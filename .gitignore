@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.data/
+coverage/
+*.log
+.env
+.DS_Store
+.ai-docs/
