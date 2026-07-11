@@ -18,6 +18,18 @@ function createLegacyDatabase(conflict = false): string {
       id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
       language TEXT NOT NULL DEFAULT 'zh-CN', cover_url TEXT, tags_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    CREATE TABLE volumes (
+      id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE, title TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'main', source TEXT NOT NULL DEFAULT 'manual', sort_order INTEGER NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE chapters (
+      id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+      volume_id TEXT NOT NULL REFERENCES volumes(id) ON DELETE CASCADE, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL, word_count INTEGER NOT NULL DEFAULT 0, version_no INTEGER NOT NULL DEFAULT 1,
+      analysis_status TEXT NOT NULL DEFAULT 'pending', excluded_from_analysis INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
     CREATE TABLE characters (
       id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE, name TEXT NOT NULL,
       aliases_json TEXT NOT NULL DEFAULT '[]', attributes_json TEXT NOT NULL DEFAULT '{}', profile_json TEXT NOT NULL DEFAULT '{}',
@@ -25,6 +37,8 @@ function createLegacyDatabase(conflict = false): string {
       first_chapter_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     INSERT INTO works VALUES ('work-old', '旧作品', '', '', 'zh-CN', NULL, '[]', '2025-01-01', '2025-01-01');
+    INSERT INTO volumes VALUES ('volume-old', 'work-old', '第一卷', 'main', 'manual', 0, '2025-01-01', '2025-01-01');
+    INSERT INTO chapters VALUES ('chapter-old', 'work-old', 'volume-old', '第一章', '旧正文', 0, 3, 1, 'pending', 0, '2025-01-01', '2025-01-01');
   `);
   const insert = database.prepare(`INSERT INTO characters
     (id, work_id, name, aliases_json, attributes_json, profile_json, current_state_json, locked_fields_json, visibility, first_chapter_id, created_at, updated_at)
@@ -53,6 +67,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit"].includes(String(column.name)))).toHaveLength(2);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
+    expect(first.get("SELECT title, chapter_type FROM chapters WHERE id = 'chapter-old'")).toEqual({ title: "第一章", chapter_type: "正文" });
     expect(first.get("SELECT COUNT(*) AS count FROM organizations")?.count).toBe(0);
     first.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, status, created_at)
