@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
+    <title>叙界 · 小说 AI 创作工作台</title>
+    <link rel="stylesheet" href="/styles.css?v=20260712-stream-chapter-types">
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <header class="topbar">
+        <button id="home-button" class="brand-block" type="button" aria-label="返回书架">
+          <span class="brand-mark">叙</span>
+          <div>
+            <strong>叙界</strong>
+            <small>小说 AI 创作工作台</small>
+          </div>
+        </button>
+        <div id="work-meta" class="work-meta">尚未选择作品</div>
+        <div class="top-actions">
+          <button id="appearance-button" class="ghost-button" type="button">显示设置</button>
+          <button id="search-button" class="ghost-button" type="button">全文检索</button>
+          <button id="export-button" class="ghost-button" type="button">导出</button>
+          <span id="save-state" class="save-state">就绪</span>
+        </div>
+      </header>
+
+      <aside class="left-panel">
+        <div class="work-picker-row">
+          <select id="work-picker" aria-label="选择作品"></select>
+          <button id="new-work-button" class="square-button" type="button" aria-label="新建作品">＋</button>
+        </div>
+        <div class="left-actions">
+          <label class="file-button">
+            导入 TXT / DOCX
+            <input id="import-file" type="file" accept=".txt,.docx">
+          </label>
+          <button id="new-chapter-button" class="secondary-button" type="button">新建章节</button>
+        </div>
+        <nav id="module-nav" class="module-nav" aria-label="作品模块">
+          <button type="button" data-module="editor" class="active">正文</button>
+          <button type="button" data-module="settings">设定库</button>
+          <button type="button" data-module="characters">角色</button>
+          <button type="button" data-module="organizations">组织</button>
+          <button type="button" data-module="timeline">时间轴</button>
+          <button type="button" data-module="relationships">关系</button>
+          <button type="button" data-module="outlines">大纲与伏笔</button>
+          <button type="button" data-module="reviews">审核</button>
+          <button type="button" data-module="tasks">分析任务</button>
+          <button type="button" data-module="ai-config">AI 管理</button>
+        </nav>
+        <div class="panel-heading">
+          <span>作品目录</span>
+          <span id="chapter-count">0 章</span>
+        </div>
+        <div id="novel-tree" class="novel-tree empty-copy">创建或选择作品后开始写作</div>
+      </aside>
+
+      <main id="main-panel" class="main-panel">
+        <section id="shelf-view" class="shelf-view hidden" aria-labelledby="shelf-title">
+          <div class="shelf-header">
+            <div><span class="eyebrow">我的创作书架</span><h1 id="shelf-title">选择一本书，继续写下去</h1><p>封面、正文、人物关系和创作约束都保存在同一部作品中。</p></div>
+            <button id="shelf-new-work" class="primary-button" type="button">新建作品</button>
+          </div>
+          <div id="book-shelf" class="book-shelf" data-testid="book-shelf"></div>
+        </section>
+
+        <section id="welcome-view" class="welcome-view hidden">
+          <span class="eyebrow">从一个世界开始</span>
+          <h1>把长篇故事的每条线索，<br>留在作者掌控之中。</h1>
+          <p>管理章节、人物、设定和时间线。AI 只提出有依据的建议，是否写入正文始终由你决定。</p>
+          <button id="welcome-new-work" class="primary-button" type="button">创建第一部作品</button>
+          <div class="welcome-grid">
+            <article><b>版本可回溯</b><span>每次保存正文都形成可恢复版本</span></article>
+            <article><b>设定有边界</b><span>锁定事实成为续写和校对的硬约束</span></article>
+            <article><b>结论有证据</b><span>分析、关系与事件保留原文依据</span></article>
+          </div>
+        </section>
+
+        <section id="editor-view" class="editor-view hidden">
+          <div class="editor-toolbar">
+            <div>
+              <span id="chapter-path" class="eyebrow">未选择章节</span>
+              <input id="chapter-title" class="chapter-title" aria-label="章节标题" placeholder="章节标题">
+            </div>
+            <div class="editor-actions">
+              <span id="chapter-stats" class="chapter-stats">0 字 · v0</span>
+              <button id="insight-button" class="ghost-button" type="button">章节概览</button>
+              <button id="versions-button" class="ghost-button" type="button">版本</button>
+              <button id="save-button" class="primary-button" type="button">保存正文</button>
+            </div>
+          </div>
+          <div class="editor-body">
+            <div id="chapter-insight" class="chapter-insight hidden"></div>
+            <textarea id="chapter-content" class="chapter-content" aria-label="章节正文" placeholder="在这里开始你的故事……"></textarea>
+          </div>
+        </section>
+
+        <section id="module-view" class="module-view hidden">
+          <div class="module-header">
+            <div>
+              <span id="module-eyebrow" class="eyebrow">作品知识</span>
+              <h1 id="module-title">模块</h1>
+              <p id="module-description"></p>
+            </div>
+            <button id="module-create-button" class="primary-button" type="button">新建</button>
+          </div>
+          <div id="module-content" class="module-content"></div>
+        </section>
+      </main>
+
+      <aside class="ai-panel">
+        <div class="ai-heading">
+          <div><span class="status-dot"></span><strong>创作助手</strong></div>
+          <small>结果先作为建议</small>
+        </div>
+        <label class="field-label">实际使用模型
+          <select id="ai-model"></select>
+        </label>
+        <div class="entity-context">
+          <select id="ai-character" aria-label="附加角色"><option value="">附加角色：无</option></select>
+          <select id="ai-setting" aria-label="附加设定"><option value="">附加设定：无</option></select>
+        </div>
+        <div class="quick-actions" aria-label="快捷指令">
+          <button type="button" data-task="chat" data-prompt="总结当前章节，并列出尚未解决的冲突。">总结本章</button>
+          <button type="button" data-task="continue" data-prompt="续写当前章节，保持现有叙事风格和人物状态。">续写</button>
+          <button type="button" data-task="chat" data-prompt="提供三种后续剧情方向，并说明各自与既有设定的兼容性。">三种方向</button>
+          <button type="button" data-task="chat" data-prompt="检查当前章节与锁定设定、人物状态和时间线的冲突。">检查冲突</button>
+        </div>
+        <div id="ai-feed" class="ai-feed">
+          <div class="assistant-message">
+            <span>助手</span>
+            <p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p>
+          </div>
+        </div>
+        <div class="prompt-box">
+          <div class="prompt-options">
+            <select id="ai-task" aria-label="任务类型">
+              <option value="chat">问答</option>
+              <option value="continue">续写</option>
+              <option value="polish">润色选中文本</option>
+            </select>
+            <select id="ai-scope" aria-label="上下文范围">
+              <option value="chapter">当前章节</option>
+              <option value="volume">当前卷</option>
+              <option value="book">全书</option>
+              <option value="selection">选中文本</option>
+            </select>
+          </div>
+          <textarea id="ai-prompt" rows="4" placeholder="告诉 AI 你想讨论或修改什么……"></textarea>
+          <button id="ai-send" class="primary-button full-button" type="button">生成建议</button>
+        </div>
+      </aside>
+    </div>
+
+    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <div id="chapter-type-menu" class="chapter-type-menu hidden" role="menu" aria-label="设置章节类型" data-testid="chapter-type-menu">
+      <strong>标记章节</strong>
+      <div>
+        <button type="button" role="menuitemradio" data-chapter-type="正文">正文</button>
+        <button type="button" role="menuitemradio" data-chapter-type="设定">设定</button>
+        <button type="button" role="menuitemradio" data-chapter-type="作者的话">作者的话</button>
+        <button type="button" role="menuitemradio" data-chapter-type="其他">其他</button>
+      </div>
+    </div>
+    <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
+    <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
+
+    <dialog id="form-dialog" class="dialog">
+      <form id="dynamic-form" method="dialog">
+        <div class="dialog-header">
+          <div><span id="dialog-eyebrow" class="eyebrow">新增</span><h2 id="dialog-title">创建记录</h2></div>
+          <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+        </div>
+        <div id="dialog-fields" class="dialog-fields"></div>
+        <div class="dialog-actions">
+          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button id="dialog-submit" class="primary-button" value="default" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="appearance-dialog" class="dialog">
+      <form id="appearance-form" method="dialog">
+        <div class="dialog-header">
+          <div><span class="eyebrow">本机偏好</span><h2>显示设置</h2></div>
+          <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+        </div>
+        <div class="appearance-grid">
+          <label>中文字体
+            <select id="appearance-cjk-font" name="cjkFont">
+              <option value="system">系统黑体</option>
+              <option value="pingfang">苹方</option>
+              <option value="heiti">黑体</option>
+              <option value="yahei">微软雅黑</option>
+              <option value="noto-sans">思源黑体</option>
+            </select>
+          </label>
+          <label>英文字体（仅等宽）
+            <select id="appearance-latin-font" name="latinFont">
+              <option value="system">系统等宽</option>
+              <option value="sf-mono">SF Mono</option>
+              <option value="menlo">Menlo</option>
+              <option value="monaco">Monaco</option>
+              <option value="consolas">Consolas</option>
+            </select>
+          </label>
+          <label>正文字号
+            <select id="appearance-font-size" name="fontSize">
+              <option value="15">15 px</option>
+              <option value="16">16 px</option>
+              <option value="17">17 px</option>
+              <option value="18">18 px</option>
+              <option value="20">20 px</option>
+            </select>
+          </label>
+          <label>正文行距与段落密度
+            <select id="appearance-density" name="density">
+              <option value="compact">紧凑</option>
+              <option value="balanced">标准</option>
+              <option value="relaxed">宽松</option>
+            </select>
+          </label>
+          <div id="font-preview" class="font-preview" aria-live="polite">
+            <strong>字体预览 Typography 0123</strong>
+            <span>中文默认使用黑体，English letters always use monospace.</span>
+            <span>第二段用于预览正文的行距与段落密度。</span>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button id="appearance-reset" class="ghost-button reset-button" type="button">恢复默认</button>
+          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button class="primary-button" value="save" type="submit">保存设置</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="versions-dialog" class="dialog wide-dialog">
+      <div class="dialog-header">
+        <div><span class="eyebrow">版本历史</span><h2>章节保存记录</h2></div>
+        <button id="versions-close" class="dialog-close" aria-label="关闭" type="button">×</button>
+      </div>
+      <div id="versions-list" class="versions-list"></div>
+    </dialog>
+
+    <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-labelledby="relationship-map-dialog-title" data-testid="relationship-map-expanded">
+      <div class="dialog-header">
+        <div><span class="eyebrow">人物网络</span><h2 id="relationship-map-dialog-title">人物关系图</h2></div>
+        <button id="relationship-map-close" class="dialog-close" aria-label="关闭放大关系图" type="button">×</button>
+      </div>
+      <div id="relationship-map-expanded-host" class="relationship-map-expanded-host"></div>
+    </dialog>
+
+    <dialog id="relationship-galaxy-dialog" class="galaxy-dialog" aria-labelledby="galaxy-title" data-testid="relationship-fullscreen">
+      <section class="galaxy-shell">
+        <h2 id="galaxy-title" class="sr-only">人物关系银河图</h2>
+        <canvas id="galaxy-background" class="galaxy-background" aria-hidden="true"></canvas>
+        <canvas id="galaxy-graph" class="galaxy-graph" aria-hidden="true"></canvas>
+        <div id="galaxy-node-layer" class="galaxy-node-layer"></div>
+        <button id="galaxy-close" class="galaxy-close" type="button" aria-label="关闭人物关系银河图" data-testid="galaxy-close">×</button>
+        <output id="galaxy-stats" class="galaxy-stats" aria-live="polite" data-testid="galaxy-stats"></output>
+        <aside class="galaxy-controls" aria-label="银河图控制">
+          <button id="galaxy-stars" type="button" aria-pressed="true" data-testid="galaxy-stars">隐藏背景星点</button>
+          <button id="galaxy-rotation" type="button" aria-pressed="false" data-testid="galaxy-rotation">暂停旋转</button>
+          <button id="galaxy-zoom-out" type="button" aria-label="缩小">−</button>
+          <button id="galaxy-zoom-in" type="button" aria-label="放大">＋</button>
+          <button id="galaxy-reset" type="button" data-testid="galaxy-reset">重置视角</button>
+        </aside>
+        <ul class="galaxy-legend" aria-label="关系类型图例">
+          <li><i class="family"></i>亲属</li><li><i class="social"></i>社交</li><li><i class="emotional"></i>情感</li><li><i class="conflict"></i>冲突</li><li><i class="uncertain"></i>未确定</li>
+        </ul>
+        <aside id="galaxy-detail" class="galaxy-detail hidden" aria-live="polite"></aside>
+      </section>
+    </dialog>
+
+    <script type="module" src="/app.js?v=20260712-stream-chapter-types"></script>
+  </body>
+</html>
