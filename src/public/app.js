@@ -930,54 +930,56 @@ async function streamChat(body) {
   $("#ai-feed").append(message);
   const content = message.querySelector("p");
   const meta = message.querySelector(".message-meta");
-  const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok || !response.body) {
-    const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-    message.remove();
-    throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let streamError = null;
-  const consume = (eventText) => {
-    let eventName = "message";
-    const dataLines = [];
-    for (const line of eventText.split(/\r?\n/)) {
-      if (line.startsWith("event:")) eventName = line.slice(6).trim();
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+  try {
+    const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok || !response.body) {
+      const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
+      throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
     }
-    if (!dataLines.length) return;
-    const payload = JSON.parse(dataLines.join("\n"));
-    if (eventName === "delta") {
-      content.textContent += payload.delta ?? "";
-      meta.textContent = `已接收 ${Array.from(content.textContent).length} 字`;
-      $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
-    } else if (eventName === "complete") {
-      message.classList.remove("is-streaming");
-      message.querySelector("span").textContent = "助手";
-      meta.textContent = `${payload.provider?.name ?? "AI"} · ${payload.model?.displayName ?? "模型"} · 流式完成`;
-    } else if (eventName === "error") {
-      streamError = new Error(payload.message ?? "AI 流式调用失败");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamError = null;
+    const consume = (eventText) => {
+      let eventName = "message";
+      const dataLines = [];
+      for (const line of eventText.split(/\r?\n/)) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (!dataLines.length) return;
+      const payload = JSON.parse(dataLines.join("\n"));
+      if (eventName === "delta") {
+        content.textContent += payload.delta ?? "";
+        meta.textContent = `已接收 ${Array.from(content.textContent).length} 字`;
+        $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+      } else if (eventName === "complete") {
+        message.classList.remove("is-streaming");
+        message.querySelector("span").textContent = "助手";
+        meta.textContent = `${payload.provider?.name ?? "AI"} · ${payload.model?.displayName ?? "模型"} · 流式完成`;
+      } else if (eventName === "error") {
+        streamError = new Error(payload.message ?? "AI 流式调用失败");
+      }
+    };
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+      events.forEach(consume);
+      if (chunk.done) break;
     }
-  };
-  while (true) {
-    const chunk = await reader.read();
-    buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-    const events = buffer.split(/\r?\n\r?\n/);
-    buffer = events.pop() ?? "";
-    events.forEach(consume);
-    if (chunk.done) break;
-  }
-  if (buffer.trim()) consume(buffer);
-  if (streamError) {
+    if (buffer.trim()) consume(buffer);
+    if (streamError) throw streamError;
+  } catch (error) {
     message.classList.remove("is-streaming");
+    message.querySelector("span").textContent = "助手 · 生成中断";
     meta.textContent = "生成中断";
-    throw streamError;
+    throw error;
   }
 }
 
