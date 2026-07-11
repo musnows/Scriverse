@@ -461,6 +461,41 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0].subtype).toBe("伴侣");
   });
 
+  it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {
+    let chapterId = "";
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      expect(prompt).toContain("血亲关系必须有明确亲属称谓");
+      expect(prompt).toContain("严格核对对话说话人");
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { fromCharacterId: "林舟", toCharacterId: "沈星", category: "family", subtype: "叔侄", directed: true, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "有两个幼崽走丢了", supports: "救援幼崽" }] },
+        { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "君臣", directed: true, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "君王估计也会过来", supports: "表现敬畏" }] },
+        { fromCharacterId: "林舟", toCharacterId: "沈星", category: "conflict", subtype: "宿敌", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "双方开始战斗", supports: "本场战斗直接对抗" }] }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "有两个幼崽走丢了。君王估计也会过来。双方开始战斗。"
+    }).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "chapter", chapterId }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.candidateCount).toBe(1);
+    expect(result.body.data.result.skipped.map((item: { reason: string }) => item.reason).join("\n")).toContain("血亲关系缺少明确亲属称谓");
+    expect(result.body.data.result.skipped.map((item: { reason: string }) => item.reason).join("\n")).toContain("君臣关系缺少权力身份");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({ category: "conflict", subtype: "战时敌对", directed: false });
+  });
+
   it("关系分块全部失败时保留既有候选且任务进入 partial", async () => {
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: "unavailable" }), {
       status: 400,

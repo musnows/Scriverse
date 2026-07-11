@@ -1421,9 +1421,15 @@ export class AiManager {
           "13. 组织、阵营或国家之间的盟约不能投射成代表个人之间的盟友；某人替组织传话、执行任务或参与同一行动，也不能据此建立个人长期关系。",
           "14. evidence 的引文和 supports 必须能共同识别关系双方及关系类型；仅有一方名字、模糊代词或旁人泛称时不要输出。",
           "15. keywords 必须是 2 至 8 个简短中文关键词，描述这两个人之间具体的互动方式、权力结构、情感阶段或剧情张力，例如共同守护、长期信任、王权效忠、单向追求、决裂后和解；不能只重复 subtype。",
-          "16. 只输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。"
+          "16. 血亲关系必须有明确亲属称谓、出生或收养证据；年龄差、同族、救援幼崽、照护后辈都不能推断为父子、叔侄或手足。",
+          "17. 君臣关系必须同时出现明确权力身份与效忠、听命、下令或服从行为；仅称呼‘君王/女王’、表现敬畏、属于同一族群或接受帮助都不构成君臣，也不能给每个具名族民批量建立君臣边。",
+          "18. 宿敌必须有跨两个不同章节/时期的持续冲突证据，或原文直接使用宿敌、世仇、长期威胁等表述；单场危机只能使用战时敌对、围攻与反击、追杀与反击等准确 subtype。",
+          "19. 严格核对对话说话人、提问者和回答中的主语。不能把回答者的行为归给提问者，不能因某人被类比、被提及、出现在角色规范表或既有关系上下文中就生成新边。",
+          "20. 前任向继任者让位属于前任与继任，不是继任者统御前任；方向必须由原文中的权力交接和实际服从行为共同决定。",
+          "21. 关键词只能描述双方互动，不得混入任何一方单独的基因改造、意识变化、物种背景或未参与本关系的事件，也不得把不同时间阶段压成互相矛盾的同一组关键词。",
+          "22. 只输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。"
         ].join("\n"),
-        extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定或同章共现写成现实长期关系。"
+        extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。"
       });
       const extracted = extractJson<unknown>(generated.content);
       if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "人物关系分析结果必须是数组");
@@ -1505,7 +1511,7 @@ export class AiManager {
         return;
       }
       const category = canonicalizeRelationshipCategory(reportedCategory, rawSubtype);
-      const subtype = canonicalizeRelationshipSubtype(category, rawSubtype);
+      let subtype = canonicalizeRelationshipSubtype(category, rawSubtype);
       const currentStatus = typeof candidate.currentStatus === "string" ? candidate.currentStatus.trim() : "active";
       const keywords = this.normalizeRelationshipKeywords(candidate.keywords, subtype);
       const confidence = typeof candidate.confidence === "number" ? clamp(candidate.confidence, 0, 1) : 0;
@@ -1535,6 +1541,27 @@ export class AiManager {
       if (evidence.length === 0) {
         skipped.push({ index, reason: "证据引文未在对应章节原文命中" });
         return;
+      }
+      const evidenceText = evidence.map((item) => String(item.quote)).join("\n");
+      if (category === "family" && ["父母子女", "收养亲子", "手足", "叔侄"].includes(subtype)) {
+        const explicitKinship = /父亲|母亲|爸爸|妈妈|父子|父女|母子|母女|儿子|女儿|孩子|亲生|收养|养父|养母|养子|养女|兄弟|姐妹|哥哥|弟弟|姐姐|妹妹|手足|叔叔|叔父|侄|姑姑|舅舅|外甥/u.test(evidenceText);
+        if (!explicitKinship) {
+          skipped.push({ index, reason: "血亲关系缺少明确亲属称谓、出生或收养证据" });
+          return;
+        }
+      }
+      if (category === "social" && subtype === "君臣") {
+        const hasAuthority = /君王|女王|国王|陛下|领主|统治者|首领/u.test(evidenceText);
+        const hasObedience = /效忠|臣属|臣服|服从|听命|领命|奉命|遵命|命令|下令|宣誓|跪拜|麾下|部下|属下/u.test(evidenceText);
+        if (!hasAuthority || !hasObedience) {
+          skipped.push({ index, reason: "君臣关系缺少权力身份与效忠、命令或服从的双重证据" });
+          return;
+        }
+      }
+      if (category === "conflict" && subtype === "宿敌") {
+        const evidenceChapters = new Set(evidence.map((item) => String(item.chapterId)));
+        const explicitlyLongRunning = /宿敌|世仇|死敌|多年|长期|世代|一直.{0,24}(?:敌|威胁|对抗|杀手)|远古.{0,16}(?:战|敌)|多次.{0,16}(?:交战|对抗|冲突)/u.test(evidenceText);
+        if (evidenceChapters.size < 2 && !explicitlyLongRunning) subtype = "战时敌对";
       }
       const key = [fromCharacterId, toCharacterId, category, this.normalizeReference(subtype), directed ? "1" : "0"].join("|");
       const current = merged.get(key);
