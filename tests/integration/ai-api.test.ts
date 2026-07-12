@@ -80,6 +80,54 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
+  it("平台供应商可被多本书复用，并在内置提示词后追加平台和书籍提示词", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const secondWork = await request(runtime.app).post("/api/works").send({ title: "第二本 AI 作品" }).expect(201);
+    const secondVolume = await request(runtime.app).post(`/api/works/${secondWork.body.data.id}/volumes`).send({ title: "第二卷" }).expect(201);
+    const secondChapter = await request(runtime.app).post(`/api/works/${secondWork.body.data.id}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "第二章",
+      content: "第二本书的正文。"
+    }).expect(201);
+
+    const platformProviders = await request(runtime.app).get("/api/platform/ai/providers").expect(200);
+    expect(platformProviders.body.data.map((item: { id: string }) => item.id)).toContain(providerId);
+    const sharedModels = await request(runtime.app).get(`/api/works/${secondWork.body.data.id}/models`).expect(200);
+    expect(sharedModels.body.data.map((item: { id: string }) => item.id)).toContain(modelId);
+
+    await request(runtime.app).patch("/api/platform/ai/settings").send({ systemPrompt: "平台追加：保持克制叙事。" }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ systemPrompt: "本书追加：哥斯拉不得离开地球。" }).expect(200);
+    const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 4096 }).expect(200);
+    expect(updatedModel.body.data.contextWindow).toBe(4096);
+
+    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
+      modelId,
+      taskType: "chat",
+      scope: { type: "chapter", chapterId },
+      instruction: "概述本章"
+    }).expect(200);
+    expect(usage.body.data).toMatchObject({ modelId, contextWindow: 4096 });
+    expect(usage.body.data.inputTokens).toBeGreaterThan(0);
+
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      expect(body.messages[0]?.content).toContain("作者锁定的事实是不可违反的硬约束");
+      expect(body.messages[0]?.content).toContain("平台追加：保持克制叙事。");
+      expect(body.messages[0]?.content).toContain("本书追加：哥斯拉不得离开地球。");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "提示词已生效。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "检查提示词",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+    await request(runtime.app).put(`/api/works/${secondWork.body.data.id}/task-defaults/chat`).send({ modelId }).expect(200);
+    expect(secondChapter.body.data.title).toBe("第二章");
+  });
+
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

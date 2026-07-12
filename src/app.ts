@@ -172,10 +172,15 @@ const modelSchema = z.object({
   modelId: nonEmpty.max(300),
   purposes: optionalStrings,
   contextNote: z.string().max(10_000).optional(),
+  contextWindow: z.number().int().min(1_024).max(2_000_000).optional(),
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   enabled: z.boolean().optional(),
   note: z.string().max(10_000).optional()
+});
+
+const aiPromptSchema = z.object({
+  systemPrompt: z.string().max(100_000).optional()
 });
 
 const contextSchema = z.object({
@@ -482,8 +487,32 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/tasks/:taskId/cancel", (request, response) => data(response, ai.cancelTask(request.params.taskId)));
 
-  app.get("/api/works/:workId/providers", (request, response) => data(response, ai.listProviders(request.params.workId)));
-  app.post("/api/works/:workId/providers", (request, response) => data(response, ai.createProvider(request.params.workId, parse(providerSchema, request.body)), 201));
+  app.get("/api/platform/ai/providers", (_request, response) => data(response, ai.listProviders()));
+  app.post("/api/platform/ai/providers", (request, response) => data(response, ai.createProvider(parse(providerSchema, request.body)), 201));
+  app.get("/api/platform/ai/models", (_request, response) => data(response, ai.listPlatformModels()));
+  app.get("/api/platform/ai/settings", (_request, response) => data(response, store.getPlatformAiSettings()));
+  app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
+
+  app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
+  app.patch("/api/works/:workId/ai-settings", (request, response) => data(response, store.updateWorkAiSettings(request.params.workId, parse(aiPromptSchema, request.body))));
+  app.post("/api/works/:workId/ai-context-usage", (request, response) => {
+    const input = parse(z.object({
+      modelId: identifier.optional(),
+      taskType: z.enum(TASK_TYPES).default("chat"),
+      scope: contextSchema,
+      instruction: z.string().max(100_000).default("")
+    }), request.body ?? {});
+    data(response, ai.getContextUsage({ workId: request.params.workId, ...input }));
+  });
+
+  app.get("/api/works/:workId/providers", (request, response) => {
+    store.getWork(request.params.workId);
+    data(response, ai.listProviders());
+  });
+  app.post("/api/works/:workId/providers", (request, response) => {
+    store.getWork(request.params.workId);
+    data(response, ai.createProvider(parse(providerSchema, request.body)), 201);
+  });
   app.get("/api/providers/:providerId", (request, response) => data(response, ai.getProvider(request.params.providerId)));
   app.patch("/api/providers/:providerId", (request, response) => data(response, ai.updateProvider(request.params.providerId, parse(providerSchema.partial(), request.body))));
   app.delete("/api/providers/:providerId", (request, response) => {

@@ -1,6 +1,6 @@
 import type { AiMessage, ContextScope, TaskType } from "./domain.js";
 import { CredentialVault } from "./credential-vault.js";
-import { type Row } from "./database.js";
+import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { Store } from "./store.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
@@ -21,6 +21,7 @@ type ModelInput = {
   modelId: string;
   purposes?: string[];
   contextNote?: string;
+  contextWindow?: number;
   outputNote?: string;
   preset?: Record<string, unknown>;
   enabled?: boolean;
@@ -70,6 +71,17 @@ type GenerateResult = {
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
+const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+export function estimateAiTokens(value: string): number {
+  let wideCharacters = 0;
+  let narrowCharacters = 0;
+  for (const character of value) {
+    if (/[^\u0000-\u00ff]/u.test(character)) wideCharacters += 1;
+    else narrowCharacters += 1;
+  }
+  return Math.max(1, Math.ceil(wideCharacters * 1.1 + narrowCharacters / 4));
+}
 
 function normalizeModelPreset(input: Record<string, unknown>): Record<string, unknown> {
   const maxTokens = typeof input.max_tokens === "number" && Number.isFinite(input.max_tokens)
@@ -409,8 +421,7 @@ export class AiManager {
     this.contextBuilder = new ContextBuilder(store);
   }
 
-  createProvider(workId: string, input: ProviderInput): Record<string, unknown> {
-    this.store.getWork(workId);
+  createProvider(input: ProviderInput): Record<string, unknown> {
     const providerId = id("provider");
     const encrypted = this.vault.encrypt(input.apiKey);
     const timestamp = now();
@@ -419,7 +430,7 @@ export class AiManager {
        connection_status, concurrency_limit, rpm_limit, max_tokens, note, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
       providerId,
-      workId,
+      PLATFORM_AI_WORK_ID,
       input.name,
       normalizeBaseUrl(input.baseUrl),
       encrypted.encrypted,
@@ -434,13 +445,12 @@ export class AiManager {
       timestamp,
       timestamp
     );
-    this.store.audit(workId, "provider.created", "provider", providerId, { name: input.name, baseUrl: normalizeBaseUrl(input.baseUrl) });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl: normalizeBaseUrl(input.baseUrl) });
     return this.getProvider(providerId);
   }
 
-  listProviders(workId: string): Record<string, unknown>[] {
-    this.store.getWork(workId);
-    return this.store.db.all("SELECT * FROM providers WHERE work_id = ? ORDER BY created_at", workId).map((row) => this.mapProvider(row));
+  listProviders(): Record<string, unknown>[] {
+    return this.store.db.all("SELECT * FROM providers WHERE work_id = ? ORDER BY created_at", PLATFORM_AI_WORK_ID).map((row) => this.mapProvider(row));
   }
 
   getProvider(providerId: string): Record<string, unknown> {
@@ -481,7 +491,7 @@ export class AiManager {
       now(),
       providerId
     );
-    this.store.audit(stringValue(row, "work_id"), "provider.updated", "provider", providerId, {
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.updated", "provider", providerId, {
       fields: Object.keys(input).filter((key) => key !== "apiKey"),
       keyReplaced: Boolean(input.apiKey)
     });
@@ -501,7 +511,7 @@ export class AiManager {
       "SELECT COUNT(*) AS value FROM task_defaults WHERE model_id IN (SELECT id FROM models WHERE provider_id = ?)",
       providerId
     );
-    this.store.audit(stringValue(row, "work_id"), "provider.deleted", "provider", providerId, {
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.deleted", "provider", providerId, {
       modelCount: numberValue(modelCount ?? {}, "value"),
       affectedDefaults: numberValue(defaultCount ?? {}, "value")
     });
@@ -551,14 +561,15 @@ export class AiManager {
     const modelId = id("model");
     const timestamp = now();
     this.store.db.run(
-      `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, output_note,
-       preset_json, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
+       preset_json, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       modelId,
       providerId,
       input.displayName,
       input.modelId,
       JSON.stringify(input.purposes ?? []),
       input.contextNote ?? "",
+      input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       input.outputNote ?? "",
       JSON.stringify(normalizeModelPreset(input.preset ?? {})),
       (input.enabled ?? true) ? 1 : 0,
@@ -566,7 +577,7 @@ export class AiManager {
       timestamp,
       timestamp
     );
-    this.store.audit(stringValue(provider, "work_id"), "model.created", "model", modelId, { providerId, modelId: input.modelId });
+    this.store.audit(PLATFORM_AI_WORK_ID, "model.created", "model", modelId, { providerId, modelId: input.modelId });
     return this.getModel(modelId);
   }
 
@@ -575,11 +586,15 @@ export class AiManager {
     return this.store.db.all("SELECT * FROM models WHERE provider_id = ? ORDER BY created_at", providerId).map((row) => this.mapModel(row));
   }
 
+  listPlatformModels(): Record<string, unknown>[] {
+    return this.store.db
+      .all("SELECT m.* FROM models m JOIN providers p ON p.id = m.provider_id WHERE p.work_id = ? ORDER BY p.created_at, m.created_at", PLATFORM_AI_WORK_ID)
+      .map((row) => this.mapModel(row));
+  }
+
   listWorkModels(workId: string): Record<string, unknown>[] {
     this.store.getWork(workId);
-    return this.store.db
-      .all("SELECT m.* FROM models m JOIN providers p ON p.id = m.provider_id WHERE p.work_id = ? ORDER BY p.created_at, m.created_at", workId)
-      .map((row) => this.mapModel(row));
+    return this.listPlatformModels();
   }
 
   getModel(modelId: string): Record<string, unknown> {
@@ -591,12 +606,13 @@ export class AiManager {
     const row = this.getModelRow(modelId);
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")));
     this.store.db.run(
-      `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, output_note = ?,
+      `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
        preset_json = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.displayName ?? stringValue(row, "display_name"),
       input.modelId ?? stringValue(row, "model_id"),
       JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
       input.contextNote ?? stringValue(row, "context_note"),
+      input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
       input.outputNote ?? stringValue(row, "output_note"),
       JSON.stringify(preset),
       (input.enabled ?? boolValue(row, "enabled")) ? 1 : 0,
@@ -615,7 +631,7 @@ export class AiManager {
   setTaskDefault(workId: string, taskType: TaskType, modelId: string): Record<string, unknown> {
     const model = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(model, "provider_id"));
-    if (stringValue(provider, "work_id") !== workId) throw new AppError(400, "MODEL_WORK_MISMATCH", "模型不属于当前作品");
+    if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     this.assertAvailable(provider, model);
     this.store.db.run(
       `INSERT INTO task_defaults (work_id, task_type, model_id) VALUES (?, ?, ?)
@@ -892,11 +908,61 @@ export class AiManager {
     return task;
   }
 
+  getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction">): Record<string, unknown> {
+    const context = this.contextBuilder.build(input.workId, input.scope);
+    const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    const messages = this.buildMessages(input, context);
+    const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
+    const remainingTokens = Math.max(0, contextWindow - inputTokens);
+    return {
+      modelId: stringValue(model, "id"),
+      contextWindow,
+      inputTokens,
+      remainingTokens,
+      usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100))
+    };
+  }
+
+  private buildMessages(input: Pick<GenerateInput, "workId" | "instruction" | "extraSystemPrompt">, context: string): AiMessage[] {
+    const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
+    const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
+    const systemPrompt = [
+      "你是小说作者的创作协作助手。作者锁定的事实是不可违反的硬约束。",
+      "只根据提供的正文和设定回答；不确定时明确说明，不得把推测当成事实。",
+      "引用事实时注明章节或设定名称。不要声称已经修改正文。",
+      platformPrompt ? `平台全局追加系统提示词：\n${platformPrompt}` : "",
+      workPrompt ? `本书追加系统提示词：\n${workPrompt}` : "",
+      input.extraSystemPrompt ?? ""
+    ].filter(Boolean).join("\n\n");
+    return [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
+    ];
+  }
+
+  private constrainParametersForContext(model: ModelRow, messages: AiMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
+    const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
+    if (inputTokens >= contextWindow) {
+      throw new AppError(400, "CONTEXT_WINDOW_EXCEEDED", `当前上下文约 ${inputTokens} Token，已超过模型 ${contextWindow} Token 的上下文容量`);
+    }
+    return {
+      ...parameters,
+      max_tokens: Math.min(Number(parameters.max_tokens) || DEFAULT_MAX_TOKENS, contextWindow - inputTokens)
+    };
+  }
+
   async generate(input: GenerateInput): Promise<GenerateResult> {
     const context = this.contextBuilder.build(input.workId, input.scope);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
-    const parameters = this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS });
+    const messages = this.buildMessages(input, context);
+    const parameters = this.constrainParametersForContext(
+      model,
+      messages,
+      this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS })
+    );
     const callId = id("call");
     const timestamp = now();
     this.store.db.run(
@@ -912,18 +978,6 @@ export class AiManager {
       context.length + input.instruction.length,
       timestamp
     );
-    const messages: AiMessage[] = [
-      {
-        role: "system",
-        content: [
-          "你是小说作者的创作协作助手。作者锁定的事实是不可违反的硬约束。",
-          "只根据提供的正文和设定回答；不确定时明确说明，不得把推测当成事实。",
-          "引用事实时注明章节或设定名称。不要声称已经修改正文。",
-          input.extraSystemPrompt ?? ""
-        ].filter(Boolean).join("\n")
-      },
-      { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
-    ];
     try {
       const apiKey = this.decryptKey(provider);
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
@@ -1001,7 +1055,12 @@ export class AiManager {
     const context = this.contextBuilder.build(input.workId, input.scope);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
-    const parameters = this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS });
+    const messages = this.buildMessages(input, context);
+    const parameters = this.constrainParametersForContext(
+      model,
+      messages,
+      this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS })
+    );
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -1016,18 +1075,6 @@ export class AiManager {
       context.length + input.instruction.length,
       now()
     );
-    const messages: AiMessage[] = [
-      {
-        role: "system",
-        content: [
-          "你是小说作者的创作协作助手。作者锁定的事实是不可违反的硬约束。",
-          "只根据提供的正文和设定回答；不确定时明确说明，不得把推测当成事实。",
-          "引用事实时注明章节或设定名称。不要声称已经修改正文。",
-          input.extraSystemPrompt ?? ""
-        ].filter(Boolean).join("\n")
-      },
-      { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
-    ];
     try {
       const apiKey = this.decryptKey(provider);
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
@@ -2238,7 +2285,7 @@ export class AiManager {
     if (!modelId) throw new AppError(409, "MODEL_REQUIRED", `尚未为 ${taskType} 配置默认模型，请先选择模型`);
     const model = this.getModelRow(modelId);
     const provider = this.getProviderRow(stringValue(model, "provider_id"));
-    if (stringValue(provider, "work_id") !== workId) throw new AppError(400, "MODEL_WORK_MISMATCH", "模型不属于当前作品");
+    if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
     this.assertAvailable(provider, model);
     return { model, provider };
   }
@@ -2384,7 +2431,7 @@ export class AiManager {
   private mapProvider(row: Row): Record<string, unknown> {
     return {
       id: stringValue(row, "id"),
-      workId: stringValue(row, "work_id"),
+      scope: "platform",
       name: stringValue(row, "name"),
       baseUrl: stringValue(row, "base_url"),
       apiKey: stringValue(row, "key_hint"),
@@ -2410,6 +2457,7 @@ export class AiManager {
       modelId: stringValue(row, "model_id"),
       purposes: json(stringValue(row, "purposes_json"), []),
       contextNote: stringValue(row, "context_note"),
+      contextWindow: numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW,
       outputNote: stringValue(row, "output_note"),
       preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json"))),
       enabled: boolValue(row, "enabled"),

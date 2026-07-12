@@ -177,13 +177,56 @@ export class Store {
   }
 
   listWorks(): Record<string, unknown>[] {
-    return this.db.all("SELECT * FROM works ORDER BY updated_at DESC").map((row) => this.mapWork(row));
+    return this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC").map((row) => this.mapWork(row));
   }
 
   getWork(workId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM works WHERE id = ?", workId);
     if (!row) throw notFound("作品");
     return this.mapWork(row);
+  }
+
+  getPlatformAiSettings(): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM platform_ai_settings WHERE id = 1");
+    return {
+      systemPrompt: String(row?.system_prompt ?? ""),
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  updatePlatformAiSettings(input: { systemPrompt?: string }): Record<string, unknown> {
+    const timestamp = now();
+    this.db.run(
+      `INSERT INTO platform_ai_settings (id, system_prompt, updated_at) VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt, updated_at = excluded.updated_at`,
+      input.systemPrompt ?? String(this.getPlatformAiSettings().systemPrompt),
+      timestamp
+    );
+    return this.getPlatformAiSettings();
+  }
+
+  getWorkAiSettings(workId: string): Record<string, unknown> {
+    this.getWork(workId);
+    const row = this.db.get("SELECT * FROM work_ai_settings WHERE work_id = ?", workId);
+    return {
+      workId,
+      systemPrompt: String(row?.system_prompt ?? ""),
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  updateWorkAiSettings(workId: string, input: { systemPrompt?: string }): Record<string, unknown> {
+    this.getWork(workId);
+    const timestamp = now();
+    this.db.run(
+      `INSERT INTO work_ai_settings (work_id, system_prompt, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(work_id) DO UPDATE SET system_prompt = excluded.system_prompt, updated_at = excluded.updated_at`,
+      workId,
+      input.systemPrompt ?? String(this.getWorkAiSettings(workId).systemPrompt),
+      timestamp
+    );
+    this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, { systemPromptChanged: input.systemPrompt !== undefined });
+    return this.getWorkAiSettings(workId);
   }
 
   updateWork(workId: string, input: Partial<WorkInput>): Record<string, unknown> {

@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 
 export type Row = Record<string, unknown>;
+export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
 
 export class Database {
   readonly raw: DatabaseSync;
@@ -61,6 +62,7 @@ export class Database {
         language TEXT NOT NULL DEFAULT 'zh-CN',
         cover_url TEXT,
         tags_json TEXT NOT NULL DEFAULT '[]',
+        is_internal INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -259,6 +261,7 @@ export class Database {
         model_id TEXT NOT NULL,
         purposes_json TEXT NOT NULL DEFAULT '[]',
         context_note TEXT NOT NULL DEFAULT '',
+        context_window INTEGER NOT NULL DEFAULT 128000 CHECK(context_window BETWEEN 1024 AND 2000000),
         output_note TEXT NOT NULL DEFAULT '',
         preset_json TEXT NOT NULL DEFAULT '{}',
         enabled INTEGER NOT NULL DEFAULT 1,
@@ -273,6 +276,18 @@ export class Database {
         task_type TEXT NOT NULL,
         model_id TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
         PRIMARY KEY(work_id, task_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS platform_ai_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        system_prompt TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS work_ai_settings (
+        work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+        system_prompt TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS ai_calls (
@@ -550,6 +565,44 @@ export class Database {
           this.run("ALTER TABLE volumes ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(8)) {
+      this.transaction(() => {
+        const timestamp = new Date().toISOString();
+        const workColumns = new Set(this.all("PRAGMA table_info(works)").map((row) => String(row.name)));
+        if (!workColumns.has("is_internal")) {
+          this.run("ALTER TABLE works ADD COLUMN is_internal INTEGER NOT NULL DEFAULT 0");
+        }
+        const modelColumns = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+        if (!modelColumns.has("context_window")) {
+          this.run("ALTER TABLE models ADD COLUMN context_window INTEGER NOT NULL DEFAULT 128000 CHECK(context_window BETWEEN 1024 AND 2000000)");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS platform_ai_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          system_prompt TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS work_ai_settings (
+          work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+          system_prompt TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(
+          `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, is_internal, created_at, updated_at)
+           VALUES (?, '平台 AI 配置', '', '', 'zh-CN', NULL, '[]', 1, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET is_internal = 1`,
+          PLATFORM_AI_WORK_ID,
+          timestamp,
+          timestamp
+        );
+        this.run(
+          "INSERT INTO platform_ai_settings (id, system_prompt, updated_at) VALUES (1, '', ?) ON CONFLICT(id) DO NOTHING",
+          timestamp
+        );
+        this.run("UPDATE providers SET work_id = ? WHERE work_id <> ?", PLATFORM_AI_WORK_ID, PLATFORM_AI_WORK_ID);
+        this.run("CREATE INDEX IF NOT EXISTS idx_work_ai_settings_work ON work_ai_settings(work_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (8, ?)", timestamp);
       });
     }
   }
