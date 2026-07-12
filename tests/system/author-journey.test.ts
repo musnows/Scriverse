@@ -120,9 +120,11 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("viewport.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain('button.addEventListener("pointermove"');
     expect(graph.text).toContain("shell.dataset.draggedNodeId = node.id");
+    expect(graph.text).toContain("Math.sqrt(node.degree / maxDegree)");
     expect(graph.text).toContain("initialNodePositions");
     expect(styles.text).toContain(".book-shelf");
     expect(styles.text).toContain(".galaxy-dialog");
+    expect(styles.text).toContain("grid-template-rows: var(--node-size) auto");
   });
 
   it("从导入作品到采纳续写、抽取时间轴并安全导出", async () => {

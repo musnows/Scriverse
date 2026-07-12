@@ -513,13 +513,13 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const renderNodes = () => {
     nodeLayer.replaceChildren();
     nodeElements.clear();
-    const maxImportance = Math.max(graph.nodes[0]?.importance ?? 1, 1);
+    const maxDegree = Math.max(...layout.nodes.map((node) => node.degree), 1);
     for (const node of layout.nodes) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "galaxy-node";
       button.dataset.galaxyNode = node.id;
-      button.style.setProperty("--node-size", `${8 + Math.sqrt(node.importance / maxImportance) * 15}px`);
+      button.style.setProperty("--node-size", `${10 + Math.sqrt(node.degree / maxDegree) * 28}px`);
       const marker = document.createElement("i");
       const label = document.createElement("span");
       label.textContent = node.name;

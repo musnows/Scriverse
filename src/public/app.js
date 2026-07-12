@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-galaxy-node-drag";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-galaxy-node-degree";
 import { normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-blank-lines";
 
 const state = {
