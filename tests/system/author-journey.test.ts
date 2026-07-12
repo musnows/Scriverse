@@ -139,6 +139,9 @@ describe("作者完整创作流程", () => {
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
     expect(application.text).toContain('data-testid="book-add-card"');
+    expect(application.text).toContain('const platformDocumentTitle = "叙界 · 小说 AI 创作工作台"');
+    expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
+    expect(application.text).toContain("updateDocumentTitle(state.work)");
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);

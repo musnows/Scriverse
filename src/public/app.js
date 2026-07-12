@@ -38,6 +38,7 @@ const taskTypeLabels = [
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 
@@ -471,6 +472,11 @@ function confirmDiscardChanges(message = "当前章节有未保存修改，继�
   return window.confirm(message);
 }
 
+function updateDocumentTitle(work = null) {
+  const workTitle = String(work?.title ?? "").trim();
+  document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle;
+}
+
 async function loadWorks(preferredId) {
   state.works = await api("/api/works");
   if (preferredId) {
@@ -482,6 +488,7 @@ async function loadWorks(preferredId) {
 
 function showShelf() {
   state.dirty = false;
+  updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -528,6 +535,7 @@ async function selectWork(workId) {
   $("#shelf-view").classList.add("hidden");
   state.work = nextWork;
   state.chapter = null;
+  updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
   renderTree();
   await loadModels();
