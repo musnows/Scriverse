@@ -1130,7 +1130,7 @@ async function openCharacterDialog(item) {
     field("name", "标准名", "text", item?.name) + field("aliases", "别名（用逗号分隔）", "text", item?.aliases?.join(", ")) +
     field("identity", "身份", "text", item?.attributes?.identity) + field("motivation", "动机", "textarea", item?.profile?.motivation) +
     field("location", "当前位置", "text", item?.currentState?.location) +
-    (organizationOptions.length ? field("organizationIds", "所属组织（可多选）", "multiselect", item?.organizationIds ?? [], organizationOptions) : "") +
+    (organizationOptions.length ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions) : "") +
     field("lockedFields", "锁定字段（用逗号分隔）", "text", item?.lockedFields?.join(", ")),
     async (form) => {
       const split = (value) => String(value ?? "").split(/[,，]/).map((part) => part.trim()).filter(Boolean);

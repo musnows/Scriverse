@@ -122,6 +122,24 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(search.body.data).toContainEqual(expect.objectContaining({ type: "organization", title: "北港守望会" }));
   });
 
+  it("允许角色同时绑定多个组织且各组织独立维护成员", async () => {
+    const { workId } = await seedWork(runtime);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "双面间谍" }).expect(201);
+    const first = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "北港情报局" }).expect(201);
+    const second = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "深空同盟" }).expect(201);
+
+    const joined = await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({
+      organizationIds: [first.body.data.id, second.body.data.id]
+    }).expect(200);
+    expect(new Set(joined.body.data.organizationIds)).toEqual(new Set([first.body.data.id, second.body.data.id]));
+    expect(joined.body.data.organizations.map((item: { name: string }) => item.name).sort()).toEqual(["北港情报局", "深空同盟"].sort());
+
+    await request(runtime.app).patch(`/api/organizations/${first.body.data.id}`).send({ memberIds: [] }).expect(200);
+    const remaining = await request(runtime.app).get(`/api/characters/${character.body.data.id}`).expect(200);
+    expect(remaining.body.data.organizationIds).toEqual([second.body.data.id]);
+    expect(remaining.body.data.organizations).toEqual([expect.objectContaining({ name: "深空同盟" })]);
+  });
+
   it("支持原子导入新建、上传替换和删除书籍封面", async () => {
     const before = await request(runtime.app).get("/api/works").expect(200);
     await request(runtime.app).post("/api/works/import").attach("file", Buffer.from("无效"), "bad.pdf").expect(415);
