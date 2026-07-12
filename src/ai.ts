@@ -1409,6 +1409,7 @@ export class AiManager {
           "1. 人名、别名、昵称和拼写变体必须归一到唯一 characterId，禁止创造角色或把相似名字强行合并。",
           "2. 单次见面、同场出现、对话、传话、约定或共同目睹事件本身不是长期人物关系，没有长期意义时不要输出。",
           "3. 区分现实当前、真实历史、回忆/第三方陈述、梦境/平行可能、假设、媒体作品和作者注释。梦境、假设或替代人生不能改变现实关系状态。",
+          "3.1 标记为‘作者的话’的章节默认不会进入自动分析；若原文片段仍包含序言、后记、作者注或现实创作说明，其中的人名和关系也不得写入小说人物图。",
           "4. 父母→子女、君王→臣属、导师→学生、施害者→受害者、倾慕者→被倾慕者使用 directed=true；伴侣、朋友、兄弟姐妹、盟友、互为宿敌使用 directed=false。",
           "5. 同一人物对、同一 category、同一 subtype 只输出一次；不得输出反向重复边。",
           "6. currentStatus 表示本批正文结束时的状态；阶段变化写入 timeRange.stages。",
@@ -1699,10 +1700,14 @@ export class AiManager {
       if (!scope.volumeId) throw new AppError(400, "VOLUME_REQUIRED", "分析范围缺少卷标识");
       const volume = volumes.find((item) => item.id === scope.volumeId);
       if (!volume) throw notFound("卷");
-      return volume.chapters as Record<string, unknown>[];
+      return (volume.chapters as Record<string, unknown>[]).filter((chapter) => this.isAutomaticAnalysisChapter(chapter));
     }
     return volumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])
-      .filter((chapter) => !chapter.excludedFromAnalysis);
+      .filter((chapter) => this.isAutomaticAnalysisChapter(chapter));
+  }
+
+  private isAutomaticAnalysisChapter(chapter: Record<string, unknown>): boolean {
+    return !chapter.excludedFromAnalysis && chapter.chapterType !== "作者的话";
   }
 
   private buildChapterChunks(chapters: Record<string, unknown>[], maximumChars = 10_000): Array<{ text: string; chapterIds: string[] }> {

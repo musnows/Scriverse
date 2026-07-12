@@ -516,6 +516,33 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ category: "conflict", subtype: "战时敌对", directed: false });
   });
 
+  it("自动关系分析跳过作者的话章节", async () => {
+    const prompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      prompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, volumeId } = await seedWork(runtime);
+    await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId,
+      title: "后记",
+      chapterType: "作者的话",
+      content: "作者现实中的朋友关系绝不能进入小说人物图。"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(prompts.every((prompt) => !prompt.includes("作者现实中的朋友关系"))).toBe(true);
+  });
+
   it("关系分块全部失败时保留既有候选且任务进入 partial", async () => {
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: "unavailable" }), {
       status: 400,
