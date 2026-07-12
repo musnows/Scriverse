@@ -11,4 +11,9 @@ describe("正文排版整理", () => {
     expect(normalizeParagraphSpacing("第一行\n第二行\n\n下一段"))
       .toBe("第一行\n第二行\n\n下一段");
   });
+
+  it("把全角空格、不换行空格和字节序标记组成的伪空行一并清理", () => {
+    expect(normalizeParagraphSpacing("第一段。\r\n　\r\n\u00a0\r\n\uFEFF\r\n第二段。"))
+      .toBe("第一段。\n\n第二段。");
+  });
 });

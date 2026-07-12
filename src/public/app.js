@@ -1,5 +1,5 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-relationship-wheel-zoom";
-import { normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-blank-lines";
+import { normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-unicode-blank-lines";
 
 const state = {
   works: [],
@@ -321,15 +321,19 @@ async function saveChapter() {
   if (!state.chapter) return toast("请先选择章节", "error");
   try {
     setSaveState("保存中");
+    const input = $("#chapter-content");
+    const content = normalizeParagraphSpacing(input.value);
+    const spacingChanged = content !== input.value;
+    if (spacingChanged) input.value = content;
     state.chapter = await api(`/api/chapters/${state.chapter.id}`, {
       method: "PATCH",
-      body: { title: $("#chapter-title").value.trim(), content: $("#chapter-content").value }
+      body: { title: $("#chapter-title").value.trim(), content }
     });
     state.work = await api(`/api/works/${state.work.id}`);
     renderTree();
     updateChapterStats();
     setSaveState("已保存");
-    toast(`正文已保存为 v${state.chapter.versionNo}`);
+    toast(`正文已保存为 v${state.chapter.versionNo}${spacingChanged ? "，多余空行已整理" : ""}`);
   } catch (error) {
     setSaveState("保存失败", true);
     toast(error.message, "error");
