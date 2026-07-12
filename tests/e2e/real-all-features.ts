@@ -110,10 +110,11 @@ try {
   assert.equal(health.status, "ok");
   checked("health", "service is available");
 
-  const [page, application, graph] = await Promise.all([
+  const [page, application, graph, markdown] = await Promise.all([
     fetch(`${appUrl}/`).then((response) => response.text()),
     fetch(`${appUrl}/app.js`).then((response) => response.text()),
-    fetch(`${appUrl}/relationship-graph.js`).then((response) => response.text())
+    fetch(`${appUrl}/relationship-graph.js`).then((response) => response.text()),
+    fetch(`${appUrl}/markdown.js`).then((response) => response.text())
   ]);
   assert.match(page, /id="shelf-view"/u);
   assert.match(page, /data-testid="relationship-fullscreen"/u);
@@ -126,6 +127,9 @@ try {
   assert.match(application, /concurrencyLimit/u);
   assert.match(application, /step="any"/u);
   assert.match(application, /streamChat/u);
+  assert.match(application, /renderMarkdown/u);
+  assert.match(markdown, /export function renderMarkdown/u);
+  assert.match(markdown, /noopener noreferrer/u);
   assert.match(application, /scheduleChapterAutoSave/u);
   assert.match(application, /collapsedVolumeIds/u);
   assert.match(application, /contextmenu/u);

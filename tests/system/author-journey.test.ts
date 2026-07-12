@@ -133,14 +133,17 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
+    const markdown = await request(runtime.app).get("/markdown.js").expect(200);
     const icon = await request(runtime.app).get("/icon.svg").expect(200).expect("Content-Type", /svg/u);
     const manifest = await request(runtime.app).get("/site.webmanifest").expect(200);
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-chapter-autosave');
+    expect(page.text).toContain('/app.js?v=20260712-chat-markdown');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain('source: automatic ? "auto" : "manual"');
+    expect(markdown.text).toContain("export function renderMarkdown");
+    expect(markdown.text).toContain("safeLinkTarget");
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
@@ -162,6 +165,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
     expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
+    expect(application.text).toContain("content.innerHTML = renderMarkdown(streamedText)");
+    expect(application.text).toContain('class="message-body"');
+    expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");

@@ -1,5 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-galaxy-3d";
 import { collapseExcessBlankLines, normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-auto-blank-lines";
+import { renderMarkdown } from "/markdown.js?v=20260712-chat-markdown";
 
 const state = {
   works: [],
@@ -1422,10 +1423,11 @@ async function streamChat(body) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<span>助手 · 正在生成</span><p data-testid="ai-stream-content" aria-live="polite"></p><div class="message-meta">正在连接模型流……</div>';
+  message.innerHTML = '<span>助手 · 正在生成</span><div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
   $("#ai-feed").append(message);
-  const content = message.querySelector("p");
+  const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  let streamedText = "";
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -1450,8 +1452,9 @@ async function streamChat(body) {
       if (!dataLines.length) return;
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "delta") {
-        content.textContent += payload.delta ?? "";
-        meta.textContent = `已接收 ${Array.from(content.textContent).length} 字`;
+        streamedText += payload.delta ?? "";
+        content.innerHTML = renderMarkdown(streamedText);
+        meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
         $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
       } else if (eventName === "complete") {
         message.classList.remove("is-streaming");
@@ -1482,7 +1485,7 @@ async function streamChat(body) {
 function appendMessage(role, text, citations = []) {
   const message = document.createElement("div");
   message.className = role === "user" ? "user-message" : "assistant-message";
-  message.innerHTML = `<span>${role === "user" ? "作者" : "助手"}</span><p>${esc(text)}</p>`;
+  message.innerHTML = `<span>${role === "user" ? "作者" : "助手"}</span><div class="message-body">${renderMarkdown(text)}</div>`;
   if (citations.length) {
     const references = document.createElement("div");
     references.className = "message-citations";
@@ -1503,7 +1506,7 @@ function appendSuggestion(suggestion) {
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(issue.severity)} · ${esc(issue.type)}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<span>助手建议</span><p>${esc(suggestion.content)}</p><div class="message-meta">${esc(suggestion.provider.name)} · ${esc(suggestion.model.displayName)} · 基于 v${suggestion.chapterVersion ?? "-"}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  message.innerHTML = `<span>助手建议</span><div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(suggestion.provider.name)} · ${esc(suggestion.model.displayName)} · 基于 v${suggestion.chapterVersion ?? "-"}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
   if (applicable) {
     message.querySelector('[data-action="accept"]').addEventListener("click", async () => {
       try {

@@ -297,7 +297,18 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .assistant-message { background: var(--paper-deep); }
 .user-message { margin-left: 24px; background: var(--accent); color: #fff; }
 .assistant-message > span, .user-message > span { display: block; opacity: .65; font-size: 9px; letter-spacing: .12em; margin-bottom: 5px; }
-.assistant-message p, .user-message p { margin: 0; white-space: pre-wrap; }
+.message-body { min-width: 0; overflow-wrap: anywhere; }
+.message-body > :first-child { margin-top: 0; }.message-body > :last-child { margin-bottom: 0; }
+.message-body p { margin: 0 0 10px; white-space: normal; }
+.message-body h1, .message-body h2, .message-body h3, .message-body h4 { margin: 14px 0 7px; color: inherit; line-height: 1.35; }
+.message-body h1 { font-size: 17px; }.message-body h2 { font-size: 15px; }.message-body h3, .message-body h4 { font-size: 13px; }
+.message-body ul, .message-body ol { margin: 7px 0 11px; padding-left: 21px; }.message-body li { margin: 4px 0; }
+.message-body li.markdown-depth-1 { margin-left: 14px; }.message-body li.markdown-depth-2 { margin-left: 28px; }.message-body li.markdown-depth-3 { margin-left: 42px; }
+.message-body blockquote { margin: 9px 0; padding: 6px 9px; border-left: 3px solid currentColor; background: rgba(255,255,255,.35); opacity: .82; }
+.message-body pre { max-width: 100%; overflow-x: auto; margin: 9px 0; padding: 9px 10px; border-radius: 4px; background: #292724; color: #f6f1e7; font: 10px/1.55 var(--font-latin), monospace; white-space: pre; }
+.message-body code { padding: 1px 4px; border-radius: 3px; background: rgba(49,42,32,.1); font-family: var(--font-latin), monospace; font-size: .9em; }.message-body pre code { padding: 0; background: transparent; color: inherit; }
+.message-body a { color: var(--accent-dark); text-decoration: underline; text-underline-offset: 2px; }.user-message .message-body a { color: inherit; }
+.message-body hr { margin: 12px 0; border: 0; border-top: 1px solid currentColor; opacity: .22; }
 .message-meta { margin-top: 8px; color: var(--muted); font-size: 9px; }
 .guard-card { margin-top: 10px; padding: 9px 10px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 4px; background: rgba(255,255,255,.55); }
 .guard-card.warning { border-left-color: #c07b31; }.guard-card.failed { border-left-color: var(--accent); }
