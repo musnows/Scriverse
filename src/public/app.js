@@ -661,6 +661,10 @@ function field(name, label, type = "text", value = "", options = []) {
     const selected = new Set((Array.isArray(value) ? value : []).map(String));
     return `<label>${esc(label)}<select name="${esc(name)}" multiple size="${Math.min(8, Math.max(3, options.length))}">${options.map(([key, text]) => `<option value="${esc(key)}" ${selected.has(String(key)) ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   }
+  if (type === "chips") {
+    const selected = new Set((Array.isArray(value) ? value : []).map(String));
+    return `<div class="form-field chip-field"><span>${esc(label)}</span><div class="chip-picker" role="group" aria-label="${esc(label)}">${options.map(([key, text]) => `<label class="member-chip"><input type="checkbox" name="${esc(name)}" value="${esc(key)}" ${selected.has(String(key)) ? "checked" : ""}><span>${esc(text)}</span></label>`).join("")}</div></div>`;
+  }
   if (type === "checkbox") return `<label class="checkbox-field"><input name="${esc(name)}" type="checkbox" ${value ? "checked" : ""}><span>${esc(label)}</span></label>`;
   return `<label>${esc(label)}<input name="${esc(name)}" type="${esc(type)}" value="${esc(value)}" ${type === "password" ? 'autocomplete="new-password"' : ""} ${type === "number" ? 'step="any"' : ""}></label>`;
 }
@@ -793,7 +797,7 @@ async function openOrganizationDialog(item) {
     field("name", "组织名称", "text", item?.name) +
     field("description", "组织简介", "textarea", item?.description) +
     field("settings", "组织设定（逐条填写）", "item-list", item?.settings ?? []) +
-    (memberOptions.length ? field("memberIds", "组织成员（可多选）", "multiselect", item?.memberIds ?? [], memberOptions) : ""),
+    (memberOptions.length ? field("memberIds", "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
     async (form) => {
       const settings = form.getAll("settings").map((value) => String(value).trim()).filter(Boolean);
       const body = { name: form.get("name"), description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };

@@ -115,6 +115,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("async function streamChat(body)");
     expect(application.text).toContain('field("settings", "组织设定（逐条填写）", "item-list"');
     expect(application.text).toContain('form.getAll("settings")');
+    expect(application.text).toContain('field("memberIds", "组织成员（可多选）", "chips"');
+    expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("collapsedVolumeIds");

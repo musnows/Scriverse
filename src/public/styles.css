@@ -296,6 +296,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .item-list-row button, .item-list-add { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--muted); font-size: 10px; }
 .item-list-row button { padding: 0 10px; }
 .item-list-add { justify-self: start; padding: 7px 11px; }
+.chip-picker { display: flex; flex-wrap: wrap; gap: 7px; max-height: 190px; overflow-y: auto; padding: 9px; border: 1px solid var(--line); border-radius: 4px; background: rgba(255,255,255,.34); }
+.dialog-fields .member-chip { position: relative; display: inline-flex !important; width: auto; cursor: pointer; }
+.member-chip input { position: absolute; width: 1px !important; height: 1px; opacity: 0; }
+.member-chip span { display: inline-flex; align-items: center; min-height: 30px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--muted); font-size: 10px; transition: background .14s ease, border-color .14s ease, color .14s ease; }
+.member-chip input:checked + span { border-color: var(--accent); background: var(--accent); color: #fff; }
+.member-chip input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .checkbox-field { display: flex !important; align-items: center; grid-template-columns: 18px 1fr; }
 .checkbox-field input { width: auto; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px 20px; }
