@@ -8,7 +8,7 @@
     <title>叙界 · 小说 AI 创作工作台</title>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260712-compact-chat-send">
+    <link rel="stylesheet" href="/styles.css?v=20260712-integrated-panel-toggles">
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -30,7 +30,6 @@
       </header>
 
       <aside class="left-panel">
-        <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
         <div id="left-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整作品侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="left-actions">
           <label class="file-button">
@@ -56,6 +55,7 @@
         <div class="panel-heading">
           <span>作品目录</span>
           <span id="chapter-count">0 章</span>
+          <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
         </div>
         <div id="novel-tree" class="novel-tree empty-copy">创建或选择作品后开始写作</div>
       </aside>
@@ -119,9 +119,9 @@
       </main>
 
       <aside class="ai-panel">
-        <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
         <div id="ai-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整创作助手宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="ai-heading">
+          <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
           <div><span class="status-dot"></span><strong>创作助手</strong></div>
           <small>结果先作为建议</small>
         </div>

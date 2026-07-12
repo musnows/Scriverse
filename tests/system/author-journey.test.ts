@@ -76,6 +76,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("选择第 ${index + 1} 行");
     expect(page.text).toContain('id="left-panel-resize"');
     expect(page.text).toContain('id="ai-panel-resize"');
+    expect(page.text).toContain('<div class="panel-heading">');
+    expect(page.text).toContain('<div class="ai-heading">');
     expect(styles.text).toContain(".editor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
@@ -84,6 +86,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function setupPanelResize(handle, side)");
     expect(application.text).toContain("function ensureAiPanelExpanded()");
     expect(styles.text).toContain(".app-shell.left-panel-collapsed");
+    expect(styles.text).toContain(".app-shell.left-panel-collapsed .panel-heading");
+    expect(styles.text).toContain(".app-shell.ai-panel-collapsed .ai-heading");
     expect(application.text).toContain("function addSelectedLinesAsCitation()");
     expect(application.text).toContain("input.setSelectionRange(selection.startOffset, selection.startOffset)");
     expect(application.text).toContain('addEventListener("contextmenu"');
