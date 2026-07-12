@@ -161,9 +161,21 @@ export class Database {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS timeline_tracks (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(work_id, name)
+      );
+
       CREATE TABLE IF NOT EXISTS timeline_events (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        track_id TEXT REFERENCES timeline_tracks(id) ON DELETE SET NULL,
         name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
         event_type TEXT NOT NULL DEFAULT 'other',
@@ -414,6 +426,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_settings_work ON settings(work_id, category);
       CREATE INDEX IF NOT EXISTS idx_characters_work ON characters(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_events_work ON timeline_events(work_id, time_sort);
+      CREATE INDEX IF NOT EXISTS idx_timeline_tracks_work ON timeline_tracks(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_relationships_work ON relationships(work_id);
       CREATE INDEX IF NOT EXISTS idx_reviews_work ON review_items(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_tasks_work ON analysis_tasks(work_id, status);
@@ -503,6 +516,26 @@ export class Database {
           this.run("ALTER TABLE providers ADD COLUMN max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768)");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(6)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS timeline_tracks (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(work_id, name)
+        )`);
+        const eventColumns = new Set(this.all("PRAGMA table_info(timeline_events)").map((row) => String(row.name)));
+        if (!eventColumns.has("track_id")) {
+          this.run("ALTER TABLE timeline_events ADD COLUMN track_id TEXT REFERENCES timeline_tracks(id) ON DELETE SET NULL");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_timeline_tracks_work ON timeline_tracks(work_id, sort_order)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (6, ?)", new Date().toISOString());
       });
     }
   }

@@ -41,6 +41,7 @@ type CharacterInput = {
 
 type TimelineInput = {
   name: string;
+  trackId?: string | null;
   description?: string;
   eventType?: string;
   timeLabel?: string;
@@ -52,6 +53,12 @@ type TimelineInput = {
   impactScope?: string;
   evidence?: unknown[];
   status?: string;
+};
+
+type TimelineTrackInput = {
+  name: string;
+  description?: string;
+  sortOrder?: number;
 };
 
 type RelationshipInput = {
@@ -1392,16 +1399,72 @@ export class Store {
     }
   }
 
+  createTimelineTrack(workId: string, input: TimelineTrackInput): Record<string, unknown> {
+    this.getWork(workId);
+    const trackId = id("timeline-track");
+    const timestamp = now();
+    const fallbackOrder = Number(this.db.get("SELECT COALESCE(MAX(sort_order), -1) + 1 AS value FROM timeline_tracks WHERE work_id = ?", workId)?.value ?? 0);
+    this.db.run(
+      `INSERT INTO timeline_tracks (id, work_id, name, description, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      trackId,
+      workId,
+      input.name,
+      input.description ?? "",
+      input.sortOrder ?? fallbackOrder,
+      timestamp,
+      timestamp
+    );
+    this.audit(workId, "timeline-track.created", "timeline-track", trackId);
+    return this.getTimelineTrack(trackId);
+  }
+
+  listTimelineTracks(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all("SELECT * FROM timeline_tracks WHERE work_id = ? ORDER BY sort_order, created_at", workId).map((row) => this.mapTimelineTrack(row));
+  }
+
+  getTimelineTrack(trackId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM timeline_tracks WHERE id = ?", trackId);
+    if (!row) throw notFound("独立时间轴");
+    return this.mapTimelineTrack(row);
+  }
+
+  updateTimelineTrack(trackId: string, input: Partial<TimelineTrackInput>): Record<string, unknown> {
+    const current = this.getTimelineTrack(trackId);
+    this.db.run(
+      "UPDATE timeline_tracks SET name = ?, description = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+      input.name ?? String(current.name),
+      input.description ?? String(current.description),
+      input.sortOrder ?? Number(current.sortOrder),
+      now(),
+      trackId
+    );
+    this.audit(String(current.workId), "timeline-track.updated", "timeline-track", trackId, { fields: Object.keys(input) });
+    return this.getTimelineTrack(trackId);
+  }
+
+  deleteTimelineTrack(trackId: string): void {
+    const current = this.getTimelineTrack(trackId);
+    this.db.run("DELETE FROM timeline_tracks WHERE id = ?", trackId);
+    this.audit(String(current.workId), "timeline-track.deleted", "timeline-track", trackId);
+  }
+
   createTimelineEvent(workId: string, input: TimelineInput): Record<string, unknown> {
     this.getWork(workId);
+    if (input.trackId) {
+      const track = this.getTimelineTrack(input.trackId);
+      if (track.workId !== workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "独立时间轴不属于当前作品");
+    }
     const eventId = id("event");
     const timestamp = now();
     this.db.run(
-      `INSERT INTO timeline_events (id, work_id, name, description, event_type, time_label, time_sort, chapter_ids_json,
+      `INSERT INTO timeline_events (id, work_id, track_id, name, description, event_type, time_label, time_sort, chapter_ids_json,
        participant_ids_json, location, causes_json, impact_scope, evidence_json, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       eventId,
       workId,
+      input.trackId ?? null,
       input.name,
       input.description ?? "",
       input.eventType ?? "other",
@@ -1436,10 +1499,15 @@ export class Store {
 
   updateTimelineEvent(eventId: string, input: Partial<TimelineInput>): Record<string, unknown> {
     const current = this.getTimelineEvent(eventId);
+    if (input.trackId) {
+      const track = this.getTimelineTrack(input.trackId);
+      if (track.workId !== current.workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "独立时间轴不属于当前作品");
+    }
     this.db.run(
-      `UPDATE timeline_events SET name = ?, description = ?, event_type = ?, time_label = ?, time_sort = ?,
+      `UPDATE timeline_events SET track_id = ?, name = ?, description = ?, event_type = ?, time_label = ?, time_sort = ?,
        chapter_ids_json = ?, participant_ids_json = ?, location = ?, causes_json = ?, impact_scope = ?, evidence_json = ?,
        status = ?, updated_at = ? WHERE id = ?`,
+      input.trackId === undefined ? (current.trackId as string | null) : input.trackId,
       input.name ?? String(current.name),
       input.description ?? String(current.description),
       input.eventType ?? String(current.eventType),
@@ -1483,6 +1551,7 @@ export class Store {
     return this.db.transaction(() => {
       const merged = this.createTimelineEvent(workId, {
         name: input.name,
+        trackId: events.every((event) => event.trackId === events[0]?.trackId) ? (events[0]?.trackId as string | null) : null,
         description: input.description ?? events.map((event) => String(event.description)).filter(Boolean).join("\n"),
         eventType: String(events[0]?.eventType ?? "other"),
         timeLabel: input.timeLabel ?? String(events[0]?.timeLabel ?? "时间待定"),
@@ -1510,6 +1579,7 @@ export class Store {
     return this.db.transaction(() => {
       const created = parts.map((part, index) => this.createTimelineEvent(String(source.workId), {
         name: part.name,
+        trackId: source.trackId as string | null,
         description: part.description ?? String(source.description),
         eventType: String(source.eventType),
         timeLabel: part.timeLabel ?? String(source.timeLabel),
@@ -1534,6 +1604,7 @@ export class Store {
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
+      trackId: row.track_id === null ? null : requiredString(row, "track_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       eventType: requiredString(row, "event_type"),
@@ -1546,6 +1617,18 @@ export class Store {
       impactScope: requiredString(row, "impact_scope"),
       evidence: json(requiredString(row, "evidence_json"), []),
       status: requiredString(row, "status"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private mapTimelineTrack(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      name: requiredString(row, "name"),
+      description: requiredString(row, "description"),
+      sortOrder: numberValue(row, "sort_order"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -2022,12 +2105,13 @@ export class Store {
   exportWork(workId: string): Record<string, unknown> {
     const tree = this.getWorkTree(workId);
     return {
-      schemaVersion: 4,
+      schemaVersion: 5,
       exportedAt: now(),
       work: tree,
       settings: this.listSettings(workId),
       characters: this.listCharacters(workId),
       organizations: this.listOrganizations(workId),
+      timelineTracks: this.listTimelineTracks(workId),
       timeline: this.listTimelineEvents(workId),
       relationships: this.listRelationships(workId),
       outlines: this.listChapterOutlines(workId),

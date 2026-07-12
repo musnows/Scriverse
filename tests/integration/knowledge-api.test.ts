@@ -77,6 +77,31 @@ describe("设定、角色、时间轴、关系和审核 API", () => {
     expect(resolved.body.data).toMatchObject({ status: "exception", resolutionNote: "该段为回忆。" });
   });
 
+  it("支持为同一作品建立多个独立时间轴并归类事件", async () => {
+    const expedition = await request(runtime.app).post(`/api/works/${workId}/timeline-tracks`).send({
+      name: "远征主线",
+      description: "记录远征舰队的关键节点。"
+    }).expect(201);
+    const home = await request(runtime.app).post(`/api/works/${workId}/timeline-tracks`).send({
+      name: "故乡支线"
+    }).expect(201);
+    const tracks = await request(runtime.app).get(`/api/works/${workId}/timeline-tracks`).expect(200);
+    expect(tracks.body.data.map((track: { name: string }) => track.name)).toEqual(["远征主线", "故乡支线"]);
+
+    const event = await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
+      name: "舰队启航",
+      trackId: expedition.body.data.id,
+      timeLabel: "远征第一日"
+    }).expect(201);
+    expect(event.body.data.trackId).toBe(expedition.body.data.id);
+    const moved = await request(runtime.app).patch(`/api/timeline/${event.body.data.id}`).send({ trackId: home.body.data.id }).expect(200);
+    expect(moved.body.data.trackId).toBe(home.body.data.id);
+
+    await request(runtime.app).delete(`/api/timeline-tracks/${home.body.data.id}`).expect(204);
+    const ungrouped = await request(runtime.app).get(`/api/timeline/${event.body.data.id}`).expect(200);
+    expect(ungrouped.body.data.trackId).toBeNull();
+  });
+
   it("合并和拆分时间轴事件时保留参与者与证据", async () => {
     const first = await request(runtime.app).post(`/api/works/${workId}/timeline`).send({
       name: "警报触发",

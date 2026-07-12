@@ -53,6 +53,7 @@ const characterSchema = z.object({
 
 const timelineSchema = z.object({
   name: nonEmpty.max(300),
+  trackId: identifier.nullable().optional(),
   description: z.string().max(100_000).optional(),
   eventType: z.string().max(100).optional(),
   timeLabel: z.string().max(300).optional(),
@@ -64,6 +65,12 @@ const timelineSchema = z.object({
   impactScope: z.enum(["personal", "organization", "regional", "world", "galaxy"]).optional(),
   evidence: z.array(z.unknown()).optional(),
   status: z.enum(["candidate", "pending", "confirmed", "deprecated"]).optional()
+});
+
+const timelineTrackSchema = z.object({
+  name: nonEmpty.max(200),
+  description: z.string().max(20_000).optional(),
+  sortOrder: z.number().int().min(0).optional()
 });
 
 const relationshipSchema = z.object({
@@ -376,6 +383,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/organizations/:organizationId", (request, response) => {
     store.deleteOrganization(request.params.organizationId);
+    noContent(response);
+  });
+
+  app.get("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.listTimelineTracks(request.params.workId)));
+  app.post("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.createTimelineTrack(request.params.workId, parse(timelineTrackSchema, request.body)), 201));
+  app.get("/api/timeline-tracks/:trackId", (request, response) => data(response, store.getTimelineTrack(request.params.trackId)));
+  app.patch("/api/timeline-tracks/:trackId", (request, response) => data(response, store.updateTimelineTrack(request.params.trackId, parse(timelineTrackSchema.partial(), request.body))));
+  app.delete("/api/timeline-tracks/:trackId", (request, response) => {
+    store.deleteTimelineTrack(request.params.trackId);
     noContent(response);
   });
 
