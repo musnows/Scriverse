@@ -162,6 +162,17 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     toolbar.append(actions);
     const viewport = document.createElement("div");
     viewport.className = "relationship-mindmap";
+    const stage = document.createElement("div");
+    stage.className = "relationship-mindmap-stage";
+    viewport.append(stage);
+    let viewScale = 1;
+    let viewX = 0;
+    let viewY = 0;
+    const updateViewTransform = () => {
+      stage.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+      viewport.dataset.graphScale = viewScale.toFixed(3);
+    };
+    updateViewTransform();
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 1000 490");
     svg.setAttribute("preserveAspectRatio", "none");
@@ -204,7 +215,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       edgeElements.push(edgeElement);
       updateEdgeGeometry(edgeElement);
     }
-    viewport.append(svg);
+    stage.append(svg);
     const updateHighlight = (nodeId, locked = false) => {
       const related = new Set([nodeId]);
       for (const edge of graph.edges) if (edge.source === nodeId || edge.target === nodeId) {
@@ -250,8 +261,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         if (!dragState.dragged) return;
         event.preventDefault();
         const position = {
-          x: clamp((event.clientX - dragState.rect.left) / Math.max(dragState.rect.width, 1) * 1000, 48, 952),
-          y: clamp((event.clientY - dragState.rect.top) / Math.max(dragState.rect.height, 1) * 490, 38, 452),
+          x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * 1000, 48, 952),
+          y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * 490, 38, 452),
           depth: positions.get(node.id)?.depth ?? 1
         };
         positions.set(node.id, position);
@@ -280,7 +291,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         options.onSelect?.(node.id);
         render();
       });
-      viewport.append(button);
+      stage.append(button);
     }
     if (graph.nodes.length > visibleNodes.length) {
       const more = document.createElement("button");
@@ -290,6 +301,18 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       more.addEventListener("click", () => options.onOpenGalaxy?.());
       viewport.append(more);
     }
+    if (options.expanded) viewport.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const pointerX = event.clientX - rect.left;
+      const pointerY = event.clientY - rect.top;
+      const nextScale = clamp(viewScale * (event.deltaY > 0 ? 0.9 : 1.1), 0.5, 2.5);
+      const ratio = nextScale / viewScale;
+      viewX = pointerX - (pointerX - viewX) * ratio;
+      viewY = pointerY - (pointerY - viewY) * ratio;
+      viewScale = nextScale;
+      updateViewTransform();
+    }, { passive: false });
     shell.append(toolbar, viewport);
     container.append(shell);
   };
