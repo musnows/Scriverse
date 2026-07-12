@@ -118,6 +118,8 @@ try {
   assert.match(page, /id="shelf-view"/u);
   assert.match(page, /data-testid="relationship-fullscreen"/u);
   assert.match(page, /data-testid="relationship-map-expanded"/u);
+  assert.match(page, /data-testid="galaxy-3d-starfield"/u);
+  assert.match(page, /data-testid="galaxy-3d-relationships"/u);
   assert.match(page, /data-testid="chapter-type-menu"/u);
   assert.match(application, /preservedOccurrences/u);
   assert.match(application, /openOrganizationDialog/u);
@@ -131,6 +133,10 @@ try {
   assert.match(application, /data-open-character/u);
   assert.match(application, /所属组织/u);
   assert.match(graph, /createGalaxyRenderer/u);
+  assert.match(graph, /createGalaxyStarfield/u);
+  assert.match(graph, /projectGalaxyPoint/u);
+  assert.match(graph, /sceneDimension = "3"/u);
+  assert.match(graph, /camera\.yaw \+= elapsed/u);
   assert.match(graph, /relationship-map-expand/u);
   assert.match(graph, /highlightedKeywords/u);
   assert.match(graph, /is-related/u);

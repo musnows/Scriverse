@@ -172,6 +172,12 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-testid="continuation-guard"');
     expect(graph.text).toContain("export function buildRelationshipGraph");
     expect(graph.text).toContain("export function createGalaxyRenderer");
+    expect(graph.text).toContain("export function createGalaxyStarfield");
+    expect(graph.text).toContain("export function projectGalaxyPoint");
+    expect(graph.text).toContain('shell.dataset.sceneDimension = "3"');
+    expect(graph.text).toContain("camera.yaw += elapsed * 0.000045");
+    expect(page.text).toContain('data-testid="galaxy-3d-starfield"');
+    expect(page.text).toContain('data-testid="galaxy-3d-relationships"');
     expect(graph.text).toContain('expand.dataset.testid = "relationship-map-expand"');
     expect(graph.text).toContain("viewport.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain("viewport.dataset.graphScale = viewScale.toFixed(3)");
@@ -186,6 +192,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("initialNodePositions");
     expect(styles.text).toContain(".book-shelf");
     expect(styles.text).toContain(".galaxy-dialog");
+    expect(styles.text).toContain(".galaxy-shell.is-rotating-camera");
     expect(styles.text).toContain("grid-template-rows: var(--node-size) auto");
   });
 
