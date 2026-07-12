@@ -1622,8 +1622,9 @@ export class AiManager {
           skipped.push({ index: -1, reason: `已有伴侣关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
-        if (candidate.category === "conflict" && candidate.subtype === "施害与受害" && enemyPairs.has(candidatePair)) {
-          skipped.push({ index: -1, reason: "已有宿敌关系，忽略较弱的“施害与受害”重复边" });
+        const weakerEncounterConflict = ["施害与受害", "战时敌对", "围攻与反击", "追杀与反击", "单次交锋"].includes(candidate.subtype);
+        if (candidate.category === "conflict" && weakerEncounterConflict && enemyPairs.has(candidatePair)) {
+          skipped.push({ index: -1, reason: `已有宿敌关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
         const duplicateIndex = existing.findIndex((relationship) => {

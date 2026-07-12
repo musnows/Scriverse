@@ -434,6 +434,16 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       confidence: 0.9,
       timeRange: {},
       evidence: [{ chapterId: firstChapterId, chapterTitle: "第一章 埋线", quote: "我们一直是朋友", contextType: "current", supports: "两人是朋友" }]
+    }, {
+      fromCharacterId: "林舟",
+      toCharacterId: "沈星",
+      category: "conflict",
+      subtype: "战时敌对",
+      directed: false,
+      currentStatus: "ended",
+      confidence: 0.9,
+      timeRange: {},
+      evidence: [{ chapterId: firstChapterId, chapterTitle: "第一章 埋线", quote: "我们一直是朋友", contextType: "historical", supports: "曾在单场战斗中对抗" }]
     }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
     runtime = createTestRuntime(fetchMock);
     const { workId, chapters } = await seedWork(runtime);
@@ -448,6 +458,14 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       directed: false,
       confidence: 0.95
     }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: first.body.data.id,
+      toCharacterId: second.body.data.id,
+      category: "conflict",
+      subtype: "宿敌",
+      directed: false,
+      confidence: 0.95
+    }).expect(201);
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",
@@ -456,9 +474,10 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result.candidateCount).toBe(0);
     expect(result.body.data.result.skipped.some((item: { reason: string }) => item.reason.includes("已有伴侣关系"))).toBe(true);
+    expect(result.body.data.result.skipped.some((item: { reason: string }) => item.reason.includes("已有宿敌关系") && item.reason.includes("战时敌对"))).toBe(true);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
-    expect(relationships.body.data).toHaveLength(1);
-    expect(relationships.body.data[0].subtype).toBe("伴侣");
+    expect(relationships.body.data).toHaveLength(2);
+    expect(relationships.body.data.map((item: { subtype: string }) => item.subtype).sort()).toEqual(["伴侣", "宿敌"]);
   });
 
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {
