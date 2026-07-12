@@ -1072,11 +1072,12 @@ $("#save-button").addEventListener("click", saveChapter);
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
-$("#relationship-map-close").addEventListener("click", () => {
-  $("#relationship-map-dialog").close();
+function cleanupExpandedRelationshipMap() {
   state.relationshipExpandedMap?.destroy?.();
   state.relationshipExpandedMap = null;
-});
+}
+$("#relationship-map-close").addEventListener("click", () => $("#relationship-map-dialog").close());
+$("#relationship-map-dialog").addEventListener("close", cleanupExpandedRelationshipMap);
 $("#appearance-button").addEventListener("click", openAppearanceDialog);
 $("#appearance-reset").addEventListener("click", () => {
   fillAppearanceForm(typographyDefaults);
