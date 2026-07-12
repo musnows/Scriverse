@@ -180,7 +180,6 @@ function renderChapterLineNumbers() {
       number.setAttribute("aria-pressed", "true");
     }
     number.style.height = `${Math.max(lineHeight, Math.ceil(row.getBoundingClientRect().height))}px`;
-    number.style.lineHeight = `${lineHeight}px`;
     numbers.append(number);
   });
   inner.replaceChildren(numbers);
