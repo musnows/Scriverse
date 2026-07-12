@@ -487,6 +487,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       const prompt = body.messages[1]?.content ?? "";
       expect(prompt).toContain("血亲关系必须有明确亲属称谓");
       expect(prompt).toContain("严格核对对话说话人");
+      expect(prompt).toContain("集合身份、分身或内部意识不能当作额外人物扩散关系");
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
         { fromCharacterId: "林舟", toCharacterId: "沈星", category: "family", subtype: "叔侄", directed: true, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "有两个幼崽走丢了", supports: "救援幼崽" }] },
         { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "君臣", directed: true, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "君王估计也会过来", supports: "表现敬畏" }] },
