@@ -82,9 +82,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function setupPanelResize(handle, side)");
     expect(application.text).toContain("function ensureAiPanelExpanded()");
     expect(styles.text).toContain(".app-shell.left-panel-collapsed");
-    expect(application.text).toContain("function quoteChapterLines(start, end)");
+    expect(application.text).toContain("function addSelectedLinesAsCitation()");
+    expect(application.text).toContain('addEventListener("contextmenu"');
+    expect(application.text).toContain("state.aiCitations.map");
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
+    expect(styles.text).toContain("grid-template-columns: 38px minmax(0, 1fr)");
+    expect(page.text).toContain('id="ai-citations"');
+    expect(page.text).toContain('id="line-citation-menu"');
   });
 
   it("作品选择器使用紧凑字号和固定高度", async () => {

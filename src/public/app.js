@@ -10,6 +10,7 @@ const state = {
   characters: [],
   organizations: [],
   timelineTracks: [],
+  aiCitations: [],
   settings: [],
   dirty: false,
   pendingImportMeta: null,
@@ -216,22 +217,96 @@ function paintChapterLineSelection(anchor, focus) {
   });
 }
 
-function quoteChapterLines(start, end) {
+function selectedChapterLinePayload(start, end) {
   const input = $("#chapter-content");
   const lines = input.value.replace(/\r\n?/gu, "\n").split("\n");
   const safeStart = Math.max(0, Math.min(start, lines.length - 1));
   const safeEnd = Math.max(safeStart, Math.min(end, lines.length - 1));
-  const selectedText = lines.slice(safeStart, safeEnd + 1).join("\n");
+  const text = lines.slice(safeStart, safeEnd + 1).join("\n");
   const startOffset = lines.slice(0, safeStart).reduce((length, line) => length + line.length + 1, 0);
-  input.setSelectionRange(startOffset, startOffset + selectedText.length);
-  const prompt = $("#ai-prompt");
+  return { safeStart, safeEnd, text, startOffset };
+}
+
+function selectChapterLines(start, end) {
+  const input = $("#chapter-content");
+  const selection = selectedChapterLinePayload(start, end);
+  input.setSelectionRange(selection.startOffset, selection.startOffset + selection.text.length);
+  input.focus({ preventScroll: true });
+  return selection;
+}
+
+function renderAiCitations() {
+  const host = $("#ai-citations");
+  host.replaceChildren();
+  host.classList.toggle("hidden", state.aiCitations.length === 0);
+  for (const citation of state.aiCitations) {
+    const card = document.createElement("article");
+    card.className = "ai-citation-card";
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "ai-citation-main";
+    const source = document.createElement("strong");
+    source.textContent = citation.chapterTitle;
+    const range = document.createElement("small");
+    range.textContent = citation.startLine === citation.endLine ? `第 ${citation.startLine} 行` : `第 ${citation.startLine}-${citation.endLine} 行`;
+    const excerpt = document.createElement("span");
+    excerpt.textContent = citation.text.replace(/\s+/gu, " ").trim() || "空白行";
+    main.append(source, range, excerpt);
+    main.addEventListener("click", () => card.classList.toggle("is-expanded"));
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "ai-citation-remove";
+    remove.setAttribute("aria-label", `移除 ${citation.chapterTitle} 第 ${citation.startLine}-${citation.endLine} 行引用`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      state.aiCitations = state.aiCitations.filter((item) => item.id !== citation.id);
+      renderAiCitations();
+    });
+    const fullText = document.createElement("pre");
+    fullText.textContent = citation.text || "（空白行）";
+    card.append(main, remove, fullText);
+    host.append(card);
+  }
+}
+
+function addSelectedLinesAsCitation() {
+  if (!state.chapter || !chapterLineSelection) return;
+  const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
+  const citation = {
+    id: `${state.chapter.id}:${selection.safeStart}:${selection.safeEnd}`,
+    chapterId: state.chapter.id,
+    chapterTitle: state.chapter.title,
+    startLine: selection.safeStart + 1,
+    endLine: selection.safeEnd + 1,
+    text: selection.text
+  };
+  const existing = state.aiCitations.findIndex((item) => item.id === citation.id);
+  if (existing < 0 && state.aiCitations.length >= 20) return toast("一次最多添加 20 条正文引用", "error");
+  if (existing >= 0) state.aiCitations.splice(existing, 1, citation);
+  else state.aiCitations.push(citation);
   ensureAiPanelExpanded();
-  const label = safeStart === safeEnd ? `引用第 ${safeStart + 1} 行` : `引用第 ${safeStart + 1}-${safeEnd + 1} 行`;
-  const quote = `${label}：\n${selectedText}`;
-  prompt.value = prompt.value.trim() ? `${prompt.value.trimEnd()}\n\n${quote}` : quote;
-  prompt.focus();
-  prompt.setSelectionRange(prompt.value.length, prompt.value.length);
-  toast(`${label}已添加到创作助手`);
+  renderAiCitations();
+  closeLineCitationMenu();
+  toast(`已引用《${citation.chapterTitle}》第 ${citation.startLine}${citation.startLine === citation.endLine ? "" : `-${citation.endLine}`} 行`);
+}
+
+function closeLineCitationMenu() {
+  $("#line-citation-menu").classList.add("hidden");
+}
+
+function showLineCitationMenu(event, lineIndex) {
+  event.preventDefault();
+  if (!chapterLineSelection || lineIndex < chapterLineSelection.start || lineIndex > chapterLineSelection.end) {
+    paintChapterLineSelection(lineIndex, lineIndex);
+    selectChapterLines(lineIndex, lineIndex);
+  }
+  const menu = $("#line-citation-menu");
+  const { start, end } = chapterLineSelection;
+  $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
+  menu.classList.remove("hidden");
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8))}px`;
 }
 
 function clearChapterLineSelection() {
@@ -430,6 +505,10 @@ async function selectWork(workId) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
   const nextWork = await api(`/api/works/${workId}`);
+  if (state.work?.id !== nextWork.id) {
+    state.aiCitations = [];
+    renderAiCitations();
+  }
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -1179,16 +1258,19 @@ async function sendAi() {
   if ($("#ai-character").value) scope.characterIds = [$("#ai-character").value];
   if ($("#ai-setting").value) scope.settingIds = [$("#ai-setting").value];
   if ((scopeType === "selection" || taskType === "polish") && !selection) return toast("请先在正文中选中一段文本", "error");
-  appendMessage("user", instruction);
+  const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  appendMessage("user", instruction, citations);
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "生成中";
   try {
-    if (taskType === "chat") await streamChat({ instruction, scope, modelId });
+    if (taskType === "chat") await streamChat({ instruction, scope, modelId, citations });
     else {
-      const suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId } });
+      const suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
       appendSuggestion(suggestion);
     }
     $("#ai-prompt").value = "";
+    state.aiCitations = [];
+    renderAiCitations();
   } catch (error) {
     appendMessage("assistant", `调用失败：${error.message}`);
   } finally {
@@ -1258,10 +1340,20 @@ async function streamChat(body) {
   }
 }
 
-function appendMessage(role, text) {
+function appendMessage(role, text, citations = []) {
   const message = document.createElement("div");
   message.className = role === "user" ? "user-message" : "assistant-message";
   message.innerHTML = `<span>${role === "user" ? "作者" : "助手"}</span><p>${esc(text)}</p>`;
+  if (citations.length) {
+    const references = document.createElement("div");
+    references.className = "message-citations";
+    for (const citation of citations) {
+      const reference = document.createElement("span");
+      reference.textContent = `${citation.chapterTitle} · L${citation.startLine}${citation.endLine === citation.startLine ? "" : `-L${citation.endLine}`}`;
+      references.append(reference);
+    }
+    message.append(references);
+  }
   $("#ai-feed").append(message);
   $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
 }
@@ -1391,10 +1483,15 @@ const finishChapterLineDrag = (event) => {
   const { anchor, focus, pointerId } = chapterLineDrag;
   chapterLineDrag = null;
   if ($("#chapter-line-numbers-inner").hasPointerCapture(pointerId)) $("#chapter-line-numbers-inner").releasePointerCapture(pointerId);
-  quoteChapterLines(Math.min(anchor, focus), Math.max(anchor, focus));
+  selectChapterLines(Math.min(anchor, focus), Math.max(anchor, focus));
 };
 $("#chapter-line-numbers-inner").addEventListener("pointerup", finishChapterLineDrag);
 $("#chapter-line-numbers-inner").addEventListener("pointercancel", finishChapterLineDrag);
+$("#chapter-line-numbers-inner").addEventListener("contextmenu", (event) => {
+  const row = event.target.closest(".chapter-line-number");
+  if (row) showLineCitationMenu(event, Number(row.dataset.lineIndex));
+});
+$("#add-line-citation").addEventListener("click", addSelectedLinesAsCitation);
 $("#left-panel-toggle").addEventListener("click", () => {
   panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
   applyPanelLayout(true);
@@ -1487,9 +1584,13 @@ $("#chapter-type-menu").addEventListener("click", async (event) => {
 });
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
+  if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeChapterTypeMenu();
+  if (event.key === "Escape") {
+    closeChapterTypeMenu();
+    closeLineCitationMenu();
+  }
 });
 $("#ai-send").addEventListener("click", sendAi);
 $("#ai-prompt").addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") sendAi(); });

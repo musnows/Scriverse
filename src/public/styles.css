@@ -159,15 +159,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .editor-actions { display: flex; align-items: center; gap: 10px; }
 .chapter-stats { color: var(--muted); font-size: 11px; }
 .editor-body { display: flex; min-height: 0; flex-direction: column; }
-.chapter-editor-frame { position: relative; display: grid; grid-template-columns: 48px minmax(0, 1fr); flex: 1 1 auto; width: min(900px, 92%); min-height: 0; margin: 0 auto; }
+.chapter-editor-frame { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); flex: 1 1 auto; width: min(900px, 92%); min-height: 0; margin: 0 auto; }
 .chapter-line-numbers { position: relative; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: linear-gradient(to right, transparent, rgba(143,132,116,.04)); color: var(--muted); font-family: var(--font-latin), monospace; font-size: 10px; user-select: none; }
 #chapter-line-numbers-inner { position: absolute; top: 32px; left: 0; right: 0; will-change: transform; }
-.chapter-line-number { box-sizing: border-box; width: 100%; padding: 0 11px 0 2px; border: 0; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
+.chapter-line-number { box-sizing: border-box; width: 100%; padding: 0 7px 0 1px; border: 0; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
 .chapter-line-number:hover { background: rgba(139,61,44,.08); color: var(--accent-dark); }
 .chapter-line-number.is-line-selected { background: rgba(139,61,44,.16); color: var(--accent-dark); font-weight: 700; }
 .chapter-content { resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
 .chapter-content:focus { box-shadow: none; }
-.chapter-line-measure { position: absolute; z-index: -1; top: 0; left: 48px; visibility: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; }
+.chapter-line-measure { position: absolute; z-index: -1; top: 0; left: 38px; visibility: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; }
 .chapter-line-measure > div { display: block; }
 .chapter-insight { margin: 14px 7% 0; padding: 13px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: rgba(255,255,255,.5); color: var(--muted); font-size: 11px; line-height: 1.5; }
 .chapter-insight strong { color: var(--ink); margin-right: 8px; }
@@ -307,6 +307,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
 .prompt-options select { padding: 6px; color: var(--muted); font-size: 10px; }
 .prompt-box textarea { width: 100%; resize: none; padding: 10px; font-size: 12px; line-height: 1.45; margin-bottom: 7px; }
+.ai-citations { display: grid; gap: 6px; max-height: 190px; overflow-y: auto; margin-bottom: 8px; }
+.ai-citation-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); overflow: hidden; }
+.ai-citation-main { min-width: 0; padding: 8px 9px; border: 0; background: transparent; text-align: left; }
+.ai-citation-main strong, .ai-citation-main small, .ai-citation-main span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-citation-main strong { font-size: 10px; }.ai-citation-main small { margin-top: 2px; color: var(--accent); font-size: 8px; }.ai-citation-main span { margin-top: 4px; color: var(--muted); font-size: 9px; }
+.ai-citation-remove { width: 30px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); }
+.ai-citation-card pre { display: none; grid-column: 1 / -1; max-height: 160px; overflow: auto; margin: 0; padding: 9px; border-top: 1px solid var(--line); background: #fffefa; font: 10px/1.55 var(--font-cjk), sans-serif; white-space: pre-wrap; }
+.ai-citation-card.is-expanded pre { display: block; }
+.message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
 
 .toast-region { position: fixed; right: 24px; top: 78px; z-index: 30; display: grid; gap: 8px; }
 .toast { max-width: 360px; background: var(--ink); color: #fff; padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: appear .18s ease; }
@@ -316,6 +325,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-type-menu > div { display: grid; gap: 3px; }
 .chapter-type-menu button { border: 0; border-radius: 3px; padding: 7px 8px; background: transparent; text-align: left; font-size: 11px; }
 .chapter-type-menu button:hover, .chapter-type-menu button.active { background: var(--paper-deep); color: var(--accent-dark); }
+.line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
+.line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }
 @keyframes appear { from { opacity: 0; transform: translateY(-7px); } }
 
 .dialog { width: min(570px, 92vw); max-height: 88vh; border: 1px solid var(--line); border-radius: 5px; padding: 0; background: var(--panel); box-shadow: var(--shadow); }

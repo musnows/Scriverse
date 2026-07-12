@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260712-resizable-panels">
+    <link rel="stylesheet" href="/styles.css?v=20260712-structured-citations">
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -144,6 +144,7 @@
           </div>
         </div>
         <div class="prompt-box">
+          <div id="ai-citations" class="ai-citations hidden" aria-label="已添加的正文引用"></div>
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
               <option value="chat">问答</option>
@@ -172,6 +173,10 @@
         <button type="button" role="menuitemradio" data-chapter-type="作者的话">作者的话</button>
         <button type="button" role="menuitemradio" data-chapter-type="其他">其他</button>
       </div>
+    </div>
+    <div id="line-citation-menu" class="line-citation-menu hidden" role="menu" aria-label="正文行引用操作">
+      <strong id="line-citation-label">已选择正文</strong>
+      <button id="add-line-citation" type="button" role="menuitem">添加到创作助手引用</button>
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
@@ -280,6 +285,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260712-resizable-panels"></script>
+    <script type="module" src="/app.js?v=20260712-structured-citations"></script>
   </body>
 </html>
