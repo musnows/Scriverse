@@ -184,11 +184,13 @@ function renderChapterLineNumbers() {
     number.dataset.lineIndex = String(index);
     number.setAttribute("aria-label", `选择第 ${index + 1} 行`);
     number.tabIndex = -1;
-    if (chapterLineSelection && index >= chapterLineSelection.start && index <= chapterLineSelection.end) {
+    const selected = chapterLineSelection && index >= chapterLineSelection.start && index <= chapterLineSelection.end;
+    if (selected) {
       number.classList.add("is-line-selected");
       number.setAttribute("aria-pressed", "true");
     }
-    number.style.height = `${Math.max(lineHeight, Math.ceil(row.getBoundingClientRect().height))}px`;
+    const rowHeight = Math.max(lineHeight, Math.ceil(row.getBoundingClientRect().height));
+    number.style.height = `${rowHeight}px`;
     numbers.append(number);
   });
   inner.replaceChildren(numbers);

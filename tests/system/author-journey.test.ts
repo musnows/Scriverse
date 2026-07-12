@@ -89,6 +89,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("state.aiCitations.map");
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
+    expect(styles.text).toContain(".chapter-line-number.is-line-selected::after");
+    expect(styles.text).toContain("width: 100vw; height: 100%");
     expect(styles.text).toContain("grid-template-columns: 38px minmax(0, 1fr)");
     expect(styles.text).toContain("width: 100%; min-height: 0; margin: 0;");
     expect(styles.text).toContain("font-variant-numeric: tabular-nums; text-align: center");
@@ -135,7 +137,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-dynamic-document-title');
+    expect(page.text).toContain('/app.js?v=20260712-line-selection-highlight');
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
