@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
+import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeFocusCamera, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -44,5 +44,17 @@ describe("人物关系图数据与布局", () => {
     const far = projectGalaxyPoint({ x: 100, y: 0, z: 300 }, camera, viewport);
     expect(near.scale).toBeGreaterThan(far.scale);
     expect(near.x - viewport.width / 2).toBeGreaterThan(far.x - viewport.width / 2);
+  });
+
+  it("点击节点后把三维相机聚焦并放大到该节点", () => {
+    const node = { x: 320, y: -80, z: 140 };
+    const initial = { yaw: -0.38, pitch: 0.72, distance: 1420, focalRatio: 1.72, zoom: 1, targetX: 0, targetY: 0, targetZ: 0 };
+    const focused = { ...initial, ...getGalaxyNodeFocusCamera(node, initial) };
+    const viewport = { width: 1200, height: 800 };
+    const projected = projectGalaxyPoint(node, focused, viewport);
+
+    expect(focused).toMatchObject({ targetX: 320, targetY: -80, targetZ: 140, distance: 940, zoom: 1.65 });
+    expect(projected.x).toBe(viewport.width / 2);
+    expect(projected.y).toBe(viewport.height / 2);
   });
 });

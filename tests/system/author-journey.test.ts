@@ -143,7 +143,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-relationship-label-parity');
+    expect(page.text).toContain('/app.js?v=20260712-galaxy-node-focus');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
@@ -206,6 +206,9 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("export function createGalaxyRenderer");
     expect(graph.text).toContain("export function createGalaxyStarfield");
     expect(graph.text).toContain("export function projectGalaxyPoint");
+    expect(graph.text).toContain("export function getGalaxyNodeFocusCamera");
+    expect(graph.text).toContain("focusCameraOnNode(node)");
+    expect(graph.text).toContain("duration: 650");
     expect(graph.text).toContain('shell.dataset.sceneDimension = "3"');
     expect(graph.text).toContain("camera.yaw += elapsed * 0.000045");
     expect(page.text).toContain('data-testid="galaxy-3d-starfield"');

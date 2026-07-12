@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-relationship-label-parity";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-galaxy-node-focus";
 import { collapseExcessBlankLines, normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-auto-blank-lines";
 import { renderMarkdown } from "/markdown.js?v=20260712-chat-markdown";
 

@@ -463,14 +463,17 @@ export function createGalaxyStarfield(seed, count = 3600) {
 }
 
 export function projectGalaxyPoint(point, camera, viewport) {
+  const relativeX = point.x - Number(camera.targetX ?? 0);
+  const relativeY = point.y - Number(camera.targetY ?? 0);
+  const relativeZ = point.z - Number(camera.targetZ ?? 0);
   const cosYaw = Math.cos(camera.yaw);
   const sinYaw = Math.sin(camera.yaw);
   const cosPitch = Math.cos(camera.pitch);
   const sinPitch = Math.sin(camera.pitch);
-  const cameraX = point.x * cosYaw - point.z * sinYaw;
-  const yawedZ = point.x * sinYaw + point.z * cosYaw;
-  const cameraY = point.y * cosPitch - yawedZ * sinPitch;
-  const cameraZ = point.y * sinPitch + yawedZ * cosPitch;
+  const cameraX = relativeX * cosYaw - relativeZ * sinYaw;
+  const yawedZ = relativeX * sinYaw + relativeZ * cosYaw;
+  const cameraY = relativeY * cosPitch - yawedZ * sinPitch;
+  const cameraZ = relativeY * sinPitch + yawedZ * cosPitch;
   const depth = camera.distance + cameraZ;
   const focalLength = Math.min(viewport.width, viewport.height) * camera.focalRatio;
   const scale = depth > 1 ? focalLength / depth * camera.zoom : 0;
@@ -480,6 +483,16 @@ export function projectGalaxyPoint(point, camera, viewport) {
     depth,
     scale,
     visible: depth > 80
+  };
+}
+
+export function getGalaxyNodeFocusCamera(node, camera) {
+  return {
+    targetX: Number(node?.x ?? 0),
+    targetY: Number(node?.y ?? 0),
+    targetZ: Number(node?.z ?? 0),
+    distance: Math.min(Number(camera?.distance ?? 1420), 940),
+    zoom: Math.max(Number(camera?.zoom ?? 1), 1.65)
   };
 }
 
@@ -494,7 +507,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const layout = layoutGalaxy(graph, seed);
   const stars = createGalaxyStarfield(`${seed}|stars`);
   const initialNodePositions = new Map(layout.nodes.map((node) => [node.id, { x: node.x, y: node.y, z: node.z }]));
-  const initialCamera = Object.freeze({ yaw: -0.38, pitch: 0.72, distance: 1420, focalRatio: 1.72, zoom: 1 });
+  const initialCamera = Object.freeze({ yaw: -0.38, pitch: 0.72, distance: 1420, focalRatio: 1.72, zoom: 1, targetX: 0, targetY: 0, targetZ: 0 });
   const camera = { ...initialCamera };
   const nodeElements = new Map();
   const cleanups = [];
@@ -502,6 +515,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let cameraDrag = null;
   let animationFrame = 0;
   let previousFrameTime = 0;
+  let cameraFocus = null;
   let paused = false;
   let starsVisible = true;
   let destroyed = false;
@@ -666,8 +680,9 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const element = nodeElements.get(node.id);
       if (!element || !point) continue;
       const perspective = clamp(point.scale / Math.max(baseScale, 0.01), 0.5, 1.8);
+      const selectedScale = node.id === selectedId ? clamp(camera.zoom, 1, 1.8) : 1;
       element.hidden = !point.visible;
-      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -50%) scale(${perspective})`;
+      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -50%) scale(${perspective * selectedScale})`;
       element.style.zIndex = String(10000 - Math.round(point.depth));
       element.style.setProperty("--depth-opacity", String(clamp(1.45 - point.depth / 2300, 0.38, 1)));
       element.dataset.worldX = node.x.toFixed(2);
@@ -686,6 +701,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.dataset.cameraPitch = camera.pitch.toFixed(5);
     shell.dataset.cameraDistance = camera.distance.toFixed(1);
     shell.dataset.graphScale = camera.zoom.toFixed(3);
+    shell.dataset.cameraTarget = [camera.targetX, camera.targetY, camera.targetZ].map((value) => value.toFixed(2)).join(",");
   };
 
   const drawScene = () => {
@@ -698,6 +714,17 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     if (destroyed || !dialog.open) return;
     const elapsed = previousFrameTime ? Math.min(50, time - previousFrameTime) : 0;
     previousFrameTime = time;
+    if (cameraFocus) {
+      const progress = clamp((time - cameraFocus.startedAt) / cameraFocus.duration, 0, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      for (const key of ["targetX", "targetY", "targetZ", "distance", "zoom"]) {
+        camera[key] = cameraFocus.from[key] + (cameraFocus.to[key] - cameraFocus.from[key]) * eased;
+      }
+      if (progress >= 1) {
+        cameraFocus = null;
+        shell.classList.remove("is-focusing-node");
+      }
+    }
     if (!paused && !cameraDrag) camera.yaw += elapsed * 0.000045;
     drawScene();
     animationFrame = window.requestAnimationFrame(renderFrame);
@@ -707,6 +734,30 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     if (animationFrame || destroyed) return;
     previousFrameTime = 0;
     animationFrame = window.requestAnimationFrame(renderFrame);
+  };
+
+  const cancelCameraFocus = () => {
+    cameraFocus = null;
+    shell.classList.remove("is-focusing-node");
+  };
+
+  const focusCameraOnNode = (node) => {
+    const target = getGalaxyNodeFocusCamera(node, camera);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    shell.dataset.focusedNodeId = node.id;
+    if (reducedMotion) {
+      Object.assign(camera, target);
+      drawScene();
+      return;
+    }
+    cameraFocus = {
+      from: Object.fromEntries(["targetX", "targetY", "targetZ", "distance", "zoom"].map((key) => [key, camera[key]])),
+      to: target,
+      startedAt: performance.now(),
+      duration: 650
+    };
+    shell.classList.add("is-focusing-node");
+    startAnimation();
   };
 
   const renderDetail = (node) => {
@@ -759,6 +810,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       listen(button, "pointerdown", (event) => {
         if (event.button !== 0) return;
         event.stopPropagation();
+        cancelCameraFocus();
         nodeDrag = {
           pointerId: event.pointerId,
           startX: event.clientX,
@@ -811,6 +863,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         }
         selectedId = node.id;
         renderDetail(node);
+        focusCameraOnNode(node);
         drawScene();
       });
       nodeElements.set(node.id, button);
@@ -819,9 +872,11 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const reset = () => {
+    cancelCameraFocus();
     Object.assign(camera, initialCamera);
     for (const node of layout.nodes) Object.assign(node, initialNodePositions.get(node.id));
     selectedId = null;
+    delete shell.dataset.focusedNodeId;
     delete shell.dataset.draggedNodeId;
     detail.classList.add("hidden");
     detail.replaceChildren();
@@ -829,6 +884,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const zoom = (factor) => {
+    cancelCameraFocus();
     camera.zoom = clamp(camera.zoom * factor, 0.45, 2.8);
     drawScene();
   };
@@ -880,6 +936,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   }, { passive: false });
   listen(shell, "pointerdown", (event) => {
     if (event.button !== 0 || event.target.closest("button, aside")) return;
+    cancelCameraFocus();
     cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch };
     shell.classList.add("is-rotating-camera");
     shell.setPointerCapture(event.pointerId);
