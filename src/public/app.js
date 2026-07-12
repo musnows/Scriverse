@@ -1,4 +1,5 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-expanded-map";
+import { normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-blank-lines";
 
 const state = {
   works: [],
@@ -333,6 +334,17 @@ async function saveChapter() {
     setSaveState("保存失败", true);
     toast(error.message, "error");
   }
+}
+
+function tidyChapterBlankLines() {
+  if (!state.chapter) return toast("请先选择章节", "error");
+  const input = $("#chapter-content");
+  const normalized = normalizeParagraphSpacing(input.value);
+  if (normalized === input.value) return toast("正文空行已经符合要求");
+  input.value = normalized;
+  updateChapterStats();
+  setSaveState("未保存", true);
+  toast("已整理空行：段与段之间保留 1 个空行");
 }
 
 function showWelcome(hasWork = false) {
@@ -1069,6 +1081,7 @@ $("#work-picker").addEventListener("change", async (event) => {
   if (selected === false && state.work) event.target.value = state.work.id;
 });
 $("#save-button").addEventListener("click", saveChapter);
+$("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
