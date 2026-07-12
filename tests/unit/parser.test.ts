@@ -99,7 +99,7 @@ describe("小说结构解析", () => {
     expect(parsed.volumes[0]?.chapters[0]?.content).toContain("第一章放出之后");
   });
 
-  it("将前传和番外识别为分卷，并把后记留在当前分卷中", () => {
+  it("仅将结构化前传识别为分卷，番外篇名留在章节正文中", () => {
     const result = parseNovelText(`前传 风暴前夜
 第一章 信号
 信号来自深空。
@@ -110,9 +110,31 @@ describe("小说结构解析", () => {
 第三章 归航
 他们回到了家。`);
 
-    expect(result.volumes.map((volume) => volume.kind)).toEqual(["prequel", "extra"]);
-    expect(result.volumes[1]?.chapters.map((chapter) => chapter.title)).toEqual(["第二章 往事", "后记", "第三章 归航"]);
-    expect(result.volumes[1]?.chapters[1]).toMatchObject({ title: "后记", chapterType: "作者的话" });
+    expect(result.volumes.map((volume) => volume.kind)).toEqual(["prequel"]);
+    expect(result.volumes[0]?.chapters.map((chapter) => chapter.title)).toEqual(["第一章 信号", "第二章 往事", "后记", "第三章 归航"]);
+    expect(result.volumes[0]?.chapters[0]?.content).toContain("番外 旧照片");
+    expect(result.volumes[0]?.chapters[2]).toMatchObject({ title: "后记", chapterType: "作者的话" });
+  });
+
+  it("不会把章节正文中独占一行的卷名误判为新分卷", () => {
+    const result = parseNovelText(`第一卷 归来
+第一章 开端
+故事开始。
+第二卷 邻居
+第二章 回忆录
+帝王组织发布了回忆录：
+
+第一卷 亿年之恋
+
+故事的开头总是这样。
+第三章 余波
+故事继续。
+第三卷 探索
+第四章 出发
+舰队启航。`);
+
+    expect(result.volumes.map((volume) => volume.title)).toEqual(["第一卷 归来", "第二卷 邻居", "第三卷 探索"]);
+    expect(result.volumes[1]?.chapters[0]?.content).toContain("第一卷 亿年之恋");
   });
 
   it("不会把流浪地球正文末尾的后记拆成独立分卷", () => {

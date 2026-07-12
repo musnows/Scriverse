@@ -3,7 +3,7 @@ import { countWords } from "./utils.js";
 
 const volumePattern = /^\s*(?:第[零一二三四五六七八九十百千万两\d]+卷|卷[零一二三四五六七八九十百千万两\d]+)(?:\s+|[:：]\s*|$)[^\n]*\s*$/u;
 const chapterPattern = /^\s*(?:第[零一二三四五六七八九十百千万两\d]+章(?:[上中下])?|序章|楔子|终章|后记|作者的话)(?:\s+|[:：]\s*|$)[^\n]*\s*$/u;
-const specialPattern = /^\s*(前传|番外|附录)(?:\s+|[:：]\s*|$)([^\n]*)\s*$/u;
+const specialVolumePattern = /^\s*(前传|附录)(?:\s+|[:：]\s*|$)([^\n]*)\s*$/u;
 
 function titleOf(line: string): string {
   return line.trim().replace(/\s+/gu, " ");
@@ -77,7 +77,29 @@ export function parseNovelText(raw: string): ParsedNovel {
     }
   }
   const lines = originalLines.filter((_line, index) => !ignoredDirectoryLines.has(index));
-  const hasExplicitVolume = lines.some((line) => volumePattern.test(line) || specialPattern.test(line));
+  // 卷标题附近必须出现目录或章节，并且同一卷号不能重复，避免把正文中的书名、篇名误当成分卷。
+  const volumeHeadingIndexes = new Set<number>();
+  const seenVolumeKeys = new Set<string>();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!volumePattern.test(line) && !specialVolumePattern.test(line)) continue;
+    const volumeKey = line.trim().match(/^(?:第([零一二三四五六七八九十百千万两\d]+)卷|卷([零一二三四五六七八九十百千万两\d]+))/u)?.slice(1).find(Boolean);
+    if (volumeKey && seenVolumeKeys.has(volumeKey)) continue;
+    let nextIndex = index + 1;
+    let meaningfulLineCount = 0;
+    while (nextIndex < lines.length && meaningfulLineCount < 8) {
+      const nextLine = lines[nextIndex] ?? "";
+      nextIndex += 1;
+      if (!nextLine.trim()) continue;
+      if (/^\s*目\s*录\s*$/u.test(nextLine) || chapterPattern.test(nextLine)) {
+        volumeHeadingIndexes.add(index);
+        if (volumeKey) seenVolumeKeys.add(volumeKey);
+        break;
+      }
+      meaningfulLineCount += 1;
+    }
+  }
+  const hasExplicitVolume = volumeHeadingIndexes.size > 0;
   const warnings: string[] = [];
   const volumes: ParsedVolume[] = [];
   let currentVolume: ParsedVolume | undefined;
@@ -118,8 +140,8 @@ export function parseNovelText(raw: string): ParsedNovel {
     });
   };
 
-  for (const line of lines) {
-    if (volumePattern.test(line) || specialPattern.test(line)) {
+  for (const [lineIndex, line] of lines.entries()) {
+    if (volumeHeadingIndexes.has(lineIndex)) {
       flushChapter();
       flushPreamble();
       const title = titleOf(line);
