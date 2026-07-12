@@ -295,6 +295,7 @@ function renderAiCitations() {
     card.append(main, remove, fullText);
     host.append(card);
   }
+  scheduleAiContextUsage();
 }
 
 function addSelectedLinesAsCitation() {
@@ -589,12 +590,29 @@ function showShelf() {
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.remove("hidden");
+  $("#platform-ai-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = `${state.works.length} 部作品`;
   setSaveState("书架");
   renderShelf();
+}
+
+async function showPlatformAi() {
+  if (state.dirty && !confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？")) return false;
+  state.dirty = false;
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.remove("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "平台 AI 管理";
+  setSaveState("平台 AI");
+  await renderPlatformAiConfig();
+  return true;
 }
 
 function renderShelf() {
@@ -631,6 +649,7 @@ async function selectWork(workId) {
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
   state.work = nextWork;
   state.chapter = null;
   updateDocumentTitle(state.work);
@@ -771,7 +790,7 @@ const moduleMeta = {
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["增量分析", "分析任务", "正文变化后只重算受影响的章节与知识对象。", "新建任务"],
-  "ai-config": ["模型配置", "AI 供应商管理", "仅接入 OpenAI Chat Completions 兼容服务，密钥只在服务端使用。", "新建供应商"]
+  "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
 };
 
 async function showModule(module) {
@@ -797,7 +816,7 @@ async function showModule(module) {
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", false);
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings");
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
@@ -808,7 +827,7 @@ async function showModule(module) {
     if (module === "relationships") await renderRelationships();
     if (module === "reviews") await renderReviews();
     if (module === "tasks") await renderTasks();
-    if (module === "ai-config") await renderAiConfig();
+    if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
     $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
   }
@@ -1000,22 +1019,33 @@ async function renderTasks() {
   }));
 }
 
-async function renderAiConfig() {
-  const [providers, models, taskDefaults] = await Promise.all([
-    api(`/api/works/${state.work.id}/providers`),
-    api(`/api/works/${state.work.id}/models`),
-    api(`/api/works/${state.work.id}/task-defaults`)
-  ]);
-  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
-  const providerContent = providers.length ? `<div class="card-grid">${providers.map((provider) => `
-    <article class="record-card"><small>${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
+function renderProviderCards(providers, models) {
+  return providers.length ? `<div class="card-grid">${providers.map((provider) => `
+    <article class="record-card"><small>平台级 · ${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
     <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit} · max_tokens：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div>${models.filter((model) => model.providerId === provider.id).map((model) => `<span class="pill">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · max_tokens ${esc(model.preset?.max_tokens ?? 32000)}</span>`).join("")}</div>
+    <div>${models.filter((model) => model.providerId === provider.id).map((model) => `<span class="pill">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token</span>`).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI Chat Completions 兼容地址和密钥，测试成功后再添加模型。");
-  const defaultsContent = models.length ? `<section class="config-section">
-    <div class="config-section-header"><div><h2>任务默认模型</h2><p>未单独指定模型时使用下列配置；所有请求都会携带 max_tokens，默认值为 32000。</p></div></div>
+}
+
+function bindPlatformProviderActions(host, providers) {
+  host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "测试中";
+    const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
+    toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
+    await renderPlatformAiConfig();
+    await loadModels();
+  }));
+  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
+  host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
+}
+
+function renderTaskDefaults(models, providers, taskDefaults) {
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
+  return models.length ? `<section class="config-section">
+    <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带 max_tokens，默认值为 32000。</p></div></div>
     <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody>${taskTypeLabels.map(([taskType, label]) => {
       const currentModelId = defaultModelByTask.get(taskType) ?? "";
       return `<tr><td>${esc(label)}<br><small>${esc(taskType)}</small></td><td><select class="default-model-select" data-task-default="${esc(taskType)}">
@@ -1027,19 +1057,55 @@ async function renderAiConfig() {
         }).join("")}
       </select></td></tr>`;
     }).join("")}</tbody></table>
-  </section>` : "";
-  $("#module-content").innerHTML = `${providerContent}${defaultsContent}`;
-  $("#module-content").querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
+  </section>` : emptyModule("尚未配置平台模型", "请先在平台 AI 管理中添加并测试供应商模型。");
+}
+
+async function renderPlatformAiConfig() {
+  const [providers, models, settings] = await Promise.all([
+    api("/api/platform/ai/providers"),
+    api("/api/platform/ai/models"),
+    api("/api/platform/ai/settings")
+  ]);
+  const host = $("#platform-ai-content");
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><label class="field-label">全局系统提示词<textarea id="platform-system-prompt" rows="7" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></label><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section>${renderProviderCards(providers, models)}`;
+  $("#save-platform-system-prompt").addEventListener("click", async () => {
+    const button = $("#save-platform-system-prompt");
     button.disabled = true;
-    button.textContent = "测试中";
-    const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
-    toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
-    await renderAiConfig();
-    await loadModels();
-  }));
-  $("#module-content").querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
-  $("#module-content").querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
-  $("#module-content").querySelectorAll("[data-task-default]").forEach((select) => select.addEventListener("change", async () => {
+    try {
+      await api("/api/platform/ai/settings", { method: "PATCH", body: { systemPrompt: $("#platform-system-prompt").value } });
+      toast("平台全局系统提示词已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  bindPlatformProviderActions(host, providers);
+}
+
+async function renderBookAiSettings() {
+  const [settings, providers, models, taskDefaults] = await Promise.all([
+    api(`/api/works/${state.work.id}/ai-settings`),
+    api("/api/platform/ai/providers"),
+    api(`/api/works/${state.work.id}/models`),
+    api(`/api/works/${state.work.id}/task-defaults`)
+  ]);
+  const host = $("#module-content");
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><label class="field-label">本书追加系统提示词<textarea id="work-system-prompt" rows="8" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></label><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  $("#save-work-system-prompt").addEventListener("click", async () => {
+    const button = $("#save-work-system-prompt");
+    button.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { systemPrompt: $("#work-system-prompt").value } });
+      toast("本书系统提示词已保存");
+      scheduleAiContextUsage();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  host.querySelectorAll("[data-task-default]").forEach((select) => select.addEventListener("change", async () => {
     select.disabled = true;
     try {
       await api(`/api/works/${state.work.id}/task-defaults/${select.dataset.taskDefault}`, { method: "PUT", body: { modelId: select.value } });
@@ -1047,7 +1113,8 @@ async function renderAiConfig() {
     } catch (error) {
       toast(error.message, "error");
     }
-    await renderAiConfig();
+    await renderBookAiSettings();
+    await loadModels();
   }));
 }
 
@@ -1058,6 +1125,82 @@ async function loadModels() {
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(model.displayName)} · ${esc(model.modelId)}</option>`).join("")
     : '<option value="">请先配置模型</option>';
+  scheduleAiContextUsage();
+}
+
+let aiContextUsageTimer = null;
+let aiContextUsageRequest = 0;
+
+function currentAiRequestScope() {
+  if (!state.work || !state.chapter) return null;
+  const taskType = $("#ai-task").value;
+  const scopeType = $("#ai-scope").value;
+  const selection = $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd);
+  const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
+  const scope = scopeType === "book" ? { type: "book" }
+    : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
+    : scopeType === "selection" ? { type: "selection", chapterId: state.chapter.id, selection }
+    : { type: "chapter", chapterId: state.chapter.id, ...(taskType === "polish" ? { selection } : {}) };
+  if ($("#ai-character").value) scope.characterIds = [$("#ai-character").value];
+  if ($("#ai-setting").value) scope.settingIds = [$("#ai-setting").value];
+  return { taskType, scope, selection };
+}
+
+function setAiContextMeter(usage) {
+  const meter = $("#ai-context-meter");
+  const value = meter.querySelector("b");
+  const label = meter.querySelector("small");
+  if (!usage) {
+    meter.classList.add("is-empty");
+    meter.classList.remove("is-warning", "is-danger");
+    meter.style.setProperty("--context-usage", "0");
+    value.textContent = "—";
+    label.textContent = "上下文";
+    meter.title = "选择可用模型后显示当前上下文用量";
+    return;
+  }
+  const percent = Math.max(0, Math.min(100, Number(usage.usagePercent) || 0));
+  meter.classList.remove("is-empty");
+  meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
+  meter.classList.toggle("is-danger", percent >= 90);
+  meter.style.setProperty("--context-usage", String(percent));
+  value.textContent = `${percent}%`;
+  label.textContent = "上下文";
+  meter.title = `当前输入约 ${Number(usage.inputTokens).toLocaleString("zh-CN")} / ${Number(usage.contextWindow).toLocaleString("zh-CN")} Token，可用 ${Number(usage.remainingTokens).toLocaleString("zh-CN")} Token`;
+}
+
+function scheduleAiContextUsage() {
+  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
+  aiContextUsageTimer = setTimeout(() => {
+    aiContextUsageTimer = null;
+    void refreshAiContextUsage();
+  }, 260);
+}
+
+async function refreshAiContextUsage() {
+  const requestScope = currentAiRequestScope();
+  const modelId = $("#ai-model").value;
+  if (!requestScope || !modelId || ((requestScope.scope.type === "selection" || requestScope.taskType === "polish") && !requestScope.selection)) {
+    setAiContextMeter(null);
+    return;
+  }
+  const requestId = ++aiContextUsageRequest;
+  try {
+    const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+    const usage = await api(`/api/works/${state.work.id}/ai-context-usage`, {
+      method: "POST",
+      body: {
+        modelId,
+        taskType: requestScope.taskType,
+        scope: requestScope.scope,
+        instruction: $("#ai-prompt").value,
+        citations
+      }
+    });
+    if (requestId === aiContextUsageRequest) setAiContextMeter(usage);
+  } catch {
+    if (requestId === aiContextUsageRequest) setAiContextMeter(null);
+  }
 }
 
 async function loadAiReferences() {
@@ -1368,15 +1511,16 @@ function openProviderDialog(item) {
   openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("baseUrl", "Chat Completions 基础地址", "url", item?.baseUrl ?? "https://api.openai.com/v1") + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限（RPM）", "number", item?.rpmLimit ?? 10) + field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
     const body = { name: form.get("name"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), maxTokens: Number(form.get("maxTokens")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
     if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
-    await api(item ? `/api/providers/${item.id}` : `/api/works/${state.work.id}/providers`, { method: item ? "PATCH" : "POST", body });
-    await renderAiConfig();
+    await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
+    await renderPlatformAiConfig();
+    await loadModels();
   }, item ? "限流与凭据" : "OpenAI 兼容协议");
 }
 
 function openModelDialog(providerId) {
-  openDialog("添加模型", field("displayName", "显示名称") + field("modelId", "模型标识符") + field("purposes", "用途（用逗号分隔）", "text", "通用对话, 创作续写") + field("temperature", "默认温度", "number", "0.7") + field("maxTokens", "默认 max_tokens", "number", "32000") + field("enabled", "启用模型", "checkbox", true), async (form) => {
-    await api(`/api/providers/${providerId}/models`, { method: "POST", body: { displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: String(form.get("purposes")).split(/[,，]/).map((value) => value.trim()).filter(Boolean), preset: { temperature: Number(form.get("temperature")), max_tokens: Number(form.get("maxTokens")) }, enabled: form.get("enabled") === "on" } });
-    await renderAiConfig();
+  openDialog("添加模型", field("displayName", "显示名称") + field("modelId", "模型标识符") + field("purposes", "用途（用逗号分隔）", "text", "通用对话, 创作续写") + field("contextWindow", "模型上下文总量（Token）", "number", "128000") + field("temperature", "默认温度", "number", "0.7") + field("maxTokens", "默认 max_tokens", "number", "32000") + field("enabled", "启用模型", "checkbox", true), async (form) => {
+    await api(`/api/providers/${providerId}/models`, { method: "POST", body: { displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: String(form.get("purposes")).split(/[,，]/).map((value) => value.trim()).filter(Boolean), contextWindow: Number(form.get("contextWindow")), preset: { temperature: Number(form.get("temperature")), max_tokens: Number(form.get("maxTokens")) }, enabled: form.get("enabled") === "on" } });
+    await renderPlatformAiConfig();
     await loadModels();
   });
 }
@@ -1387,17 +1531,10 @@ async function sendAi() {
   if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
   const instruction = $("#ai-prompt").value.trim();
   if (!instruction) return toast("请输入指令", "error");
-  const taskType = $("#ai-task").value;
-  const scopeType = $("#ai-scope").value;
-  const selection = $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd);
-  const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
-  const scope = scopeType === "book" ? { type: "book" }
-    : scopeType === "volume" ? { type: "volume", volumeId: volume.id }
-    : scopeType === "selection" ? { type: "selection", chapterId: state.chapter.id, selection }
-    : { type: "chapter", chapterId: state.chapter.id, ...(taskType === "polish" ? { selection } : {}) };
-  if ($("#ai-character").value) scope.characterIds = [$("#ai-character").value];
-  if ($("#ai-setting").value) scope.settingIds = [$("#ai-setting").value];
-  if ((scopeType === "selection" || taskType === "polish") && !selection) return toast("请先在正文中选中一段文本", "error");
+  const requestScope = currentAiRequestScope();
+  if (!requestScope) return toast("请先选择章节", "error");
+  const { taskType, scope, selection } = requestScope;
+  if ((scope.type === "selection" || taskType === "polish") && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   appendMessage("user", instruction, citations);
   $("#ai-send").disabled = true;
@@ -1411,6 +1548,7 @@ async function sendAi() {
     $("#ai-prompt").value = "";
     state.aiCitations = [];
     renderAiCitations();
+    scheduleAiContextUsage();
   } catch (error) {
     appendMessage("assistant", `调用失败：${error.message}`);
   } finally {
@@ -1573,6 +1711,8 @@ $("#home-button").addEventListener("click", () => {
   if (!confirmDiscardChanges()) return;
   loadWorks().catch((error) => toast(error.message, "error"));
 });
+$("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
+$("#platform-new-provider").addEventListener("click", () => openProviderDialog());
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#new-chapter-button").addEventListener("click", openChapterDialog);
@@ -1608,7 +1748,9 @@ $("#chapter-content").addEventListener("input", (event) => {
   scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
+  scheduleAiContextUsage();
 });
+$("#chapter-content").addEventListener("select", scheduleAiContextUsage);
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
@@ -1652,7 +1794,13 @@ if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLin
 window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
-$("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog, "ai-config": openProviderDialog })[state.module]?.());
+$("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
+$("#ai-prompt").addEventListener("input", scheduleAiContextUsage);
+$("#ai-model").addEventListener("change", scheduleAiContextUsage);
+$("#ai-task").addEventListener("change", scheduleAiContextUsage);
+$("#ai-scope").addEventListener("change", scheduleAiContextUsage);
+$("#ai-character").addEventListener("change", scheduleAiContextUsage);
+$("#ai-setting").addEventListener("change", scheduleAiContextUsage);
 $("#import-file").addEventListener("change", async (event) => {
   if (!state.work || !event.target.files[0]) return;
   if (!confirmDiscardChanges("导入会替换当前作品目录，未保存修改将丢失。是否继续？")) {

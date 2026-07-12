@@ -71,12 +71,13 @@ PORT=13211 DATA_DIR=/path/to/scriverse-data npm run dev
 
 ## AI Provider Setup
 
-1. Start Scriverse and open a work.
-2. Open "AI Management" from the left navigation.
-3. Add an OpenAI Chat Completions-compatible provider with its base URL and API key.
-4. Add models and select a default model for each AI task.
+1. Start Scriverse and open the top-level **AI Management** page.
+2. Add an OpenAI Chat Completions-compatible provider with its base URL, API key, concurrency, RPM, and maximum output tokens.
+3. Add models with their supported context-window size in tokens.
+4. Set a platform-wide system prompt; it is appended after Scriverse's built-in prompt.
+5. In a work, open **More → AI Settings** to set the work-specific appended system prompt and default models. The work prompt is appended after the platform prompt.
 
-New providers default to `10` concurrent requests, `10` RPM, and `32000` maximum output tokens. These limits are configurable per provider in the UI.
+New providers default to `10` concurrent requests, `10` RPM, and `32000` maximum output tokens. New models default to a `128000`-token context window. The chat sidebar displays a context-usage ring for the selected model.
 
 ## Data and Security
 

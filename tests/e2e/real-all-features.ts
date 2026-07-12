@@ -10,7 +10,9 @@ const checks: Array<{ feature: string; detail: string }> = [];
 const suffix = Date.now().toString(36);
 let disposableWorkId: string | null = null;
 const cleanupWorkIds = new Set<string>();
+const cleanupProviderIds = new Set<string>();
 let upstreamStreamCompleted = false;
+let originalPlatformSystemPrompt: string | null = null;
 
 function checked(feature: string, detail: string): void {
   checks.push({ feature, detail });
@@ -123,9 +125,16 @@ try {
   assert.match(page, /data-testid="galaxy-3d-relationships"/u);
   assert.match(page, /data-testid="chapter-type-menu"/u);
   assert.match(page, /class="ai-send-button"/u);
+  assert.match(page, /id="platform-ai-view"/u);
+  assert.match(page, /id="platform-ai-button"/u);
+  assert.match(page, /id="ai-context-meter"/u);
   assert.match(application, /preservedOccurrences/u);
   assert.match(application, /openOrganizationDialog/u);
   assert.match(application, /concurrencyLimit/u);
+  assert.match(application, /contextWindow/u);
+  assert.match(application, /renderPlatformAiConfig/u);
+  assert.match(application, /renderBookAiSettings/u);
+  assert.match(application, /scheduleAiContextUsage/u);
   assert.match(application, /step="any"/u);
   assert.match(application, /streamChat/u);
   assert.match(application, /renderMarkdown/u);
@@ -267,9 +276,18 @@ try {
     apiKey: "sk-e2e-disposable-secret",
     status: "enabled"
   });
+  cleanupProviderIds.add(String(provider.id));
   assert.equal(provider.concurrencyLimit, 10);
   assert.equal(provider.rpmLimit, 10);
   assert.equal(provider.maxTokens, 32_000);
+  const platformProviders = await api<Entity[]>("GET", "/platform/ai/providers");
+  assert.ok(platformProviders.some((item) => item.id === provider.id));
+  const existingPlatformSettings = await api<Entity>("GET", "/platform/ai/settings");
+  originalPlatformSystemPrompt = String(existingPlatformSettings.systemPrompt ?? "");
+  const platformSettings = await api<Entity>("PATCH", "/platform/ai/settings", { systemPrompt: "平台统一约束。" });
+  assert.equal(platformSettings.systemPrompt, "平台统一约束。");
+  const workSettings = await api<Entity>("PATCH", `/works/${disposableWorkId}/ai-settings`, { systemPrompt: "本书专属约束。" });
+  assert.equal(workSettings.systemPrompt, "本书专属约束。");
   const configuredProvider = await api<Entity>("PATCH", `/providers/${provider.id}`, { concurrencyLimit: 4, rpmLimit: 20 });
   assert.equal(configuredProvider.concurrencyLimit, 4);
   assert.equal(configuredProvider.rpmLimit, 20);
@@ -277,9 +295,20 @@ try {
   assert.equal(connection.ok, true);
   const model = await api<Entity>("POST", `/providers/${provider.id}/models`, {
     displayName: "E2E deterministic model",
-    modelId: "e2e-deterministic-model"
+    modelId: "e2e-deterministic-model",
+    contextWindow: 128_000
   });
   assert.equal(model.preset.max_tokens, 32_000);
+  assert.equal(model.contextWindow, 128_000);
+  const contextUsage = await api<Entity>("POST", `/works/${disposableWorkId}/ai-context-usage`, {
+    modelId: model.id,
+    taskType: "chat",
+    scope: { type: "chapter", chapterId: firstChapter.id },
+    instruction: "概述本章"
+  });
+  assert.equal(contextUsage.contextWindow, 128_000);
+  assert.ok(contextUsage.inputTokens > 0);
+  checked("platform-ai", "global providers and prompt settings are shared, book prompts remain isolated, and model context usage is measurable");
 
   const streamResponse = await fetch(`${baseUrl}/works/${disposableWorkId}/chat/stream`, {
     method: "POST",
@@ -365,6 +394,22 @@ try {
       console.log(`[e2e] cleanup: deleted disposable work ${workId}`);
     } catch (error) {
       console.error("[e2e] cleanup failed", error);
+    }
+  }
+  for (const providerId of cleanupProviderIds) {
+    try {
+      await api("DELETE", `/providers/${providerId}`);
+      console.log(`[e2e] cleanup: deleted platform provider ${providerId}`);
+    } catch (error) {
+      console.error("[e2e] provider cleanup failed", error);
+    }
+  }
+  if (originalPlatformSystemPrompt !== null) {
+    try {
+      await api("PATCH", "/platform/ai/settings", { systemPrompt: originalPlatformSystemPrompt });
+      console.log("[e2e] cleanup: restored platform system prompt");
+    } catch (error) {
+      console.error("[e2e] platform prompt cleanup failed", error);
     }
   }
   mockAi.close();

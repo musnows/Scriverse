@@ -500,9 +500,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: identifier.optional(),
       taskType: z.enum(TASK_TYPES).default("chat"),
       scope: contextSchema,
-      instruction: z.string().max(100_000).default("")
+      instruction: z.string().max(100_000).default(""),
+      citations: aiCitationsSchema.optional()
     }), request.body ?? {});
-    data(response, ai.getContextUsage({ workId: request.params.workId, ...input }));
+    data(response, ai.getContextUsage({
+      workId: request.params.workId,
+      modelId: input.modelId,
+      taskType: input.taskType,
+      scope: input.scope,
+      instruction: instructionWithCitations(input.instruction, input.citations ?? [])
+    }));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {

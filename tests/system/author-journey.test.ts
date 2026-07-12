@@ -141,11 +141,14 @@ describe("作者完整创作流程", () => {
     const icon = await request(runtime.app).get("/icon.svg").expect(200).expect("Content-Type", /svg/u);
     const manifest = await request(runtime.app).get("/site.webmanifest").expect(200);
     expect(page.text).toContain('id="shelf-view"');
+    expect(page.text).toContain('id="platform-ai-view"');
+    expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/app.js?v=20260712-galaxy-node-focus');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
+    expect(page.text).toContain('id="ai-context-meter"');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain('source: automatic ? "auto" : "manual"');
     expect(markdown.text).toContain("export function renderMarkdown");
@@ -161,6 +164,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<button type="button" data-module="outlines">大纲与伏笔</button>');
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(3);
+    expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
     expect(page.text).toContain('class="relationship-map-floating-close"');
@@ -198,6 +202,10 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
+    expect(application.text).toContain('field("contextWindow", "模型上下文总量（Token）", "number", "128000")');
+    expect(application.text).toContain('async function renderPlatformAiConfig()');
+    expect(application.text).toContain('async function renderBookAiSettings()');
+    expect(application.text).toContain('function scheduleAiContextUsage()');
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("collapsedVolumeIds");
     expect(application.text).toContain('data-testid="continuation-guard"');
