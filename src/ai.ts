@@ -1618,17 +1618,38 @@ export class AiManager {
         const pair = [String(fromCharacterId), String(toCharacterId)].sort((left, right) => left.localeCompare(right));
         return `${pair[0]}|${pair[1]}`;
       };
+      const relationshipHasEnded = (relationship: Record<string, unknown>): boolean => {
+        const status = String(relationship.currentStatus ?? "").trim();
+        return /ended|completed|historical|结束|终止|已死|死亡|去世|离世|历史|曾经/iu.test(status);
+      };
       const allCandidates = [...existing, ...merged.values()];
       const partnerPairs = new Set(allCandidates
         .filter((relationship) => relationship.category === "emotional"
+          && canonicalizeRelationshipSubtype("emotional", String(relationship.subtype)) === "伴侣")
+        .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
+      const currentPartnerPairs = new Set(allCandidates
+        .filter((relationship) => !relationshipHasEnded(relationship)
+          && relationship.category === "emotional"
           && canonicalizeRelationshipSubtype("emotional", String(relationship.subtype)) === "伴侣")
         .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
       const enemyPairs = new Set(allCandidates
         .filter((relationship) => relationship.category === "conflict"
           && canonicalizeRelationshipSubtype("conflict", String(relationship.subtype)) === "宿敌")
         .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
+      const currentEnemyPairs = new Set(allCandidates
+        .filter((relationship) => !relationshipHasEnded(relationship)
+          && relationship.category === "conflict"
+          && canonicalizeRelationshipSubtype("conflict", String(relationship.subtype)) === "宿敌")
+        .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
       const familyLikePairs = new Set(allCandidates
         .filter((relationship) => {
+          const subtype = canonicalizeRelationshipSubtype(String(relationship.category), String(relationship.subtype));
+          return relationship.category === "family" || /父母|亲子|手足|兄弟|姐妹|姐弟|叔侄|监护/u.test(subtype);
+        })
+        .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
+      const currentFamilyLikePairs = new Set(allCandidates
+        .filter((relationship) => {
+          if (relationshipHasEnded(relationship)) return false;
           const subtype = canonicalizeRelationshipSubtype(String(relationship.category), String(relationship.subtype));
           return relationship.category === "family" || /父母|亲子|手足|兄弟|姐妹|姐弟|叔侄|监护/u.test(subtype);
         })
@@ -1642,31 +1663,40 @@ export class AiManager {
         return 0;
       };
       const strongestPeerSocialByPair = new Map<string, number>();
+      const strongestCurrentPeerSocialByPair = new Map<string, number>();
       for (const relationship of allCandidates) {
         const pair = unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId);
         strongestPeerSocialByPair.set(pair, Math.max(strongestPeerSocialByPair.get(pair) ?? 0, peerSocialStrength(relationship)));
+        if (!relationshipHasEnded(relationship)) {
+          strongestCurrentPeerSocialByPair.set(pair, Math.max(strongestCurrentPeerSocialByPair.get(pair) ?? 0, peerSocialStrength(relationship)));
+        }
       }
       for (const candidate of merged.values()) {
         const candidatePair = unorderedPairKey(candidate.fromCharacterId, candidate.toCharacterId);
+        const candidateEnded = relationshipHasEnded(candidate);
+        const relevantPartnerPairs = candidateEnded ? partnerPairs : currentPartnerPairs;
+        const relevantEnemyPairs = candidateEnded ? enemyPairs : currentEnemyPairs;
+        const relevantFamilyLikePairs = candidateEnded ? familyLikePairs : currentFamilyLikePairs;
+        const relevantPeerStrength = candidateEnded ? strongestPeerSocialByPair : strongestCurrentPeerSocialByPair;
         const weakerThanPartner = (candidate.category === "emotional" && ["倾慕", "亲密羁绊"].includes(candidate.subtype))
           || (candidate.category === "social" && candidate.subtype === "朋友");
-        if (weakerThanPartner && partnerPairs.has(candidatePair)) {
+        if (weakerThanPartner && relevantPartnerPairs.has(candidatePair)) {
           skipped.push({ index: -1, reason: `已有伴侣关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
         const weakerEncounterConflict = ["施害与受害", "战时敌对", "围攻与反击", "追杀与反击", "单次交锋"].includes(candidate.subtype);
-        if (candidate.category === "conflict" && weakerEncounterConflict && enemyPairs.has(candidatePair)) {
+        if (candidate.category === "conflict" && weakerEncounterConflict && relevantEnemyPairs.has(candidatePair)) {
           skipped.push({ index: -1, reason: `已有宿敌关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
         const weakerThanFamilyLike = (candidate.category === "emotional" && candidate.subtype === "亲密羁绊")
           || (candidate.category === "social" && ["同事", "朋友"].includes(candidate.subtype));
-        if (weakerThanFamilyLike && familyLikePairs.has(candidatePair)) {
+        if (weakerThanFamilyLike && relevantFamilyLikePairs.has(candidatePair)) {
           skipped.push({ index: -1, reason: `已有亲属或监护关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
         const candidatePeerStrength = peerSocialStrength(candidate);
-        if (candidatePeerStrength > 0 && (strongestPeerSocialByPair.get(candidatePair) ?? 0) > candidatePeerStrength) {
+        if (candidatePeerStrength > 0 && (relevantPeerStrength.get(candidatePair) ?? 0) > candidatePeerStrength) {
           skipped.push({ index: -1, reason: `已有更强的同级社会关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
