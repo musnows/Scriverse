@@ -138,7 +138,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-line-background-only');
+    expect(page.text).toContain('/app.js?v=20260712-chapter-autosave');
+    expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
+    expect(application.text).toContain('source: automatic ? "auto" : "manual"');
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
@@ -160,7 +162,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
     expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
-    expect(application.text).toContain("const content = normalizeParagraphSpacing(input.value)");
+    expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");
     expect(application.text).toContain('field("keywords", "分卷关键词（逐条填写）", "item-list"');

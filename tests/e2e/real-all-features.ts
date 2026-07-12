@@ -126,6 +126,7 @@ try {
   assert.match(application, /concurrencyLimit/u);
   assert.match(application, /step="any"/u);
   assert.match(application, /streamChat/u);
+  assert.match(application, /scheduleChapterAutoSave/u);
   assert.match(application, /collapsedVolumeIds/u);
   assert.match(application, /contextmenu/u);
   assert.match(application, /chapter\.wordCount/u);

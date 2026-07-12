@@ -322,8 +322,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional() }), request.body);
-    data(response, store.saveChapter(request.params.chapterId, input));
+    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional() }), request.body);
+    const { source, ...chapterInput } = input;
+    data(response, store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual"));
   });
   app.delete("/api/chapters/:chapterId", (request, response) => {
     store.deleteChapter(request.params.chapterId);

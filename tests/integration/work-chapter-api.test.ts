@@ -30,11 +30,12 @@ describe("作品、导入和章节版本 API", () => {
 
     await request(runtime.app)
       .patch(`/api/chapters/${chapter.id}`)
-      .send({ content: "林舟收到来自深空的求救信号。" })
+      .send({ content: "林舟收到来自深空的求救信号。", source: "auto" })
       .expect(200);
 
     const versions = await request(runtime.app).get(`/api/chapters/${chapter.id}/versions`).expect(200);
     expect(versions.body.data.map((item: { versionNo: number }) => item.versionNo)).toEqual([3, 2, 1]);
+    expect(versions.body.data[0].source).toBe("auto");
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     expect(tasks.body.data).toHaveLength(1);

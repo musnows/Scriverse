@@ -133,7 +133,11 @@ function setupPanelResize(handle, side) {
 let chapterLineNumberFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
+let chapterAutoSaveTimer = null;
+let chapterSaveInFlight = null;
+let lastSavedChapterSnapshot = null;
 let moduleNavExpanded = false;
+const chapterAutoSaveDelay = 800;
 
 function setModuleNavExpanded(expanded) {
   moduleNavExpanded = expanded;
@@ -469,6 +473,97 @@ function setSaveState(text, dirty = false) {
   $("#save-state").style.color = dirty ? "var(--accent)" : "var(--green)";
 }
 
+function chapterDraftSnapshot() {
+  if (!state.chapter) return null;
+  return {
+    chapterId: state.chapter.id,
+    title: $("#chapter-title").value.trim(),
+    content: normalizeParagraphSpacing($("#chapter-content").value)
+  };
+}
+
+function sameChapterSnapshot(left, right) {
+  return Boolean(left && right && left.chapterId === right.chapterId && left.title === right.title && left.content === right.content);
+}
+
+function cancelChapterAutoSave() {
+  if (chapterAutoSaveTimer !== null) clearTimeout(chapterAutoSaveTimer);
+  chapterAutoSaveTimer = null;
+}
+
+function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
+  if (!state.chapter) return;
+  cancelChapterAutoSave();
+  setSaveState("等待自动保存", true);
+  chapterAutoSaveTimer = setTimeout(() => {
+    chapterAutoSaveTimer = null;
+    persistChapter({ automatic: true });
+  }, delay);
+}
+
+async function persistChapter({ automatic = false } = {}) {
+  if (!state.chapter) {
+    if (!automatic) toast("请先选择章节", "error");
+    return null;
+  }
+  cancelChapterAutoSave();
+  if (chapterSaveInFlight) {
+    await chapterSaveInFlight;
+    const pendingDraft = chapterDraftSnapshot();
+    if (!sameChapterSnapshot(pendingDraft, lastSavedChapterSnapshot)) return persistChapter({ automatic });
+    return state.chapter;
+  }
+  const draft = chapterDraftSnapshot();
+  if (!draft?.title) {
+    setSaveState("标题不能为空", true);
+    if (!automatic) toast("章节标题不能为空", "error");
+    return null;
+  }
+  const input = $("#chapter-content");
+  if (input.value !== draft.content) {
+    input.value = draft.content;
+    scheduleChapterLineNumbers();
+  }
+  if (sameChapterSnapshot(draft, lastSavedChapterSnapshot)) {
+    setSaveState(automatic ? "已自动保存" : "已保存");
+    return state.chapter;
+  }
+  setSaveState(automatic ? "自动保存中" : "保存中", true);
+  const workId = state.work.id;
+  const request = (async () => {
+    const chapter = await api(`/api/chapters/${draft.chapterId}`, {
+      method: "PATCH",
+      body: { title: draft.title, content: draft.content, source: automatic ? "auto" : "manual" }
+    });
+    const work = await api(`/api/works/${workId}`);
+    return { chapter, work };
+  })();
+  chapterSaveInFlight = request;
+  try {
+    const saved = await request;
+    if (state.work?.id !== workId || state.chapter?.id !== draft.chapterId) return saved.chapter;
+    state.chapter = saved.chapter;
+    state.work = saved.work;
+    lastSavedChapterSnapshot = draft;
+    renderTree();
+    updateChapterStats();
+    const currentDraft = chapterDraftSnapshot();
+    if (sameChapterSnapshot(currentDraft, draft)) {
+      setSaveState(automatic ? "已自动保存" : "已保存");
+      if (!automatic) toast(`正文已保存为 v${state.chapter.versionNo}`);
+    } else {
+      scheduleChapterAutoSave(250);
+    }
+    return state.chapter;
+  } catch (error) {
+    if (state.chapter?.id === draft.chapterId) setSaveState("自动保存失败", true);
+    toast(error.message, "error");
+    return null;
+  } finally {
+    if (chapterSaveInFlight === request) chapterSaveInFlight = null;
+  }
+}
+
 function confirmDiscardChanges(message = "当前章节有未保存修改，继续将丢弃这些修改。是否继续？") {
   if (!state.dirty) return true;
   return window.confirm(message);
@@ -608,7 +703,9 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
 
 async function selectChapter(chapterId) {
   if (state.chapter?.id !== chapterId && !confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？")) return;
+  cancelChapterAutoSave();
   state.chapter = await api(`/api/chapters/${chapterId}`);
+  lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   state.module = "editor";
   markActiveModule("editor");
   $("#welcome-view").classList.add("hidden");
@@ -624,7 +721,8 @@ async function selectChapter(chapterId) {
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  setSaveState(spacingChanged ? "未保存" : "已保存", spacingChanged);
+  if (spacingChanged) scheduleChapterAutoSave(120);
+  else setSaveState("已保存");
   renderTree();
 }
 
@@ -636,27 +734,7 @@ function updateChapterStats() {
 }
 
 async function saveChapter() {
-  if (!state.chapter) return toast("请先选择章节", "error");
-  try {
-    setSaveState("保存中");
-    const input = $("#chapter-content");
-    const content = normalizeParagraphSpacing(input.value);
-    const spacingChanged = content !== input.value;
-    if (spacingChanged) input.value = content;
-    if (spacingChanged) scheduleChapterLineNumbers();
-    state.chapter = await api(`/api/chapters/${state.chapter.id}`, {
-      method: "PATCH",
-      body: { title: $("#chapter-title").value.trim(), content }
-    });
-    state.work = await api(`/api/works/${state.work.id}`);
-    renderTree();
-    updateChapterStats();
-    setSaveState("已保存");
-    toast(`正文已保存为 v${state.chapter.versionNo}${spacingChanged ? "，多余空行已整理" : ""}`);
-  } catch (error) {
-    setSaveState("保存失败", true);
-    toast(error.message, "error");
-  }
+  return persistChapter({ automatic: false });
 }
 
 function tidyChapterBlankLines() {
@@ -667,7 +745,7 @@ function tidyChapterBlankLines() {
   input.value = normalized;
   scheduleChapterLineNumbers();
   updateChapterStats();
-  setSaveState("未保存", true);
+  scheduleChapterAutoSave(120);
   toast("已整理空行：段与段之间保留 1 个空行");
 }
 
@@ -1431,6 +1509,7 @@ function appendSuggestion(suggestion) {
       try {
         const result = await api(`/api/suggestions/${suggestion.id}/accept`, { method: "POST", body: {} });
         state.chapter = result.chapter;
+        lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
         $("#chapter-content").value = state.chapter.content;
         scheduleChapterLineNumbers();
         updateChapterStats();
@@ -1456,10 +1535,12 @@ async function showVersions() {
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm(`将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`)) return;
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
+    lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
     $("#chapter-title").value = state.chapter.title;
     $("#chapter-content").value = state.chapter.content;
     scheduleChapterLineNumbers();
     updateChapterStats();
+    setSaveState("已保存");
     $("#versions-dialog").close();
     toast("历史内容已恢复为新版本");
   }));
@@ -1517,11 +1598,11 @@ $("#appearance-form").addEventListener("submit", (event) => {
   $("#appearance-dialog").close();
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
-$("#chapter-title").addEventListener("input", () => setSaveState("未保存", true));
+$("#chapter-title").addEventListener("input", () => scheduleChapterAutoSave());
 $("#chapter-content").addEventListener("input", (event) => {
   if (!event.isComposing) collapseChapterInputBlankLines(event.currentTarget);
   updateChapterStats();
-  setSaveState("未保存", true);
+  scheduleChapterAutoSave();
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
 });
