@@ -1622,7 +1622,7 @@ export class AiManager {
       };
       const relationshipHasEnded = (relationship: Record<string, unknown>): boolean => {
         const status = String(relationship.currentStatus ?? "").trim();
-        if (/未结束|尚未结束|没有结束|未终止|尚未终止|没有终止/iu.test(status)) return false;
+        if (/未结束|尚未结束|没有结束|未终止|尚未终止|没有终止|未死亡|尚未死亡|没有死亡|\bnot\s+(?:ended|completed|dead|deceased)\b|\bstill\s+alive\b/iu.test(status)) return false;
         if (/已结束|关系结束|已终止|关系终止|已死|死亡|去世|离世|至死亡/iu.test(status)) return true;
         if (/\b(?:active|ongoing|reconciled|established|stable)\b|仍在|持续|现阶段|当前/iu.test(status)) return false;
         if (/\b(?:ended|completed|historical|deceased|dead)\b/iu.test(status)) return true;
