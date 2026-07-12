@@ -152,7 +152,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('card.addEventListener("keydown"');
     expect(application.text).toContain('field("organizationIds", "所属组织（可多选）", "chips"');
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
-    expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字');
+    expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('field("settings", "组织设定（逐条填写）", "item-list"');
     expect(application.text).toContain('form.getAll("settings")');
     expect(application.text).toContain('field("memberIds", "组织成员（可多选）", "chips"');
