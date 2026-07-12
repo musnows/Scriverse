@@ -1616,6 +1616,25 @@ export class AiManager {
         .filter((relationship) => relationship.category === "conflict"
           && canonicalizeRelationshipSubtype("conflict", String(relationship.subtype)) === "宿敌")
         .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
+      const familyLikePairs = new Set(allCandidates
+        .filter((relationship) => {
+          const subtype = canonicalizeRelationshipSubtype(String(relationship.category), String(relationship.subtype));
+          return relationship.category === "family" || /父母|亲子|手足|兄弟|姐妹|姐弟|叔侄|监护/u.test(subtype);
+        })
+        .map((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId)));
+      const peerSocialStrength = (relationship: Record<string, unknown>): number => {
+        if (relationship.category !== "social") return 0;
+        const subtype = canonicalizeRelationshipSubtype("social", String(relationship.subtype));
+        if (/盟友|挚友/u.test(subtype)) return 3;
+        if (/朋友|战友|搭档|合作伙伴/u.test(subtype)) return 2;
+        if (/同事|同僚|共事/u.test(subtype)) return 1;
+        return 0;
+      };
+      const strongestPeerSocialByPair = new Map<string, number>();
+      for (const relationship of allCandidates) {
+        const pair = unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId);
+        strongestPeerSocialByPair.set(pair, Math.max(strongestPeerSocialByPair.get(pair) ?? 0, peerSocialStrength(relationship)));
+      }
       for (const candidate of merged.values()) {
         const candidatePair = unorderedPairKey(candidate.fromCharacterId, candidate.toCharacterId);
         const weakerThanPartner = (candidate.category === "emotional" && ["倾慕", "亲密羁绊"].includes(candidate.subtype))
@@ -1627,6 +1646,17 @@ export class AiManager {
         const weakerEncounterConflict = ["施害与受害", "战时敌对", "围攻与反击", "追杀与反击", "单次交锋"].includes(candidate.subtype);
         if (candidate.category === "conflict" && weakerEncounterConflict && enemyPairs.has(candidatePair)) {
           skipped.push({ index: -1, reason: `已有宿敌关系，忽略较弱的“${candidate.subtype}”重复边` });
+          continue;
+        }
+        const weakerThanFamilyLike = (candidate.category === "emotional" && candidate.subtype === "亲密羁绊")
+          || (candidate.category === "social" && ["同事", "朋友"].includes(candidate.subtype));
+        if (weakerThanFamilyLike && familyLikePairs.has(candidatePair)) {
+          skipped.push({ index: -1, reason: `已有亲属或监护关系，忽略较弱的“${candidate.subtype}”重复边` });
+          continue;
+        }
+        const candidatePeerStrength = peerSocialStrength(candidate);
+        if (candidatePeerStrength > 0 && (strongestPeerSocialByPair.get(candidatePair) ?? 0) > candidatePeerStrength) {
+          skipped.push({ index: -1, reason: `已有更强的同级社会关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
         const duplicateIndex = existing.findIndex((relationship) => {
