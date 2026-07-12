@@ -72,11 +72,16 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
     expect(page.text).toContain('id="chapter-line-numbers"');
+    expect(page.text).toContain('id="left-panel-resize"');
+    expect(page.text).toContain('id="ai-panel-resize"');
     expect(styles.text).toContain(".editor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers()");
     expect(application.text).toContain("syncChapterLineNumberScroll");
+    expect(application.text).toContain("function setupPanelResize(handle, side)");
+    expect(application.text).toContain("function ensureAiPanelExpanded()");
+    expect(styles.text).toContain(".app-shell.left-panel-collapsed");
     expect(application.text).toContain("function quoteChapterLines(start, end)");
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");

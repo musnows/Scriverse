@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260712-timeline-kanban">
+    <link rel="stylesheet" href="/styles.css?v=20260712-resizable-panels">
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -27,6 +27,8 @@
       </header>
 
       <aside class="left-panel">
+        <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
+        <div id="left-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整作品侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="work-picker-row">
           <select id="work-picker" aria-label="选择作品"></select>
           <button id="new-work-button" class="square-button" type="button" aria-label="新建作品">＋</button>
@@ -116,6 +118,8 @@
       </main>
 
       <aside class="ai-panel">
+        <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
+        <div id="ai-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整创作助手宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="ai-heading">
           <div><span class="status-dot"></span><strong>创作助手</strong></div>
           <small>结果先作为建议</small>
@@ -276,6 +280,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260712-timeline-kanban"></script>
+    <script type="module" src="/app.js?v=20260712-resizable-panels"></script>
   </body>
 </html>

@@ -37,6 +37,96 @@ const taskTypeLabels = [
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
+const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
+
+function loadPanelLayout() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(panelLayoutStorageKey) ?? "{}");
+    return {
+      leftWidth: Math.round(Math.max(180, Math.min(520, Number(stored.leftWidth) || panelLayoutDefaults.leftWidth))),
+      aiWidth: Math.round(Math.max(260, Math.min(600, Number(stored.aiWidth) || panelLayoutDefaults.aiWidth))),
+      leftCollapsed: Boolean(stored.leftCollapsed),
+      aiCollapsed: Boolean(stored.aiCollapsed)
+    };
+  } catch {
+    return { ...panelLayoutDefaults };
+  }
+}
+
+let panelLayout = loadPanelLayout();
+
+function constrainPanelLayout() {
+  const minimumMainWidth = 480;
+  if (!panelLayout.leftCollapsed) {
+    const available = window.innerWidth - (panelLayout.aiCollapsed ? 42 : panelLayout.aiWidth) - minimumMainWidth;
+    panelLayout.leftWidth = Math.max(180, Math.min(520, available, panelLayout.leftWidth));
+  }
+  if (!panelLayout.aiCollapsed) {
+    const available = window.innerWidth - (panelLayout.leftCollapsed ? 42 : panelLayout.leftWidth) - minimumMainWidth;
+    panelLayout.aiWidth = Math.max(260, Math.min(600, available, panelLayout.aiWidth));
+  }
+}
+
+function applyPanelLayout(persist = false) {
+  constrainPanelLayout();
+  const app = $("#app");
+  app.style.setProperty("--left-panel-width", `${panelLayout.leftWidth}px`);
+  app.style.setProperty("--ai-panel-width", `${panelLayout.aiWidth}px`);
+  app.classList.toggle("left-panel-collapsed", panelLayout.leftCollapsed);
+  app.classList.toggle("ai-panel-collapsed", panelLayout.aiCollapsed);
+  $("#left-panel-toggle").textContent = panelLayout.leftCollapsed ? "›" : "‹";
+  $("#left-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
+  $("#left-panel-toggle").setAttribute("aria-label", panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏");
+  $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
+  $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
+  $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
+  scheduleChapterLineNumbers();
+  if (persist) {
+    try { localStorage.setItem(panelLayoutStorageKey, JSON.stringify(panelLayout)); } catch { /* 浏览器禁用存储时仅保留当前布局 */ }
+  }
+}
+
+function ensureAiPanelExpanded() {
+  if (!panelLayout.aiCollapsed) return;
+  panelLayout.aiCollapsed = false;
+  applyPanelLayout(true);
+}
+
+function setupPanelResize(handle, side) {
+  let resize = null;
+  const updateWidth = (width) => {
+    if (side === "left") panelLayout.leftWidth = width;
+    else panelLayout.aiWidth = width;
+    applyPanelLayout();
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || (side === "left" ? panelLayout.leftCollapsed : panelLayout.aiCollapsed)) return;
+    resize = { pointerId: event.pointerId, startX: event.clientX, startWidth: side === "left" ? panelLayout.leftWidth : panelLayout.aiWidth };
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add("is-panel-resizing");
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    updateWidth(resize.startWidth + (event.clientX - resize.startX) * (side === "left" ? 1 : -1));
+  });
+  const finish = (event) => {
+    if (!resize || event.pointerId !== resize.pointerId) return;
+    resize = null;
+    document.body.classList.remove("is-panel-resizing");
+    applyPanelLayout(true);
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const current = side === "left" ? panelLayout.leftWidth : panelLayout.aiWidth;
+    updateWidth(current + direction * 12 * (side === "left" ? 1 : -1));
+    applyPanelLayout(true);
+  });
+}
 
 let chapterLineNumberFrame = null;
 let chapterLineSelection = null;
@@ -135,6 +225,7 @@ function quoteChapterLines(start, end) {
   const startOffset = lines.slice(0, safeStart).reduce((length, line) => length + line.length + 1, 0);
   input.setSelectionRange(startOffset, startOffset + selectedText.length);
   const prompt = $("#ai-prompt");
+  ensureAiPanelExpanded();
   const label = safeStart === safeEnd ? `引用第 ${safeStart + 1} 行` : `引用第 ${safeStart + 1}-${safeEnd + 1} 行`;
   const quote = `${label}：\n${selectedText}`;
   prompt.value = prompt.value.trim() ? `${prompt.value.trimEnd()}\n\n${quote}` : quote;
@@ -249,6 +340,7 @@ function openAppearanceDialog() {
 }
 
 applyTypographySettings(typographySettings);
+applyPanelLayout();
 
 async function api(path, options = {}) {
   const response = await fetch(path, options.body instanceof FormData ? options : {
@@ -1303,8 +1395,18 @@ const finishChapterLineDrag = (event) => {
 };
 $("#chapter-line-numbers-inner").addEventListener("pointerup", finishChapterLineDrag);
 $("#chapter-line-numbers-inner").addEventListener("pointercancel", finishChapterLineDrag);
+$("#left-panel-toggle").addEventListener("click", () => {
+  panelLayout.leftCollapsed = !panelLayout.leftCollapsed;
+  applyPanelLayout(true);
+});
+$("#ai-panel-toggle").addEventListener("click", () => {
+  panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
+  applyPanelLayout(true);
+});
+setupPanelResize($("#left-panel-resize"), "left");
+setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
-window.addEventListener("resize", scheduleChapterLineNumbers);
+window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog, "ai-config": openProviderDialog })[state.module]?.());
 $("#import-file").addEventListener("change", async (event) => {
