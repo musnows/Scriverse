@@ -173,7 +173,7 @@ function renderChapterLineNumbers() {
     number.className = "chapter-line-number";
     number.textContent = String(index + 1);
     number.dataset.lineIndex = String(index);
-    number.setAttribute("aria-label", `引用第 ${index + 1} 行`);
+    number.setAttribute("aria-label", `选择第 ${index + 1} 行`);
     number.tabIndex = -1;
     if (chapterLineSelection && index >= chapterLineSelection.start && index <= chapterLineSelection.end) {
       number.classList.add("is-line-selected");
