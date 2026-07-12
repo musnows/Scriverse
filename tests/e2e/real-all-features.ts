@@ -126,6 +126,10 @@ try {
   assert.match(application, /streamChat/u);
   assert.match(application, /collapsedVolumeIds/u);
   assert.match(application, /contextmenu/u);
+  assert.match(application, /chapter\.wordCount/u);
+  assert.match(application, /openVolumeDialog/u);
+  assert.match(application, /data-open-character/u);
+  assert.match(application, /所属组织/u);
   assert.match(graph, /createGalaxyRenderer/u);
   assert.match(graph, /relationship-map-expand/u);
   assert.match(graph, /highlightedKeywords/u);
@@ -151,6 +155,21 @@ try {
   assert.equal(postscriptChapter.title, "后记");
   assert.equal(postscriptChapter.chapterType, "作者的话");
   checked("disposable-import", "a fresh work was imported and its postscript remained a typed chapter instead of a standalone volume");
+
+  const createdVolume = await api<Entity>("POST", `/works/${disposableWorkId}/volumes`, {
+    title: "第二卷 暗潮",
+    kind: "main",
+    description: "双面间谍进入敌方组织。",
+    keywords: ["谍战", "身份危机", "谍战"]
+  });
+  assert.deepEqual(createdVolume.keywords, ["谍战", "身份危机"]);
+  const updatedVolume = await api<Entity>("PATCH", `/volumes/${createdVolume.id}`, {
+    description: "间谍身份开始暴露。",
+    keywords: ["身份暴露", "阵营冲突"]
+  });
+  assert.equal(updatedVolume.description, "间谍身份开始暴露。");
+  assert.deepEqual(updatedVolume.keywords, ["身份暴露", "阵营冲突"]);
+  checked("volume-metadata", "volumes can be created and edited with descriptions and keyword lists");
 
   const originalVersion = secondChapter.versionNo;
   const typedChapter = await api<Entity>("PATCH", `/chapters/${secondChapter.id}`, { chapterType: "设定" });
@@ -188,12 +207,24 @@ try {
     settings: ["以星图为成员信物", "重大决策需双席同意"],
     memberIds: [lin.id]
   });
-  const shenInOrganization = await api<Entity>("PATCH", `/characters/${shen.id}`, { organizationIds: [organization.id] });
-  assert.deepEqual(shenInOrganization.organizationIds, [organization.id]);
+  const secondOrganization = await api<Entity>("POST", `/works/${disposableWorkId}/organizations`, {
+    name: "深空同盟",
+    description: "负责深空情报交换。",
+    settings: ["成员身份分级保密"],
+    memberIds: []
+  });
+  const shenInOrganization = await api<Entity>("PATCH", `/characters/${shen.id}`, { organizationIds: [organization.id, secondOrganization.id] });
+  assert.deepEqual(new Set(shenInOrganization.organizationIds), new Set([organization.id, secondOrganization.id]));
   const organizations = await api<Entity[]>("GET", `/works/${disposableWorkId}/organizations`);
-  assert.deepEqual(new Set(organizations[0]?.memberIds), new Set([lin.id, shen.id]));
-  assert.deepEqual(organizations[0]?.settings, ["以星图为成员信物", "重大决策需双席同意"]);
-  checked("organizations", "organization settings and character membership stay synchronized in both directions");
+  const guardOrganization = organizations.find((item) => item.id === organization.id);
+  const allianceOrganization = organizations.find((item) => item.id === secondOrganization.id);
+  assert.deepEqual(new Set(guardOrganization?.memberIds), new Set([lin.id, shen.id]));
+  assert.deepEqual(allianceOrganization?.memberIds, [shen.id]);
+  assert.deepEqual(guardOrganization?.settings, ["以星图为成员信物", "重大决策需双席同意"]);
+  await api("PATCH", `/organizations/${organization.id}`, { memberIds: [lin.id] });
+  const shenAfterRemoval = await api<Entity>("GET", `/characters/${shen.id}`);
+  assert.deepEqual(shenAfterRemoval.organizationIds, [secondOrganization.id]);
+  checked("organizations", "characters can belong to multiple organizations and each membership remains independently editable");
 
   await api("PUT", `/chapters/${firstChapter.id}/outline`, {
     goal: "建立旧友关系",
