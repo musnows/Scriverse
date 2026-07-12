@@ -356,24 +356,34 @@ export function layoutGalaxy(graph, seed) {
   const random = seededRandom(hashString(seed));
   const nodes = graph.nodes.map((node, index) => {
     const angle = random() * Math.PI * 2;
-    const radius = 80 + Math.sqrt(random()) * 330;
-    return { ...node, x: Math.cos(angle) * radius, y: Math.sin(angle) * radius * 0.52, vx: 0, vy: 0, index };
+    const radius = 105 + Math.sqrt(random()) * 470;
+    const thickness = 18 + radius * 0.12;
+    return {
+      ...node,
+      x: Math.cos(angle) * radius,
+      y: (random() - 0.5) * thickness,
+      z: Math.sin(angle) * radius,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      index
+    };
   });
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const exactRepulsion = nodes.length <= 180;
   const iterations = exactRepulsion ? 130 : 82;
   const applyRepulsion = (left, right) => {
         let dx = right.x - left.x;
-        let dy = right.y - left.y;
-        const distanceSquared = Math.max(80, dx * dx + dy * dy);
+        let dz = right.z - left.z;
+        const distanceSquared = Math.max(80, dx * dx + dz * dz);
         const force = 2600 / distanceSquared;
         const distance = Math.sqrt(distanceSquared);
         dx /= distance;
-        dy /= distance;
+        dz /= distance;
         left.vx -= dx * force;
-        left.vy -= dy * force;
+        left.vz -= dz * force;
         right.vx += dx * force;
-        right.vy += dy * force;
+        right.vz += dz * force;
   };
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     const cooling = 1 - iteration / (iterations + 20);
@@ -400,25 +410,70 @@ export function layoutGalaxy(graph, seed) {
       const target = byId.get(edge.target);
       if (!source || !target) continue;
       const dx = target.x - source.x;
-      const dy = target.y - source.y;
-      const distance = Math.max(1, Math.hypot(dx, dy));
+      const dz = target.z - source.z;
+      const distance = Math.max(1, Math.hypot(dx, dz));
       const force = (distance - 125) * 0.0028 * (0.5 + edge.confidence);
       source.vx += dx / distance * force;
-      source.vy += dy / distance * force;
+      source.vz += dz / distance * force;
       target.vx -= dx / distance * force;
-      target.vy -= dy / distance * force;
+      target.vz -= dz / distance * force;
     }
     for (const node of nodes) {
       const centrality = clamp(node.importance / Math.max(graph.nodes[0]?.importance || 1, 1), 0, 1);
       node.vx += -node.x * (0.0008 + centrality * 0.0018);
-      node.vy += -node.y * (0.0016 + centrality * 0.0025);
+      node.vy += -node.y * 0.0014;
+      node.vz += -node.z * (0.0008 + centrality * 0.0018);
       node.vx *= 0.84;
       node.vy *= 0.84;
+      node.vz *= 0.84;
       node.x += node.vx * cooling;
       node.y += node.vy * cooling;
+      node.z += node.vz * cooling;
     }
   }
   return { nodes, byId };
+}
+
+export function createGalaxyStarfield(seed, count = 3600) {
+  const random = seededRandom(hashString(seed));
+  const stars = [];
+  const armCount = 4;
+  for (let index = 0; index < count; index += 1) {
+    const radius = 55 + Math.pow(random(), 0.62) * 1120;
+    const arm = index % armCount;
+    const armAngle = arm / armCount * Math.PI * 2;
+    const angle = armAngle + radius * 0.0065 + (random() - 0.5) * (0.42 + radius / 1100);
+    const thickness = 22 + radius * 0.105;
+    stars.push({
+      x: Math.cos(angle) * radius + (random() - 0.5) * 62,
+      y: (random() + random() + random() - 1.5) * thickness,
+      z: Math.sin(angle) * radius + (random() - 0.5) * 62,
+      size: random() > 0.965 ? 1.7 + random() * 1.4 : 0.45 + random() * 0.85,
+      brightness: 0.22 + random() * 0.78
+    });
+  }
+  return stars;
+}
+
+export function projectGalaxyPoint(point, camera, viewport) {
+  const cosYaw = Math.cos(camera.yaw);
+  const sinYaw = Math.sin(camera.yaw);
+  const cosPitch = Math.cos(camera.pitch);
+  const sinPitch = Math.sin(camera.pitch);
+  const cameraX = point.x * cosYaw - point.z * sinYaw;
+  const yawedZ = point.x * sinYaw + point.z * cosYaw;
+  const cameraY = point.y * cosPitch - yawedZ * sinPitch;
+  const cameraZ = point.y * sinPitch + yawedZ * cosPitch;
+  const depth = camera.distance + cameraZ;
+  const focalLength = Math.min(viewport.width, viewport.height) * camera.focalRatio;
+  const scale = depth > 1 ? focalLength / depth * camera.zoom : 0;
+  return {
+    x: viewport.width / 2 + cameraX * scale,
+    y: viewport.height / 2 + cameraY * scale,
+    depth,
+    scale,
+    visible: depth > 80
+  };
 }
 
 export function createGalaxyRenderer(dialog, graph, options = {}) {

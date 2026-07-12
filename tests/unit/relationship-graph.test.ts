@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRelationshipGraph, layoutGalaxy } from "../../src/public/relationship-graph.js";
+import { buildRelationshipGraph, createGalaxyStarfield, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -20,6 +20,21 @@ describe("人物关系图数据与布局", () => {
     const layout = layoutGalaxy(graph, "large-graph-test");
     expect(layout.nodes).toHaveLength(600);
     expect(layout.byId.size).toBe(600);
-    expect(layout.nodes.every((node: { x: number; y: number }) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true);
+    expect(layout.nodes.every((node: { x: number; y: number; z: number }) => Number.isFinite(node.x) && Number.isFinite(node.y) && Number.isFinite(node.z))).toBe(true);
+    expect(new Set(layout.nodes.map((node: { z: number }) => Math.round(node.z))).size).toBeGreaterThan(100);
+  });
+
+  it("为星点建立三维旋臂并按透视深度缩放", () => {
+    const stars = createGalaxyStarfield("three-dimensional-test", 120);
+    expect(stars).toHaveLength(120);
+    expect(stars.every((star: { x: number; y: number; z: number }) => Number.isFinite(star.x) && Number.isFinite(star.y) && Number.isFinite(star.z))).toBe(true);
+    expect(new Set(stars.map((star: { z: number }) => Math.round(star.z))).size).toBeGreaterThan(80);
+
+    const camera = { yaw: 0, pitch: 0, distance: 1500, focalRatio: 1.6, zoom: 1 };
+    const viewport = { width: 1200, height: 800 };
+    const near = projectGalaxyPoint({ x: 100, y: 0, z: -300 }, camera, viewport);
+    const far = projectGalaxyPoint({ x: 100, y: 0, z: 300 }, camera, viewport);
+    expect(near.scale).toBeGreaterThan(far.scale);
+    expect(near.x - viewport.width / 2).toBeGreaterThan(far.x - viewport.width / 2);
   });
 });
