@@ -99,11 +99,14 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="line-citation-menu"');
   });
 
-  it("作品选择器使用紧凑字号和固定高度", async () => {
+  it("作品切换和新建只保留在书架首页", async () => {
     const page = await request(runtime.app).get("/").expect(200);
-    const styles = await request(runtime.app).get("/styles.css").expect(200);
-    expect(page.text).toContain('id="work-picker"');
-    expect(styles.text).toContain(".work-picker-row select { width: 100%; height: 38px; padding: 7px 9px; font-size: 12px;");
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    expect(page.text).not.toContain('id="work-picker"');
+    expect(page.text).not.toContain('id="new-work-button"');
+    expect(page.text).toContain('id="shelf-new-work"');
+    expect(application.text).toContain('id="book-add-card"');
+    expect(application.text).not.toContain('$("#work-picker")');
   });
 
   it("全站使用黑体与等宽英文并提供可持久化显示设置", async () => {

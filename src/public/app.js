@@ -466,16 +466,10 @@ function confirmDiscardChanges(message = "当前章节有未保存修改，继�
 
 async function loadWorks(preferredId) {
   state.works = await api("/api/works");
-  const picker = $("#work-picker");
-  picker.innerHTML = state.works.length
-    ? state.works.map((work) => `<option value="${esc(work.id)}">${esc(work.title)}</option>`).join("")
-    : '<option value="">尚无作品</option>';
   if (preferredId) {
-    picker.value = preferredId;
     await selectWork(preferredId);
     return;
   }
-  if (state.work?.id && state.works.some((work) => work.id === state.work.id)) picker.value = state.work.id;
   showShelf();
 }
 
@@ -1478,14 +1472,8 @@ $("#home-button").addEventListener("click", () => {
   loadWorks().catch((error) => toast(error.message, "error"));
 });
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
-$("#new-work-button").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#new-chapter-button").addEventListener("click", openChapterDialog);
-$("#work-picker").addEventListener("change", async (event) => {
-  if (!event.target.value) return;
-  const selected = await selectWork(event.target.value);
-  if (selected === false && state.work) event.target.value = state.work.id;
-});
 $("#save-button").addEventListener("click", saveChapter);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());

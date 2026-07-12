@@ -103,11 +103,8 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .book-add-card small { max-width: 160px; text-align: center; line-height: 1.5; }
 .book-add-card:hover { border-color: var(--accent); background: rgba(255,255,255,.42); }
 
-.work-picker-row { display: flex; gap: 8px; }
 select, input, textarea { border: 1px solid var(--line); background: #fffefa; border-radius: 5px; outline: none; }
 select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0 0 0 3px rgba(139,61,44,.08); }
-.work-picker-row select { width: 100%; height: 38px; padding: 7px 9px; font-size: 12px; font-weight: 400; letter-spacing: 0; }
-.square-button { flex: 0 0 38px; border: 1px solid var(--line); border-radius: 5px; background: transparent; font-size: 20px; }
 .left-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 15px; }
 .left-actions .file-button { grid-column: 1 / -1; }
 .file-button, .secondary-button { display: grid; place-items: center; min-height: 34px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: transparent; }
