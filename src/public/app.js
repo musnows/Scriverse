@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-expanded-map-spacing";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-expanded-map-labels";
 import { normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-unicode-blank-lines";
 
 const state = {

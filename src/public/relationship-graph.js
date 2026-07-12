@@ -217,7 +217,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         label = document.createElementNS("http://www.w3.org/2000/svg", "text");
         label.setAttribute("text-anchor", "middle");
         label.classList.add("mind-edge-label");
-        label.textContent = edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype;
+        label.textContent = edge.subtype;
+        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+        title.textContent = edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype;
+        label.append(title);
         svg.append(label);
       }
       const edgeElement = { edge, path, label };
@@ -225,6 +228,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       updateEdgeGeometry(edgeElement);
     }
     stage.append(svg);
+    const edgeDetail = document.createElement("div");
+    edgeDetail.className = "mind-edge-detail hidden";
+    edgeDetail.setAttribute("aria-live", "polite");
+    viewport.append(edgeDetail);
     const updateHighlight = (nodeId, locked = false) => {
       const related = new Set([nodeId]);
       for (const edge of graph.edges) if (edge.source === nodeId || edge.target === nodeId) {
@@ -237,6 +244,22 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         edge.classList.toggle("is-dimmed", locked && !active);
         edge.classList.toggle("is-highlighted", locked && active);
       });
+      const focusedEdges = locked && nodeId !== selectedId
+        ? relevantEdges.filter((edge) => (edge.source === selectedId && edge.target === nodeId) || (edge.target === selectedId && edge.source === nodeId))
+        : [];
+      if (focusedEdges.length) {
+        const selectedName = graph.nodeById.get(selectedId)?.name ?? "当前角色";
+        const focusedName = graph.nodeById.get(nodeId)?.name ?? "关联角色";
+        const heading = document.createElement("b");
+        heading.textContent = `${selectedName}与${focusedName}`;
+        const detailText = document.createElement("span");
+        detailText.textContent = focusedEdges.map((edge) => edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype).join("；");
+        edgeDetail.replaceChildren(heading, detailText);
+        edgeDetail.classList.remove("hidden");
+      } else {
+        edgeDetail.classList.add("hidden");
+        edgeDetail.replaceChildren();
+      }
     };
     for (const node of visibleNodes.filter(Boolean)) {
       const position = positions.get(node.id);

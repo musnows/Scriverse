@@ -130,6 +130,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("viewport.dataset.graphScale = viewScale.toFixed(3)");
     expect(graph.text).toContain("firstRadiusX: 520");
     expect(graph.text).toContain("viewport.dataset.layoutWidth = String(layout.width)");
+    expect(graph.text).toContain('edgeDetail.className = "mind-edge-detail hidden"');
+    expect(styles.text).toContain(".mind-edge-detail { position: absolute;");
     expect(graph.text).toContain('viewport.addEventListener("wheel"');
     expect(graph.text).toContain('button.addEventListener("pointermove"');
     expect(graph.text).toContain("shell.dataset.draggedNodeId = node.id");
