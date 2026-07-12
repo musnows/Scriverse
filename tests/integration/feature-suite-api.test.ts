@@ -668,6 +668,36 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data.filter((item: { subtype: string }) => item.subtype === "朋友")).toHaveLength(1);
   });
 
+  it("显式结束状态优先于当前或持续修饰词", async () => {
+    let chapterId = "";
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+      { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟和沈星现在是朋友", supports: "当前朋友" }] },
+      { fromCharacterId: "乔安", toCharacterId: "叶宁", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "乔安和叶宁现在是朋友", supports: "当前朋友" }] }
+    ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({ content: "林舟和沈星现在是朋友。乔安和叶宁现在是朋友。" }).expect(200);
+    const characters = new Map<string, string>();
+    for (const name of ["林舟", "沈星", "乔安", "叶宁"]) {
+      const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name }).expect(201);
+      characters.set(name, character.body.data.id as string);
+    }
+    await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: characters.get("林舟"), toCharacterId: characters.get("沈星"), category: "social", subtype: "盟友", directed: false, currentStatus: "当前已结束"
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: characters.get("乔安"), toCharacterId: characters.get("叶宁"), category: "social", subtype: "盟友", directed: false, currentStatus: "持续至死亡"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.candidateCount).toBe(2);
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(4);
+    expect(relationships.body.data.filter((item: { subtype: string }) => item.subtype === "朋友")).toHaveLength(2);
+  });
+
   it("新强关系原地升级已有待确认弱关系", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
