@@ -85,6 +85,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function ensureAiPanelExpanded()");
     expect(styles.text).toContain(".app-shell.left-panel-collapsed");
     expect(application.text).toContain("function addSelectedLinesAsCitation()");
+    expect(application.text).toContain("input.setSelectionRange(selection.startOffset, selection.startOffset)");
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("state.aiCitations.map");
     expect(application.text).toContain('addEventListener("pointermove"');
@@ -137,7 +138,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-line-selection-highlight');
+    expect(page.text).toContain('/app.js?v=20260712-line-background-only');
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');

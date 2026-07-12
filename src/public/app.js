@@ -253,8 +253,8 @@ function selectedChapterLinePayload(start, end) {
 function selectChapterLines(start, end) {
   const input = $("#chapter-content");
   const selection = selectedChapterLinePayload(start, end);
-  input.setSelectionRange(selection.startOffset, selection.startOffset + selection.text.length);
   input.focus({ preventScroll: true });
+  input.setSelectionRange(selection.startOffset, selection.startOffset);
   return selection;
 }
 
