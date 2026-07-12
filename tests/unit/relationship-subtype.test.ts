@@ -23,5 +23,7 @@ describe("关系子类规范化", () => {
     expect(canonicalizeRelationshipCategory("social", "rival")).toBe("conflict");
     expect(canonicalizeRelationshipCategory("emotional", "父女")).toBe("family");
     expect(canonicalizeRelationshipCategory("emotional", "旧友")).toBe("social");
+    expect(canonicalizeRelationshipCategory("family", "监护与旧友")).toBe("family");
+    expect(canonicalizeRelationshipCategory("family", "姐弟般挚友与监护")).toBe("family");
   });
 });

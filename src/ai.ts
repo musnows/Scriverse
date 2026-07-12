@@ -150,7 +150,8 @@ export function canonicalizeRelationshipCategory(category: string, subtype: stri
   if (/parentchild|fatherdaughter|fatherson|motherdaughter|motherson|adopt|sister|brother|sibling|uncle|aunt|nephew|niece|父母子女|父女|父子|母女|母子|收养|养父|养母|养子|养女|姐妹|兄弟|手足|叔侄|姑侄|舅甥/u.test(key)) return "family";
   if (/romanticpartner|partner|lover|spouse|夫妻|伴侣|恋人|admirer|admired|crush|倾慕|单恋|追求|closebond|亲密羁绊|亲密关系/u.test(key)) return "emotional";
   if (/enemy|enemies|rival|宿敌|敌人|死敌|abuser|victim|施害|受害|manipulat|操纵|利用/u.test(key)) return "conflict";
-  if (/monarchsubject|subjecttoruler|rulersubject|superiorsubordinate|君王臣属|君臣|臣属君王|mentorstudent|teacherstudent|导师学生|师生|colleague|coworker|同事|同僚|共事|ally|allies|盟友|同盟|联盟|friend|friends|朋友|友人|旧友|老友|好友|挚友|战友|搭档|伙伴/u.test(key)) return "social";
+  const simplePeerSocial = /^(?:同事|同僚|共事|盟友|同盟|联盟|朋友|友人|旧友|老友|好友|挚友|战友|搭档|伙伴)$/u.test(key);
+  if (/monarchsubject|subjecttoruler|rulersubject|superiorsubordinate|君王臣属|君臣|臣属君王|mentorstudent|teacherstudent|导师学生|师生|colleague|coworker|ally|allies|friend|friends/u.test(key) || simplePeerSocial) return "social";
   return category;
 }
 
