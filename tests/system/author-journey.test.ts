@@ -69,10 +69,14 @@ describe("作者完整创作流程", () => {
   it("正文编辑区在章节概览隐藏时仍占满剩余高度", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
+    const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
+    expect(page.text).toContain('id="chapter-line-numbers"');
     expect(styles.text).toContain(".editor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }");
     expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
-    expect(styles.text).toContain(".chapter-content { flex: 1 1 auto;");
+    expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
+    expect(application.text).toContain("function renderChapterLineNumbers()");
+    expect(application.text).toContain("syncChapterLineNumberScroll");
   });
 
   it("作品选择器使用紧凑字号和固定高度", async () => {

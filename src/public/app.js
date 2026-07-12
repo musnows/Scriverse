@@ -37,6 +37,64 @@ const taskTypeLabels = [
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 
+let chapterLineNumberFrame = null;
+
+function syncChapterLineNumberScroll() {
+  const input = $("#chapter-content");
+  const inner = $("#chapter-line-numbers-inner");
+  if (!input || !inner) return;
+  inner.style.transform = `translateY(${-input.scrollTop}px)`;
+  inner.dataset.scrollTop = String(input.scrollTop);
+}
+
+function renderChapterLineNumbers() {
+  const input = $("#chapter-content");
+  const inner = $("#chapter-line-numbers-inner");
+  const measure = $("#chapter-line-measure");
+  if (!input || !inner || !measure || input.clientWidth === 0) return;
+  const style = getComputedStyle(input);
+  const contentWidth = Math.max(1, input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
+  const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
+  Object.assign(measure.style, {
+    width: `${contentWidth}px`,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    tabSize: style.tabSize
+  });
+  const lines = input.value.replace(/\r\n?/gu, "\n").split("\n");
+  const measureRows = lines.map((line) => {
+    const row = document.createElement("div");
+    row.textContent = line || "\u200b";
+    return row;
+  });
+  measure.replaceChildren(...measureRows);
+  const numbers = document.createDocumentFragment();
+  measureRows.forEach((row, index) => {
+    const number = document.createElement("div");
+    number.className = "chapter-line-number";
+    number.textContent = String(index + 1);
+    number.style.height = `${Math.max(lineHeight, Math.ceil(row.getBoundingClientRect().height))}px`;
+    number.style.lineHeight = `${lineHeight}px`;
+    numbers.append(number);
+  });
+  inner.replaceChildren(numbers);
+  inner.dataset.lineCount = String(lines.length);
+  measure.replaceChildren();
+  syncChapterLineNumberScroll();
+}
+
+function scheduleChapterLineNumbers() {
+  if (chapterLineNumberFrame !== null) return;
+  chapterLineNumberFrame = requestAnimationFrame(() => {
+    chapterLineNumberFrame = null;
+    renderChapterLineNumbers();
+  });
+}
+
 const typographyStorageKey = "ai-novel-typography-v1";
 const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, density: "balanced" });
 const cjkFontStacks = {
@@ -88,6 +146,7 @@ function applyTypographySettings(settings) {
   root.dataset.latinFont = normalized.latinFont;
   root.dataset.fontSize = String(normalized.fontSize);
   root.dataset.density = normalized.density;
+  scheduleChapterLineNumbers();
 }
 
 function saveTypographySettings(settings) {
@@ -304,6 +363,7 @@ async function selectChapter(chapterId) {
   $("#chapter-path").textContent = `${volume?.title ?? "正文"} / 保存于 ${formatDate(state.chapter.updatedAt)}`;
   $("#chapter-title").value = state.chapter.title;
   $("#chapter-content").value = state.chapter.content;
+  scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
   setSaveState("已保存");
@@ -325,6 +385,7 @@ async function saveChapter() {
     const content = normalizeParagraphSpacing(input.value);
     const spacingChanged = content !== input.value;
     if (spacingChanged) input.value = content;
+    if (spacingChanged) scheduleChapterLineNumbers();
     state.chapter = await api(`/api/chapters/${state.chapter.id}`, {
       method: "PATCH",
       body: { title: $("#chapter-title").value.trim(), content }
@@ -346,6 +407,7 @@ function tidyChapterBlankLines() {
   const normalized = normalizeParagraphSpacing(input.value);
   if (normalized === input.value) return toast("正文空行已经符合要求");
   input.value = normalized;
+  scheduleChapterLineNumbers();
   updateChapterStats();
   setSaveState("未保存", true);
   toast("已整理空行：段与段之间保留 1 个空行");
@@ -1052,6 +1114,7 @@ function appendSuggestion(suggestion) {
         const result = await api(`/api/suggestions/${suggestion.id}/accept`, { method: "POST", body: {} });
         state.chapter = result.chapter;
         $("#chapter-content").value = state.chapter.content;
+        scheduleChapterLineNumbers();
         updateChapterStats();
         state.work = await api(`/api/works/${state.work.id}`);
         renderTree();
@@ -1077,6 +1140,7 @@ async function showVersions() {
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
     $("#chapter-title").value = state.chapter.title;
     $("#chapter-content").value = state.chapter.content;
+    scheduleChapterLineNumbers();
     updateChapterStats();
     $("#versions-dialog").close();
     toast("历史内容已恢复为新版本");
@@ -1141,7 +1205,10 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => setSaveState("未保存", true));
-$("#chapter-content").addEventListener("input", () => { updateChapterStats(); setSaveState("未保存", true); });
+$("#chapter-content").addEventListener("input", () => { updateChapterStats(); setSaveState("未保存", true); scheduleChapterLineNumbers(); });
+$("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
+window.addEventListener("resize", scheduleChapterLineNumbers);
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog, "ai-config": openProviderDialog })[state.module]?.());
 $("#import-file").addEventListener("change", async (event) => {
