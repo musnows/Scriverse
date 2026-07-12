@@ -122,6 +122,7 @@ try {
   assert.match(page, /data-testid="galaxy-3d-starfield"/u);
   assert.match(page, /data-testid="galaxy-3d-relationships"/u);
   assert.match(page, /data-testid="chapter-type-menu"/u);
+  assert.match(page, /class="ai-send-button"/u);
   assert.match(application, /preservedOccurrences/u);
   assert.match(application, /openOrganizationDialog/u);
   assert.match(application, /concurrencyLimit/u);

@@ -8,7 +8,7 @@
     <title>叙界 · 小说 AI 创作工作台</title>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260712-line-selection-highlight">
+    <link rel="stylesheet" href="/styles.css?v=20260712-compact-chat-send">
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -159,8 +159,10 @@
               <option value="selection">选中文本</option>
             </select>
           </div>
-          <textarea id="ai-prompt" rows="4" placeholder="告诉 AI 你想讨论或修改什么……"></textarea>
-          <button id="ai-send" class="primary-button full-button" type="button">生成建议</button>
+          <div class="prompt-composer">
+            <textarea id="ai-prompt" rows="4" placeholder="告诉 AI 你想讨论或修改什么……"></textarea>
+            <button id="ai-send" class="ai-send-button" type="button" aria-label="发送消息">发送</button>
+          </div>
         </div>
       </aside>
     </div>
@@ -286,6 +288,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260712-chat-markdown"></script>
+    <script type="module" src="/app.js?v=20260712-compact-chat-send"></script>
   </body>
 </html>

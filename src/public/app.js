@@ -1401,7 +1401,7 @@ async function sendAi() {
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   appendMessage("user", instruction, citations);
   $("#ai-send").disabled = true;
-  $("#ai-send").textContent = "生成中";
+  $("#ai-send").textContent = "发送中";
   try {
     if (taskType === "chat") await streamChat({ instruction, scope, modelId, citations });
     else {
@@ -1415,7 +1415,7 @@ async function sendAi() {
     appendMessage("assistant", `调用失败：${error.message}`);
   } finally {
     $("#ai-send").disabled = false;
-    $("#ai-send").textContent = "生成建议";
+    $("#ai-send").textContent = "发送";
   }
 }
 

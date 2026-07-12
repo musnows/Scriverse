@@ -139,7 +139,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-chat-markdown');
+    expect(page.text).toContain('/app.js?v=20260712-compact-chat-send');
+    expect(page.text).toContain('class="prompt-composer"');
+    expect(page.text).toContain('class="ai-send-button"');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
     expect(application.text).toContain('source: automatic ? "auto" : "manual"');
     expect(markdown.text).toContain("export function renderMarkdown");
@@ -168,6 +170,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("content.innerHTML = renderMarkdown(streamedText)");
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
+    expect(styles.text).toContain(".ai-send-button { position: absolute; right: 8px; bottom: 8px;");
+    expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");
