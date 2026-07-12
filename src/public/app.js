@@ -590,7 +590,7 @@ async function renderAiConfig() {
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const providerContent = providers.length ? `<div class="card-grid">${providers.map((provider) => `
     <article class="record-card"><small>${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
-    <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit} · max_tokens：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div>${models.filter((model) => model.providerId === provider.id).map((model) => `<span class="pill">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · max_tokens ${esc(model.preset?.max_tokens ?? 32000)}</span>`).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI Chat Completions 兼容地址和密钥，测试成功后再添加模型。");
@@ -883,8 +883,8 @@ function openTaskDialog() {
 }
 
 function openProviderDialog(item) {
-  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("baseUrl", "Chat Completions 基础地址", "url", item?.baseUrl ?? "https://api.openai.com/v1") + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限（RPM）", "number", item?.rpmLimit ?? 10) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
-    const body = { name: form.get("name"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
+  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("baseUrl", "Chat Completions 基础地址", "url", item?.baseUrl ?? "https://api.openai.com/v1") + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限（RPM）", "number", item?.rpmLimit ?? 10) + field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
+    const body = { name: form.get("name"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), maxTokens: Number(form.get("maxTokens")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
     if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
     await api(item ? `/api/providers/${item.id}` : `/api/works/${state.work.id}/providers`, { method: item ? "PATCH" : "POST", body });
     await renderAiConfig();

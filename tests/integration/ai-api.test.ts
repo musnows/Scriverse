@@ -8,8 +8,10 @@ describe("AI 供应商、模型与建议 API", () => {
   let workId: string;
   let chapterId: string;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+  let expectedMaxTokens: number;
 
   beforeEach(async () => {
+    expectedMaxTokens = 32_000;
     fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/models")) {
@@ -17,7 +19,7 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number };
       expect(body.messages[1]?.content).toContain("跃迁后必须冷却十二小时");
-      expect(body.max_tokens).toBe(32_000);
+      expect(body.max_tokens).toBe(expectedMaxTokens);
       if (body.messages[1]?.content.includes("检查下面的续写候选")) {
         return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -46,7 +48,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const providerId = provider.body.data.id;
     expect(provider.body.data.apiKey).not.toContain("sensitive");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10 });
+    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokens: 32_000 });
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
 
@@ -81,6 +83,8 @@ describe("AI 供应商、模型与建议 API", () => {
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expectedMaxTokens = 24_000;
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ maxTokens: expectedMaxTokens }).expect(200);
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "continue",
@@ -99,7 +103,7 @@ describe("AI 供应商、模型与建议 API", () => {
 
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     const continuationCall = calls.body.data.find((call: { taskType: string }) => call.taskType === "continue");
-    expect(continuationCall).toMatchObject({ status: "completed", parameters: { temperature: 2, max_tokens: 32_000 } });
+    expect(continuationCall).toMatchObject({ status: "completed", parameters: { temperature: 2, max_tokens: 24_000 } });
     expect(continuationCall.provider.name).toBe("本地兼容服务");
     expect(continuationCall.model.displayName).toBe("小说模型");
     expect(suggestion.body.data.guard).toMatchObject({ status: "clear", issues: [] });

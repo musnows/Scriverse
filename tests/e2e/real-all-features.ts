@@ -226,6 +226,7 @@ try {
   });
   assert.equal(provider.concurrencyLimit, 10);
   assert.equal(provider.rpmLimit, 10);
+  assert.equal(provider.maxTokens, 32_000);
   const configuredProvider = await api<Entity>("PATCH", `/providers/${provider.id}`, { concurrencyLimit: 4, rpmLimit: 20 });
   assert.equal(configuredProvider.concurrencyLimit, 4);
   assert.equal(configuredProvider.rpmLimit, 20);

@@ -13,6 +13,7 @@ type ProviderInput = {
   note?: string;
   concurrencyLimit?: number;
   rpmLimit?: number;
+  maxTokens?: number;
 };
 
 type ModelInput = {
@@ -415,8 +416,8 @@ export class AiManager {
     const timestamp = now();
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, max_tokens, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
       providerId,
       workId,
       input.name,
@@ -428,6 +429,7 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
+      input.maxTokens ?? DEFAULT_MAX_TOKENS,
       input.note ?? "",
       timestamp,
       timestamp
@@ -463,7 +465,7 @@ export class AiManager {
     if (input.baseUrl && normalizeBaseUrl(input.baseUrl) !== stringValue(row, "base_url")) connectionStatus = "unchecked";
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       input.baseUrl ? normalizeBaseUrl(input.baseUrl) : stringValue(row, "base_url"),
       encryptedKey,
@@ -474,6 +476,7 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
+      input.maxTokens ?? numberValue(row, "max_tokens"),
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -893,7 +896,7 @@ export class AiManager {
     const context = this.contextBuilder.build(input.workId, input.scope);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
-    const parameters = this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) });
+    const parameters = this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS });
     const callId = id("call");
     const timestamp = now();
     this.store.db.run(
@@ -998,7 +1001,7 @@ export class AiManager {
     const context = this.contextBuilder.build(input.workId, input.scope);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
-    const parameters = this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) });
+    const parameters = this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS });
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -2389,6 +2392,7 @@ export class AiManager {
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,
       rpmLimit: numberValue(row, "rpm_limit") || 10,
+      maxTokens: numberValue(row, "max_tokens") || DEFAULT_MAX_TOKENS,
       defaultModelId: row.default_model_id === null ? null : stringValue(row, "default_model_id"),
       note: stringValue(row, "note"),
       lastError: row.last_error === null ? null : stringValue(row, "last_error"),

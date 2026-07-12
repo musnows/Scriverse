@@ -132,7 +132,8 @@ const providerSchema = z.object({
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
-  rpmLimit: z.number().int().min(1).max(10_000).optional()
+  rpmLimit: z.number().int().min(1).max(10_000).optional(),
+  maxTokens: z.number().int().min(1).max(32_768).optional()
 });
 
 const modelSchema = z.object({

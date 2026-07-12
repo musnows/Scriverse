@@ -229,6 +229,7 @@ export class Database {
         connection_status TEXT NOT NULL DEFAULT 'unchecked',
         concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
         rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
+        max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
         default_model_id TEXT,
         note TEXT NOT NULL DEFAULT '',
         last_error TEXT,
@@ -493,6 +494,15 @@ export class Database {
           this.run("ALTER TABLE chapters ADD COLUMN chapter_type TEXT NOT NULL DEFAULT '正文' CHECK(chapter_type IN ('正文', '设定', '作者的话', '其他'))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(5)) {
+      this.transaction(() => {
+        const providerColumns = new Set(this.all("PRAGMA table_info(providers)").map((row) => String(row.name)));
+        if (!providerColumns.has("max_tokens")) {
+          this.run("ALTER TABLE providers ADD COLUMN max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768)");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (5, ?)", new Date().toISOString());
       });
     }
   }
