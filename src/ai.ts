@@ -128,9 +128,9 @@ export function canonicalizeRelationshipSubtype(category: string, subtype: strin
   if (category === "social") {
     if (/monarchsubject|subjecttoruler|rulersubject|superiorsubordinate|君王臣属|君臣|臣属君王/u.test(key)) return "君臣";
     if (/mentorstudent|teacherstudent|导师学生|师生/u.test(key)) return "师生";
-    if (/colleague|coworker|同事/u.test(key)) return "同事";
-    if (/ally|allies|盟友/u.test(key)) return "盟友";
-    if (/friend|friends|朋友|友人/u.test(key)) return "朋友";
+    if (/colleague|coworker|同事/u.test(key) || /^(?:同僚|共事)$/u.test(key)) return "同事";
+    if (/ally|allies|盟友/u.test(key) || /^(?:同盟|联盟)$/u.test(key)) return "盟友";
+    if (/friend|friends|朋友|友人/u.test(key) || /^(?:旧友|老友|好友|挚友|战友|搭档|伙伴)$/u.test(key)) return "朋友";
   }
   if (category === "emotional") {
     if (/romanticpartner|romanticpartners|partner|partners|lover|lovers|spouse|夫妻|伴侣|恋人/u.test(key)) return "伴侣";
@@ -150,7 +150,7 @@ export function canonicalizeRelationshipCategory(category: string, subtype: stri
   if (/parentchild|fatherdaughter|fatherson|motherdaughter|motherson|adopt|sister|brother|sibling|uncle|aunt|nephew|niece|父母子女|父女|父子|母女|母子|收养|养父|养母|养子|养女|姐妹|兄弟|手足|叔侄|姑侄|舅甥/u.test(key)) return "family";
   if (/romanticpartner|partner|lover|spouse|夫妻|伴侣|恋人|admirer|admired|crush|倾慕|单恋|追求|closebond|亲密羁绊|亲密关系/u.test(key)) return "emotional";
   if (/enemy|enemies|rival|宿敌|敌人|死敌|abuser|victim|施害|受害|manipulat|操纵|利用/u.test(key)) return "conflict";
-  if (/monarchsubject|subjecttoruler|rulersubject|superiorsubordinate|君王臣属|君臣|臣属君王|mentorstudent|teacherstudent|导师学生|师生|colleague|coworker|同事|ally|allies|盟友|friend|friends|朋友|友人/u.test(key)) return "social";
+  if (/monarchsubject|subjecttoruler|rulersubject|superiorsubordinate|君王臣属|君臣|臣属君王|mentorstudent|teacherstudent|导师学生|师生|colleague|coworker|同事|同僚|共事|ally|allies|盟友|同盟|联盟|friend|friends|朋友|友人|旧友|老友|好友|挚友|战友|搭档|伙伴/u.test(key)) return "social";
   return category;
 }
 

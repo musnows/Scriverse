@@ -567,11 +567,11 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       const first = prompt.match(/<CHAPTER id="([^"]+)"[^>]*>[^<]*林舟替沈星挡下攻击/gu)?.[0]?.match(/id="([^"]+)"/u)?.[1];
       const second = prompt.match(/<CHAPTER id="([^"]+)"[^>]*>[^<]*沈星撤离时护住林舟/gu)?.[0]?.match(/id="([^"]+)"/u)?.[1];
       if (first) candidates.push({
-        fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
+        fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "旧友", directed: false,
         currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId: first, quote: "林舟替沈星挡下攻击", supports: "一次保护" }]
       });
       if (second) candidates.push({
-        fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
+        fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "朋友", directed: false,
         currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId: second, quote: "沈星撤离时护住林舟", supports: "再次保护" }]
       });
       return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(candidates) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -596,7 +596,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(result.body.data.result).toMatchObject({ candidateCount: 1, rawCandidateCount: 2 });
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toHaveLength(1);
-    expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
+    expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友" });
     expect(relationships.body.data[0].evidence).toHaveLength(2);
   });
 
@@ -712,7 +712,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result.candidateCount).toBe(1);
     expect(result.body.data.result.skipped.map((item: { reason: string }) => item.reason).join("\n"))
-      .toContain("“旧友”缺少明确身份或跨章长期互动证据");
+      .toContain("“朋友”缺少明确身份或跨章长期互动证据");
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toHaveLength(1);
     expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
