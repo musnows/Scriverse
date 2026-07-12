@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { createRuntime } from "./app.js";
 import { loadMasterSecret } from "./credential-vault.js";
 
-const port = Number(process.env.PORT ?? 3210);
+const port = Number(process.env.PORT ?? 13210);
 const dataDirectory = process.env.DATA_DIR ?? join(process.cwd(), ".data");
 const runtime = createRuntime({
   databasePath: process.env.DATABASE_PATH ?? join(dataDirectory, "novel.db"),

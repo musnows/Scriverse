@@ -4,7 +4,7 @@ import { once } from "node:events";
 
 type Entity = Record<string, any>;
 
-const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:3210/api").replace(/\/$/u, "");
+const baseUrl = (process.env.E2E_BASE_URL ?? "http://127.0.0.1:13210/api").replace(/\/$/u, "");
 const appUrl = baseUrl.replace(/\/api$/u, "");
 const checks: Array<{ feature: string; detail: string }> = [];
 const suffix = Date.now().toString(36);
