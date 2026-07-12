@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRelationshipGraph, createGalaxyStarfield, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
+import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -12,6 +12,14 @@ describe("人物关系图数据与布局", () => {
     expect(graph.edges.map((edge: { id: string }) => edge.id)).toEqual(["pending"]);
     expect(graph.edges[0].keywords).toEqual(["共同成长", "失联重逢"]);
     expect(graph.warnings).toContainEqual({ relationshipId: "rejected", reason: "关系候选已拒绝" });
+  });
+
+  it("普通关系图与银河图使用相同的完整关系文字", () => {
+    expect(formatRelationshipLabel({
+      subtype: "君臣",
+      keywords: ["王权效忠", "兄弟情谊", "长期并肩", "舍命相救", "相互调侃", "互相关怀"]
+    })).toBe("君臣 · 王权效忠 · 兄弟情谊 · 长期并肩 · 舍命相救 · 相互调侃 · 互相关怀");
+    expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
   });
 
   it("大量角色使用有界采样布局并返回全部节点", () => {

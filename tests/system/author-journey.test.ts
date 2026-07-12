@@ -143,7 +143,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="shelf-view"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-compact-chat-send');
+    expect(page.text).toContain('/app.js?v=20260712-relationship-label-parity');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(application.text).toContain("function scheduleChapterAutoSave(delay = chapterAutoSaveDelay)");
@@ -201,6 +201,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("collapsedVolumeIds");
     expect(application.text).toContain('data-testid="continuation-guard"');
     expect(graph.text).toContain("export function buildRelationshipGraph");
+    expect(graph.text).toContain("export function formatRelationshipLabel");
+    expect(graph.text).toContain("label.textContent = fullLabel");
     expect(graph.text).toContain("export function createGalaxyRenderer");
     expect(graph.text).toContain("export function createGalaxyStarfield");
     expect(graph.text).toContain("export function projectGalaxyPoint");

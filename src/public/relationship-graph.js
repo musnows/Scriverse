@@ -12,6 +12,14 @@ const MINDMAP_LAYOUTS = Object.freeze({
   expanded: Object.freeze({ width: 1400, height: 760, firstRadiusX: 520, firstRadiusY: 285, secondRadiusX: 650, secondRadiusY: 350, marginX: 72, marginY: 54, edgeCurve: 88, labelOffset: 10 })
 });
 
+export function formatRelationshipLabel(edge, separator = " · ") {
+  const subtype = String(edge?.subtype ?? "").trim();
+  const keywords = Array.isArray(edge?.keywords)
+    ? edge.keywords.map(String).map((value) => value.trim()).filter(Boolean)
+    : [];
+  return [subtype, ...keywords].filter(Boolean).join(separator) || "关系";
+}
+
 function hashString(value) {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -217,10 +225,9 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         label = document.createElementNS("http://www.w3.org/2000/svg", "text");
         label.setAttribute("text-anchor", "middle");
         label.classList.add("mind-edge-label");
-        label.textContent = edge.subtype;
-        const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-        title.textContent = edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype;
-        label.append(title);
+        const fullLabel = formatRelationshipLabel(edge);
+        label.textContent = fullLabel;
+        label.dataset.fullLabel = fullLabel;
         svg.append(label);
       }
       const edgeElement = { edge, path, label };
@@ -253,7 +260,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         const heading = document.createElement("b");
         heading.textContent = `${selectedName}与${focusedName}`;
         const detailText = document.createElement("span");
-        detailText.textContent = focusedEdges.map((edge) => edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype).join("；");
+        detailText.textContent = focusedEdges.map((edge) => formatRelationshipLabel(edge)).join("；");
         edgeDetail.replaceChildren(heading, detailText);
         edgeDetail.classList.remove("hidden");
       } else {
@@ -635,7 +642,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         context.fill();
       }
       if (highlighted) {
-        const fullLabel = edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype;
+        const fullLabel = formatRelationshipLabel(edge);
         highlightedKeywords.push(fullLabel);
         const label = fullLabel.length > 42 ? `${fullLabel.slice(0, 41)}…` : fullLabel;
         const x = (from.x + to.x) / 2;
@@ -725,8 +732,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const item = document.createElement("li");
       const category = document.createElement("i");
       category.className = edge.category;
-      const keywords = edge.keywords.length ? ` · ${edge.keywords.join("、")}` : "";
-      item.append(category, document.createTextNode(`${other?.name ?? "未知角色"} · ${edge.subtype}${keywords}`));
+      item.append(category, document.createTextNode(`${other?.name ?? "未知角色"} · ${formatRelationshipLabel(edge)}`));
       list.append(item);
     }
     detail.append(list);
