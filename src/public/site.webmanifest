@@ -1,0 +1,17 @@
+{
+  "name": "叙界 · 小说 AI 创作工作台",
+  "short_name": "叙界",
+  "description": "面向长篇小说创作的 AI 协作工作台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fffefa",
+  "theme_color": "#8b3d2c",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -130,7 +130,13 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
+    const icon = await request(runtime.app).get("/icon.svg").expect(200).expect("Content-Type", /svg/u);
+    const manifest = await request(runtime.app).get("/site.webmanifest").expect(200);
     expect(page.text).toContain('id="shelf-view"');
+    expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
+    expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
+    expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
+    expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
     expect(application.text).toContain('data-testid="book-add-card"');
     expect(page.text).toContain('data-module="outlines"');
