@@ -119,6 +119,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('field("memberIds", "组织成员（可多选）", "chips"');
     expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
+    expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("collapsedVolumeIds");
