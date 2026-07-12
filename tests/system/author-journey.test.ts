@@ -88,7 +88,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("state.aiCitations.map");
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
-    expect(styles.text).toContain("grid-template-columns: 28px minmax(0, 1fr)");
+    expect(styles.text).toContain("grid-template-columns: 38px minmax(0, 1fr)");
     expect(styles.text).toContain("width: 100%; min-height: 0; margin: 0;");
     expect(styles.text).toContain("font-variant-numeric: tabular-nums; text-align: center");
     expect(page.text).toContain('id="ai-citations"');
