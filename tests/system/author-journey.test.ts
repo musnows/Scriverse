@@ -92,6 +92,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("width: 100%; min-height: 0; margin: 0;");
     expect(styles.text).toContain("font-variant-numeric: tabular-nums; text-align: center");
     expect(styles.text).toContain("font-size: var(--editor-font-size); line-height: var(--editor-line-height)");
+    expect(styles.text).toContain("grid-template-columns: minmax(0, 1fr) max-content");
+    expect(styles.text).toContain("overflow-wrap: anywhere; line-height: 1.45; white-space: normal");
     expect(page.text).toContain('id="ai-citations"');
     expect(page.text).toContain('id="line-citation-menu"');
   });
