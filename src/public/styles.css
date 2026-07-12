@@ -290,6 +290,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .dialog-fields input, .dialog-fields textarea, .dialog-fields select { width: 100%; padding: 9px 10px; font-size: 13px; }
 .dialog-fields textarea { resize: vertical; min-height: 90px; line-height: 1.6; }
+.form-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.item-list-rows { display: grid; gap: 7px; }
+.item-list-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.item-list-row button, .item-list-add { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--muted); font-size: 10px; }
+.item-list-row button { padding: 0 10px; }
+.item-list-add { justify-self: start; padding: 7px 11px; }
 .checkbox-field { display: flex !important; align-items: center; grid-template-columns: 18px 1fr; }
 .checkbox-field input { width: auto; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px 20px; }

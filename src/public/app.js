@@ -652,6 +652,10 @@ async function loadAiReferences() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
+  if (type === "item-list") {
+    const values = Array.isArray(value) && value.length ? value : [""];
+    return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
+  }
   if (type === "select") return `<label>${esc(label)}<select name="${esc(name)}">${options.map(([key, text]) => `<option value="${esc(key)}" ${key === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   if (type === "multiselect") {
     const selected = new Set((Array.isArray(value) ? value : []).map(String));
@@ -665,6 +669,30 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增") {
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-fields").innerHTML = fields;
+  $("#dialog-fields").querySelectorAll("[data-item-list-add]").forEach((button) => button.addEventListener("click", () => {
+    const rows = button.previousElementSibling;
+    const row = document.createElement("div");
+    row.className = "item-list-row";
+    const input = document.createElement("input");
+    input.name = rows.dataset.name;
+    input.setAttribute("aria-label", "组织设定");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.dataset.itemListRemove = "";
+    remove.setAttribute("aria-label", "删除此条");
+    remove.textContent = "删除";
+    row.append(input, remove);
+    rows.append(row);
+    input.focus();
+  }));
+  $("#dialog-fields").onclick = (event) => {
+    const remove = event.target.closest("[data-item-list-remove]");
+    if (!remove) return;
+    const row = remove.closest(".item-list-row");
+    const rows = row.parentElement;
+    if (rows.children.length === 1) row.querySelector("input").value = "";
+    else row.remove();
+  };
   const form = $("#dynamic-form");
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") return;
@@ -764,10 +792,10 @@ async function openOrganizationDialog(item) {
   openDialog(item ? "编辑组织" : "新建组织",
     field("name", "组织名称", "text", item?.name) +
     field("description", "组织简介", "textarea", item?.description) +
-    field("settings", "组织设定（每行一条）", "textarea", item?.settings?.join("\n")) +
+    field("settings", "组织设定（逐条填写）", "item-list", item?.settings ?? []) +
     (memberOptions.length ? field("memberIds", "组织成员（可多选）", "multiselect", item?.memberIds ?? [], memberOptions) : ""),
     async (form) => {
-      const settings = String(form.get("settings") ?? "").split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+      const settings = form.getAll("settings").map((value) => String(value).trim()).filter(Boolean);
       const body = { name: form.get("name"), description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };
       await api(item ? `/api/organizations/${item.id}` : `/api/works/${state.work.id}/organizations`, { method: item ? "PATCH" : "POST", body });
       await renderOrganizations();
