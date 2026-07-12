@@ -483,17 +483,17 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
   it("已有亲属监护或更强同级关系时忽略弱重复边", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
-      { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "同事", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟和沈星共同执行了一次任务", supports: "共同任务" }] },
-      { fromCharacterId: "林舟", toCharacterId: "沈星", category: "emotional", subtype: "亲密羁绊", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟和沈星共同执行了一次任务", supports: "关系亲密" }] },
-      { fromCharacterId: "乔安", toCharacterId: "叶宁", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "乔安和叶宁继续互相支援", supports: "双方友好" }] },
-      { fromCharacterId: "罗川", toCharacterId: "苏澜", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "罗川和苏澜仍以姐弟相称", supports: "双方是朋友" }] },
-      { fromCharacterId: "罗川", toCharacterId: "苏澜", category: "emotional", subtype: "亲密羁绊", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "罗川和苏澜仍以姐弟相称", supports: "关系亲密" }] }
+      { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "同事", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟说：沈星是我的同事", supports: "明确同事" }] },
+      { fromCharacterId: "林舟", toCharacterId: "沈星", category: "emotional", subtype: "亲密羁绊", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟说：沈星是我的同事", supports: "关系亲密" }] },
+      { fromCharacterId: "乔安", toCharacterId: "叶宁", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "乔安说：叶宁是我的朋友", supports: "明确朋友" }] },
+      { fromCharacterId: "罗川", toCharacterId: "苏澜", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "罗川说：苏澜是我最好的朋友", supports: "明确朋友" }] },
+      { fromCharacterId: "罗川", toCharacterId: "苏澜", category: "emotional", subtype: "亲密羁绊", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "罗川说：苏澜是我最好的朋友", supports: "关系亲密" }] }
     ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
     runtime = createTestRuntime(fetchMock);
     const { workId, chapters } = await seedWork(runtime);
     chapterId = String(chapters[0].id);
     await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
-      content: "林舟和沈星共同执行了一次任务。乔安和叶宁继续互相支援。罗川和苏澜仍以姐弟相称。"
+      content: "林舟说：沈星是我的同事。乔安说：叶宁是我的朋友。罗川说：苏澜是我最好的朋友。"
     }).expect(200);
     const characters = new Map<string, string>();
     for (const name of ["林舟", "沈星", "乔安", "叶宁", "罗川", "苏澜"]) {
@@ -521,6 +521,42 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(reasons).toContain("已有更强的同级社会关系");
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toHaveLength(3);
+  });
+
+  it("拒绝用单次任务或转发消息推断长期社会关系", async () => {
+    let chapterId = "";
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      expect(prompt).toContain("共同执行一次任务、同属一个组织");
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "同事", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟和沈星共同执行了一次任务", supports: "共同任务" }] },
+        { fromCharacterId: "乔安", toCharacterId: "罗川", category: "social", subtype: "盟友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "乔安把叶宁的消息转告给罗川", supports: "转发消息" }] },
+        { fromCharacterId: "苏澜", toCharacterId: "叶宁", category: "social", subtype: "朋友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "苏澜对叶宁说：我们一直是朋友", supports: "直接说明" }] }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
+      content: "林舟和沈星共同执行了一次任务。乔安把叶宁的消息转告给罗川。苏澜对叶宁说：我们一直是朋友。"
+    }).expect(200);
+    for (const name of ["林舟", "沈星", "乔安", "罗川", "苏澜", "叶宁"]) {
+      await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name }).expect(201);
+    }
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "chapter", chapterId }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.candidateCount).toBe(1);
+    const reasons = result.body.data.result.skipped.map((item: { reason: string }) => item.reason).join("\n");
+    expect(reasons).toContain("“同事”缺少明确身份或跨章长期互动证据");
+    expect(reasons).toContain("“盟友”缺少明确身份或跨章长期互动证据");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友" });
   });
 
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {

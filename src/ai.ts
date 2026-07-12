@@ -1429,7 +1429,8 @@ export class AiManager {
           "20. 前任向继任者让位属于前任与继任，不是继任者统御前任；方向必须由原文中的权力交接和实际服从行为共同决定。",
           "21. 关键词只能描述双方互动，不得混入任何一方单独的基因改造、意识变化、物种背景或未参与本关系的事件，也不得把不同时间阶段压成互相矛盾的同一组关键词。",
           "22. 集合身份、分身或内部意识不能当作额外人物扩散关系。若银月基多拉等聚合角色已代表内部意识与外部对象的整体关系，不得再把同一任务协作复制成每个内部意识与该对象的多条边；别名更不能彼此建边。",
-          "23. 只输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。"
+          "23. 只输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。",
+          "24. 共同执行一次任务、同属一个组织、在同一集体场景中被感谢或落泪、替第三人转发消息，都不能单独证明同事、朋友或盟友。此类关系必须有原文明示身份，或至少两个不同章节的持续互动证据。"
         ].join("\n"),
         extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。"
       });
@@ -1557,6 +1558,14 @@ export class AiManager {
         const hasObedience = /效忠|臣属|臣服|服从|听命|领命|奉命|遵命|命令|下令|宣誓|跪拜|麾下|部下|属下/u.test(evidenceText);
         if (!hasAuthority || !hasObedience) {
           skipped.push({ index, reason: "君臣关系缺少权力身份与效忠、命令或服从的双重证据" });
+          return;
+        }
+      }
+      if (category === "social" && ["同事", "朋友", "盟友"].includes(subtype)) {
+        const evidenceChapters = new Set(evidence.map((item) => String(item.chapterId)));
+        const explicitlyLongRunning = /同事|同僚|共事|搭档|朋友|好友|挚友|老友|老朋友|盟友|同盟|联盟|旧识|好久不见|多年|长期|几十年|经常|往日|一直.{0,16}(?:合作|支援|互助|并肩)/u.test(evidenceText);
+        if (evidenceChapters.size < 2 && !explicitlyLongRunning) {
+          skipped.push({ index, reason: `“${subtype}”缺少明确身份或跨章长期互动证据` });
           return;
         }
       }
