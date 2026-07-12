@@ -132,6 +132,14 @@ function setupPanelResize(handle, side) {
 let chapterLineNumberFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
+let moduleNavExpanded = false;
+
+function setModuleNavExpanded(expanded) {
+  moduleNavExpanded = expanded;
+  $("#module-more-button").textContent = expanded ? "收起" : "更多";
+  $("#module-more-button").setAttribute("aria-expanded", String(expanded));
+  $("#module-nav").querySelectorAll(".module-nav-secondary").forEach((button) => button.classList.toggle("hidden", !expanded));
+}
 
 function syncChapterLineNumberScroll() {
   const input = $("#chapter-content");
@@ -1549,6 +1557,7 @@ setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
 window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
+$("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog, "ai-config": openProviderDialog })[state.module]?.());
 $("#import-file").addEventListener("change", async (event) => {
   if (!state.work || !event.target.files[0]) return;

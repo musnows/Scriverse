@@ -44,10 +44,11 @@
           <button type="button" data-module="organizations">组织</button>
           <button type="button" data-module="timeline">时间轴</button>
           <button type="button" data-module="relationships">关系</button>
-          <button type="button" data-module="outlines">大纲与伏笔</button>
-          <button type="button" data-module="reviews">审核</button>
-          <button type="button" data-module="tasks">分析任务</button>
-          <button type="button" data-module="ai-config">AI 管理</button>
+          <button id="module-more-button" type="button" aria-expanded="false">更多</button>
+          <button class="module-nav-secondary hidden" type="button" data-module="outlines">大纲与伏笔</button>
+          <button class="module-nav-secondary hidden" type="button" data-module="reviews">审核</button>
+          <button class="module-nav-secondary hidden" type="button" data-module="tasks">分析任务</button>
+          <button class="module-nav-secondary hidden" type="button" data-module="ai-config">AI 管理</button>
         </nav>
         <div class="panel-heading">
           <span>作品目录</span>
@@ -282,6 +283,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260712-character-multi-org"></script>
+    <script type="module" src="/app.js?v=20260712-navigation-cleanup"></script>
   </body>
 </html>

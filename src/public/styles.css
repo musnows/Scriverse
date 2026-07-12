@@ -112,6 +112,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-nav { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 8px 0 14px; border-bottom: 1px solid var(--line); }
 .module-nav button { border: 0; background: transparent; text-align: left; padding: 7px 9px; color: var(--muted); font-size: 12px; border-radius: 3px; }
 .module-nav button.active, .module-nav button:hover { background: var(--paper-deep); color: var(--ink); }
+#module-more-button { color: var(--accent-dark); }
 .panel-heading { display: flex; justify-content: space-between; padding: 15px 7px 9px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 .novel-tree { font-size: 13px; }
 .empty-copy { color: var(--muted); padding: 14px 7px; line-height: 1.5; }
