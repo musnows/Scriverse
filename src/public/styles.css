@@ -159,8 +159,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .editor-actions { display: flex; align-items: center; gap: 10px; }
 .chapter-stats { color: var(--muted); font-size: 11px; }
 .editor-body { display: flex; min-height: 0; flex-direction: column; }
-.chapter-editor-frame { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); flex: 1 1 auto; width: 100%; min-height: 0; margin: 0; }
-.chapter-line-numbers { position: relative; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: linear-gradient(to right, transparent, rgba(143,132,116,.04)); color: var(--muted); font-family: var(--font-latin), monospace; font-size: 10px; user-select: none; }
+.chapter-editor-frame { position: relative; display: grid; grid-template-columns: max(38px, calc(var(--editor-font-size) * 2.5 + 10px)) minmax(0, 1fr); flex: 1 1 auto; width: 100%; min-height: 0; margin: 0; }
+.chapter-line-numbers { position: relative; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: linear-gradient(to right, transparent, rgba(143,132,116,.04)); color: var(--muted); font-family: var(--font-latin), monospace; font-size: var(--editor-font-size); line-height: var(--editor-line-height); user-select: none; }
 #chapter-line-numbers-inner { position: absolute; top: 32px; left: 0; right: 0; will-change: transform; }
 .chapter-line-number { box-sizing: border-box; width: 100%; padding: 0 3px; border: 0; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; text-align: center; cursor: pointer; }
 .chapter-line-number:hover { background: rgba(139,61,44,.08); color: var(--accent-dark); }
