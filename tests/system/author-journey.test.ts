@@ -199,7 +199,7 @@ describe("作者完整创作流程", () => {
     const relationshipResult = await request(runtime.app).post(`/api/tasks/${relationshipTask.body.data.id}/run`).send({ modelId: model.body.data.id }).expect(200);
     expect(relationshipResult.body.data.result.candidateCount).toBe(1);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
-    expect(relationships.body.data[0]).toMatchObject({ category: "social", subtype: "旧友", confidence: 0.82, confirmationStatus: "pending" });
+    expect(relationships.body.data[0]).toMatchObject({ category: "social", subtype: "朋友", confidence: 0.82, confirmationStatus: "pending" });
     expect(relationships.body.data[0].evidence).toHaveLength(2);
 
     const search = await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("北港")}`).expect(200);

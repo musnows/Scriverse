@@ -282,14 +282,14 @@ try {
   const relationshipResult = await api<Entity>("POST", `/tasks/${relationshipTask.id}/run`, { modelId: model.id });
   assert.equal(relationshipResult.status, "review");
   let relationships = await api<Entity[]>("GET", `/works/${disposableWorkId}/relationships`);
-  const generated = relationships.find((relationship) => relationship.subtype === "旧友" && relationship.confirmationStatus === "pending");
+  const generated = relationships.find((relationship) => relationship.subtype === "朋友" && relationship.confirmationStatus === "pending");
   assert.ok(generated);
   assert.deepEqual(generated.keywords, ["长期信任", "失联重逢", "共同守望"]);
   await api("PATCH", `/relationships/${generated.id}`, { confirmationStatus: "rejected" });
   const retryTask = await api<Entity>("POST", `/works/${disposableWorkId}/tasks`, { taskType: "relationship-analysis", scope: { type: "book" } });
   await api("POST", `/tasks/${retryTask.id}/run`, { modelId: model.id });
   relationships = await api<Entity[]>("GET", `/works/${disposableWorkId}/relationships`);
-  assert.ok(relationships.some((relationship) => relationship.subtype === "旧友" && relationship.confirmationStatus === "pending"));
+  assert.ok(relationships.some((relationship) => relationship.subtype === "朋友" && relationship.confirmationStatus === "pending"));
   checked("relationship-analysis", "small chunked analysis verifies quotes, persists keyword lists, and rejected history does not suppress new evidence");
 
   const staleTask = await api<Entity>("POST", `/works/${disposableWorkId}/tasks`, { taskType: "book-analysis", scope: { type: "book" } });
