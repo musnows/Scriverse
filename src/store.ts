@@ -352,18 +352,20 @@ export class Store {
     };
   }
 
-  createVolume(workId: string, input: { title: string; kind?: string }): Record<string, unknown> {
+  createVolume(workId: string, input: { title: string; kind?: string; description?: string; keywords?: string[] }): Record<string, unknown> {
     this.getWork(workId);
     const volumeId = id("volume");
     const timestamp = now();
     const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
     this.db.run(
-      `INSERT INTO volumes (id, work_id, title, kind, source, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'manual', ?, ?, ?)`,
+      `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?)`,
       volumeId,
       workId,
       input.title,
       input.kind ?? "main",
+      input.description?.trim() ?? "",
+      JSON.stringify(this.normalizeVolumeKeywords(input.keywords ?? [])),
       numberValue(last ?? {}, "value") + 1,
       timestamp,
       timestamp
@@ -378,12 +380,14 @@ export class Store {
     return this.mapVolume(row);
   }
 
-  updateVolume(volumeId: string, input: { title?: string; kind?: string; sortOrder?: number }): Record<string, unknown> {
+  updateVolume(volumeId: string, input: { title?: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }): Record<string, unknown> {
     const current = this.getVolume(volumeId);
     this.db.run(
-      "UPDATE volumes SET title = ?, kind = ?, sort_order = ?, source = 'manual', updated_at = ? WHERE id = ?",
+      "UPDATE volumes SET title = ?, kind = ?, description = ?, keywords_json = ?, sort_order = ?, source = 'manual', updated_at = ? WHERE id = ?",
       input.title ?? String(current.title),
       input.kind ?? String(current.kind),
+      input.description?.trim() ?? String(current.description),
+      JSON.stringify(input.keywords === undefined ? current.keywords : this.normalizeVolumeKeywords(input.keywords)),
       input.sortOrder ?? Number(current.sortOrder),
       now(),
       volumeId
@@ -672,10 +676,16 @@ export class Store {
       title: requiredString(row, "title"),
       kind: requiredString(row, "kind"),
       source: requiredString(row, "source"),
+      description: optionalString(row, "description") ?? "",
+      keywords: json<string[]>(optionalString(row, "keywords_json"), []),
       sortOrder: numberValue(row, "sort_order"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  private normalizeVolumeKeywords(keywords: string[]): string[] {
+    return [...new Set(keywords.map((keyword) => keyword.normalize("NFKC").trim()).filter(Boolean))].slice(0, 100);
   }
 
   private mapChapter(row: Row): Record<string, unknown> {

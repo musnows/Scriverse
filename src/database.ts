@@ -83,6 +83,8 @@ export class Database {
         title TEXT NOT NULL,
         kind TEXT NOT NULL DEFAULT 'main',
         source TEXT NOT NULL DEFAULT 'manual',
+        description TEXT NOT NULL DEFAULT '',
+        keywords_json TEXT NOT NULL DEFAULT '[]',
         sort_order INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -536,6 +538,18 @@ export class Database {
         }
         this.run("CREATE INDEX IF NOT EXISTS idx_timeline_tracks_work ON timeline_tracks(work_id, sort_order)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (6, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(7)) {
+      this.transaction(() => {
+        const volumeColumns = new Set(this.all("PRAGMA table_info(volumes)").map((row) => String(row.name)));
+        if (!volumeColumns.has("description")) {
+          this.run("ALTER TABLE volumes ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+        }
+        if (!volumeColumns.has("keywords_json")) {
+          this.run("ALTER TABLE volumes ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (7, ?)", new Date().toISOString());
       });
     }
   }

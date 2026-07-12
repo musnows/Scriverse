@@ -304,11 +304,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.post("/api/works/:workId/volumes", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(200), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional() }), request.body);
+    const input = parse(z.object({ title: nonEmpty.max(200), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional() }), request.body);
     data(response, store.createVolume(request.params.workId, input), 201);
   });
   app.patch("/api/volumes/:volumeId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.string().max(100).optional(), sortOrder: z.number().int().min(0).optional() }), request.body);
+    const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), sortOrder: z.number().int().min(0).optional() }), request.body);
     data(response, store.updateVolume(request.params.volumeId, input));
   });
   app.delete("/api/volumes/:volumeId", (request, response) => {

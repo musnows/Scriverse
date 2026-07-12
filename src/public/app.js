@@ -545,7 +545,7 @@ function renderTree() {
   $("#novel-tree").classList.remove("empty-copy");
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
     <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
-      <button class="volume-title" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}"><span>${esc(volume.title)}</span><span>${volume.chapters.length}</span></button>
+      <div class="volume-heading"><button class="volume-title" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}"><span>${esc(volume.title)}</span><span>${volume.chapters.length}</span></button><button class="volume-edit-button" type="button" data-edit-volume="${esc(volume.id)}" aria-label="设置分卷 ${esc(volume.title)}">设置</button></div>
       <div class="volume-chapters">
       ${volume.chapters.map((chapter) => `
         <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}">
@@ -560,6 +560,9 @@ function renderTree() {
       else state.collapsedVolumeIds.add(volumeId);
       renderTree();
     });
+  });
+  $("#novel-tree").querySelectorAll("[data-edit-volume]").forEach((button) => {
+    button.addEventListener("click", () => openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.editVolume)));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
@@ -1076,6 +1079,28 @@ async function openChapterDialog() {
   });
 }
 
+function openVolumeDialog(item) {
+  if (!state.work) return openWorkDialog();
+  const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
+  openDialog(item ? "编辑分卷" : "新建分卷",
+    field("title", "分卷名称", "text", item?.title) +
+    field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
+    field("description", "分卷简介", "textarea", item?.description) +
+    field("keywords", "分卷关键词（逐条填写）", "item-list", item?.keywords ?? []),
+    async (form) => {
+      const body = {
+        title: form.get("title"),
+        kind: form.get("kind"),
+        description: form.get("description"),
+        keywords: form.getAll("keywords").map((value) => String(value).trim()).filter(Boolean)
+      };
+      await api(item ? `/api/volumes/${item.id}` : `/api/works/${state.work.id}/volumes`, { method: item ? "PATCH" : "POST", body });
+      state.work = await api(`/api/works/${state.work.id}`);
+      renderTree();
+      toast(item ? "分卷设置已保存" : "分卷已创建");
+    }, "分卷设置");
+}
+
 function openSettingDialog(item) {
   openDialog(item ? "编辑设定" : "新建设定",
     field("title", "标题", "text", item?.title) +
@@ -1454,6 +1479,7 @@ $("#work-picker").addEventListener("change", async (event) => {
 });
 $("#save-button").addEventListener("click", saveChapter);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
+$("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());

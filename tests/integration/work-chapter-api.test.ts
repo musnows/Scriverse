@@ -132,6 +132,31 @@ describe("作品、导入和章节版本 API", () => {
     await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/move`).send({ volumeId: secondVolume.body.data.id, sortOrder: 0 }).expect(400);
   });
 
+  it("创建和编辑带简介及关键词的分卷", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "分卷设定作品" }).expect(201);
+    const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({
+      title: "第二卷 暗潮",
+      kind: "main",
+      description: "双面间谍进入敌方组织。",
+      keywords: ["谍战", "身份危机", "谍战"]
+    }).expect(201);
+    expect(volume.body.data).toMatchObject({
+      description: "双面间谍进入敌方组织。",
+      keywords: ["谍战", "身份危机"]
+    });
+
+    const updated = await request(runtime.app).patch(`/api/volumes/${volume.body.data.id}`).send({
+      description: "间谍身份开始暴露。",
+      keywords: ["身份暴露", "阵营冲突"]
+    }).expect(200);
+    expect(updated.body.data).toMatchObject({
+      description: "间谍身份开始暴露。",
+      keywords: ["身份暴露", "阵营冲突"]
+    });
+    const tree = await request(runtime.app).get(`/api/works/${work.body.data.id}`).expect(200);
+    expect(tree.body.data.volumes[0]).toMatchObject({ description: "间谍身份开始暴露。", keywords: ["身份暴露", "阵营冲突"] });
+  });
+
   it("支持四种章节类型且只修改类型时不增加正文版本", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "章节类型作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "正文" }).expect(201);

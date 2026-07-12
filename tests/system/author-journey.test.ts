@@ -72,6 +72,7 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
     expect(page.text).toContain('id="chapter-line-numbers"');
+    expect(page.text).toContain('id="new-volume-button"');
     expect(application.text).toContain("选择第 ${index + 1} 行");
     expect(page.text).toContain('id="left-panel-resize"');
     expect(page.text).toContain('id="ai-panel-resize"');
@@ -141,6 +142,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("async function streamChat(body)");
     expect(application.text).toContain("const content = normalizeParagraphSpacing(input.value)");
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
+    expect(application.text).toContain("function openVolumeDialog(item)");
+    expect(application.text).toContain('field("keywords", "分卷关键词（逐条填写）", "item-list"');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字');
     expect(application.text).toContain('field("settings", "组织设定（逐条填写）", "item-list"');
     expect(application.text).toContain('form.getAll("settings")');
