@@ -119,6 +119,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('expand.dataset.testid = "relationship-map-expand"');
     expect(graph.text).toContain("viewport.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain('button.addEventListener("pointermove"');
+    expect(graph.text).toContain("shell.dataset.draggedNodeId = node.id");
+    expect(graph.text).toContain("initialNodePositions");
     expect(styles.text).toContain(".book-shelf");
     expect(styles.text).toContain(".galaxy-dialog");
   });

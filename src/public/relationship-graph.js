@@ -374,6 +374,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const detail = dialog.querySelector("#galaxy-detail");
   const shell = dialog.querySelector(".galaxy-shell");
   const layout = layoutGalaxy(graph, `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`);
+  const initialNodePositions = new Map(layout.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
   let transform = { x: 0, y: 0, scale: 1 };
   let selectedId = null;
   let drag = null;
@@ -524,7 +525,42 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       label.textContent = node.name;
       button.append(marker, label);
       button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
+      button.setAttribute("aria-grabbed", "false");
+      let nodeDrag = null;
+      let suppressClick = false;
+      listen(button, "pointerdown", (event) => {
+        if (event.button !== 0) return;
+        event.stopPropagation();
+        nodeDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: node.x, originY: node.y, dragged: false };
+        button.setPointerCapture(event.pointerId);
+        button.classList.add("is-dragging");
+        button.setAttribute("aria-grabbed", "true");
+      });
+      listen(button, "pointermove", (event) => {
+        if (!nodeDrag || event.pointerId !== nodeDrag.pointerId) return;
+        if (Math.hypot(event.clientX - nodeDrag.startX, event.clientY - nodeDrag.startY) >= 3) nodeDrag.dragged = true;
+        if (!nodeDrag.dragged) return;
+        event.preventDefault();
+        node.x = nodeDrag.originX + (event.clientX - nodeDrag.startX) / transform.scale;
+        node.y = nodeDrag.originY + (event.clientY - nodeDrag.startY) / transform.scale;
+        shell.dataset.draggedNodeId = node.id;
+        drawGraph();
+      });
+      const endNodeDrag = (event) => {
+        if (!nodeDrag || event.pointerId !== nodeDrag.pointerId) return;
+        suppressClick = nodeDrag.dragged;
+        nodeDrag = null;
+        button.classList.remove("is-dragging");
+        button.setAttribute("aria-grabbed", "false");
+        if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+      };
+      listen(button, "pointerup", endNodeDrag);
+      listen(button, "pointercancel", endNodeDrag);
       listen(button, "click", () => {
+        if (suppressClick) {
+          suppressClick = false;
+          return;
+        }
         selectedId = node.id;
         const relations = graph.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
         detail.classList.remove("hidden");
@@ -561,7 +597,9 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
   const reset = () => {
     transform = { x: 0, y: 0, scale: 1 };
+    for (const node of layout.nodes) Object.assign(node, initialNodePositions.get(node.id));
     selectedId = null;
+    delete shell.dataset.draggedNodeId;
     detail.classList.add("hidden");
     detail.replaceChildren();
     drawGraph();
