@@ -119,6 +119,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).not.toContain('id="relationship-map-dialog-title"');
     expect(page.text).toContain('data-testid="chapter-type-menu"');
     expect(application.text).toContain("async function renderOutlines()");
+    expect(application.text).toContain('data-testid="timeline-kanban"');
+    expect(application.text).toContain("function openTimelineTrackDialog(item)");
+    expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
     expect(application.text).toContain("const content = normalizeParagraphSpacing(input.value)");
     expect(application.text).toContain('field("settings", "组织设定（逐条填写）", "item-list"');

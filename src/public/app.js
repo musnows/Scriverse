@@ -9,6 +9,7 @@ const state = {
   models: [],
   characters: [],
   organizations: [],
+  timelineTracks: [],
   settings: [],
   dirty: false,
   pendingImportMeta: null,
@@ -578,12 +579,20 @@ async function renderOrganizations() {
 }
 
 async function renderTimeline() {
-  const events = await api(`/api/works/${state.work.id}/timeline`);
-  $("#module-content").innerHTML = events.length ? `${events.length > 1 ? '<div class="timeline-tools"><button id="merge-events" class="ghost-button" type="button">合并所选事件</button></div>' : ""}<div class="timeline-list">${events.map((item) => `
-    <article class="timeline-item"><input class="timeline-select" type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)} · 顺序 ${item.timeSort ?? "待定"}</small><h3>${esc(item.name)}</h3>
-    <p>${esc(item.description || "暂无说明")}<br>${item.location ? `地点：${esc(item.location)}` : ""}</p>
-    <div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button></div></article>`).join("")}</div>`
-    : emptyModule("时间轴还是空的", "可以手动创建事件，也可以在分析任务中生成带证据的候选事件。");
+  const [events, tracks] = await Promise.all([
+    api(`/api/works/${state.work.id}/timeline`),
+    api(`/api/works/${state.work.id}/timeline-tracks`)
+  ]);
+  state.timelineTracks = tracks;
+  const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
+  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button></div></article>`;
+  $("#module-content").innerHTML = `<div class="timeline-tools"><button id="create-timeline-track" class="primary-button" type="button">新建独立时间轴</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button">合并所选事件</button>' : ""}</div><div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
+    const laneEvents = events.filter((item) => (item.trackId ?? "") === track.id);
+    return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
+  }).join("")}</div>`;
+  $("#create-timeline-track").addEventListener("click", () => openTimelineTrackDialog());
+  $("#module-content").querySelectorAll("[data-edit-timeline-track]").forEach((button) => button.addEventListener("click", () => openTimelineTrackDialog(tracks.find((track) => track.id === button.dataset.editTimelineTrack))));
+  $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));
   $("#module-content").querySelectorAll("[data-split-event]").forEach((button) => button.addEventListener("click", () => openTimelineSplitDialog(events.find((item) => item.id === button.dataset.splitEvent))));
   $("#merge-events")?.addEventListener("click", () => {
@@ -929,10 +938,18 @@ async function openOrganizationDialog(item) {
     }, item ? "组织档案" : "世界内组织");
 }
 
-function openTimelineDialog(item) {
-  openDialog(item ? "编辑大事件" : "新建大事件", field("name", "事件名称", "text", item?.name) + field("timeLabel", "时间描述", "text", item?.timeLabel ?? "时间待定") + field("timeSort", "排序值（留空表示时间待定）", "number", item?.timeSort ?? "") + field("eventType", "事件类型", "text", item?.eventType ?? "other") + field("location", "地点", "text", item?.location) + field("description", "事件简述", "textarea", item?.description), async (form) => {
+function openTimelineTrackDialog(item) {
+  openDialog(item ? "编辑独立时间轴" : "新建独立时间轴", field("name", "时间轴名称", "text", item?.name) + field("description", "时间轴简介", "textarea", item?.description) + field("sortOrder", "看板排序", "number", item?.sortOrder ?? state.timelineTracks.length), async (form) => {
+    await api(item ? `/api/timeline-tracks/${item.id}` : `/api/works/${state.work.id}/timeline-tracks`, { method: item ? "PATCH" : "POST", body: { name: form.get("name"), description: form.get("description"), sortOrder: Number(form.get("sortOrder")) } });
+    await renderTimeline();
+  }, item ? "大事件分组" : "多线叙事");
+}
+
+function openTimelineDialog(item, preferredTrackId = null) {
+  const trackOptions = [["", "未分组"], ...state.timelineTracks.map((track) => [track.id, track.name])];
+  openDialog(item ? "编辑大事件" : "新建大事件", field("trackId", "所属独立时间轴", "select", item?.trackId ?? preferredTrackId ?? "", trackOptions) + field("name", "事件名称", "text", item?.name) + field("timeLabel", "时间描述", "text", item?.timeLabel ?? "时间待定") + field("timeSort", "排序值（留空表示时间待定）", "number", item?.timeSort ?? "") + field("eventType", "事件类型", "text", item?.eventType ?? "other") + field("location", "地点", "text", item?.location) + field("description", "事件简述", "textarea", item?.description), async (form) => {
     const rawSort = String(form.get("timeSort") ?? "").trim();
-    const body = { name: form.get("name"), timeLabel: form.get("timeLabel"), timeSort: rawSort ? Number(rawSort) : null, eventType: form.get("eventType"), location: form.get("location"), description: form.get("description"), status: item?.status ?? "confirmed" };
+    const body = { trackId: form.get("trackId") || null, name: form.get("name"), timeLabel: form.get("timeLabel"), timeSort: rawSort ? Number(rawSort) : null, eventType: form.get("eventType"), location: form.get("location"), description: form.get("description"), status: item?.status ?? "confirmed" };
     await api(item ? `/api/timeline/${item.id}` : `/api/works/${state.work.id}/timeline`, { method: item ? "PATCH" : "POST", body });
     await renderTimeline();
   }, item ? "人工调整" : "作者确认事件");
