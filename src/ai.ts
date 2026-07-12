@@ -1561,14 +1561,6 @@ export class AiManager {
           return;
         }
       }
-      if (category === "social" && ["同事", "朋友", "盟友"].includes(subtype)) {
-        const evidenceChapters = new Set(evidence.map((item) => String(item.chapterId)));
-        const explicitlyLongRunning = /同事|同僚|共事|搭档|朋友|好友|挚友|老友|老朋友|盟友|同盟|联盟|旧识|好久不见|多年|长期|几十年|经常|往日|一直.{0,16}(?:合作|支援|互助|并肩)/u.test(evidenceText);
-        if (evidenceChapters.size < 2 && !explicitlyLongRunning) {
-          skipped.push({ index, reason: `“${subtype}”缺少明确身份或跨章长期互动证据` });
-          return;
-        }
-      }
       if (category === "conflict" && subtype === "宿敌") {
         const evidenceChapters = new Set(evidence.map((item) => String(item.chapterId)));
         const explicitlyLongRunning = /宿敌|世仇|死敌|多年|长期|世代|一直.{0,24}(?:敌|威胁|对抗|杀手)|远古.{0,16}(?:战|敌)|多次.{0,16}(?:交战|对抗|冲突)/u.test(evidenceText);
@@ -1602,6 +1594,16 @@ export class AiManager {
         evidence
       });
     });
+
+    for (const [key, candidate] of merged) {
+      if (candidate.category !== "social" || !["同事", "朋友", "盟友"].includes(candidate.subtype)) continue;
+      const evidenceChapters = new Set(candidate.evidence.map((item) => String(item.chapterId)));
+      const evidenceText = candidate.evidence.map((item) => String(item.quote)).join("\n");
+      const explicitlyLongRunning = /同事|同僚|共事|搭档|朋友|好友|挚友|老友|老朋友|盟友|同盟|联盟|旧识|好久不见|多年|长期|几十年|经常|往日|一直.{0,16}(?:合作|支援|互助|并肩)/u.test(evidenceText);
+      if (evidenceChapters.size >= 2 || explicitlyLongRunning) continue;
+      skipped.push({ index: -1, reason: `“${candidate.subtype}”缺少明确身份或跨章长期互动证据` });
+      merged.delete(key);
+    }
 
     const relationshipIds: string[] = [];
     this.store.db.transaction(() => {

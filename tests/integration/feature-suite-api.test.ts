@@ -559,6 +559,47 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ subtype: "朋友" });
   });
 
+  it("先合并跨分块证据再判断长期社会关系", async () => {
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      const candidates: Array<Record<string, unknown>> = [];
+      const first = prompt.match(/<CHAPTER id="([^"]+)"[^>]*>[^<]*林舟替沈星挡下攻击/gu)?.[0]?.match(/id="([^"]+)"/u)?.[1];
+      const second = prompt.match(/<CHAPTER id="([^"]+)"[^>]*>[^<]*沈星撤离时护住林舟/gu)?.[0]?.match(/id="([^"]+)"/u)?.[1];
+      if (first) candidates.push({
+        fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
+        currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId: first, quote: "林舟替沈星挡下攻击", supports: "一次保护" }]
+      });
+      if (second) candidates.push({
+        fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
+        currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId: second, quote: "沈星撤离时护住林舟", supports: "再次保护" }]
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(candidates) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: `林舟替沈星挡下攻击。${"第一处背景。".repeat(1400)}`
+    }).expect(200);
+    await request(runtime.app).patch(`/api/chapters/${chapters[1].id}`).send({
+      content: `沈星撤离时护住林舟。${"第二处背景。".repeat(1400)}`
+    }).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book" }
+    }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.body.data.result).toMatchObject({ candidateCount: 1, rawCandidateCount: 2 });
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
+    expect(relationships.body.data[0].evidence).toHaveLength(2);
+  });
+
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
