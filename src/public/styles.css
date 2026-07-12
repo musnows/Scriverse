@@ -214,6 +214,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-map-floating-close { position: absolute; z-index: 6; top: 25px; right: 25px; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; background: rgba(255,254,250,.92); color: var(--ink); font-size: 20px; }
 .relationship-map-expanded-host { height: 100%; padding: 18px; }
 .relationship-map-expanded-host .relationship-map-card { height: 100%; margin: 0; }
+.relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }
 .relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 560px; }
 
 .outline-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 32px; }
