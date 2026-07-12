@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260712-editor-line-numbers">
+    <link rel="stylesheet" href="/styles.css?v=20260712-editor-line-quotes">
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -95,7 +95,7 @@
           <div class="editor-body">
             <div id="chapter-insight" class="chapter-insight hidden"></div>
             <div class="chapter-editor-frame">
-              <aside id="chapter-line-numbers" class="chapter-line-numbers" aria-label="正文行号" aria-hidden="true"><div id="chapter-line-numbers-inner"></div></aside>
+              <aside id="chapter-line-numbers" class="chapter-line-numbers" aria-label="正文行号，可拖拽引用多行"><div id="chapter-line-numbers-inner"></div></aside>
               <textarea id="chapter-content" class="chapter-content" aria-label="章节正文" placeholder="在这里开始你的故事……"></textarea>
               <div id="chapter-line-measure" class="chapter-line-measure" aria-hidden="true"></div>
             </div>
@@ -276,6 +276,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260712-editor-line-numbers"></script>
+    <script type="module" src="/app.js?v=20260712-editor-line-quotes"></script>
   </body>
 </html>

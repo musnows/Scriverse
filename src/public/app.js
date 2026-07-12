@@ -38,6 +38,8 @@ const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 
 let chapterLineNumberFrame = null;
+let chapterLineSelection = null;
+let chapterLineDrag = null;
 
 function syncChapterLineNumberScroll() {
   const input = $("#chapter-content");
@@ -74,9 +76,17 @@ function renderChapterLineNumbers() {
   measure.replaceChildren(...measureRows);
   const numbers = document.createDocumentFragment();
   measureRows.forEach((row, index) => {
-    const number = document.createElement("div");
+    const number = document.createElement("button");
+    number.type = "button";
     number.className = "chapter-line-number";
     number.textContent = String(index + 1);
+    number.dataset.lineIndex = String(index);
+    number.setAttribute("aria-label", `引用第 ${index + 1} 行`);
+    number.tabIndex = -1;
+    if (chapterLineSelection && index >= chapterLineSelection.start && index <= chapterLineSelection.end) {
+      number.classList.add("is-line-selected");
+      number.setAttribute("aria-pressed", "true");
+    }
     number.style.height = `${Math.max(lineHeight, Math.ceil(row.getBoundingClientRect().height))}px`;
     number.style.lineHeight = `${lineHeight}px`;
     numbers.append(number);
@@ -92,6 +102,51 @@ function scheduleChapterLineNumbers() {
   chapterLineNumberFrame = requestAnimationFrame(() => {
     chapterLineNumberFrame = null;
     renderChapterLineNumbers();
+  });
+}
+
+function lineIndexAtPointer(clientY) {
+  const rows = [...$("#chapter-line-numbers-inner").querySelectorAll(".chapter-line-number")];
+  if (!rows.length) return 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (clientY < rows[index].getBoundingClientRect().bottom) return index;
+  }
+  return rows.length - 1;
+}
+
+function paintChapterLineSelection(anchor, focus) {
+  const start = Math.min(anchor, focus);
+  const end = Math.max(anchor, focus);
+  chapterLineSelection = { start, end };
+  $("#chapter-line-numbers-inner").querySelectorAll(".chapter-line-number").forEach((row) => {
+    const selected = Number(row.dataset.lineIndex) >= start && Number(row.dataset.lineIndex) <= end;
+    row.classList.toggle("is-line-selected", selected);
+    row.setAttribute("aria-pressed", String(selected));
+  });
+}
+
+function quoteChapterLines(start, end) {
+  const input = $("#chapter-content");
+  const lines = input.value.replace(/\r\n?/gu, "\n").split("\n");
+  const safeStart = Math.max(0, Math.min(start, lines.length - 1));
+  const safeEnd = Math.max(safeStart, Math.min(end, lines.length - 1));
+  const selectedText = lines.slice(safeStart, safeEnd + 1).join("\n");
+  const startOffset = lines.slice(0, safeStart).reduce((length, line) => length + line.length + 1, 0);
+  input.setSelectionRange(startOffset, startOffset + selectedText.length);
+  const prompt = $("#ai-prompt");
+  const label = safeStart === safeEnd ? `引用第 ${safeStart + 1} 行` : `引用第 ${safeStart + 1}-${safeEnd + 1} 行`;
+  const quote = `${label}：\n${selectedText}`;
+  prompt.value = prompt.value.trim() ? `${prompt.value.trimEnd()}\n\n${quote}` : quote;
+  prompt.focus();
+  prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+  toast(`${label}已添加到创作助手`);
+}
+
+function clearChapterLineSelection() {
+  chapterLineSelection = null;
+  $("#chapter-line-numbers-inner")?.querySelectorAll(".is-line-selected").forEach((row) => {
+    row.classList.remove("is-line-selected");
+    row.setAttribute("aria-pressed", "false");
   });
 }
 
@@ -363,6 +418,7 @@ async function selectChapter(chapterId) {
   $("#chapter-path").textContent = `${volume?.title ?? "正文"} / 保存于 ${formatDate(state.chapter.updatedAt)}`;
   $("#chapter-title").value = state.chapter.title;
   $("#chapter-content").value = state.chapter.content;
+  clearChapterLineSelection();
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
@@ -1205,8 +1261,31 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => setSaveState("未保存", true));
-$("#chapter-content").addEventListener("input", () => { updateChapterStats(); setSaveState("未保存", true); scheduleChapterLineNumbers(); });
+$("#chapter-content").addEventListener("input", () => { updateChapterStats(); setSaveState("未保存", true); clearChapterLineSelection(); scheduleChapterLineNumbers(); });
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
+$("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
+  const row = event.target.closest(".chapter-line-number");
+  if (!row || event.button !== 0) return;
+  event.preventDefault();
+  const anchor = Number(row.dataset.lineIndex);
+  chapterLineDrag = { pointerId: event.pointerId, anchor, focus: anchor };
+  paintChapterLineSelection(anchor, anchor);
+  $("#chapter-line-numbers-inner").setPointerCapture(event.pointerId);
+});
+$("#chapter-line-numbers-inner").addEventListener("pointermove", (event) => {
+  if (!chapterLineDrag || event.pointerId !== chapterLineDrag.pointerId) return;
+  chapterLineDrag.focus = lineIndexAtPointer(event.clientY);
+  paintChapterLineSelection(chapterLineDrag.anchor, chapterLineDrag.focus);
+});
+const finishChapterLineDrag = (event) => {
+  if (!chapterLineDrag || event.pointerId !== chapterLineDrag.pointerId) return;
+  const { anchor, focus, pointerId } = chapterLineDrag;
+  chapterLineDrag = null;
+  if ($("#chapter-line-numbers-inner").hasPointerCapture(pointerId)) $("#chapter-line-numbers-inner").releasePointerCapture(pointerId);
+  quoteChapterLines(Math.min(anchor, focus), Math.max(anchor, focus));
+};
+$("#chapter-line-numbers-inner").addEventListener("pointerup", finishChapterLineDrag);
+$("#chapter-line-numbers-inner").addEventListener("pointercancel", finishChapterLineDrag);
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
 window.addEventListener("resize", scheduleChapterLineNumbers);
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));

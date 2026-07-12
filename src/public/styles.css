@@ -148,7 +148,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-editor-frame { position: relative; display: grid; grid-template-columns: 48px minmax(0, 1fr); flex: 1 1 auto; width: min(900px, 92%); min-height: 0; margin: 0 auto; }
 .chapter-line-numbers { position: relative; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: linear-gradient(to right, transparent, rgba(143,132,116,.04)); color: var(--muted); font-family: var(--font-latin), monospace; font-size: 10px; user-select: none; }
 #chapter-line-numbers-inner { position: absolute; top: 32px; left: 0; right: 0; will-change: transform; }
-.chapter-line-number { box-sizing: border-box; padding-right: 11px; text-align: right; }
+.chapter-line-number { box-sizing: border-box; width: 100%; padding: 0 11px 0 2px; border: 0; background: transparent; color: inherit; font: inherit; text-align: right; cursor: pointer; }
+.chapter-line-number:hover { background: rgba(139,61,44,.08); color: var(--accent-dark); }
+.chapter-line-number.is-line-selected { background: rgba(139,61,44,.16); color: var(--accent-dark); font-weight: 700; }
 .chapter-content { resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
 .chapter-content:focus { box-shadow: none; }
 .chapter-line-measure { position: absolute; z-index: -1; top: 0; left: 48px; visibility: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; }

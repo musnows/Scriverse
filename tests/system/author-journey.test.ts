@@ -77,6 +77,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers()");
     expect(application.text).toContain("syncChapterLineNumberScroll");
+    expect(application.text).toContain("function quoteChapterLines(start, end)");
+    expect(application.text).toContain('addEventListener("pointermove"');
+    expect(styles.text).toContain(".chapter-line-number.is-line-selected");
   });
 
   it("作品选择器使用紧凑字号和固定高度", async () => {
