@@ -138,6 +138,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
     expect(application.text).toContain("const content = normalizeParagraphSpacing(input.value)");
+    expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain('field("settings", "组织设定（逐条填写）", "item-list"');
     expect(application.text).toContain('form.getAll("settings")');
     expect(application.text).toContain('field("memberIds", "组织成员（可多选）", "chips"');

@@ -1,5 +1,5 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-expanded-map-labels";
-import { normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-unicode-blank-lines";
+import { collapseExcessBlankLines, normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-auto-blank-lines";
 
 const state = {
   works: [],
@@ -195,6 +195,19 @@ function scheduleChapterLineNumbers() {
     chapterLineNumberFrame = null;
     renderChapterLineNumbers();
   });
+}
+
+function collapseChapterInputBlankLines(input) {
+  const value = input.value;
+  const normalized = collapseExcessBlankLines(value);
+  if (normalized === value) return false;
+  const selectionStart = input.selectionStart ?? value.length;
+  const selectionEnd = input.selectionEnd ?? selectionStart;
+  const nextStart = collapseExcessBlankLines(value.slice(0, selectionStart)).length;
+  const nextEnd = collapseExcessBlankLines(value.slice(0, selectionEnd)).length;
+  input.value = normalized;
+  input.setSelectionRange(nextStart, nextEnd);
+  return true;
 }
 
 function lineIndexAtPointer(clientY) {
@@ -589,12 +602,14 @@ async function selectChapter(chapterId) {
   const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
   $("#chapter-path").textContent = `${volume?.title ?? "正文"} / 保存于 ${formatDate(state.chapter.updatedAt)}`;
   $("#chapter-title").value = state.chapter.title;
-  $("#chapter-content").value = state.chapter.content;
+  const normalizedContent = normalizeParagraphSpacing(state.chapter.content);
+  const spacingChanged = normalizedContent !== state.chapter.content;
+  $("#chapter-content").value = normalizedContent;
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  setSaveState("已保存");
+  setSaveState(spacingChanged ? "未保存" : "已保存", spacingChanged);
   renderTree();
 }
 
@@ -1462,7 +1477,13 @@ $("#appearance-form").addEventListener("submit", (event) => {
   toast(persisted ? "显示设置已保存" : "显示设置已应用，但当前浏览器无法保存偏好", persisted ? "info" : "error");
 });
 $("#chapter-title").addEventListener("input", () => setSaveState("未保存", true));
-$("#chapter-content").addEventListener("input", () => { updateChapterStats(); setSaveState("未保存", true); clearChapterLineSelection(); scheduleChapterLineNumbers(); });
+$("#chapter-content").addEventListener("input", (event) => {
+  if (!event.isComposing) collapseChapterInputBlankLines(event.currentTarget);
+  updateChapterStats();
+  setSaveState("未保存", true);
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+});
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");

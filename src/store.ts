@@ -2,7 +2,7 @@ import type { ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
-import { countWords, id, json, now } from "./utils.js";
+import { countWords, id, json, normalizeParagraphSpacing, now } from "./utils.js";
 
 type WorkInput = {
   title: string;
@@ -470,7 +470,7 @@ export class Store {
   ): Record<string, unknown> {
     const current = this.getChapter(chapterId);
     const nextTitle = input.title ?? String(current.title);
-    const nextContent = input.content ?? String(current.content);
+    const nextContent = input.content === undefined ? String(current.content) : normalizeParagraphSpacing(input.content);
     const nextExcluded = input.excludedFromAnalysis ?? Boolean(current.excludedFromAnalysis);
     const nextChapterType = input.chapterType ?? String(current.chapterType) as ChapterType;
     const hasTextChange = nextTitle !== current.title || nextContent !== current.content;
@@ -569,6 +569,7 @@ export class Store {
   ): string {
     const chapterId = id("chapter");
     const timestamp = now();
+    const normalizedContent = normalizeParagraphSpacing(content);
     this.db.run(
       `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'pending', ?, ?)`,
@@ -576,10 +577,10 @@ export class Store {
       workId,
       volumeId,
       title,
-      content,
+      normalizedContent,
       chapterType,
       sortOrder,
-      countWords(content),
+      countWords(normalizedContent),
       timestamp,
       timestamp
     );
@@ -589,7 +590,7 @@ export class Store {
       id("chapterVersion"),
       chapterId,
       title,
-      content,
+      normalizedContent,
       source,
       sourceRef,
       timestamp
