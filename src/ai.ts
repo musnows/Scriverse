@@ -1700,6 +1700,34 @@ export class AiManager {
           skipped.push({ index: -1, reason: `已有更强的同级社会关系，忽略较弱的“${candidate.subtype}”重复边` });
           continue;
         }
+        const weakerExistingPeerIndex = candidatePeerStrength > 0
+          ? existing.findIndex((relationship) => unorderedPairKey(relationship.fromCharacterId, relationship.toCharacterId) === candidatePair
+            && relationship.category === "social"
+            && Boolean(relationship.directed) === candidate.directed
+            && relationship.confirmationStatus === "pending"
+            && relationship.locked !== true
+            && relationshipHasEnded(relationship) === candidateEnded
+            && peerSocialStrength(relationship) > 0
+            && peerSocialStrength(relationship) < candidatePeerStrength)
+          : -1;
+        if (weakerExistingPeerIndex >= 0) {
+          const weaker = existing[weakerExistingPeerIndex] as Record<string, unknown>;
+          const mergedEvidence = [...(weaker.evidence as Array<Record<string, unknown>> ?? [])];
+          const seenEvidence = new Set(mergedEvidence.map((item) => `${String(item.chapterId)}|${String(item.quote)}`));
+          for (const item of candidate.evidence) {
+            const evidenceKey = `${String(item.chapterId)}|${String(item.quote)}`;
+            if (!seenEvidence.has(evidenceKey)) mergedEvidence.push(item);
+          }
+          existing[weakerExistingPeerIndex] = this.store.updateRelationship(String(weaker.id), {
+            subtype: candidate.subtype,
+            keywords: [...new Set([...(weaker.keywords as string[] ?? []), ...candidate.keywords])].slice(0, 8),
+            confidence: Math.max(Number(weaker.confidence ?? 0), candidate.confidence),
+            currentStatus: candidate.currentStatus,
+            timeRange: candidate.timeRange,
+            evidence: mergedEvidence
+          });
+          continue;
+        }
         const duplicateIndex = existing.findIndex((relationship) => {
           const same = relationship.fromCharacterId === candidate.fromCharacterId && relationship.toCharacterId === candidate.toCharacterId;
           const reverse = !candidate.directed && !relationship.directed
