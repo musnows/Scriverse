@@ -743,12 +743,21 @@ async function renderCharacters() {
     api(`/api/works/${state.work.id}/organizations`)
   ]);
   $("#module-content").innerHTML = state.characters.length ? `<div class="card-grid">${state.characters.map((item) => `
-    <article class="record-card"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
+    <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
     <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
-    <div class="organization-links">${(item.organizations ?? []).map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("")}</div>
+    <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     <p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>
     <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`).join("")}</div>`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。");
+  $("#module-content").querySelectorAll("[data-open-character]").forEach((card) => {
+    const open = () => openCharacterDialog(state.characters.find((item) => item.id === card.dataset.openCharacter));
+    card.addEventListener("click", (event) => { if (!event.target.closest("button")) open(); });
+    card.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      open();
+    });
+  });
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterDialog(state.characters.find((item) => item.id === button.dataset.editCharacter))));
 }
 

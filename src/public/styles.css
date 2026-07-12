@@ -186,10 +186,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.character-card { cursor: pointer; }
+.character-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .card-actions { display: flex; gap: 6px; margin-top: 15px; }
 .card-actions button { border: 1px solid var(--line); background: transparent; border-radius: 3px; font-size: 10px; padding: 5px 8px; }
 .pill { display: inline-block; padding: 3px 7px; margin: 0 4px 4px 0; border-radius: 12px; background: var(--paper-deep); color: var(--muted); font-size: 9px; }
-.organization-links { margin: 6px 0 4px; }.organization-pill { color: var(--accent-dark); background: rgba(139,61,44,.1); }.organization-settings { margin: 10px 0 6px; }.organization-members { margin-top: 9px !important; }.relationship-keyword { white-space: nowrap; }
+.organization-links { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 8px 0 6px; }.organization-links b { color: var(--muted); font-size: 9px; font-weight: 500; }.organization-links .pill { margin: 0; }.organization-empty { color: var(--muted); font-size: 9px; }.organization-pill { color: var(--accent-dark); background: rgba(139,61,44,.1); }.organization-settings { margin: 10px 0 6px; }.organization-members { margin-top: 9px !important; }.relationship-keyword { white-space: nowrap; }
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section-header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
 .config-section-header h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
