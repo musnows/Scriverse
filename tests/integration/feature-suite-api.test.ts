@@ -686,6 +686,38 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
   });
 
+  it("目标强边已存在时先合并强边再清理弱边", async () => {
+    let chapterId = "";
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([{
+      fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "盟友", directed: false,
+      currentStatus: "active", confidence: 0.97, timeRange: {}, keywords: ["共同守望"],
+      evidence: [{ chapterId, quote: "林舟和沈星仍是盟友", supports: "持续联盟" }]
+    }]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({ content: "林舟和沈星仍是盟友。" }).expect(200);
+    const first = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const second = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const weaker = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: first.body.data.id, toCharacterId: second.body.data.id, category: "social", subtype: "朋友",
+      directed: false, currentStatus: "active", confirmationStatus: "pending"
+    }).expect(201);
+    const stronger = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: first.body.data.id, toCharacterId: second.body.data.id, category: "social", subtype: "盟友",
+      directed: false, currentStatus: "active", confirmationStatus: "pending"
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data).toMatchObject({ status: "review" });
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({ id: stronger.body.data.id, subtype: "盟友", confidence: 0.97 });
+    expect(relationships.body.data[0].evidence).toHaveLength(1);
+    expect(relationships.body.data.some((item: { id: string }) => item.id === weaker.body.data.id)).toBe(false);
+  });
+
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
