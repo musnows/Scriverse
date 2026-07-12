@@ -539,7 +539,7 @@ function renderTree() {
   $("#novel-tree").classList.remove("empty-copy");
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
     <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
-      <div class="volume-heading"><button class="volume-title" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}"><span>${esc(volume.title)}</span><span>${volume.chapters.length}</span></button><button class="volume-edit-button" type="button" data-edit-volume="${esc(volume.id)}" aria-label="设置分卷 ${esc(volume.title)}">设置</button></div>
+      <button class="volume-title" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷"><span>${esc(volume.title)}</span><span>${volume.chapters.length}</span></button>
       <div class="volume-chapters">
       ${volume.chapters.map((chapter) => `
         <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}">
@@ -554,9 +554,10 @@ function renderTree() {
       else state.collapsedVolumeIds.add(volumeId);
       renderTree();
     });
-  });
-  $("#novel-tree").querySelectorAll("[data-edit-volume]").forEach((button) => {
-    button.addEventListener("click", () => openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.editVolume)));
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
+    });
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));

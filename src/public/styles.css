@@ -116,13 +116,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .novel-tree { font-size: 13px; }
 .empty-copy { color: var(--muted); padding: 14px 7px; line-height: 1.5; }
 .volume-node { margin-bottom: 8px; }
-.volume-heading { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .volume-title { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; padding: 7px; border: 0; background: transparent; color: var(--muted); font-size: 11px; letter-spacing: .05em; text-align: left; }
 .volume-title::before { content: ""; width: 4px; height: 4px; border: solid var(--muted); border-width: 0 1px 1px 0; transform: rotate(45deg); margin-right: 8px; }
 .volume-node.is-collapsed .volume-title::before { transform: rotate(-45deg); }
 .volume-title span:first-child { flex: 1; }
-.volume-edit-button { margin-right: 3px; padding: 4px 6px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 9px; }
-.volume-edit-button:hover { background: var(--paper-deep); color: var(--ink); }
 .volume-chapters { display: block; }
 .volume-node.is-collapsed .volume-chapters { display: none; }
 .chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: 100%; padding: 9px 10px 9px 20px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }

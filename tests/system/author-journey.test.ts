@@ -147,6 +147,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");
     expect(application.text).toContain('field("keywords", "分卷关键词（逐条填写）", "item-list"');
+    expect(application.text).not.toContain("data-edit-volume");
+    expect(application.text).toContain('title="左键折叠，右键设置分卷"');
+    expect(application.text).toContain('button.dataset.volumeToggle));');
     expect(application.text).toContain('class="record-card character-card" data-open-character');
     expect(application.text).toContain("所属组织");
     expect(application.text).toContain('card.addEventListener("keydown"');
