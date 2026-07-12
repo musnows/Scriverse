@@ -73,6 +73,30 @@ const timelineTrackSchema = z.object({
   sortOrder: z.number().int().min(0).optional()
 });
 
+const aiCitationSchema = z.object({
+  chapterId: identifier,
+  chapterTitle: nonEmpty.max(300),
+  startLine: z.number().int().positive(),
+  endLine: z.number().int().positive(),
+  text: z.string().max(20_000)
+}).refine((citation) => citation.endLine >= citation.startLine, "引用结束行不能早于开始行");
+
+const aiCitationsSchema = z.array(aiCitationSchema).max(20).refine(
+  (citations) => citations.reduce((total, citation) => total + citation.text.length, 0) <= 100_000,
+  "引用正文总长度不能超过 100000 字符"
+);
+
+type AiCitation = z.infer<typeof aiCitationSchema>;
+
+function instructionWithCitations(instruction: string, citations: AiCitation[]): string {
+  if (!citations.length) return instruction;
+  const references = citations.map((citation) => {
+    const lines = citation.startLine === citation.endLine ? `L${citation.startLine}` : `L${citation.startLine}-L${citation.endLine}`;
+    return `[${citation.chapterTitle} ${lines}]\n${citation.text}`;
+  }).join("\n\n");
+  return `${instruction}\n\n作者显式添加了以下正文引用。请优先依据这些引用回答，并在引用相关结论中注明章节与行号：\n\n${references}`;
+}
+
 const relationshipSchema = z.object({
   fromCharacterId: identifier,
   toCharacterId: identifier,
@@ -492,12 +516,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       instruction: nonEmpty.max(100_000),
       scope: contextSchema,
       modelId: identifier.optional(),
-      parameters: jsonObject.optional()
+      parameters: jsonObject.optional(),
+      citations: aiCitationsSchema.optional()
     }), request.body);
+    const citations = input.citations ?? [];
+    for (const citation of citations) {
+      if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
+    }
     data(response, await ai.createSuggestion({
       workId: request.params.workId,
       taskType: input.taskType,
-      instruction: input.instruction,
+      instruction: instructionWithCitations(input.instruction, citations),
       scope: input.scope as ContextScope,
       ...(input.modelId ? { modelId: input.modelId } : {}),
       ...(input.parameters ? { parameters: input.parameters } : {})
@@ -508,8 +537,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       instruction: nonEmpty.max(100_000),
       scope: contextSchema,
       modelId: identifier.optional(),
-      parameters: jsonObject.optional()
+      parameters: jsonObject.optional(),
+      citations: aiCitationsSchema.optional()
     }), request.body);
+    const citations = input.citations ?? [];
+    for (const citation of citations) {
+      if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
+    }
     const controller = new AbortController();
     response.on("close", () => {
       if (!response.writableEnded) controller.abort(new Error("浏览器已中断流式请求"));
@@ -527,7 +561,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     try {
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
-        instruction: input.instruction,
+        instruction: instructionWithCitations(input.instruction, citations),
         scope: input.scope as ContextScope,
         signal: controller.signal,
         ...(input.modelId ? { modelId: input.modelId } : {}),

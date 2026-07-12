@@ -143,8 +143,10 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number };
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; messages?: Array<{ content: string }> };
       expect(body).toMatchObject({ stream: true, max_tokens: 32_000 });
+      expect(body.messages?.[1]?.content).toContain("[第一章 L1-L2]");
+      expect(body.messages?.[1]?.content).toContain("林舟启动了飞船。");
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder();
@@ -161,7 +163,8 @@ describe("AI 供应商、模型与建议 API", () => {
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "飞船接下来怎样？",
       scope: { type: "chapter", chapterId },
-      modelId
+      modelId,
+      citations: [{ chapterId, chapterTitle: "第一章", startLine: 1, endLine: 2, text: "林舟启动了飞船。\n跃迁准备完成。" }]
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"飞船"}');
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"离港"}');
