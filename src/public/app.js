@@ -983,7 +983,7 @@ function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
-    return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
+    return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
   if (type === "select") return `<label>${esc(label)}<select name="${esc(name)}">${options.map(([key, text]) => `<option value="${esc(key)}" ${key === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   if (type === "multiselect") {
@@ -1008,7 +1008,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增") {
     row.className = "item-list-row";
     const input = document.createElement("input");
     input.name = rows.dataset.name;
-    input.setAttribute("aria-label", "组织设定");
+    input.setAttribute("aria-label", rows.dataset.label || "列表项目");
     const remove = document.createElement("button");
     remove.type = "button";
     remove.dataset.itemListRemove = "";
