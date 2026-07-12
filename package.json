@@ -12,7 +12,7 @@
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=1",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
     "test:system": "vitest run tests/system",
