@@ -483,73 +483,115 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const stats = dialog.querySelector("#galaxy-stats");
   const detail = dialog.querySelector("#galaxy-detail");
   const shell = dialog.querySelector(".galaxy-shell");
-  const layout = layoutGalaxy(graph, `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`);
-  const initialNodePositions = new Map(layout.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
-  let transform = { x: 0, y: 0, scale: 1 };
-  let selectedId = null;
-  let drag = null;
-  let destroyed = false;
+  const seed = `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`;
+  const layout = layoutGalaxy(graph, seed);
+  const stars = createGalaxyStarfield(`${seed}|stars`);
+  const initialNodePositions = new Map(layout.nodes.map((node) => [node.id, { x: node.x, y: node.y, z: node.z }]));
+  const initialCamera = Object.freeze({ yaw: -0.38, pitch: 0.72, distance: 1420, focalRatio: 1.72, zoom: 1 });
+  const camera = { ...initialCamera };
   const nodeElements = new Map();
   const cleanups = [];
+  let selectedId = null;
+  let cameraDrag = null;
+  let animationFrame = 0;
+  let previousFrameTime = 0;
+  let paused = false;
+  let starsVisible = true;
+  let destroyed = false;
+
+  shell.classList.add("is-three-dimensional");
+  shell.dataset.sceneDimension = "3";
+  shell.dataset.starCount = String(stars.length);
+
   const listen = (target, type, handler, settings) => {
     target.addEventListener(type, handler, settings);
     cleanups.push(() => target.removeEventListener(type, handler, settings));
   };
+
   const resizeCanvas = (target) => {
     const ratio = Math.min(window.devicePixelRatio || 1, 2);
     const rect = shell.getBoundingClientRect();
-    const pixelWidth = Math.max(1, Math.round(rect.width * ratio));
-    const pixelHeight = Math.max(1, Math.round(rect.height * ratio));
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
+    const pixelWidth = Math.max(1, Math.round(width * ratio));
+    const pixelHeight = Math.max(1, Math.round(height * ratio));
     if (target.width !== pixelWidth) target.width = pixelWidth;
     if (target.height !== pixelHeight) target.height = pixelHeight;
-    if (target.style.width !== `${rect.width}px`) target.style.width = `${rect.width}px`;
-    if (target.style.height !== `${rect.height}px`) target.style.height = `${rect.height}px`;
+    if (target.style.width !== `${width}px`) target.style.width = `${width}px`;
+    if (target.style.height !== `${height}px`) target.style.height = `${height}px`;
     const context = target.getContext("2d");
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    return { context, width: rect.width, height: rect.height, ratio };
+    return { context, width, height };
   };
+
+  const project = (point, width, height) => projectGalaxyPoint(point, camera, { width, height });
+
   const drawBackground = () => {
     const { context, width, height } = resizeCanvas(background);
     context.clearRect(0, 0, width, height);
-    context.fillStyle = "#05070d";
+    const backdrop = context.createRadialGradient(width * 0.53, height * 0.48, 0, width * 0.53, height * 0.48, Math.max(width, height) * 0.78);
+    backdrop.addColorStop(0, "#0b1830");
+    backdrop.addColorStop(0.36, "#07101f");
+    backdrop.addColorStop(0.72, "#03070e");
+    backdrop.addColorStop(1, "#010205");
+    context.fillStyle = backdrop;
     context.fillRect(0, 0, width, height);
-    context.strokeStyle = "rgba(120,145,180,.045)";
+
     context.lineWidth = 1;
-    for (let x = 0; x < width; x += 42) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke(); }
-    for (let y = 0; y < height; y += 42) { context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke(); }
-    const random = seededRandom(hashString(String(options.workId ?? "galaxy")));
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const stars = Math.min(3600, Math.round(width * height / 360));
-    for (let index = 0; index < stars; index += 1) {
-      const angle = random() * Math.PI * 2 + random() * 1.6;
-      const radius = Math.pow(random(), 1.75) * Math.min(width * 0.58, 720);
-      const arm = Math.sin(angle * 2 + radius * 0.025) * 34;
-      const x = centerX + Math.cos(angle) * radius + (random() - 0.5) * 50;
-      const y = centerY + Math.sin(angle) * radius * 0.26 + arm + (random() - 0.5) * 34;
-      const alpha = 0.12 + random() * 0.68 * (1 - radius / Math.max(width, height));
-      const size = random() > 0.96 ? 1.5 : 0.55 + random() * 0.75;
-      context.fillStyle = `rgba(${190 + Math.round(random() * 65)},${205 + Math.round(random() * 50)},255,${alpha})`;
+    context.strokeStyle = "rgba(105,142,182,.06)";
+    for (let offset = -1200; offset <= 1200; offset += 160) {
+      const horizontalStart = project({ x: -1200, y: 0, z: offset }, width, height);
+      const horizontalEnd = project({ x: 1200, y: 0, z: offset }, width, height);
+      const verticalStart = project({ x: offset, y: 0, z: -1200 }, width, height);
+      const verticalEnd = project({ x: offset, y: 0, z: 1200 }, width, height);
+      if (horizontalStart.visible && horizontalEnd.visible) {
+        context.beginPath();
+        context.moveTo(horizontalStart.x, horizontalStart.y);
+        context.lineTo(horizontalEnd.x, horizontalEnd.y);
+        context.stroke();
+      }
+      if (verticalStart.visible && verticalEnd.visible) {
+        context.beginPath();
+        context.moveTo(verticalStart.x, verticalStart.y);
+        context.lineTo(verticalEnd.x, verticalEnd.y);
+        context.stroke();
+      }
+    }
+
+    const center = project({ x: 0, y: 0, z: 0 }, width, height);
+    const coreRadius = Math.min(width, height) * 0.28 * camera.zoom;
+    const core = context.createRadialGradient(center.x, center.y, 0, center.x, center.y, coreRadius);
+    core.addColorStop(0, "rgba(235,247,255,.22)");
+    core.addColorStop(0.12, "rgba(100,166,230,.14)");
+    core.addColorStop(0.42, "rgba(52,160,126,.06)");
+    core.addColorStop(1, "rgba(0,0,0,0)");
+    context.fillStyle = core;
+    context.fillRect(0, 0, width, height);
+
+    if (!starsVisible) return;
+    context.save();
+    context.globalCompositeOperation = "lighter";
+    for (let index = 0; index < stars.length; index += 1) {
+      const star = stars[index];
+      const point = project(star, width, height);
+      if (!point.visible || point.x < -8 || point.x > width + 8 || point.y < -8 || point.y > height + 8) continue;
+      const perspective = clamp(point.scale / 0.95, 0.32, 2.4);
+      const radius = star.size * perspective;
+      const twinkle = 0.82 + Math.sin(index * 12.9898 + camera.yaw * 5) * 0.18;
+      const alpha = clamp(star.brightness * twinkle * perspective, 0.08, 0.92);
+      context.fillStyle = `rgba(216,235,255,${alpha})`;
       context.beginPath();
-      context.arc(x, y, size, 0, Math.PI * 2);
+      context.arc(point.x, point.y, Math.max(0.28, radius), 0, Math.PI * 2);
       context.fill();
     }
-    const glow = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, Math.min(width, height) * 0.48);
-    glow.addColorStop(0, "rgba(225,240,255,.18)");
-    glow.addColorStop(0.25, "rgba(62,118,210,.09)");
-    glow.addColorStop(0.62, "rgba(38,180,145,.035)");
-    glow.addColorStop(1, "rgba(0,0,0,0)");
-    context.fillStyle = glow;
-    context.fillRect(0, 0, width, height);
+    context.restore();
   };
-  const project = (node, width, height) => ({
-    x: width / 2 + transform.x + node.x * transform.scale,
-    y: height / 2 + transform.y + node.y * transform.scale
-  });
+
   const drawGraph = () => {
     if (destroyed || !dialog.open) return;
     const { context, width, height } = resizeCanvas(canvas);
     context.clearRect(0, 0, width, height);
+    const projections = new Map(layout.nodes.map((node) => [node.id, project(node, width, height)]));
     const relatedIds = new Set(selectedId ? [selectedId] : []);
     if (selectedId) {
       for (const edge of graph.edges) {
@@ -559,31 +601,37 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         }
       }
     }
+
     const highlightedKeywords = [];
-    for (const edge of graph.edges) {
-      const source = layout.byId.get(edge.source);
-      const target = layout.byId.get(edge.target);
-      if (!source || !target) continue;
-      const from = project(source, width, height);
-      const to = project(target, width, height);
-      const highlighted = selectedId && (edge.source === selectedId || edge.target === selectedId);
-      const dimmed = selectedId && !highlighted;
-      const opacity = dimmed ? 0.04 : highlighted ? 0.82 : 0.12 + edge.confidence * 0.28;
-      const edgeColor = `${RELATION_STYLE[edge.category].color}${Math.round(opacity * 255).toString(16).padStart(2, "0")}`;
+    const orderedEdges = graph.edges.map((edge) => ({
+      edge,
+      depth: ((projections.get(edge.source)?.depth ?? 0) + (projections.get(edge.target)?.depth ?? 0)) / 2
+    })).sort((left, right) => right.depth - left.depth);
+    for (const { edge } of orderedEdges) {
+      const from = projections.get(edge.source);
+      const to = projections.get(edge.target);
+      if (!from?.visible || !to?.visible) continue;
+      const highlighted = Boolean(selectedId) && (edge.source === selectedId || edge.target === selectedId);
+      const dimmed = Boolean(selectedId) && !highlighted;
+      const depthFactor = clamp((from.scale + to.scale) / 1.9, 0.25, 1.6);
+      const opacity = dimmed ? 0.025 : highlighted ? 0.9 : (0.08 + edge.confidence * 0.22) * depthFactor;
+      const alpha = Math.round(clamp(opacity, 0, 1) * 255).toString(16).padStart(2, "0");
+      const edgeColor = `${RELATION_STYLE[edge.category].color}${alpha}`;
       context.strokeStyle = edgeColor;
-      context.lineWidth = highlighted ? 1.8 : 0.55 + edge.confidence;
-      context.setLineDash(edge.confirmationStatus === "pending" || edge.category === "uncertain" ? [4, 5] : []);
+      context.lineWidth = (highlighted ? 2.1 : 0.55 + edge.confidence) * clamp(depthFactor, 0.55, 1.45);
+      context.setLineDash(edge.confirmationStatus === "pending" || edge.category === "uncertain" ? [5, 6] : []);
       context.beginPath();
       context.moveTo(from.x, from.y);
       context.lineTo(to.x, to.y);
       context.stroke();
       if (edge.directed) {
         const angle = Math.atan2(to.y - from.y, to.x - from.x);
+        const arrowSize = 6 * clamp(depthFactor, 0.7, 1.5);
         context.fillStyle = edgeColor;
         context.beginPath();
         context.moveTo(to.x, to.y);
-        context.lineTo(to.x - Math.cos(angle - 0.45) * 7, to.y - Math.sin(angle - 0.45) * 7);
-        context.lineTo(to.x - Math.cos(angle + 0.45) * 7, to.y - Math.sin(angle + 0.45) * 7);
+        context.lineTo(to.x - Math.cos(angle - 0.45) * arrowSize, to.y - Math.sin(angle - 0.45) * arrowSize);
+        context.lineTo(to.x - Math.cos(angle + 0.45) * arrowSize, to.y - Math.sin(angle + 0.45) * arrowSize);
         context.fill();
       }
       if (highlighted) {
@@ -591,35 +639,99 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         highlightedKeywords.push(fullLabel);
         const label = fullLabel.length > 42 ? `${fullLabel.slice(0, 41)}…` : fullLabel;
         const x = (from.x + to.x) / 2;
-        const y = (from.y + to.y) / 2 - 8;
+        const y = (from.y + to.y) / 2 - 9;
         context.setLineDash([]);
         context.font = '10px "SFMono-Regular", "SF Mono", Menlo, Monaco, monospace';
         context.textAlign = "center";
         context.textBaseline = "middle";
-        const labelWidth = Math.min(280, context.measureText(label).width + 14);
-        context.fillStyle = "rgba(5,7,13,.82)";
+        const labelWidth = Math.min(300, context.measureText(label).width + 14);
+        context.fillStyle = "rgba(3,7,14,.86)";
         context.fillRect(x - labelWidth / 2, y - 9, labelWidth, 18);
-        context.fillStyle = "rgba(238,246,255,.94)";
+        context.fillStyle = "rgba(238,246,255,.96)";
         context.fillText(label, x, y, labelWidth - 8);
       }
     }
     context.setLineDash([]);
+
+    const baseScale = Math.min(width, height) * camera.focalRatio / camera.distance * camera.zoom;
     for (const node of layout.nodes) {
-      const point = project(node, width, height);
+      const point = projections.get(node.id);
       const element = nodeElements.get(node.id);
-      if (!element) continue;
-      element.style.transform = `translate(${point.x}px, ${point.y}px) translate(-50%, -50%) scale(${clamp(transform.scale, 0.72, 1.45)})`;
+      if (!element || !point) continue;
+      const perspective = clamp(point.scale / Math.max(baseScale, 0.01), 0.5, 1.8);
+      element.hidden = !point.visible;
+      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -50%) scale(${perspective})`;
+      element.style.zIndex = String(10000 - Math.round(point.depth));
+      element.style.setProperty("--depth-opacity", String(clamp(1.45 - point.depth / 2300, 0.38, 1)));
+      element.dataset.worldX = node.x.toFixed(2);
+      element.dataset.worldY = node.y.toFixed(2);
+      element.dataset.worldZ = node.z.toFixed(2);
+      element.dataset.projectedDepth = point.depth.toFixed(2);
+      element.dataset.projectedScale = point.scale.toFixed(4);
       element.classList.toggle("is-selected", node.id === selectedId);
       element.classList.toggle("is-related", Boolean(selectedId) && node.id !== selectedId && relatedIds.has(node.id));
       element.classList.toggle("is-dimmed", Boolean(selectedId) && !relatedIds.has(node.id));
-      element.classList.toggle("show-label", node.index < 24 || relatedIds.has(node.id) || transform.scale > 1.3);
+      element.classList.toggle("show-label", node.index < 26 || relatedIds.has(node.id) || camera.zoom > 1.35);
     }
     shell.dataset.selectedNodeId = selectedId ?? "";
     shell.dataset.highlightedKeywords = [...new Set(highlightedKeywords)].join("|");
-    shell.dataset.graphScale = transform.scale.toFixed(3);
-    shell.dataset.graphX = transform.x.toFixed(1);
-    shell.dataset.graphY = transform.y.toFixed(1);
+    shell.dataset.cameraYaw = camera.yaw.toFixed(5);
+    shell.dataset.cameraPitch = camera.pitch.toFixed(5);
+    shell.dataset.cameraDistance = camera.distance.toFixed(1);
+    shell.dataset.graphScale = camera.zoom.toFixed(3);
   };
+
+  const drawScene = () => {
+    drawBackground();
+    drawGraph();
+  };
+
+  const renderFrame = (time) => {
+    animationFrame = 0;
+    if (destroyed || !dialog.open) return;
+    const elapsed = previousFrameTime ? Math.min(50, time - previousFrameTime) : 0;
+    previousFrameTime = time;
+    if (!paused && !cameraDrag) camera.yaw += elapsed * 0.000045;
+    drawScene();
+    animationFrame = window.requestAnimationFrame(renderFrame);
+  };
+
+  const startAnimation = () => {
+    if (animationFrame || destroyed) return;
+    previousFrameTime = 0;
+    animationFrame = window.requestAnimationFrame(renderFrame);
+  };
+
+  const renderDetail = (node) => {
+    const relations = graph.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+    detail.classList.remove("hidden");
+    detail.replaceChildren();
+    const heading = document.createElement("strong");
+    heading.textContent = node.name;
+    detail.append(heading);
+    if (node.aliases.length) {
+      const aliases = document.createElement("small");
+      aliases.textContent = `别名：${node.aliases.join("、")}`;
+      detail.append(aliases);
+    }
+    if (node.identity) {
+      const identity = document.createElement("p");
+      identity.textContent = node.identity;
+      detail.append(identity);
+    }
+    const list = document.createElement("ul");
+    for (const edge of relations.slice(0, 12)) {
+      const other = graph.nodeById.get(edge.source === node.id ? edge.target : edge.source);
+      const item = document.createElement("li");
+      const category = document.createElement("i");
+      category.className = edge.category;
+      const keywords = edge.keywords.length ? ` · ${edge.keywords.join("、")}` : "";
+      item.append(category, document.createTextNode(`${other?.name ?? "未知角色"} · ${edge.subtype}${keywords}`));
+      list.append(item);
+    }
+    detail.append(list);
+  };
+
   const renderNodes = () => {
     nodeLayer.replaceChildren();
     nodeElements.clear();
@@ -641,20 +753,40 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       listen(button, "pointerdown", (event) => {
         if (event.button !== 0) return;
         event.stopPropagation();
-        nodeDrag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, originX: node.x, originY: node.y, dragged: false };
+        nodeDrag = {
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          originX: node.x,
+          originY: node.y,
+          originZ: node.z,
+          yaw: camera.yaw,
+          pitch: camera.pitch,
+          scale: Number(button.dataset.projectedScale) || 1,
+          dragged: false
+        };
         button.setPointerCapture(event.pointerId);
         button.classList.add("is-dragging");
         button.setAttribute("aria-grabbed", "true");
       });
       listen(button, "pointermove", (event) => {
         if (!nodeDrag || event.pointerId !== nodeDrag.pointerId) return;
-        if (Math.hypot(event.clientX - nodeDrag.startX, event.clientY - nodeDrag.startY) >= 3) nodeDrag.dragged = true;
+        const deltaX = event.clientX - nodeDrag.startX;
+        const deltaY = event.clientY - nodeDrag.startY;
+        if (Math.hypot(deltaX, deltaY) >= 3) nodeDrag.dragged = true;
         if (!nodeDrag.dragged) return;
         event.preventDefault();
-        node.x = nodeDrag.originX + (event.clientX - nodeDrag.startX) / transform.scale;
-        node.y = nodeDrag.originY + (event.clientY - nodeDrag.startY) / transform.scale;
+        const worldX = deltaX / Math.max(nodeDrag.scale, 0.16);
+        const worldY = deltaY / Math.max(nodeDrag.scale, 0.16);
+        const cosYaw = Math.cos(nodeDrag.yaw);
+        const sinYaw = Math.sin(nodeDrag.yaw);
+        const cosPitch = Math.cos(nodeDrag.pitch);
+        const sinPitch = Math.sin(nodeDrag.pitch);
+        node.x = nodeDrag.originX + worldX * cosYaw - worldY * sinYaw * sinPitch;
+        node.y = nodeDrag.originY + worldY * cosPitch;
+        node.z = nodeDrag.originZ - worldX * sinYaw - worldY * cosYaw * sinPitch;
         shell.dataset.draggedNodeId = node.id;
-        drawGraph();
+        drawScene();
       });
       const endNodeDrag = (event) => {
         if (!nodeDrag || event.pointerId !== nodeDrag.pointerId) return;
@@ -672,99 +804,117 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           return;
         }
         selectedId = node.id;
-        const relations = graph.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
-        detail.classList.remove("hidden");
-        detail.replaceChildren();
-        const heading = document.createElement("strong");
-        heading.textContent = node.name;
-        detail.append(heading);
-        if (node.aliases.length) {
-          const aliases = document.createElement("small");
-          aliases.textContent = `别名：${node.aliases.join("、")}`;
-          detail.append(aliases);
-        }
-        if (node.identity) {
-          const identity = document.createElement("p");
-          identity.textContent = node.identity;
-          detail.append(identity);
-        }
-        const list = document.createElement("ul");
-        for (const edge of relations.slice(0, 12)) {
-          const other = graph.nodeById.get(edge.source === node.id ? edge.target : edge.source);
-          const item = document.createElement("li");
-          const category = document.createElement("i");
-          category.className = edge.category;
-          const keywords = edge.keywords.length ? ` · ${edge.keywords.join("、")}` : "";
-          item.append(category, document.createTextNode(`${other?.name ?? "未知角色"} · ${edge.subtype}${keywords}`));
-          list.append(item);
-        }
-        detail.append(list);
-        drawGraph();
+        renderDetail(node);
+        drawScene();
       });
       nodeElements.set(node.id, button);
       nodeLayer.append(button);
     }
   };
+
   const reset = () => {
-    transform = { x: 0, y: 0, scale: 1 };
+    Object.assign(camera, initialCamera);
     for (const node of layout.nodes) Object.assign(node, initialNodePositions.get(node.id));
     selectedId = null;
     delete shell.dataset.draggedNodeId;
     detail.classList.add("hidden");
     detail.replaceChildren();
-    drawGraph();
+    drawScene();
   };
-  const zoom = (factor) => { transform.scale = clamp(transform.scale * factor, 0.5, 3); drawGraph(); };
+
+  const zoom = (factor) => {
+    camera.zoom = clamp(camera.zoom * factor, 0.45, 2.8);
+    drawScene();
+  };
+
+  const updateRotationControl = () => {
+    shell.classList.toggle("is-paused", paused);
+    const control = dialog.querySelector("#galaxy-rotation");
+    control.setAttribute("aria-pressed", String(paused));
+    control.textContent = paused ? "继续旋转" : "暂停旋转";
+  };
+
   const open = () => {
     if (!dialog.open) dialog.showModal();
-    shell.classList.toggle("is-paused", window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-    dialog.querySelector("#galaxy-rotation").textContent = shell.classList.contains("is-paused") ? "继续旋转" : "暂停旋转";
-    stats.value = `${graph.stats.nodeCount} 个角色 / ${graph.stats.edgeCount} 条关系`;
+    paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    starsVisible = true;
+    background.classList.remove("hidden-stars");
+    dialog.querySelector("#galaxy-stars").setAttribute("aria-pressed", "true");
+    dialog.querySelector("#galaxy-stars").textContent = "隐藏背景星点";
+    updateRotationControl();
+    stats.value = `${graph.stats.nodeCount} 个节点 / ${graph.stats.edgeCount} 条关系`;
     renderNodes();
-    drawBackground();
-    drawGraph();
+    drawScene();
+    startAnimation();
     dialog.querySelector("#galaxy-close").focus();
   };
-  const close = () => { if (dialog.open) dialog.close(); options.onClose?.(); };
+
+  const close = () => {
+    if (dialog.open) dialog.close();
+  };
+
   listen(dialog.querySelector("#galaxy-close"), "click", close);
   listen(dialog.querySelector("#galaxy-reset"), "click", reset);
-  listen(dialog.querySelector("#galaxy-zoom-in"), "click", () => zoom(1.2));
-  listen(dialog.querySelector("#galaxy-zoom-out"), "click", () => zoom(1 / 1.2));
+  listen(dialog.querySelector("#galaxy-zoom-in"), "click", () => zoom(1.18));
+  listen(dialog.querySelector("#galaxy-zoom-out"), "click", () => zoom(1 / 1.18));
   listen(dialog.querySelector("#galaxy-stars"), "click", (event) => {
-    const hidden = background.classList.toggle("hidden-stars");
-    event.currentTarget.setAttribute("aria-pressed", String(!hidden));
-    event.currentTarget.textContent = hidden ? "显示背景星点" : "隐藏背景星点";
+    starsVisible = !starsVisible;
+    background.classList.toggle("hidden-stars", !starsVisible);
+    event.currentTarget.setAttribute("aria-pressed", String(starsVisible));
+    event.currentTarget.textContent = starsVisible ? "隐藏背景星点" : "显示背景星点";
+    drawScene();
   });
-  listen(dialog.querySelector("#galaxy-rotation"), "click", (event) => {
-    const paused = shell.classList.toggle("is-paused");
-    event.currentTarget.setAttribute("aria-pressed", String(paused));
-    event.currentTarget.textContent = paused ? "继续旋转" : "暂停旋转";
+  listen(dialog.querySelector("#galaxy-rotation"), "click", () => {
+    paused = !paused;
+    updateRotationControl();
   });
-  listen(shell, "wheel", (event) => { event.preventDefault(); zoom(event.deltaY > 0 ? 0.9 : 1.1); }, { passive: false });
+  listen(shell, "wheel", (event) => {
+    event.preventDefault();
+    zoom(event.deltaY > 0 ? 0.9 : 1.1);
+  }, { passive: false });
   listen(shell, "pointerdown", (event) => {
-    if (event.target.closest("button, aside")) return;
-    drag = { x: event.clientX, y: event.clientY, originX: transform.x, originY: transform.y };
+    if (event.button !== 0 || event.target.closest("button, aside")) return;
+    cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch };
+    shell.classList.add("is-rotating-camera");
     shell.setPointerCapture(event.pointerId);
   });
   listen(shell, "pointermove", (event) => {
-    if (!drag) return;
-    transform.x = drag.originX + event.clientX - drag.x;
-    transform.y = drag.originY + event.clientY - drag.y;
-    drawGraph();
+    if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
+    camera.yaw = cameraDrag.yaw + (event.clientX - cameraDrag.x) * 0.006;
+    camera.pitch = clamp(cameraDrag.pitch + (event.clientY - cameraDrag.y) * 0.004, 0.16, 1.38);
+    drawScene();
   });
-  listen(shell, "pointerup", () => { drag = null; });
-  listen(window, "resize", () => { if (dialog.open) { drawBackground(); drawGraph(); } });
-  listen(dialog, "close", () => options.onClose?.());
+  const endCameraDrag = (event) => {
+    if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
+    cameraDrag = null;
+    shell.classList.remove("is-rotating-camera");
+    if (shell.hasPointerCapture(event.pointerId)) shell.releasePointerCapture(event.pointerId);
+  };
+  listen(shell, "pointerup", endCameraDrag);
+  listen(shell, "pointercancel", endCameraDrag);
+  listen(window, "resize", () => {
+    if (dialog.open) drawScene();
+  });
+  listen(dialog, "close", () => {
+    if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    previousFrameTime = 0;
+    options.onClose?.();
+  });
+
   return {
     open,
     close,
     reset,
     destroy() {
       destroyed = true;
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      animationFrame = 0;
       cleanups.splice(0).forEach((cleanup) => cleanup());
       if (dialog.open) dialog.close();
       nodeElements.clear();
       nodeLayer.replaceChildren();
+      shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused");
     }
   };
 }
