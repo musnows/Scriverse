@@ -7,6 +7,10 @@ const RELATION_STYLE = Object.freeze({
 });
 
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+const MINDMAP_LAYOUTS = Object.freeze({
+  standard: Object.freeze({ width: 1000, height: 490, firstRadiusX: 270, firstRadiusY: 145, secondRadiusX: 425, secondRadiusY: 205, marginX: 65, marginY: 48, edgeCurve: 55, labelOffset: 6 }),
+  expanded: Object.freeze({ width: 1400, height: 760, firstRadiusX: 520, firstRadiusY: 285, secondRadiusX: 650, secondRadiusY: 350, marginX: 72, marginY: 54, edgeCurve: 88, labelOffset: 10 })
+});
 
 function hashString(value) {
   let hash = 2166136261;
@@ -82,11 +86,13 @@ export function buildRelationshipGraph(characters, relationships) {
   return { nodes, edges, nodeById, warnings, stats: { nodeCount: nodes.length, edgeCount: edges.length } };
 }
 
-function mindMapLayout(graph, rootId, visibleIds) {
+function mindMapLayout(graph, rootId, visibleIds, layout) {
   const root = graph.nodeById.get(rootId) ?? graph.nodes[0];
   const positions = new Map();
   if (!root) return positions;
-  positions.set(root.id, { x: 500, y: 245, depth: 0 });
+  const centerX = layout.width / 2;
+  const centerY = layout.height / 2;
+  positions.set(root.id, { x: centerX, y: centerY, depth: 0 });
   const adjacency = new Map(graph.nodes.map((node) => [node.id, []]));
   for (const edge of graph.edges) {
     adjacency.get(edge.source)?.push({ id: edge.target, edge });
@@ -100,18 +106,18 @@ function mindMapLayout(graph, rootId, visibleIds) {
   });
   first.forEach((item, index) => {
     const angle = -Math.PI / 2 + Math.PI * 2 * index / Math.max(first.length, 1);
-    positions.set(item.id, { x: 500 + Math.cos(angle) * 270, y: 245 + Math.sin(angle) * 145, depth: 1 });
+    positions.set(item.id, { x: centerX + Math.cos(angle) * layout.firstRadiusX, y: centerY + Math.sin(angle) * layout.firstRadiusY, depth: 1 });
     visited.add(item.id);
   });
   const second = [...visibleIds].filter((id) => !visited.has(id));
   second.forEach((id, index) => {
     const parent = first.length ? first[index % first.length]?.id : root.id;
     const parentPosition = positions.get(parent) ?? positions.get(root.id);
-    const baseAngle = Math.atan2(parentPosition.y - 245, parentPosition.x - 500);
+    const baseAngle = Math.atan2(parentPosition.y - centerY, parentPosition.x - centerX);
     const offset = (Math.floor(index / Math.max(first.length, 1)) + 1) * 0.18 * (index % 2 ? 1 : -1);
     positions.set(id, {
-      x: clamp(500 + Math.cos(baseAngle + offset) * 425, 65, 935),
-      y: clamp(245 + Math.sin(baseAngle + offset) * 205, 48, 442),
+      x: clamp(centerX + Math.cos(baseAngle + offset) * layout.secondRadiusX, layout.marginX, layout.width - layout.marginX),
+      y: clamp(centerY + Math.sin(baseAngle + offset) * layout.secondRadiusY, layout.marginY, layout.height - layout.marginY),
       depth: 2
     });
   });
@@ -121,6 +127,7 @@ function mindMapLayout(graph, rootId, visibleIds) {
 export function renderRelationshipMindMap(container, graph, options = {}) {
   let selectedId = graph.nodes[0]?.id ?? null;
   const manualPositions = new Map();
+  const layout = options.expanded ? MINDMAP_LAYOUTS.expanded : MINDMAP_LAYOUTS.standard;
   const render = () => {
     container.replaceChildren();
     if (!graph.nodes.length) {
@@ -133,7 +140,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     const visibleNodes = graph.nodes.slice(0, 30);
     if (selectedId && !visibleNodes.some((node) => node.id === selectedId)) visibleNodes[visibleNodes.length - 1] = graph.nodeById.get(selectedId);
     const visibleIds = new Set(visibleNodes.filter(Boolean).map((node) => node.id));
-    const positions = mindMapLayout(graph, selectedId, visibleIds);
+    const positions = mindMapLayout(graph, selectedId, visibleIds, layout);
     for (const [nodeId, position] of manualPositions) if (visibleIds.has(nodeId)) positions.set(nodeId, position);
     const shell = document.createElement("section");
     shell.className = `relationship-map-card${options.expanded ? " is-expanded" : ""}`;
@@ -162,6 +169,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     toolbar.append(actions);
     const viewport = document.createElement("div");
     viewport.className = "relationship-mindmap";
+    viewport.dataset.layoutWidth = String(layout.width);
+    viewport.dataset.layoutHeight = String(layout.height);
     const stage = document.createElement("div");
     stage.className = "relationship-mindmap-stage";
     viewport.append(stage);
@@ -174,7 +183,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     };
     updateViewTransform();
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 1000 490");
+    svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
     svg.setAttribute("preserveAspectRatio", "none");
     svg.setAttribute("aria-hidden", "true");
     const marker = document.createElementNS("http://www.w3.org/2000/svg", "defs");
@@ -186,11 +195,11 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       const from = positions.get(edge.source);
       const to = positions.get(edge.target);
       if (!from || !to) return;
-      const curve = Math.min(55, Math.abs(from.x - to.x) * 0.12);
+      const curve = Math.min(layout.edgeCurve, Math.abs(from.x - to.x) * 0.12);
       path.setAttribute("d", `M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${(from.y + to.y) / 2 - curve} ${to.x} ${to.y}`);
       if (label) {
         label.setAttribute("x", String((from.x + to.x) / 2));
-        label.setAttribute("y", String((from.y + to.y) / 2 - curve - 6));
+        label.setAttribute("y", String((from.y + to.y) / 2 - curve - layout.labelOffset));
       }
     };
     for (const edge of relevantEdges) {
@@ -236,8 +245,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       button.type = "button";
       button.className = `mind-node ${node.id === selectedId ? "is-selected" : ""} ${node.locked ? "is-locked" : ""}`;
       button.dataset.nodeId = node.id;
-      button.style.left = `${position.x / 10}%`;
-      button.style.top = `${position.y / 4.9}%`;
+      button.style.left = `${position.x / layout.width * 100}%`;
+      button.style.top = `${position.y / layout.height * 100}%`;
       button.textContent = node.name;
       button.title = [node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
       button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
@@ -261,14 +270,14 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         if (!dragState.dragged) return;
         event.preventDefault();
         const position = {
-          x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * 1000, 48, 952),
-          y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * 490, 38, 452),
+          x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * layout.width, layout.marginX, layout.width - layout.marginX),
+          y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * layout.height, layout.marginY, layout.height - layout.marginY),
           depth: positions.get(node.id)?.depth ?? 1
         };
         positions.set(node.id, position);
         manualPositions.set(node.id, position);
-        button.style.left = `${position.x / 10}%`;
-        button.style.top = `${position.y / 4.9}%`;
+        button.style.left = `${position.x / layout.width * 100}%`;
+        button.style.top = `${position.y / layout.height * 100}%`;
         viewport.dataset.draggedNodeId = node.id;
         edgeElements.forEach(updateEdgeGeometry);
       });

@@ -203,6 +203,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .mind-edge.family { stroke: #3e9b73; }.mind-edge.social { stroke: #3c70a8; }.mind-edge.emotional { stroke: #af5263; }.mind-edge.conflict { stroke: #c37535; }.mind-edge.uncertain { stroke: #8a857b; stroke-dasharray: 3 5; }
 .mind-edge.is-pending { stroke-dasharray: 7 5; }.mind-edge.is-dimmed { opacity: .08; }.mind-edge.is-highlighted { opacity: .92; stroke-width: 3; }
 .mind-edge-label { fill: var(--muted); font-size: 10px; paint-order: stroke; stroke: var(--paper); stroke-width: 4px; }
+.relationship-map-card.is-expanded .mind-edge-label { font-size: 14px; stroke-width: 6px; }
 .mind-node { position: absolute; width: 96px; min-height: 40px; transform: translate(-50%, -50%); padding: 7px 9px; border: 1px solid var(--line); border-radius: 22px; background: #fffefa; box-shadow: 0 6px 18px rgba(49,42,32,.1); font-size: 10px; cursor: grab; touch-action: none; z-index: 2; transition: opacity .15s ease, transform .15s ease, box-shadow .15s ease; }
 .mind-node:hover, .mind-node:focus-visible, .mind-node.is-selected { transform: translate(-50%, -50%) scale(1.08); border-color: var(--accent); box-shadow: 0 8px 23px rgba(139,61,44,.16); }
 .mind-node.is-locked { box-shadow: 0 0 0 2px rgba(94,118,92,.2), 0 6px 18px rgba(49,42,32,.1); }.mind-node.is-dimmed { opacity: .16; }
