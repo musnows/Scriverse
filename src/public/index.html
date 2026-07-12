@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <link rel="stylesheet" href="/styles.css?v=20260712-galaxy-node-degree">
+    <link rel="stylesheet" href="/styles.css?v=20260712-relationship-dialog">
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -245,11 +245,8 @@
       <div id="versions-list" class="versions-list"></div>
     </dialog>
 
-    <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-labelledby="relationship-map-dialog-title" data-testid="relationship-map-expanded">
-      <div class="dialog-header">
-        <div><span class="eyebrow">人物网络</span><h2 id="relationship-map-dialog-title">人物关系图</h2></div>
-        <button id="relationship-map-close" class="dialog-close" aria-label="关闭放大关系图" type="button">×</button>
-      </div>
+    <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
+      <button id="relationship-map-close" class="relationship-map-floating-close" aria-label="关闭放大关系图" type="button">×</button>
       <div id="relationship-map-expanded-host" class="relationship-map-expanded-host"></div>
     </dialog>
 

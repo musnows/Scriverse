@@ -108,6 +108,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
+    expect(page.text).toContain('class="relationship-map-floating-close"');
+    expect(page.text).not.toContain('id="relationship-map-dialog-title"');
     expect(page.text).toContain('data-testid="chapter-type-menu"');
     expect(application.text).toContain("async function renderOutlines()");
     expect(application.text).toContain("async function streamChat(body)");
