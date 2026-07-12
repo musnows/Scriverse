@@ -120,6 +120,7 @@ function mindMapLayout(graph, rootId, visibleIds) {
 
 export function renderRelationshipMindMap(container, graph, options = {}) {
   let selectedId = graph.nodes[0]?.id ?? null;
+  const manualPositions = new Map();
   const render = () => {
     container.replaceChildren();
     if (!graph.nodes.length) {
@@ -133,6 +134,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     if (selectedId && !visibleNodes.some((node) => node.id === selectedId)) visibleNodes[visibleNodes.length - 1] = graph.nodeById.get(selectedId);
     const visibleIds = new Set(visibleNodes.filter(Boolean).map((node) => node.id));
     const positions = mindMapLayout(graph, selectedId, visibleIds);
+    for (const [nodeId, position] of manualPositions) if (visibleIds.has(nodeId)) positions.set(nodeId, position);
     const shell = document.createElement("section");
     shell.className = `relationship-map-card${options.expanded ? " is-expanded" : ""}`;
     shell.dataset.testid = "relationship-mindmap";
@@ -168,13 +170,20 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     marker.innerHTML = '<marker id="mind-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker>';
     svg.append(marker);
     const relevantEdges = graph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
-    for (const edge of relevantEdges) {
+    const edgeElements = [];
+    const updateEdgeGeometry = ({ edge, path, label }) => {
       const from = positions.get(edge.source);
       const to = positions.get(edge.target);
-      if (!from || !to) continue;
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      if (!from || !to) return;
       const curve = Math.min(55, Math.abs(from.x - to.x) * 0.12);
       path.setAttribute("d", `M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${(from.y + to.y) / 2 - curve} ${to.x} ${to.y}`);
+      if (label) {
+        label.setAttribute("x", String((from.x + to.x) / 2));
+        label.setAttribute("y", String((from.y + to.y) / 2 - curve - 6));
+      }
+    };
+    for (const edge of relevantEdges) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.classList.add("mind-edge", edge.category);
       path.dataset.edgeSource = edge.source;
       path.dataset.edgeTarget = edge.target;
@@ -183,15 +192,17 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
       if (edge.directed) path.setAttribute("marker-end", "url(#mind-arrow)");
       svg.append(path);
+      let label = null;
       if (edge.source === selectedId || edge.target === selectedId) {
-        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        label.setAttribute("x", String((from.x + to.x) / 2));
-        label.setAttribute("y", String((from.y + to.y) / 2 - curve - 6));
+        label = document.createElementNS("http://www.w3.org/2000/svg", "text");
         label.setAttribute("text-anchor", "middle");
         label.classList.add("mind-edge-label");
         label.textContent = edge.keywords.length ? edge.keywords.join(" · ") : edge.subtype;
         svg.append(label);
       }
+      const edgeElement = { edge, path, label };
+      edgeElements.push(edgeElement);
+      updateEdgeGeometry(edgeElement);
     }
     viewport.append(svg);
     const updateHighlight = (nodeId, locked = false) => {
@@ -219,10 +230,52 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       button.textContent = node.name;
       button.title = [node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
       button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
+      button.setAttribute("aria-grabbed", "false");
       button.addEventListener("mouseenter", () => updateHighlight(node.id, true));
       button.addEventListener("mouseleave", () => updateHighlight(selectedId, false));
       button.addEventListener("focus", () => updateHighlight(node.id, true));
+      let dragState = null;
+      let suppressClick = false;
+      button.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        const rect = viewport.getBoundingClientRect();
+        dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect, dragged: false };
+        button.setPointerCapture(event.pointerId);
+        button.classList.add("is-dragging");
+        button.setAttribute("aria-grabbed", "true");
+      });
+      button.addEventListener("pointermove", (event) => {
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) >= 3) dragState.dragged = true;
+        if (!dragState.dragged) return;
+        event.preventDefault();
+        const position = {
+          x: clamp((event.clientX - dragState.rect.left) / Math.max(dragState.rect.width, 1) * 1000, 48, 952),
+          y: clamp((event.clientY - dragState.rect.top) / Math.max(dragState.rect.height, 1) * 490, 38, 452),
+          depth: positions.get(node.id)?.depth ?? 1
+        };
+        positions.set(node.id, position);
+        manualPositions.set(node.id, position);
+        button.style.left = `${position.x / 10}%`;
+        button.style.top = `${position.y / 4.9}%`;
+        viewport.dataset.draggedNodeId = node.id;
+        edgeElements.forEach(updateEdgeGeometry);
+      });
+      const endDrag = (event) => {
+        if (!dragState || event.pointerId !== dragState.pointerId) return;
+        suppressClick = dragState.dragged;
+        dragState = null;
+        button.classList.remove("is-dragging");
+        button.setAttribute("aria-grabbed", "false");
+        if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+      };
+      button.addEventListener("pointerup", endDrag);
+      button.addEventListener("pointercancel", endDrag);
       button.addEventListener("click", () => {
+        if (suppressClick) {
+          suppressClick = false;
+          return;
+        }
         selectedId = node.id;
         options.onSelect?.(node.id);
         render();
