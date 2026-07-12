@@ -233,11 +233,16 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('button.addEventListener("pointermove"');
     expect(graph.text).toContain("shell.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain("Math.sqrt(node.degree / maxDegree)");
+    expect(graph.text).toContain("export function getGalaxyNodeAppearance");
+    expect(graph.text).toContain('button.dataset.relationshipTier = appearance.tier');
+    expect(graph.text).toContain('button.style.setProperty("--node-color", appearance.color)');
     expect(graph.text).toContain("initialNodePositions");
     expect(styles.text).toContain(".book-shelf");
     expect(styles.text).toContain(".galaxy-dialog");
     expect(styles.text).toContain(".galaxy-shell.is-rotating-camera");
     expect(styles.text).toContain("grid-template-rows: var(--node-size) auto");
+    expect(styles.text).toContain("--node-color");
+    expect(styles.text).toContain("--node-brightness");
   });
 
   it("从导入作品到采纳续写、抽取时间轴并安全导出", async () => {

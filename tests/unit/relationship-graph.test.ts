@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeFocusCamera, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
+import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -56,5 +56,17 @@ describe("人物关系图数据与布局", () => {
     expect(focused).toMatchObject({ targetX: 320, targetY: -80, targetZ: 140, distance: 940, zoom: 1.65 });
     expect(projected.x).toBe(viewport.width / 2);
     expect(projected.y).toBe(viewport.height / 2);
+  });
+
+  it("银河图按关系数量区分行星颜色与亮度", () => {
+    const outer = getGalaxyNodeAppearance({ degree: 1, weightedDegree: 0.65 }, 20);
+    const core = getGalaxyNodeAppearance({ degree: 20, weightedDegree: 27 }, 20);
+
+    expect(outer.tier).toBe("outer");
+    expect(core.tier).toBe("core");
+    expect(core.hue).toBeLessThan(outer.hue);
+    expect(Number(core.brightness)).toBeGreaterThan(Number(outer.brightness));
+    expect(Number(core.glow)).toBeGreaterThan(Number(outer.glow));
+    expect(core.color).not.toBe(outer.color);
   });
 });

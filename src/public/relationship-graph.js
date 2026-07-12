@@ -496,6 +496,31 @@ export function getGalaxyNodeFocusCamera(node, camera) {
   };
 }
 
+export function getGalaxyNodeAppearance(node, maxDegree) {
+  const degree = Math.max(0, Number(node?.degree) || 0);
+  const normalizedDegree = clamp(degree / Math.max(1, Number(maxDegree) || 1), 0, 1);
+  const weightedDegree = Math.max(0, Number(node?.weightedDegree) || 0);
+  const confidenceBoost = clamp(weightedDegree / Math.max(1, degree) / 1.35, 0, 1);
+  const intensity = clamp(normalizedDegree * 0.8 + confidenceBoost * 0.2, 0, 1);
+  const hue = Math.round(218 - intensity * 166);
+  const saturation = Math.round(58 + intensity * 35);
+  const lightness = Math.round(47 + intensity * 27);
+  const brightness = (0.7 + intensity * 0.68).toFixed(3);
+  const glow = (0.26 + intensity * 0.74).toFixed(3);
+  const tier = intensity >= 0.7 ? "core" : intensity >= 0.34 ? "active" : "outer";
+  return {
+    degree,
+    intensity,
+    hue,
+    saturation,
+    lightness,
+    brightness,
+    glow,
+    tier,
+    color: `hsl(${hue} ${saturation}% ${lightness}%)`
+  };
+}
+
 export function createGalaxyRenderer(dialog, graph, options = {}) {
   const background = dialog.querySelector("#galaxy-background");
   const canvas = dialog.querySelector("#galaxy-graph");
@@ -794,16 +819,22 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     nodeElements.clear();
     const maxDegree = Math.max(...layout.nodes.map((node) => node.degree), 1);
     for (const node of layout.nodes) {
+      const appearance = getGalaxyNodeAppearance(node, maxDegree);
       const button = document.createElement("button");
       button.type = "button";
       button.className = "galaxy-node";
       button.dataset.galaxyNode = node.id;
+      button.dataset.relationshipTier = appearance.tier;
       button.style.setProperty("--node-size", `${10 + Math.sqrt(node.degree / maxDegree) * 28}px`);
+      button.style.setProperty("--node-color", appearance.color);
+      button.style.setProperty("--node-brightness", appearance.brightness);
+      button.style.setProperty("--node-glow", appearance.glow);
       const marker = document.createElement("i");
       const label = document.createElement("span");
       label.textContent = node.name;
       button.append(marker, label);
-      button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
+      button.title = `${node.degree} 条关系 · ${appearance.tier === "core" ? "核心高亮" : appearance.tier === "active" ? "活跃连接" : "外围连接"}`;
+      button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系，${appearance.tier === "core" ? "核心高亮" : appearance.tier === "active" ? "活跃连接" : "外围连接"}${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
       button.setAttribute("aria-grabbed", "false");
       let nodeDrag = null;
       let suppressClick = false;
