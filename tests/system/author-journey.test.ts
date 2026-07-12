@@ -75,6 +75,13 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chapter-content { flex: 1 1 auto;");
   });
 
+  it("作品选择器使用紧凑字号和固定高度", async () => {
+    const page = await request(runtime.app).get("/").expect(200);
+    const styles = await request(runtime.app).get("/styles.css").expect(200);
+    expect(page.text).toContain('id="work-picker"');
+    expect(styles.text).toContain(".work-picker-row select { width: 100%; height: 38px; padding: 7px 9px; font-size: 12px;");
+  });
+
   it("全站使用黑体与等宽英文并提供可持久化显示设置", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
