@@ -662,6 +662,30 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(relationships.body.data[0].keywords).toEqual(["旧有信任", "正式结盟", "共同守望"]);
   });
 
+  it("同义社会关系不能绕过长期证据且明示结盟可通过", async () => {
+    let chapterId = "";
+    fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+      { fromCharacterId: "林舟", toCharacterId: "沈星", category: "social", subtype: "旧友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "林舟和沈星共同执行了一次任务", supports: "一次协作" }] },
+      { fromCharacterId: "乔安", toCharacterId: "叶宁", category: "social", subtype: "盟友", directed: false, currentStatus: "active", confidence: 0.9, timeRange: {}, evidence: [{ chapterId, quote: "乔安与叶宁正式结盟", supports: "明示结盟" }] }
+    ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    chapterId = String(chapters[0].id);
+    await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({ content: "林舟和沈星共同执行了一次任务。乔安与叶宁正式结盟。" }).expect(200);
+    for (const name of ["林舟", "沈星", "乔安", "叶宁"]) {
+      await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name }).expect(201);
+    }
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "relationship-analysis", scope: { type: "chapter", chapterId } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result.candidateCount).toBe(1);
+    expect(result.body.data.result.skipped.map((item: { reason: string }) => item.reason).join("\n"))
+      .toContain("“旧友”缺少明确身份或跨章长期互动证据");
+    const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
+    expect(relationships.body.data).toHaveLength(1);
+    expect(relationships.body.data[0]).toMatchObject({ subtype: "盟友" });
+  });
+
   it("拒绝礼称君臣和救援血亲，并把单场宿敌降级为战时敌对", async () => {
     let chapterId = "";
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {

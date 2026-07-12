@@ -1596,10 +1596,11 @@ export class AiManager {
     });
 
     for (const [key, candidate] of merged) {
-      if (candidate.category !== "social" || !["同事", "朋友", "盟友"].includes(candidate.subtype)) continue;
+      const durablePeerSubtype = /同事|同僚|共事|搭档|伙伴|朋友|好友|挚友|老友|旧友|战友|盟友|同盟|联盟/u.test(candidate.subtype);
+      if (candidate.category !== "social" || !durablePeerSubtype) continue;
       const evidenceChapters = new Set(candidate.evidence.map((item) => String(item.chapterId)));
       const evidenceText = candidate.evidence.map((item) => String(item.quote)).join("\n");
-      const explicitlyLongRunning = /同事|同僚|共事|搭档|朋友|好友|挚友|老友|老朋友|盟友|同盟|联盟|旧识|好久不见|多年|长期|几十年|经常|往日|一直.{0,16}(?:合作|支援|互助|并肩)/u.test(evidenceText);
+      const explicitlyLongRunning = /同事|同僚|共事|搭档|伙伴|朋友|好友|挚友|老友|旧友|老朋友|战友|盟友|同盟|联盟|结盟|缔盟|盟约|旧识|好久不见|多年|长期|几十年|经常|往日|一直.{0,16}(?:合作|支援|互助|并肩)/u.test(evidenceText);
       if (evidenceChapters.size >= 2 || explicitlyLongRunning) continue;
       skipped.push({ index: -1, reason: `“${candidate.subtype}”缺少明确身份或跨章长期互动证据` });
       merged.delete(key);
