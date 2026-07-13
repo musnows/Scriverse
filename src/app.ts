@@ -51,6 +51,7 @@ const settingSchema = z.object({
 const characterSchema = z.object({
   name: nonEmpty.max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+  species: z.string().trim().max(200).optional(),
   organizationIds: z.array(identifier).max(100).optional(),
   attributes: jsonObject.optional(),
   profile: jsonObject.optional(),

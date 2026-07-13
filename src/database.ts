@@ -155,6 +155,7 @@ export class Database {
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         aliases_json TEXT NOT NULL DEFAULT '[]',
+        species TEXT NOT NULL DEFAULT '',
         attributes_json TEXT NOT NULL DEFAULT '{}',
         profile_json TEXT NOT NULL DEFAULT '{}',
         current_state_json TEXT NOT NULL DEFAULT '{}',
@@ -632,6 +633,15 @@ export class Database {
           this.run("ALTER TABLE ai_conversation_messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(10)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("species")) {
+          this.run("ALTER TABLE characters ADD COLUMN species TEXT NOT NULL DEFAULT ''");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (10, ?)", new Date().toISOString());
       });
     }
   }

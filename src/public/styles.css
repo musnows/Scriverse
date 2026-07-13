@@ -470,6 +470,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .section-list-row textarea { grid-column: 1 / -1; min-height: 130px; }
 .structured-list-row button { grid-column: -2 / -1; grid-row: 1; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px; background: var(--panel); color: var(--muted); font-size: 10px; }
 .character-identity { color: var(--ink) !important; font-weight: 600; }
+.character-species { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 10px; }
 .character-detail-list { display: grid; gap: 5px; margin: 12px 0; }
 .character-detail-list div { display: grid; grid-template-columns: minmax(70px, .42fr) minmax(0, 1fr); gap: 8px; font-size: 10px; }
 .character-detail-list dt { color: var(--muted); }

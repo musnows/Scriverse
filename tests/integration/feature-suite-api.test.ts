@@ -140,6 +140,28 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(remaining.body.data.organizations).toEqual([expect.objectContaining({ name: "深空同盟" })]);
   });
 
+  it("独立保存、修改并检索人物种族，不与组织混用", async () => {
+    const { workId } = await seedWork(runtime);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);
+    const created = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "魔斯拉",
+      species: "泰坦族",
+      organizationIds: [organization.body.data.id]
+    }).expect(201);
+    expect(created.body.data).toMatchObject({
+      name: "魔斯拉",
+      species: "泰坦族",
+      organizationIds: [organization.body.data.id]
+    });
+
+    const updated = await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ species: "原生泰坦" }).expect(200);
+    expect(updated.body.data.species).toBe("原生泰坦");
+    expect(updated.body.data.organizations[0].name).toBe("帝王组织");
+
+    const search = await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("原生泰坦")}`).expect(200);
+    expect(search.body.data).toContainEqual(expect.objectContaining({ type: "character", title: "魔斯拉", snippet: "原生泰坦" }));
+  });
+
   it("支持原子导入新建、上传替换和删除书籍封面", async () => {
     const before = await request(runtime.app).get("/api/works").expect(200);
     await request(runtime.app).post("/api/works/import").attach("file", Buffer.from("无效"), "bad.pdf").expect(415);

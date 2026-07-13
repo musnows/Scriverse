@@ -252,7 +252,7 @@ export class ContextBuilder {
             const locked = item.lockedFields as string[];
             const attributes = item.attributes as Record<string, unknown>;
             const state = item.currentState as Record<string, unknown>;
-            const values = locked.map((key) => `${key}=${String(attributes[key] ?? state[key] ?? "未填写")}`).join("；");
+            const values = locked.map((key) => `${key}=${String(item[key] ?? attributes[key] ?? state[key] ?? "未填写")}`).join("；");
             return `- ${String(item.name)}：${values}`;
           })
           .join("\n")}`
@@ -324,7 +324,7 @@ export class ContextBuilder {
       }
       constraints.push(
         `选定角色：\n${characters
-          .map((item) => `- ${String(item.name)}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`)
+          .map((item) => `- ${String(item.name)}；种族=${String(item.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`)
           .join("\n")}`
       );
     }
@@ -1318,7 +1318,7 @@ export class AiManager {
         parameters: { temperature: 0.2 },
         instruction: [
           "抽取本批原文中有名字且对跨章节剧情有意义的人物或具有人格的生物。只输出 JSON 数组。",
-          "每项字段：canonicalName、aliases（仅无歧义昵称或拼写变体）、identity、firstEvidence（chapterId、chapterTitle、quote）。",
+          "每项字段：canonicalName、aliases（仅无歧义昵称或拼写变体）、species（仅原文明确说明时填写）、identity、firstEvidence（chapterId、chapterTitle、quote）。",
           "规则：合并明显拼写变体；不能把怪兽之王、怪兽女王、君王、女王、吾王、博士、舰长、上尉、司令、族长、老师、父亲、母亲、哥哥、姐姐等称号作为全局别名；不能把单字母简称作为别名；梦境或作品内虚构角色需在 identity 标明；不得创造人物；quote 必须是原文连续引文且不超过 80 字。",
           "没有合格人物时输出 []，不得使用 Markdown 代码块。"
         ].join("\n"),
@@ -1369,7 +1369,7 @@ export class AiManager {
     if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds };
 
     const byChapterId = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
-    const groups: Array<{ name: string; aliases: Set<string>; identity: string; firstChapterId: string | null; references: Set<string> }> = [];
+    const groups: Array<{ name: string; aliases: Set<string>; species: string; identity: string; firstChapterId: string | null; references: Set<string> }> = [];
     for (const candidate of rawCandidates) {
       if (typeof candidate.canonicalName !== "string" || !candidate.canonicalName.trim()) continue;
       const name = candidate.canonicalName.normalize("NFKC").trim();
@@ -1389,6 +1389,7 @@ export class AiManager {
       const group = matches[0] ?? {
         name,
         aliases: new Set<string>(),
+        species: typeof candidate.species === "string" ? candidate.species.trim() : "",
         identity: typeof candidate.identity === "string" ? candidate.identity : "",
         firstChapterId: chapterId,
         references: new Set<string>()
@@ -1397,6 +1398,7 @@ export class AiManager {
       for (const value of refs) group.references.add(value);
       for (const alias of aliases) if (this.normalizeReference(alias) !== this.normalizeReference(group.name)) group.aliases.add(alias);
       if (!group.identity && typeof candidate.identity === "string") group.identity = candidate.identity;
+      if (!group.species && typeof candidate.species === "string") group.species = candidate.species.trim();
       if (!group.firstChapterId && chapterId) group.firstChapterId = chapterId;
       for (const duplicate of matches.slice(1)) {
         for (const alias of [duplicate.name, ...duplicate.aliases]) {
@@ -1422,6 +1424,7 @@ export class AiManager {
             .filter((alias) => this.isSafeGlobalAlias(alias) && this.normalizeReference(alias) !== this.normalizeReference(String(existing.name)));
           const updated = this.store.updateCharacter(existingId, {
             aliases: mergedAliases,
+            species: String(existing.species) || group.species,
             attributes: { ...(existing.attributes as Record<string, unknown>), ...(group.identity ? { identity: group.identity } : {}) },
             firstChapterId: existing.firstChapterId as string | null ?? group.firstChapterId
           });
@@ -1430,6 +1433,7 @@ export class AiManager {
           const created = this.store.createCharacter(workId, {
             name: group.name,
             aliases,
+            species: group.species,
             attributes: group.identity ? { identity: group.identity } : {},
             firstChapterId: group.firstChapterId
           });
@@ -2124,6 +2128,7 @@ export class AiManager {
       candidates.push({
         canonicalName: character.name,
         aliases: (character.aliases as string[]).filter((alias) => this.isSafeGlobalAlias(alias)),
+        species: character.species,
         identity: String((character.attributes as Record<string, unknown>).identity ?? "本地回退识别"),
         firstEvidence: { chapterId, chapterTitle, quote }
       });
@@ -2237,6 +2242,7 @@ export class AiManager {
         revision: revision({
           name: item.name,
           aliases: item.aliases,
+          species: item.species,
           attributes: item.attributes,
           profile: item.profile,
           currentState: item.currentState,

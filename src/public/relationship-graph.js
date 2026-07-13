@@ -63,6 +63,7 @@ export function buildRelationshipGraph(characters, relationships) {
     id: String(character.id),
     name: String(character.name),
     aliases: Array.isArray(character.aliases) ? character.aliases : [],
+    species: String(character.species ?? ""),
     identity: String(character.attributes?.identity ?? ""),
     locked: Array.isArray(character.lockedFields) && character.lockedFields.length > 0,
     degree: 0,
@@ -347,7 +348,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       button.style.left = `${position.x / layout.width * 100}%`;
       button.style.top = `${position.y / layout.height * 100}%`;
       button.textContent = node.name;
-      button.title = [node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
+      button.title = [node.species ? `种族：${node.species}` : "", node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
       button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
       button.setAttribute("aria-grabbed", "false");
       button.addEventListener("mouseenter", () => updateHighlight(node.id, true));
@@ -927,6 +928,11 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const aliases = document.createElement("small");
       aliases.textContent = `别名：${node.aliases.join("、")}`;
       detail.append(aliases);
+    }
+    if (node.species) {
+      const species = document.createElement("small");
+      species.textContent = `种族：${node.species}`;
+      detail.append(species);
     }
     if (node.identity) {
       const identity = document.createElement("p");

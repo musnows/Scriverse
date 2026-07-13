@@ -1232,6 +1232,7 @@ async function renderCharacters() {
     return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
     <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
+    ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(item.species)}</span></div>` : ""}
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
@@ -1760,6 +1761,7 @@ async function openCharacterDialog(item) {
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
   openDialog(item ? "编辑角色" : "新建角色",
     field("name", "标准名", "text", item?.name) + field("aliases", "别名（用逗号分隔）", "text", item?.aliases?.join(", ")) +
+    field("species", "种族", "text", item?.species) +
     field("identity", "身份", "text", item?.attributes?.identity) + field("motivation", "动机", "textarea", item?.profile?.motivation) +
     field("summary", "人物简介", "textarea", item?.profile?.summary) +
     field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
@@ -1771,7 +1773,7 @@ async function openCharacterDialog(item) {
       const split = (value) => String(value ?? "").split(/[,，]/).map((part) => part.trim()).filter(Boolean);
       const details = buildCharacterDetails(form.getAll("detailLabel"), form.getAll("detailValue"));
       const sections = buildCharacterSections(form.getAll("sectionTitle"), form.getAll("sectionContent"));
-      const body = { name: form.get("name"), aliases: split(form.get("aliases")), organizationIds: form.getAll("organizationIds").map(String), attributes: { ...(item?.attributes ?? {}), identity: form.get("identity"), details }, profile: { ...(item?.profile ?? {}), motivation: form.get("motivation"), summary: form.get("summary"), sections }, currentState: { ...(item?.currentState ?? {}), location: form.get("location") }, lockedFields: split(form.get("lockedFields")) };
+      const body = { name: form.get("name"), aliases: split(form.get("aliases")), species: form.get("species"), organizationIds: form.getAll("organizationIds").map(String), attributes: { ...(item?.attributes ?? {}), identity: form.get("identity"), details }, profile: { ...(item?.profile ?? {}), motivation: form.get("motivation"), summary: form.get("summary"), sections }, currentState: { ...(item?.currentState ?? {}), location: form.get("location") }, lockedFields: split(form.get("lockedFields")) };
       await api(item ? `/api/characters/${item.id}` : `/api/works/${state.work.id}/characters`, { method: item ? "PATCH" : "POST", body });
       await renderCharacters();
       await loadAiReferences();

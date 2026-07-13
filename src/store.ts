@@ -30,6 +30,7 @@ type SettingInput = {
 type CharacterInput = {
   name: string;
   aliases?: string[];
+  species?: string;
   organizationIds?: string[];
   attributes?: Record<string, unknown>;
   profile?: Record<string, unknown>;
@@ -1279,13 +1280,14 @@ export class Store {
     this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, aliases_json, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, aliases_json, species, attributes_json, profile_json, current_state_json,
          locked_fields_json, visibility, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
         JSON.stringify(names.aliases),
+        input.species?.trim() ?? "",
         JSON.stringify(input.attributes ?? {}),
         JSON.stringify(input.profile ?? {}),
         JSON.stringify(input.currentState ?? {}),
@@ -1323,10 +1325,11 @@ export class Store {
     if (organizationIds) this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `UPDATE characters SET name = ?, aliases_json = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
+        `UPDATE characters SET name = ?, aliases_json = ?, species = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
          locked_fields_json = ?, visibility = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         JSON.stringify(names.aliases),
+        input.species === undefined ? String(current.species) : input.species.trim(),
         JSON.stringify(input.attributes ?? current.attributes),
         JSON.stringify(input.profile ?? current.profile),
         JSON.stringify(input.currentState ?? current.currentState),
@@ -1372,6 +1375,7 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
+      species: requiredString(row, "species"),
       organizationIds: organizations.map((organization) => organization.organizationId),
       organizations,
       attributes: json(requiredString(row, "attributes_json"), {}),
@@ -2265,8 +2269,9 @@ export class Store {
       pattern
     );
     const characters = this.db.all(
-      "SELECT id, name, aliases_json FROM characters WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR aliases_json LIKE ? ESCAPE '\\') LIMIT 50",
+      "SELECT id, name, aliases_json, species FROM characters WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR aliases_json LIKE ? ESCAPE '\\' OR species LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
+      pattern,
       pattern,
       pattern
     );
@@ -2285,7 +2290,7 @@ export class Store {
     return [
       ...chapters.map((row) => ({ type: "chapter", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), volumeId: requiredString(row, "volume_id") })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
-      ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: json<string[]>(requiredString(row, "aliases_json"), []).join("、") })),
+      ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: [requiredString(row, "species"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、") })),
       ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) }))
     ];
   }
