@@ -59,15 +59,32 @@ npm start
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `13210` | HTTP server port |
+| `HOST` | `127.0.0.1` | Listen address; use `0.0.0.0` for a server deployment and configure authentication |
 | `DATA_DIR` | `<project>/.data` | Default data directory |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite database path |
 | `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials |
+| `APP_AUTH_USERNAME` | Empty in local development | Single-instance administrator name; required in production or for non-loopback listening |
+| `APP_AUTH_PASSWORD` | Empty in local development | Administrator password, at least 12 characters; must be transported over HTTPS |
+| `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
+| `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
 
 Custom configuration example:
 
 ```bash
 PORT=13211 DATA_DIR=/path/to/scriverse-data npm run dev
 ```
+
+Server deployment example:
+
+```bash
+NODE_ENV=production \
+HOST=0.0.0.0 \
+APP_AUTH_USERNAME=admin \
+APP_AUTH_PASSWORD='replace-with-a-long-random-password' \
+npm start
+```
+
+Production deployments must use HTTPS at a trusted reverse proxy. HTTP Basic Auth credentials are only Base64 encoded and are not protected against network interception without HTTPS. `/api/health` remains unauthenticated for health checks; all other pages, assets, and APIs require authentication.
 
 ## AI Provider Setup
 
@@ -84,7 +101,10 @@ New providers default to `10` concurrent requests, `10` RPM, and `32000` maximum
 - Application data is stored in `.data/novel.db` by default.
 - AI provider credentials are encrypted. The default master key is `.data/master.key`.
 - Back up both the database and the master key. Existing provider credentials cannot be decrypted if the master key is lost.
-- Scriverse is currently designed as a local workspace and does not include user authentication. Do not expose it directly to the public internet without authentication at the reverse proxy and appropriate network access controls.
+- Scriverse does not include a user system. Server deployments use single-instance HTTP Basic Auth configured through environment variables, and production startup fails when credentials are missing.
+- The server listens on `127.0.0.1` by default. Non-loopback listening also requires authentication. Public entry points must use HTTPS, a trusted reverse proxy, and firewall access controls.
+- CSP, clickjacking protection, MIME sniffing protection, same-origin write validation, authentication and API rate limits, body/upload limits, and AI-provider SSRF protection are enabled by default.
+- SQLite values are bound through prepared statements. Dynamic SQL fragments are limited to server-controlled branches and never contain request input.
 
 ## Testing
 

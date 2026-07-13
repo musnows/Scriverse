@@ -11,12 +11,21 @@ import { AppError } from "./errors.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store } from "./store.js";
 import { normalizeUploadFileName } from "./utils.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeImportedPlainText } from "./import-security.js";
 
 const nonEmpty = z.string().trim().min(1);
 const identifier = z.string().trim().min(1).max(200);
 const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
+const maximumImportedTextLength = 20_000_000;
+
+function validateImportedText(text: string): string {
+  if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
+  assertSafeImportedPlainText(text);
+  return text;
+}
 
 const workSchema = z.object({
   title: nonEmpty.max(200),
@@ -197,6 +206,7 @@ export type RuntimeOptions = {
   masterSecret: string;
   fetchImpl?: typeof fetch;
   serveUi?: boolean;
+  security?: RuntimeSecurityOptions;
 };
 
 export type Runtime = {
@@ -222,28 +232,34 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 export function createRuntime(options: RuntimeOptions): Runtime {
   const database = new Database(options.databasePath);
   const store = new Store(database);
-  const ai = new AiManager(store, new CredentialVault(options.masterSecret), options.fetchImpl ?? fetch);
+  const ai = new AiManager(
+    store,
+    new CredentialVault(options.masterSecret),
+    options.fetchImpl ?? fetch,
+    options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined
+  );
   const app = express();
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 30 * 1024 * 1024, files: 1 }
+    limits: { fileSize: 30 * 1024 * 1024, files: 1, fields: 10, fieldSize: 64 * 1024, parts: 11, headerPairs: 100 }
   });
   const coverUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024, files: 1 }
+    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
 
   app.disable("x-powered-by");
-  app.use((_request, response, next) => {
-    response.setHeader("X-Content-Type-Options", "nosniff");
-    response.setHeader("Referrer-Policy", "same-origin");
-    next();
-  });
-  app.use(express.json({ limit: "2mb" }));
+  if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
+  app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
     data(response, { status: "ok", version: "0.1.0", protocol: "openai-chat-completions" });
   });
+
+  if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
+  app.use(createApiRateLimitMiddleware(options.security?.apiRateLimit, options.security?.apiRateWindowMs));
+  if (options.security?.enforceSameOrigin ?? true) app.use(createSameOriginMiddleware());
+  app.use(express.json({ limit: "2mb" }));
 
   app.get("/api/works", (_request, response) => data(response, store.listWorks()));
   app.post("/api/works", (request, response) => data(response, store.createWork(parse(workSchema, request.body)), 201));
@@ -252,9 +268,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const originalFileName = normalizeUploadFileName(request.file.originalname);
     const extension = extname(originalFileName).toLocaleLowerCase();
     if (extension !== ".txt" && extension !== ".docx") throw new AppError(415, "UNSUPPORTED_FILE", "仅支持 TXT 和 DOCX 导入");
-    const text = extension === ".docx"
+    const text = validateImportedText(extension === ".docx"
       ? (await mammoth.extractRawText({ buffer: request.file.buffer })).value
-      : request.file.buffer.toString("utf8");
+      : request.file.buffer.toString("utf8"));
     const parsedNovel = applyImportFileHints(parseNovelText(text), originalFileName);
     const inferredTitle = originalFileName.replace(/\.(txt|docx)$/iu, "").trim() || "未命名作品";
     const input = parse(workSchema, {
@@ -301,9 +317,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (extension !== ".txt" && extension !== ".docx") {
       throw new AppError(415, "UNSUPPORTED_FILE", "MVP 仅支持 TXT 和 DOCX 导入");
     }
-    const text = extension === ".docx"
+    const text = validateImportedText(extension === ".docx"
       ? (await mammoth.extractRawText({ buffer: request.file.buffer })).value
-      : request.file.buffer.toString("utf8");
+      : request.file.buffer.toString("utf8"));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
     data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed), 201);
   });
@@ -681,6 +697,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     if (error instanceof multer.MulterError) {
       response.status(400).json({ error: { code: "UPLOAD_ERROR", message: error.message } });
+      return;
+    }
+    if (error instanceof SyntaxError && "status" in error && error.status === 400) {
+      response.status(400).json({ error: { code: "INVALID_JSON", message: "请求体不是有效的 JSON" } });
+      return;
+    }
+    if (error && typeof error === "object" && "type" in error && error.type === "entity.too.large") {
+      response.status(413).json({ error: { code: "REQUEST_TOO_LARGE", message: "请求体超过大小限制" } });
       return;
     }
     if (error instanceof AppError) {

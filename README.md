@@ -59,15 +59,32 @@ npm start
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `13210` | HTTP 服务端口 |
+| `HOST` | `127.0.0.1` | 监听地址；服务器部署时可设为 `0.0.0.0`，同时必须配置鉴权 |
 | `DATA_DIR` | `<项目目录>/.data` | 默认数据目录 |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite 数据库路径 |
 | `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥 |
+| `APP_AUTH_USERNAME` | 本地开发为空 | 单实例管理员账号；生产环境或非本机监听时必填 |
+| `APP_AUTH_PASSWORD` | 本地开发为空 | 单实例管理员密码，至少 12 个字符；必须通过 HTTPS 传输 |
+| `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |
+| `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | 开发环境 `true`，生产环境 `false` | 是否允许 AI 供应商连接本机或内网地址；链路本地与云元数据地址始终禁止 |
 
 自定义示例：
 
 ```bash
 PORT=13211 DATA_DIR=/path/to/scriverse-data npm run dev
 ```
+
+服务器部署示例：
+
+```bash
+NODE_ENV=production \
+HOST=0.0.0.0 \
+APP_AUTH_USERNAME=admin \
+APP_AUTH_PASSWORD='请替换为足够长的随机密码' \
+npm start
+```
+
+生产环境必须在可信反向代理后启用 HTTPS。HTTP Basic Auth 的凭据只是 Base64 编码，未使用 HTTPS 时不能防止链路窃听。`/api/health` 保持免认证以供探活，其余页面、静态资源和 API 均受鉴权保护。
 
 ## AI 供应商配置
 
@@ -84,7 +101,10 @@ PORT=13211 DATA_DIR=/path/to/scriverse-data npm run dev
 - 数据默认保存在 `.data/novel.db`。
 - AI 供应商密钥经加密后存储，主密钥默认位于 `.data/master.key`。
 - 备份或迁移时，请同时保存数据库和主密钥；丢失主密钥后无法解密已保存的供应商密钥。
-- 项目当前定位为本地工作台，没有内置用户认证。不要在未配置反向代理认证和网络访问控制的情况下直接暴露到公网。
+- 项目不包含用户系统；服务器部署使用环境变量配置的单实例 HTTP Basic Auth。生产环境缺少凭据时会拒绝启动。
+- 服务默认只监听 `127.0.0.1`。非本机监听同样强制要求鉴权，公网入口必须使用 HTTPS、可信反向代理和防火墙访问控制。
+- 应用默认启用 CSP、防点击劫持、MIME 嗅探防护、同源写请求校验、认证失败限速、API 限速、JSON/上传大小限制和 AI 供应商 SSRF 防护。
+- SQLite 查询通过 prepared statements 绑定参数；动态 SQL 片段只来自服务端受控枚举，不拼接用户输入。
 
 ## 测试
 
