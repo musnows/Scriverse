@@ -11,3 +11,10 @@ export function normalizeParagraphSpacing(value) {
     .replace(/\n+$/u, "")
     .replace(/\n{3,}/gu, "\n\n");
 }
+
+export function formatDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
