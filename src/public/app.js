@@ -13,6 +13,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
 
 const state = {
@@ -180,6 +181,7 @@ let aiMentionMatch = null;
 let settingsReturnContext = null;
 let characterEditorItem = null;
 let characterEditorVersions = [];
+let entityHistoryContext = null;
 
 function setModuleNavExpanded(expanded) {
   moduleNavExpanded = expanded;
@@ -1307,14 +1309,81 @@ function emptyModule(title, description) {
   return `<div class="empty-state"><b>${esc(title)}</b>${esc(description)}</div>`;
 }
 
+function renderEntityHistory(versions) {
+  const host = $("#entity-history-list");
+  if (!versions.length) {
+    host.innerHTML = '<p class="entity-history-empty">还没有可用的历史版本。</p>';
+    return;
+  }
+  host.innerHTML = versions.map((version, index) => `<article class="entity-version-card${index === 0 ? " is-current" : ""}" data-entity-version="${version.versionNo}">
+    <header><strong>v${version.versionNo}</strong><span>${esc(entityVersionSourceLabel(version.source))}</span></header>
+    <time>${esc(formatDateTime(version.createdAt))}</time>
+    <p>${esc(version.changeNote || entityVersionSnapshotSummary(entityHistoryContext.type, version.snapshot))}</p>
+    <small>${esc(entityVersionSnapshotSummary(entityHistoryContext.type, version.snapshot))}</small>
+    ${index === 0 ? '<button type="button" disabled>当前版本</button>' : `<button type="button" data-entity-version-restore="${version.versionNo}">回滚到此版本</button>`}
+  </article>`).join("");
+  host.querySelectorAll("[data-entity-version-restore]").forEach((button) => button.addEventListener("click", async () => {
+    const versionNo = Number(button.dataset.entityVersionRestore);
+    if (button.dataset.confirmed !== "true") {
+      host.querySelectorAll("[data-entity-version-restore]").forEach((other) => {
+        other.dataset.confirmed = "false";
+        other.classList.remove("is-confirming");
+        other.textContent = "回滚到此版本";
+      });
+      button.dataset.confirmed = "true";
+      button.classList.add("is-confirming");
+      button.textContent = `确认回滚至 v${versionNo}`;
+      window.setTimeout(() => {
+        if (!button.isConnected || button.dataset.confirmed !== "true") return;
+        button.dataset.confirmed = "false";
+        button.classList.remove("is-confirming");
+        button.textContent = "回滚到此版本";
+      }, 5000);
+      return;
+    }
+    button.disabled = true;
+    try {
+      const restored = await api(`/api/entity-versions/${encodeURIComponent(entityHistoryContext.type)}/${encodeURIComponent(entityHistoryContext.entityId)}/restore`, { method: "POST", body: { versionNo } });
+      await entityHistoryContext.refresh();
+      const versionsAfterRestore = await api(`/api/entity-versions/${encodeURIComponent(entityHistoryContext.type)}/${encodeURIComponent(entityHistoryContext.entityId)}`);
+      renderEntityHistory(versionsAfterRestore);
+      toast(`已回滚至 v${versionNo}，并生成 v${restored.versionNo}`);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function openEntityHistory(type, entityId, title, refresh) {
+  entityHistoryContext = { type, entityId, refresh };
+  $("#entity-history-eyebrow").textContent = VERSIONED_ENTITY_LABELS[type] ?? "创作资料";
+  $("#entity-history-title").textContent = `${title} · 版本历史`;
+  $("#entity-history-list").innerHTML = '<p class="entity-history-empty">正在读取版本历史…</p>';
+  $("#entity-history-dialog").showModal();
+  try {
+    renderEntityHistory(await api(`/api/entity-versions/${encodeURIComponent(type)}/${encodeURIComponent(entityId)}`));
+  } catch (error) {
+    $("#entity-history-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
+function bindEntityHistoryButtons(refresh) {
+  $("#module-content").querySelectorAll("[data-entity-history]").forEach((button) => button.addEventListener("click", () => {
+    openEntityHistory(button.dataset.entityHistory, button.dataset.entityId, button.dataset.entityTitle, refresh);
+  }));
+}
+
 async function renderSettings() {
   const records = await api(`/api/works/${state.work.id}/settings`);
   $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
     <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
     <h3>${esc(item.title)}</h3><p>${esc(item.content)}</p>
-    <div class="card-actions"><button data-edit-setting="${esc(item.id)}">编辑</button></div></article>`).join("")}</div>`
+    <div class="card-actions"><button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div></article>`).join("")}</div>`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingDialog(records.find((item) => item.id === button.dataset.editSetting))));
+  bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
 async function renderCharacters() {
@@ -1360,9 +1429,10 @@ async function renderRaces() {
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写种族简介")}</p>
       <div class="race-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无共同设定</span>'}</div>
       <p class="race-members">角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button></div>
+      <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
     </article>`).join("")}</div>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
 async function renderOrganizations() {
@@ -1375,9 +1445,10 @@ async function renderOrganizations() {
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button></div>
+      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
     </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 
 async function renderTimeline() {
@@ -1387,16 +1458,17 @@ async function renderTimeline() {
   ]);
   state.timelineTracks = tracks;
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
-  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button></div></article>`;
+  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
   $("#module-content").innerHTML = `<div class="timeline-tools"><button id="create-timeline-track" class="primary-button" type="button">新建独立时间轴</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button">合并所选事件</button>' : ""}</div><div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
     const laneEvents = events.filter((item) => (item.trackId ?? "") === track.id);
-    return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
+    return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(track.id)}" data-entity-title="${esc(track.name)}" type="button">历史</button></div>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
   }).join("")}</div>`;
   $("#create-timeline-track").addEventListener("click", () => openTimelineTrackDialog());
   $("#module-content").querySelectorAll("[data-edit-timeline-track]").forEach((button) => button.addEventListener("click", () => openTimelineTrackDialog(tracks.find((track) => track.id === button.dataset.editTimelineTrack))));
   $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));
   $("#module-content").querySelectorAll("[data-split-event]").forEach((button) => button.addEventListener("click", () => openTimelineSplitDialog(events.find((item) => item.id === button.dataset.splitEvent))));
+  bindEntityHistoryButtons(renderTimeline);
   $("#merge-events")?.addEventListener("click", () => {
     const eventIds = [...$("#module-content").querySelectorAll("[data-event-select]:checked")].map((input) => input.dataset.eventSelect);
     if (eventIds.length < 2) return toast("请至少选择两个时间事件", "error");
@@ -1422,7 +1494,7 @@ async function renderOutlines() {
       <small>${esc(item.importance)} · ${esc(item.status)}${item.overdue ? " · 已逾期" : ""}</small>
       <h3>${esc(item.title)}</h3><p>${esc(item.description || "暂无说明")}</p>
       <div class="foreshadow-links">${item.occurrences.length ? item.occurrences.map((link) => `<span class="pill">${esc({ setup: "埋设", reminder: "提醒", payoff: "回收" }[link.role] ?? link.role)} · ${esc(link.volumeTitle)} / ${esc(link.chapterTitle)}</span>`).join("") : '<span class="pill">尚未关联章节</span>'}</div>
-      <div class="card-actions"><button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button></div>
+      <div class="card-actions"><button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div>
     </article>`).join("")}</div>` : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
   const outlineHtml = outlines.length ? `<div class="outline-list">${outlines.map((item) => `
     <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
@@ -1430,11 +1502,12 @@ async function renderOutlines() {
       <div><b>目标</b><p>${esc(item.goal || "未填写")}</p></div>
       <div><b>冲突</b><p>${esc(item.conflict || "未填写")}</p></div>
       <div><b>转折</b><p>${esc(item.turningPoint || "未填写")}</p></div>
-      <div class="outline-actions">${item.unresolvedForeshadowCount ? `<span>${item.unresolvedForeshadowCount} 个未回收伏笔</span>` : ""}<button data-edit-outline="${esc(item.chapterId)}">编辑</button></div>
+      <div class="outline-actions">${item.unresolvedForeshadowCount ? `<span>${item.unresolvedForeshadowCount} 个未回收伏笔</span>` : ""}<button data-edit-outline="${esc(item.chapterId)}">编辑</button><button data-entity-history="chapter-outline" data-entity-id="${esc(item.chapterId)}" data-entity-title="${esc(item.chapterTitle)}">版本历史</button></div>
     </article>`).join("")}</div>` : emptyModule("还没有章节", "先创建章节，再为每章维护目标、冲突和转折。\n");
   $("#module-content").innerHTML = `<div class="outline-summary"><article><strong>${outlines.length}</strong><span>章节规划</span></article><article><strong>${unresolved.length}</strong><span>未回收伏笔</span></article><article class="${overdue.length ? "danger-text" : ""}"><strong>${overdue.length}</strong><span>已逾期</span></article></div><section class="planning-section"><div class="section-title"><div><span class="eyebrow">伏笔追踪</span><h2>尚未回收与历史伏笔</h2></div></div>${foreshadowHtml}</section><section class="planning-section"><div class="section-title"><div><span class="eyebrow">逐章规划</span><h2>章节目标、冲突与转折</h2></div></div>${outlineHtml}</section>`;
   $("#module-content").querySelectorAll("[data-edit-outline]").forEach((button) => button.addEventListener("click", () => openOutlineDialog(outlines.find((item) => item.chapterId === button.dataset.editOutline))));
   $("#module-content").querySelectorAll("[data-edit-foreshadow]").forEach((button) => button.addEventListener("click", () => openForeshadowDialog(foreshadows.find((item) => item.id === button.dataset.editForeshadow))));
+  bindEntityHistoryButtons(renderOutlines);
 }
 
 async function renderRelationships() {
@@ -1446,9 +1519,9 @@ async function renderRelationships() {
   if ($("#relationship-map-dialog").open) $("#relationship-map-dialog").close();
   const graph = buildRelationshipGraph(state.characters, relationships);
   state.relationshipGraph = graph;
-  $("#module-content").innerHTML = `<div id="relationship-map-host"></div>${relationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th></tr></thead><tbody>${relationships.map((item) => `
+  $("#module-content").innerHTML = `<div id="relationship-map-host"></div>${relationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${relationships.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
-    <td>${esc(item.category)} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length} 条</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(item.confirmationStatus)}</td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在思维图中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
+    <td>${esc(item.category)} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length} 条</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(item.confirmationStatus)}</td><td class="relationship-actions"><button data-edit-relationship="${esc(item.id)}">编辑</button><button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在思维图中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
   const openGalaxy = () => {
     state.galaxy?.destroy();
     state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
@@ -1464,6 +1537,8 @@ async function renderRelationships() {
   };
   state.relationshipMindMap?.destroy?.();
   state.relationshipMindMap = renderRelationshipMindMap($("#relationship-map-host"), graph, { onOpenGalaxy: openGalaxy, onOpenExpanded: openExpanded });
+  $("#module-content").querySelectorAll("[data-edit-relationship]").forEach((button) => button.addEventListener("click", () => openRelationshipDialog(relationships.find((item) => item.id === button.dataset.editRelationship))));
+  bindEntityHistoryButtons(async () => { await renderRelationships(); await loadAiReferences(); });
 }
 
 async function renderReviews() {
@@ -2208,15 +2283,15 @@ function openTimelineSplitDialog(item) {
   }, "原证据同步保留");
 }
 
-async function openRelationshipDialog() {
+async function openRelationshipDialog(item) {
   state.characters = await api(`/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const options = state.characters.map((item) => [item.id, item.name]);
-  openDialog("新建人物关系", field("from", "起点人物", "select", options[0][0], options) + field("to", "终点人物", "select", options[1][0], options) + field("category", "关系大类", "select", "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类") + field("keywords", "关系关键词（用逗号分隔）") + field("confidence", "置信度（0-1）", "number", "1") + field("directed", "有方向性", "checkbox", false), async (form) => {
+  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? options[0][0], options) + field("to", "终点人物", "select", item?.toCharacterId ?? options[1][0], options) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词（用逗号分隔）", "text", item?.keywords?.join("、") ?? "") + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
     const keywords = String(form.get("keywords") ?? "").split(/[,，、；;]/u).map((value) => value.trim()).filter(Boolean);
-    await api(`/api/works/${state.work.id}/relationships`, { method: "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: "confirmed" } });
+    await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed" } });
     await renderRelationships();
-  }, "人工确认关系");
+  }, item ? "关系档案" : "人工确认关系");
 }
 
 function openReviewDialog() {
@@ -2503,6 +2578,7 @@ $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
+$("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#character-editor-close").addEventListener("click", () => $("#character-editor-dialog").close());
 $("#character-editor-cancel").addEventListener("click", () => $("#character-editor-dialog").close());
 $("#character-history-button").addEventListener("click", () => {

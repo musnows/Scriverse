@@ -274,6 +274,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .timeline-lane > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px 14px 10px; border-bottom: 1px solid var(--line); }
 .timeline-lane > header h3 { margin: 3px 0 0; font-size: 16px; }.timeline-lane > header small { color: var(--accent); font-size: 9px; }
 .timeline-track-menu { border: 1px solid var(--line); border-radius: 3px; padding: 5px 7px; background: transparent; font-size: 9px; }
+.timeline-track-actions { display: flex; gap: 5px; }
 .timeline-track-description { min-height: 40px; margin: 0; padding: 9px 14px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .timeline-lane-events { display: grid; gap: 9px; align-content: start; flex: 1; overflow-y: auto; padding: 8px; }
 .timeline-kanban-card { padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); box-shadow: 0 5px 16px rgba(49,42,32,.06); }
@@ -604,6 +605,22 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .versions-list { padding: 18px 24px 28px; max-height: 65vh; overflow: auto; }
 .version-row { display: grid; grid-template-columns: 75px 1fr auto; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); align-items: start; }
 .version-row p { margin: 0; color: var(--muted); font-size: 11px; white-space: pre-wrap; max-height: 70px; overflow: hidden; }
+.entity-history-list { display: grid; gap: 10px; padding: 18px 24px 28px; max-height: 65vh; overflow: auto; }
+.entity-version-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 18px; padding: 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
+.entity-version-card.is-current { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: inset 3px 0 var(--accent); }
+.entity-version-card header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.entity-version-card header strong { color: var(--accent-dark); font-size: 13px; }
+.entity-version-card header span, .entity-version-card time { color: var(--muted); font-size: 9px; }
+.entity-version-card time { justify-self: end; }
+.entity-version-card p { grid-column: 1 / -1; margin: 0; color: var(--ink); font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.entity-version-card small { align-self: center; color: var(--muted); font-size: 9px; }
+.entity-version-card > button { justify-self: end; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 9px; }
+.entity-version-card > button:not(:disabled):hover { border-color: var(--accent); color: var(--accent-dark); }
+.entity-version-card > button.is-confirming { border-color: var(--accent); background: var(--accent); color: #fff; }
+.entity-version-card > button:disabled { cursor: default; opacity: .68; }
+.entity-history-empty { margin: 0; padding: 28px 12px; color: var(--muted); font-size: 11px; text-align: center; }
+.relationship-table .relationship-actions { white-space: nowrap; }
+.relationship-table .relationship-actions button + button { margin-left: 5px; }
 
 @media (max-width: 1100px) {
   .left-panel { padding-inline: 10px; }

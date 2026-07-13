@@ -9,7 +9,7 @@ import { Database } from "./database.js";
 import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { Store } from "./store.js";
+import { Store, versionedEntityTypes } from "./store.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
 import { assertSafeImportedPlainText } from "./import-security.js";
@@ -19,6 +19,7 @@ const identifier = z.string().trim().min(1).max(200);
 const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
+const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const maximumImportedTextLength = 20_000_000;
 
 function validateImportedText(text: string): string {
@@ -515,6 +516,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.delete("/api/relationships/:relationshipId", (request, response) => {
     store.deleteRelationship(request.params.relationshipId);
     noContent(response);
+  });
+
+  app.get("/api/entity-versions/:entityType/:entityId", (request, response) => {
+    const input = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
+    data(response, store.listEntityVersions(input.entityType, input.entityId));
+  });
+  app.post("/api/entity-versions/:entityType/:entityId/restore", (request, response) => {
+    const params = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
+    const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
+    data(response, store.restoreEntityVersion(params.entityType, params.entityId, input.versionNo));
   });
 
   app.get("/api/works/:workId/reviews", (request, response) => {

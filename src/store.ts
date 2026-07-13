@@ -131,6 +131,19 @@ type ForeshadowInput = {
   occurrences?: ForeshadowOccurrenceInput[];
 };
 
+export const versionedEntityTypes = [
+  "setting",
+  "race",
+  "organization",
+  "timeline-track",
+  "timeline-event",
+  "relationship",
+  "chapter-outline",
+  "foreshadow"
+] as const;
+
+export type VersionedEntityType = typeof versionedEntityTypes[number];
+
 type ReviewInput = {
   itemType: string;
   severity?: string;
@@ -171,7 +184,202 @@ export function normalizeCharacterName(value: string): string {
 }
 
 export class Store {
-  constructor(readonly db: Database) {}
+  constructor(readonly db: Database) {
+    this.backfillEntityVersionBaselines();
+  }
+
+  private versionedEntity(type: VersionedEntityType, entityId: string): Record<string, unknown> {
+    if (type === "setting") return this.getSetting(entityId);
+    if (type === "race") return this.getRace(entityId);
+    if (type === "organization") return this.getOrganization(entityId);
+    if (type === "timeline-track") return this.getTimelineTrack(entityId);
+    if (type === "timeline-event") return this.getTimelineEvent(entityId);
+    if (type === "relationship") return this.getRelationship(entityId);
+    if (type === "chapter-outline") {
+      const outline = this.getChapterOutline(entityId);
+      if (!outline) throw notFound("章节大纲");
+      return outline;
+    }
+    return this.getForeshadow(entityId);
+  }
+
+  private versionedEntitySnapshot(type: VersionedEntityType, entity: Record<string, unknown>): Record<string, unknown> {
+    if (type === "setting") return {
+      title: entity.title,
+      category: entity.category,
+      content: entity.content,
+      tags: entity.tags,
+      status: entity.status,
+      locked: entity.locked,
+      evidence: entity.evidence,
+      scope: entity.scope,
+      authorNote: entity.authorNote
+    };
+    if (type === "race" || type === "organization") return {
+      name: entity.name,
+      description: entity.description,
+      settings: entity.settings,
+      memberIds: entity.memberIds
+    };
+    if (type === "timeline-track") return {
+      name: entity.name,
+      description: entity.description,
+      sortOrder: entity.sortOrder
+    };
+    if (type === "timeline-event") return {
+      name: entity.name,
+      trackId: entity.trackId,
+      description: entity.description,
+      eventType: entity.eventType,
+      timeLabel: entity.timeLabel,
+      timeSort: entity.timeSort,
+      chapterIds: entity.chapterIds,
+      participantIds: entity.participantIds,
+      location: entity.location,
+      causes: entity.causes,
+      impactScope: entity.impactScope,
+      evidence: entity.evidence,
+      status: entity.status
+    };
+    if (type === "relationship") return {
+      fromCharacterId: entity.fromCharacterId,
+      toCharacterId: entity.toCharacterId,
+      category: entity.category,
+      subtype: entity.subtype,
+      keywords: entity.keywords,
+      directed: entity.directed,
+      currentStatus: entity.currentStatus,
+      timeRange: entity.timeRange,
+      confidence: entity.confidence,
+      evidence: entity.evidence,
+      confirmationStatus: entity.confirmationStatus,
+      locked: entity.locked
+    };
+    if (type === "chapter-outline") return {
+      goal: entity.goal,
+      conflict: entity.conflict,
+      turningPoint: entity.turningPoint,
+      notes: entity.notes,
+      status: entity.status
+    };
+    return {
+      title: entity.title,
+      description: entity.description,
+      status: entity.status,
+      importance: entity.importance,
+      plannedPayoffChapterId: entity.plannedPayoffChapterId,
+      resolutionNote: entity.resolutionNote,
+      occurrences: (entity.occurrences as Array<Record<string, unknown>>).map((occurrence) => ({
+        chapterId: occurrence.chapterId,
+        role: occurrence.role,
+        note: occurrence.note,
+        evidence: occurrence.evidence
+      }))
+    };
+  }
+
+  private recordEntityVersion(
+    type: VersionedEntityType,
+    entityId: string,
+    source: string,
+    sourceRef: string | null,
+    changeNote: string,
+    timestamp?: string
+  ): number {
+    const entity = this.versionedEntity(type, entityId);
+    const snapshot = this.versionedEntitySnapshot(type, entity);
+    const snapshotJson = JSON.stringify(snapshot);
+    const latest = this.db.get(
+      "SELECT version_no, snapshot_json FROM entity_versions WHERE entity_type = ? AND entity_id = ? ORDER BY version_no DESC LIMIT 1",
+      type,
+      entityId
+    );
+    if (latest && requiredString(latest, "snapshot_json") === snapshotJson && source !== "restore") return numberValue(latest, "version_no");
+    const versionNo = latest ? numberValue(latest, "version_no") + 1 : 1;
+    this.db.run(
+      `INSERT INTO entity_versions (id, work_id, entity_type, entity_id, version_no, snapshot_json, source, source_ref, change_note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("entityVersion"),
+      String(entity.workId),
+      type,
+      entityId,
+      versionNo,
+      snapshotJson,
+      source,
+      sourceRef,
+      changeNote.trim(),
+      timestamp ?? now()
+    );
+    return versionNo;
+  }
+
+  private backfillEntityVersionBaselines(): void {
+    const entities: Array<[VersionedEntityType, string, string]> = [
+      ...this.db.all("SELECT id, updated_at FROM settings").map((row) => ["setting", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM races").map((row) => ["race", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM organizations").map((row) => ["organization", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM timeline_tracks").map((row) => ["timeline-track", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM timeline_events").map((row) => ["timeline-event", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM relationships").map((row) => ["relationship", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT chapter_id, updated_at FROM chapter_outlines").map((row) => ["chapter-outline", requiredString(row, "chapter_id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM foreshadows").map((row) => ["foreshadow", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string])
+    ];
+    this.db.transaction(() => {
+      for (const [type, entityId, timestamp] of entities) {
+        this.recordEntityVersion(type, entityId, "migration", null, "建立版本基线", timestamp);
+      }
+    });
+  }
+
+  listEntityVersions(type: VersionedEntityType, entityId: string): Record<string, unknown>[] {
+    this.versionedEntity(type, entityId);
+    return this.db.all(
+      "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? ORDER BY version_no DESC",
+      type,
+      entityId
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      entityType: requiredString(row, "entity_type"),
+      entityId: requiredString(row, "entity_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at")
+    }));
+  }
+
+  restoreEntityVersion(type: VersionedEntityType, entityId: string, versionNo: number): Record<string, unknown> {
+    this.versionedEntity(type, entityId);
+    const version = this.db.get(
+      "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? AND version_no = ?",
+      type,
+      entityId,
+      versionNo
+    );
+    if (!version) throw notFound("历史版本");
+    const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
+    if (!Object.keys(snapshot).length) throw new AppError(500, "ENTITY_VERSION_INVALID", "历史版本快照无效");
+    const sourceRef = requiredString(version, "id");
+    const changeNote = `恢复至 v${versionNo}`;
+    let restored: Record<string, unknown>;
+    if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote);
+    else if (type === "race") restored = this.updateRace(entityId, snapshot as Partial<RaceInput>, "restore", sourceRef, changeNote);
+    else if (type === "organization") restored = this.updateOrganization(entityId, snapshot as Partial<OrganizationInput>, "restore", sourceRef, changeNote);
+    else if (type === "timeline-track") restored = this.updateTimelineTrack(entityId, snapshot as Partial<TimelineTrackInput>, "restore", sourceRef, changeNote);
+    else if (type === "timeline-event") restored = this.updateTimelineEvent(entityId, snapshot as Partial<TimelineInput>, "restore", sourceRef, changeNote);
+    else if (type === "relationship") restored = this.updateRelationship(entityId, snapshot as Partial<RelationshipInput>, "restore", sourceRef, changeNote);
+    else if (type === "chapter-outline") restored = this.upsertChapterOutline(entityId, snapshot as ChapterOutlineInput, "restore", sourceRef, changeNote);
+    else restored = this.updateForeshadow(entityId, snapshot as Partial<ForeshadowInput>, "restore", sourceRef, changeNote);
+    const currentVersion = this.db.get(
+      "SELECT MAX(version_no) AS version_no FROM entity_versions WHERE entity_type = ? AND entity_id = ?",
+      type,
+      entityId
+    );
+    return { ...restored, versionNo: numberValue(currentVersion ?? {}, "version_no") };
+  }
 
   audit(workId: string | null, action: string, entityType: string, entityId: string | null, detail: unknown = {}): void {
     this.db.run(
@@ -818,26 +1026,35 @@ export class Store {
     }));
   }
 
-  upsertChapterOutline(chapterId: string, input: ChapterOutlineInput): Record<string, unknown> {
+  upsertChapterOutline(
+    chapterId: string,
+    input: ChapterOutlineInput,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const chapter = this.getChapter(chapterId);
     const current = this.getChapterOutline(chapterId);
     const timestamp = now();
-    this.db.run(
-      `INSERT INTO chapter_outlines (chapter_id, goal, conflict, turning_point, notes, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(chapter_id) DO UPDATE SET goal = excluded.goal, conflict = excluded.conflict,
-       turning_point = excluded.turning_point, notes = excluded.notes, status = excluded.status,
-       updated_at = excluded.updated_at`,
-      chapterId,
-      input.goal ?? String(current?.goal ?? ""),
-      input.conflict ?? String(current?.conflict ?? ""),
-      input.turningPoint ?? String(current?.turningPoint ?? ""),
-      input.notes ?? String(current?.notes ?? ""),
-      input.status ?? String(current?.status ?? "draft"),
-      timestamp,
-      timestamp
-    );
-    this.audit(String(chapter.workId), current ? "outline.updated" : "outline.created", "chapter-outline", chapterId, { fields: Object.keys(input) });
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO chapter_outlines (chapter_id, goal, conflict, turning_point, notes, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(chapter_id) DO UPDATE SET goal = excluded.goal, conflict = excluded.conflict,
+         turning_point = excluded.turning_point, notes = excluded.notes, status = excluded.status,
+         updated_at = excluded.updated_at`,
+        chapterId,
+        input.goal ?? String(current?.goal ?? ""),
+        input.conflict ?? String(current?.conflict ?? ""),
+        input.turningPoint ?? String(current?.turningPoint ?? ""),
+        input.notes ?? String(current?.notes ?? ""),
+        input.status ?? String(current?.status ?? "draft"),
+        timestamp,
+        timestamp
+      );
+      this.recordEntityVersion("chapter-outline", chapterId, current ? source : "create", sourceRef, changeNote || (current ? "更新章节大纲" : "建立章节大纲"), timestamp);
+      this.audit(String(chapter.workId), current ? "outline.updated" : "outline.created", "chapter-outline", chapterId, { fields: Object.keys(input), source, sourceRef });
+    });
     return this.getChapterOutline(chapterId) as Record<string, unknown>;
   }
 
@@ -885,6 +1102,7 @@ export class Store {
         timestamp
       );
       for (const occurrence of input.occurrences ?? []) this.insertForeshadowOccurrence(foreshadowId, workId, occurrence);
+      this.recordEntityVersion("foreshadow", foreshadowId, "create", null, "建立伏笔", timestamp);
       this.audit(workId, "foreshadow.created", "foreshadow", foreshadowId);
     });
     return this.getForeshadow(foreshadowId);
@@ -937,7 +1155,13 @@ export class Store {
     ).map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId));
   }
 
-  updateForeshadow(foreshadowId: string, input: Partial<ForeshadowInput>): Record<string, unknown> {
+  updateForeshadow(
+    foreshadowId: string,
+    input: Partial<ForeshadowInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getForeshadow(foreshadowId);
     const workId = String(current.workId);
     if (input.plannedPayoffChapterId) this.assertChapterInWork(input.plannedPayoffChapterId, workId);
@@ -958,7 +1182,8 @@ export class Store {
         this.db.run("DELETE FROM foreshadow_occurrences WHERE foreshadow_id = ?", foreshadowId);
         for (const occurrence of input.occurrences) this.insertForeshadowOccurrence(foreshadowId, workId, occurrence);
       }
-      this.audit(workId, "foreshadow.updated", "foreshadow", foreshadowId, { fields: Object.keys(input) });
+      this.recordEntityVersion("foreshadow", foreshadowId, source, sourceRef, changeNote || "更新伏笔");
+      this.audit(workId, "foreshadow.updated", "foreshadow", foreshadowId, { fields: Object.keys(input), source, sourceRef });
     });
     return this.getForeshadow(foreshadowId);
   }
@@ -971,8 +1196,12 @@ export class Store {
 
   createForeshadowOccurrence(foreshadowId: string, input: ForeshadowOccurrenceInput): Record<string, unknown> {
     const foreshadow = this.getForeshadow(foreshadowId);
-    const occurrenceId = this.insertForeshadowOccurrence(foreshadowId, String(foreshadow.workId), input);
-    this.audit(String(foreshadow.workId), "foreshadow.occurrence.created", "foreshadow-occurrence", occurrenceId);
+    const occurrenceId = this.db.transaction(() => {
+      const createdId = this.insertForeshadowOccurrence(foreshadowId, String(foreshadow.workId), input);
+      this.recordEntityVersion("foreshadow", foreshadowId, "manual", createdId, "添加伏笔章节记录");
+      this.audit(String(foreshadow.workId), "foreshadow.occurrence.created", "foreshadow-occurrence", createdId);
+      return createdId;
+    });
     return this.getForeshadowOccurrence(occurrenceId);
   }
 
@@ -981,21 +1210,27 @@ export class Store {
     const foreshadow = this.getForeshadow(String(current.foreshadowId));
     const chapterId = input.chapterId ?? String(current.chapterId);
     this.assertChapterInWork(chapterId, String(foreshadow.workId));
-    this.db.run(
-      `UPDATE foreshadow_occurrences SET chapter_id = ?, role = ?, note = ?, evidence_json = ?, updated_at = ? WHERE id = ?`,
-      chapterId,
-      input.role ?? String(current.role),
-      input.note ?? String(current.note),
-      JSON.stringify(input.evidence ?? current.evidence),
-      now(),
-      occurrenceId
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE foreshadow_occurrences SET chapter_id = ?, role = ?, note = ?, evidence_json = ?, updated_at = ? WHERE id = ?`,
+        chapterId,
+        input.role ?? String(current.role),
+        input.note ?? String(current.note),
+        JSON.stringify(input.evidence ?? current.evidence),
+        now(),
+        occurrenceId
+      );
+      this.recordEntityVersion("foreshadow", String(current.foreshadowId), "manual", occurrenceId, "更新伏笔章节记录");
+    });
     return this.getForeshadowOccurrence(occurrenceId);
   }
 
   deleteForeshadowOccurrence(occurrenceId: string): void {
-    this.getForeshadowOccurrence(occurrenceId);
-    this.db.run("DELETE FROM foreshadow_occurrences WHERE id = ?", occurrenceId);
+    const current = this.getForeshadowOccurrence(occurrenceId);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM foreshadow_occurrences WHERE id = ?", occurrenceId);
+      this.recordEntityVersion("foreshadow", String(current.foreshadowId), "manual", occurrenceId, "删除伏笔章节记录");
+    });
   }
 
   private insertForeshadowOccurrence(foreshadowId: string, workId: string, input: ForeshadowOccurrenceInput): string {
@@ -1059,28 +1294,31 @@ export class Store {
     return row ? numberValue(row, "sequence") : Number.MAX_SAFE_INTEGER;
   }
 
-  createSetting(workId: string, input: SettingInput): Record<string, unknown> {
+  createSetting(workId: string, input: SettingInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
     const settingId = id("setting");
     const timestamp = now();
-    this.db.run(
-      `INSERT INTO settings (id, work_id, title, category, content, tags_json, status, locked, evidence_json, scope_json, author_note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      settingId,
-      workId,
-      input.title,
-      input.category,
-      input.content,
-      JSON.stringify(input.tags ?? []),
-      input.status ?? "draft",
-      input.locked ? 1 : 0,
-      JSON.stringify(input.evidence ?? []),
-      JSON.stringify(input.scope ?? {}),
-      input.authorNote ?? "",
-      timestamp,
-      timestamp
-    );
-    this.audit(workId, "setting.created", "setting", settingId, { locked: input.locked ?? false });
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO settings (id, work_id, title, category, content, tags_json, status, locked, evidence_json, scope_json, author_note, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        settingId,
+        workId,
+        input.title,
+        input.category,
+        input.content,
+        JSON.stringify(input.tags ?? []),
+        input.status ?? "draft",
+        input.locked ? 1 : 0,
+        JSON.stringify(input.evidence ?? []),
+        JSON.stringify(input.scope ?? {}),
+        input.authorNote ?? "",
+        timestamp,
+        timestamp
+      );
+      this.recordEntityVersion("setting", settingId, source, sourceRef, "建立世界观设定", timestamp);
+      this.audit(workId, "setting.created", "setting", settingId, { locked: input.locked ?? false, source, sourceRef });
+    });
     return this.getSetting(settingId);
   }
 
@@ -1095,24 +1333,33 @@ export class Store {
     return this.mapSetting(row);
   }
 
-  updateSetting(settingId: string, input: Partial<SettingInput>): Record<string, unknown> {
+  updateSetting(
+    settingId: string,
+    input: Partial<SettingInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getSetting(settingId);
-    this.db.run(
-      `UPDATE settings SET title = ?, category = ?, content = ?, tags_json = ?, status = ?, locked = ?,
-       evidence_json = ?, scope_json = ?, author_note = ?, updated_at = ? WHERE id = ?`,
-      input.title ?? String(current.title),
-      input.category ?? String(current.category),
-      input.content ?? String(current.content),
-      JSON.stringify(input.tags ?? current.tags),
-      input.status ?? String(current.status),
-      (input.locked ?? Boolean(current.locked)) ? 1 : 0,
-      JSON.stringify(input.evidence ?? current.evidence),
-      JSON.stringify(input.scope ?? current.scope),
-      input.authorNote ?? String(current.authorNote),
-      now(),
-      settingId
-    );
-    this.audit(String(current.workId), "setting.updated", "setting", settingId, { fields: Object.keys(input) });
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE settings SET title = ?, category = ?, content = ?, tags_json = ?, status = ?, locked = ?,
+         evidence_json = ?, scope_json = ?, author_note = ?, updated_at = ? WHERE id = ?`,
+        input.title ?? String(current.title),
+        input.category ?? String(current.category),
+        input.content ?? String(current.content),
+        JSON.stringify(input.tags ?? current.tags),
+        input.status ?? String(current.status),
+        (input.locked ?? Boolean(current.locked)) ? 1 : 0,
+        JSON.stringify(input.evidence ?? current.evidence),
+        JSON.stringify(input.scope ?? current.scope),
+        input.authorNote ?? String(current.authorNote),
+        now(),
+        settingId
+      );
+      this.recordEntityVersion("setting", settingId, source, sourceRef, changeNote || "更新世界观设定");
+      this.audit(String(current.workId), "setting.updated", "setting", settingId, { fields: Object.keys(input), source, sourceRef });
+    });
     return this.getSetting(settingId);
   }
 
@@ -1166,6 +1413,7 @@ export class Store {
       );
       this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `设为种族“${name}”`);
+      this.recordEntityVersion("race", raceId, "create", null, "建立种族档案", timestamp);
       this.audit(workId, "race.created", "race", raceId);
     });
     return this.getRace(raceId);
@@ -1182,7 +1430,13 @@ export class Store {
     return this.mapRace(row);
   }
 
-  updateRace(raceId: string, input: Partial<RaceInput>): Record<string, unknown> {
+  updateRace(
+    raceId: string,
+    input: Partial<RaceInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getRace(raceId);
     const workId = String(current.workId);
     const name = input.name === undefined
@@ -1211,7 +1465,8 @@ export class Store {
       if (nameChanged) this.db.run("UPDATE characters SET species = ?, updated_at = ? WHERE race_id = ?", name, now(), raceId);
       if (memberIds) this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, nameChanged ? `种族更名为“${name}”` : `种族“${name}”成员关系变更`);
-      this.audit(workId, "race.updated", "race", raceId, { fields: Object.keys(input) });
+      this.recordEntityVersion("race", raceId, source, sourceRef, changeNote || "更新种族档案");
+      this.audit(workId, "race.updated", "race", raceId, { fields: Object.keys(input), source, sourceRef });
     });
     return this.getRace(raceId);
   }
@@ -1300,6 +1555,7 @@ export class Store {
       );
       this.replaceOrganizationMembers(organizationId, memberIds);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `加入组织“${name}”`);
+      this.recordEntityVersion("organization", organizationId, "create", null, "建立组织档案", timestamp);
       this.audit(workId, "organization.created", "organization", organizationId);
     });
     return this.getOrganization(organizationId);
@@ -1316,7 +1572,13 @@ export class Store {
     return this.mapOrganization(row);
   }
 
-  updateOrganization(organizationId: string, input: Partial<OrganizationInput>): Record<string, unknown> {
+  updateOrganization(
+    organizationId: string,
+    input: Partial<OrganizationInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getOrganization(organizationId);
     const workId = String(current.workId);
     const name = input.name === undefined
@@ -1343,7 +1605,8 @@ export class Store {
         this.replaceOrganizationMembers(organizationId, memberIds);
         this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${name}”成员关系变更`);
       }
-      this.audit(workId, "organization.updated", "organization", organizationId, { fields: Object.keys(input) });
+      this.recordEntityVersion("organization", organizationId, source, sourceRef, changeNote || "更新组织档案");
+      this.audit(workId, "organization.updated", "organization", organizationId, { fields: Object.keys(input), source, sourceRef });
     });
     return this.getOrganization(organizationId);
   }
@@ -1759,23 +2022,26 @@ export class Store {
     }
   }
 
-  createTimelineTrack(workId: string, input: TimelineTrackInput): Record<string, unknown> {
+  createTimelineTrack(workId: string, input: TimelineTrackInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
     const trackId = id("timeline-track");
     const timestamp = now();
     const fallbackOrder = Number(this.db.get("SELECT COALESCE(MAX(sort_order), -1) + 1 AS value FROM timeline_tracks WHERE work_id = ?", workId)?.value ?? 0);
-    this.db.run(
-      `INSERT INTO timeline_tracks (id, work_id, name, description, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      trackId,
-      workId,
-      input.name,
-      input.description ?? "",
-      input.sortOrder ?? fallbackOrder,
-      timestamp,
-      timestamp
-    );
-    this.audit(workId, "timeline-track.created", "timeline-track", trackId);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO timeline_tracks (id, work_id, name, description, sort_order, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        trackId,
+        workId,
+        input.name,
+        input.description ?? "",
+        input.sortOrder ?? fallbackOrder,
+        timestamp,
+        timestamp
+      );
+      this.recordEntityVersion("timeline-track", trackId, source, sourceRef, "建立独立时间轴", timestamp);
+      this.audit(workId, "timeline-track.created", "timeline-track", trackId, { source, sourceRef });
+    });
     return this.getTimelineTrack(trackId);
   }
 
@@ -1790,17 +2056,26 @@ export class Store {
     return this.mapTimelineTrack(row);
   }
 
-  updateTimelineTrack(trackId: string, input: Partial<TimelineTrackInput>): Record<string, unknown> {
+  updateTimelineTrack(
+    trackId: string,
+    input: Partial<TimelineTrackInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getTimelineTrack(trackId);
-    this.db.run(
-      "UPDATE timeline_tracks SET name = ?, description = ?, sort_order = ?, updated_at = ? WHERE id = ?",
-      input.name ?? String(current.name),
-      input.description ?? String(current.description),
-      input.sortOrder ?? Number(current.sortOrder),
-      now(),
-      trackId
-    );
-    this.audit(String(current.workId), "timeline-track.updated", "timeline-track", trackId, { fields: Object.keys(input) });
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE timeline_tracks SET name = ?, description = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+        input.name ?? String(current.name),
+        input.description ?? String(current.description),
+        input.sortOrder ?? Number(current.sortOrder),
+        now(),
+        trackId
+      );
+      this.recordEntityVersion("timeline-track", trackId, source, sourceRef, changeNote || "更新时间轴");
+      this.audit(String(current.workId), "timeline-track.updated", "timeline-track", trackId, { fields: Object.keys(input), source, sourceRef });
+    });
     return this.getTimelineTrack(trackId);
   }
 
@@ -1810,7 +2085,7 @@ export class Store {
     this.audit(String(current.workId), "timeline-track.deleted", "timeline-track", trackId);
   }
 
-  createTimelineEvent(workId: string, input: TimelineInput): Record<string, unknown> {
+  createTimelineEvent(workId: string, input: TimelineInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
     if (input.trackId) {
       const track = this.getTimelineTrack(input.trackId);
@@ -1818,29 +2093,32 @@ export class Store {
     }
     const eventId = id("event");
     const timestamp = now();
-    this.db.run(
-      `INSERT INTO timeline_events (id, work_id, track_id, name, description, event_type, time_label, time_sort, chapter_ids_json,
-       participant_ids_json, location, causes_json, impact_scope, evidence_json, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      eventId,
-      workId,
-      input.trackId ?? null,
-      input.name,
-      input.description ?? "",
-      input.eventType ?? "other",
-      input.timeLabel ?? "时间待定",
-      input.timeSort ?? null,
-      JSON.stringify(input.chapterIds ?? []),
-      JSON.stringify(input.participantIds ?? []),
-      input.location ?? "",
-      JSON.stringify(input.causes ?? []),
-      input.impactScope ?? "personal",
-      JSON.stringify(input.evidence ?? []),
-      input.status ?? "candidate",
-      timestamp,
-      timestamp
-    );
-    this.audit(workId, "timeline.created", "timeline-event", eventId);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO timeline_events (id, work_id, track_id, name, description, event_type, time_label, time_sort, chapter_ids_json,
+         participant_ids_json, location, causes_json, impact_scope, evidence_json, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        eventId,
+        workId,
+        input.trackId ?? null,
+        input.name,
+        input.description ?? "",
+        input.eventType ?? "other",
+        input.timeLabel ?? "时间待定",
+        input.timeSort ?? null,
+        JSON.stringify(input.chapterIds ?? []),
+        JSON.stringify(input.participantIds ?? []),
+        input.location ?? "",
+        JSON.stringify(input.causes ?? []),
+        input.impactScope ?? "personal",
+        JSON.stringify(input.evidence ?? []),
+        input.status ?? "candidate",
+        timestamp,
+        timestamp
+      );
+      this.recordEntityVersion("timeline-event", eventId, source, sourceRef, source === "analysis" ? "AI 提取时间事件" : "建立时间事件", timestamp);
+      this.audit(workId, "timeline.created", "timeline-event", eventId, { source, sourceRef });
+    });
     return this.getTimelineEvent(eventId);
   }
 
@@ -1857,33 +2135,42 @@ export class Store {
     return this.mapTimelineEvent(row);
   }
 
-  updateTimelineEvent(eventId: string, input: Partial<TimelineInput>): Record<string, unknown> {
+  updateTimelineEvent(
+    eventId: string,
+    input: Partial<TimelineInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getTimelineEvent(eventId);
     if (input.trackId) {
       const track = this.getTimelineTrack(input.trackId);
       if (track.workId !== current.workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "独立时间轴不属于当前作品");
     }
-    this.db.run(
-      `UPDATE timeline_events SET track_id = ?, name = ?, description = ?, event_type = ?, time_label = ?, time_sort = ?,
-       chapter_ids_json = ?, participant_ids_json = ?, location = ?, causes_json = ?, impact_scope = ?, evidence_json = ?,
-       status = ?, updated_at = ? WHERE id = ?`,
-      input.trackId === undefined ? (current.trackId as string | null) : input.trackId,
-      input.name ?? String(current.name),
-      input.description ?? String(current.description),
-      input.eventType ?? String(current.eventType),
-      input.timeLabel ?? String(current.timeLabel),
-      input.timeSort === undefined ? (current.timeSort as number | null) : input.timeSort,
-      JSON.stringify(input.chapterIds ?? current.chapterIds),
-      JSON.stringify(input.participantIds ?? current.participantIds),
-      input.location ?? String(current.location),
-      JSON.stringify(input.causes ?? current.causes),
-      input.impactScope ?? String(current.impactScope),
-      JSON.stringify(input.evidence ?? current.evidence),
-      input.status ?? String(current.status),
-      now(),
-      eventId
-    );
-    this.audit(String(current.workId), "timeline.updated", "timeline-event", eventId, { fields: Object.keys(input) });
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE timeline_events SET track_id = ?, name = ?, description = ?, event_type = ?, time_label = ?, time_sort = ?,
+         chapter_ids_json = ?, participant_ids_json = ?, location = ?, causes_json = ?, impact_scope = ?, evidence_json = ?,
+         status = ?, updated_at = ? WHERE id = ?`,
+        input.trackId === undefined ? (current.trackId as string | null) : input.trackId,
+        input.name ?? String(current.name),
+        input.description ?? String(current.description),
+        input.eventType ?? String(current.eventType),
+        input.timeLabel ?? String(current.timeLabel),
+        input.timeSort === undefined ? (current.timeSort as number | null) : input.timeSort,
+        JSON.stringify(input.chapterIds ?? current.chapterIds),
+        JSON.stringify(input.participantIds ?? current.participantIds),
+        input.location ?? String(current.location),
+        JSON.stringify(input.causes ?? current.causes),
+        input.impactScope ?? String(current.impactScope),
+        JSON.stringify(input.evidence ?? current.evidence),
+        input.status ?? String(current.status),
+        now(),
+        eventId
+      );
+      this.recordEntityVersion("timeline-event", eventId, source, sourceRef, changeNote || "更新时间事件");
+      this.audit(String(current.workId), "timeline.updated", "timeline-event", eventId, { fields: Object.keys(input), source, sourceRef });
+    });
     return this.getTimelineEvent(eventId);
   }
 
@@ -1923,7 +2210,7 @@ export class Store {
         impactScope: String(events[0]?.impactScope ?? "personal"),
         evidence: union("evidence"),
         status: events.every((event) => event.status === "confirmed") ? "confirmed" : "pending"
-      });
+      }, "merge", uniqueIds.join(","));
       for (const eventId of uniqueIds) this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
       this.audit(workId, "timeline.merged", "timeline-event", String(merged.id), { sourceEventIds: uniqueIds });
       return merged;
@@ -1953,7 +2240,7 @@ export class Store {
         impactScope: String(source.impactScope),
         evidence: source.evidence as unknown[],
         status: String(source.status)
-      }));
+      }, "split", eventId));
       this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
       this.audit(String(source.workId), "timeline.split", "timeline-event", eventId, { createdEventIds: created.map((event) => event.id) });
       return created;
@@ -1994,7 +2281,7 @@ export class Store {
     };
   }
 
-  createRelationship(workId: string, input: RelationshipInput): Record<string, unknown> {
+  createRelationship(workId: string, input: RelationshipInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
     let fromCharacterId = input.fromCharacterId;
     let toCharacterId = input.toCharacterId;
@@ -2007,28 +2294,31 @@ export class Store {
     const relationshipId = id("relationship");
     const timestamp = now();
     const keywords = this.normalizeRelationshipKeywords(input.keywords ?? []);
-    this.db.run(
-      `INSERT INTO relationships (id, work_id, from_character_id, to_character_id, category, subtype, keywords_json, directed,
-       current_status, time_range_json, confidence, evidence_json, confirmation_status, locked, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      relationshipId,
-      workId,
-      fromCharacterId,
-      toCharacterId,
-      input.category,
-      input.subtype ?? "",
-      JSON.stringify(keywords),
-      input.directed ? 1 : 0,
-      input.currentStatus ?? "active",
-      JSON.stringify(input.timeRange ?? {}),
-      input.confidence ?? 0.5,
-      JSON.stringify(input.evidence ?? []),
-      input.confirmationStatus ?? "pending",
-      input.locked ? 1 : 0,
-      timestamp,
-      timestamp
-    );
-    this.audit(workId, "relationship.created", "relationship", relationshipId);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO relationships (id, work_id, from_character_id, to_character_id, category, subtype, keywords_json, directed,
+         current_status, time_range_json, confidence, evidence_json, confirmation_status, locked, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        relationshipId,
+        workId,
+        fromCharacterId,
+        toCharacterId,
+        input.category,
+        input.subtype ?? "",
+        JSON.stringify(keywords),
+        input.directed ? 1 : 0,
+        input.currentStatus ?? "active",
+        JSON.stringify(input.timeRange ?? {}),
+        input.confidence ?? 0.5,
+        JSON.stringify(input.evidence ?? []),
+        input.confirmationStatus ?? "pending",
+        input.locked ? 1 : 0,
+        timestamp,
+        timestamp
+      );
+      this.recordEntityVersion("relationship", relationshipId, source, sourceRef, source === "analysis" ? "AI 提取人物关系" : "建立人物关系", timestamp);
+      this.audit(workId, "relationship.created", "relationship", relationshipId, { source, sourceRef });
+    });
     return this.getRelationship(relationshipId);
   }
 
@@ -2045,7 +2335,13 @@ export class Store {
     return this.mapRelationship(row);
   }
 
-  updateRelationship(relationshipId: string, input: Partial<RelationshipInput>): Record<string, unknown> {
+  updateRelationship(
+    relationshipId: string,
+    input: Partial<RelationshipInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getRelationship(relationshipId);
     let fromCharacterId = input.fromCharacterId ?? String(current.fromCharacterId);
     let toCharacterId = input.toCharacterId ?? String(current.toCharacterId);
@@ -2064,26 +2360,29 @@ export class Store {
       directed,
       relationshipId
     );
-    this.db.run(
-      `UPDATE relationships SET from_character_id = ?, to_character_id = ?, category = ?, subtype = ?, keywords_json = ?, directed = ?,
-       current_status = ?, time_range_json = ?, confidence = ?, evidence_json = ?, confirmation_status = ?, locked = ?, updated_at = ?
-       WHERE id = ?`,
-      fromCharacterId,
-      toCharacterId,
-      input.category ?? String(current.category),
-      input.subtype ?? String(current.subtype),
-      JSON.stringify(this.normalizeRelationshipKeywords(input.keywords ?? current.keywords as string[])),
-      directed ? 1 : 0,
-      input.currentStatus ?? String(current.currentStatus),
-      JSON.stringify(input.timeRange ?? current.timeRange),
-      input.confidence ?? Number(current.confidence),
-      JSON.stringify(input.evidence ?? current.evidence),
-      input.confirmationStatus ?? String(current.confirmationStatus),
-      (input.locked ?? Boolean(current.locked)) ? 1 : 0,
-      now(),
-      relationshipId
-    );
-    this.audit(String(current.workId), "relationship.updated", "relationship", relationshipId, { fields: Object.keys(input) });
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE relationships SET from_character_id = ?, to_character_id = ?, category = ?, subtype = ?, keywords_json = ?, directed = ?,
+         current_status = ?, time_range_json = ?, confidence = ?, evidence_json = ?, confirmation_status = ?, locked = ?, updated_at = ?
+         WHERE id = ?`,
+        fromCharacterId,
+        toCharacterId,
+        input.category ?? String(current.category),
+        input.subtype ?? String(current.subtype),
+        JSON.stringify(this.normalizeRelationshipKeywords(input.keywords ?? current.keywords as string[])),
+        directed ? 1 : 0,
+        input.currentStatus ?? String(current.currentStatus),
+        JSON.stringify(input.timeRange ?? current.timeRange),
+        input.confidence ?? Number(current.confidence),
+        JSON.stringify(input.evidence ?? current.evidence),
+        input.confirmationStatus ?? String(current.confirmationStatus),
+        (input.locked ?? Boolean(current.locked)) ? 1 : 0,
+        now(),
+        relationshipId
+      );
+      this.recordEntityVersion("relationship", relationshipId, source, sourceRef, changeNote || "更新人物关系");
+      this.audit(String(current.workId), "relationship.updated", "relationship", relationshipId, { fields: Object.keys(input), source, sourceRef });
+    });
     return this.getRelationship(relationshipId);
   }
 

@@ -1271,7 +1271,7 @@ export class AiManager {
         impactScope: typeof event.impactScope === "string" ? event.impactScope : "personal",
         evidence: Array.isArray(event.evidence) ? event.evidence : [],
         status: "candidate"
-      });
+      }, "analysis", taskId ?? generated.callId);
       eventIds.push(String(created.id));
     }
     return { eventIds, candidateCount: eventIds.length, callId: generated.callId };
@@ -1820,7 +1820,7 @@ export class AiManager {
               currentStatus: candidate.currentStatus,
               timeRange: candidate.timeRange,
               evidence: mergedEvidence
-            });
+            }, "analysis", taskId ?? null, "AI 合并关系证据");
           }
           if (candidatePeerStrength > 0) {
             for (let index = existing.length - 1; index >= 0; index -= 1) {
@@ -1865,10 +1865,15 @@ export class AiManager {
             currentStatus: candidate.currentStatus,
             timeRange: candidate.timeRange,
             evidence: mergedEvidence
-          });
+          }, "analysis", taskId ?? null, "AI 更新关系强度");
           continue;
         }
-        const relationship = this.store.createRelationship(workId, { ...candidate, confirmationStatus: "pending", locked: false });
+        const relationship = this.store.createRelationship(
+          workId,
+          { ...candidate, confirmationStatus: "pending", locked: false },
+          "analysis",
+          taskId ?? null
+        );
         relationshipIds.push(String(relationship.id));
         existing.push(relationship);
       }

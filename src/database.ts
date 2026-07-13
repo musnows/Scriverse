@@ -36,6 +36,7 @@ export class Database {
   }
 
   transaction<T>(operation: () => T): T {
+    if (this.raw.isTransaction) return operation();
     this.raw.exec("BEGIN IMMEDIATE");
     try {
       const result = operation();
@@ -190,6 +191,20 @@ export class Database {
         change_note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         UNIQUE(character_id, version_no)
+      );
+
+      CREATE TABLE IF NOT EXISTS entity_versions (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        version_no INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        source_ref TEXT,
+        change_note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(entity_type, entity_id, version_no)
       );
 
       CREATE TABLE IF NOT EXISTS timeline_tracks (
@@ -498,6 +513,8 @@ export class Database {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_character_names_primary ON character_names(character_id) WHERE kind = 'primary';
       CREATE INDEX IF NOT EXISTS idx_character_names_character ON character_names(character_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_character_versions_character ON character_versions(character_id, version_no DESC);
+      CREATE INDEX IF NOT EXISTS idx_entity_versions_entity ON entity_versions(entity_type, entity_id, version_no DESC);
+      CREATE INDEX IF NOT EXISTS idx_entity_versions_work ON entity_versions(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_races_work ON races(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_organizations_work ON organizations(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_memberships_organization ON character_organization_memberships(organization_id, character_id);
@@ -816,6 +833,26 @@ export class Database {
           }
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(14)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS entity_versions (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          version_no INTEGER NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'manual',
+          source_ref TEXT,
+          change_note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          UNIQUE(entity_type, entity_id, version_no)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_entity_versions_entity ON entity_versions(entity_type, entity_id, version_no DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_entity_versions_work ON entity_versions(work_id, created_at DESC)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?)", new Date().toISOString());
       });
     }
   }

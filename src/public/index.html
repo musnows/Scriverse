@@ -332,6 +332,14 @@
       <div id="versions-list" class="versions-list"></div>
     </dialog>
 
+    <dialog id="entity-history-dialog" class="dialog wide-dialog" aria-labelledby="entity-history-title">
+      <div class="dialog-header">
+        <div><span id="entity-history-eyebrow" class="eyebrow">可回滚记录</span><h2 id="entity-history-title">版本历史</h2></div>
+        <button id="entity-history-close" class="dialog-close" aria-label="关闭版本历史" type="button">×</button>
+      </div>
+      <div id="entity-history-list" class="entity-history-list" aria-live="polite"></div>
+    </dialog>
+
     <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
       <button id="relationship-map-close" class="relationship-map-floating-close" aria-label="关闭放大关系图" type="button">×</button>
       <div id="relationship-map-expanded-host" class="relationship-map-expanded-host"></div>
@@ -359,6 +367,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260714-obsidian-network"></script>
+    <script type="module" src="/app.js?v=20260714-entity-versions"></script>
   </body>
 </html>
