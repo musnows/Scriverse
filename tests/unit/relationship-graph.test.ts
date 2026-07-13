@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, layoutGalaxy, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
+import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -20,6 +20,28 @@ describe("人物关系图数据与布局", () => {
       keywords: ["王权效忠", "兄弟情谊", "长期并肩", "舍命相救", "相互调侃", "互相关怀"]
     })).toBe("君臣 · 王权效忠 · 兄弟情谊 · 长期并肩 · 舍命相救 · 相互调侃 · 互相关怀");
     expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
+  });
+
+  it("普通关系网络使用稳定的力导向布局并容纳全部角色", () => {
+    const characters = Array.from({ length: 18 }, (_, index) => ({ id: `n-${index}`, name: `角色 ${index}` }));
+    const relationships = Array.from({ length: 14 }, (_, index) => ({
+      id: `edge-${index}`,
+      fromCharacterId: "n-0",
+      toCharacterId: `n-${index + 1}`,
+      category: index % 2 ? "social" : "family",
+      confidence: 0.8,
+      confirmationStatus: "confirmed"
+    }));
+    const graph = buildRelationshipGraph(characters, relationships);
+    const first = layoutRelationshipNetwork(graph, "stable-layout");
+    const second = layoutRelationshipNetwork(graph, "stable-layout");
+
+    expect(first.nodes).toHaveLength(18);
+    expect(first.nodes.map((node: { id: string; x: number; y: number }) => [node.id, node.x, node.y]))
+      .toEqual(second.nodes.map((node: { id: string; x: number; y: number }) => [node.id, node.x, node.y]));
+    expect(first.nodes.every((node: { x: number; y: number }) => node.x >= 54 && node.x <= 1146 && node.y >= 46 && node.y <= 594)).toBe(true);
+    expect(new Set(first.nodes.map((node: { x: number }) => Math.round(node.x))).size).toBeGreaterThan(12);
+    expect(new Set(first.nodes.map((node: { y: number }) => Math.round(node.y))).size).toBeGreaterThan(12);
   });
 
   it("大量角色使用有界采样布局并返回全部节点", () => {

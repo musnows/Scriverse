@@ -7,9 +7,9 @@ const RELATION_STYLE = Object.freeze({
 });
 
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
-const MINDMAP_LAYOUTS = Object.freeze({
-  standard: Object.freeze({ width: 1000, height: 490, firstRadiusX: 270, firstRadiusY: 145, secondRadiusX: 425, secondRadiusY: 205, marginX: 65, marginY: 48, edgeCurve: 55, labelOffset: 6 }),
-  expanded: Object.freeze({ width: 1400, height: 760, firstRadiusX: 520, firstRadiusY: 285, secondRadiusX: 650, secondRadiusY: 350, marginX: 72, marginY: 54, edgeCurve: 88, labelOffset: 10 })
+const NETWORK_LAYOUTS = Object.freeze({
+  standard: Object.freeze({ width: 1200, height: 640, marginX: 54, marginY: 46, desiredEdgeLength: 105, repulsionStrength: 7800 }),
+  expanded: Object.freeze({ width: 1600, height: 900, marginX: 72, marginY: 62, desiredEdgeLength: 138, repulsionStrength: 11200 })
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
@@ -113,326 +113,547 @@ export function buildRelationshipGraph(characters, relationships) {
   return { nodes, edges, nodeById, warnings, stats: { nodeCount: nodes.length, edgeCount: edges.length } };
 }
 
-function mindMapLayout(graph, rootId, visibleIds, layout) {
-  const root = graph.nodeById.get(rootId) ?? graph.nodes[0];
-  const positions = new Map();
-  if (!root) return positions;
+export function layoutRelationshipNetwork(graph, seed = "relationship-network", options = {}) {
+  const layout = options.expanded ? NETWORK_LAYOUTS.expanded : NETWORK_LAYOUTS.standard;
+  const random = seededRandom(hashString(`${seed}:${graph.nodes.map((node) => node.id).join("|")}`));
+  const maxImportance = Math.max(1, ...graph.nodes.map((node) => Number(node.importance) || 0));
   const centerX = layout.width / 2;
   const centerY = layout.height / 2;
-  positions.set(root.id, { x: centerX, y: centerY, depth: 0 });
-  const adjacency = new Map(graph.nodes.map((node) => [node.id, []]));
-  for (const edge of graph.edges) {
-    adjacency.get(edge.source)?.push({ id: edge.target, edge });
-    adjacency.get(edge.target)?.push({ id: edge.source, edge });
+  const nodes = graph.nodes.map((node, index) => {
+    const centrality = clamp((Number(node.importance) || 0) / maxImportance, 0, 1);
+    const angle = index * 2.399963229728653 + random() * 0.42;
+    const radialScale = (0.2 + Math.sqrt(random()) * 0.34) * (1 - centrality * 0.45);
+    const radius = Math.min(layout.width, layout.height) * radialScale;
+    return {
+      ...node,
+      x: centerX + Math.cos(angle) * radius,
+      y: centerY + Math.sin(angle) * radius * 0.72,
+      vx: 0,
+      vy: 0,
+      radius: clamp(13 + Math.sqrt(Math.max(0, node.degree)) * 4.4, 13, 34)
+    };
+  });
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const exactRepulsion = nodes.length <= 150;
+  const iterations = exactRepulsion ? 155 : 96;
+  const repel = (left, right) => {
+    let dx = right.x - left.x;
+    let dy = right.y - left.y;
+    if (Math.abs(dx) + Math.abs(dy) < 0.01) {
+      dx = random() - 0.5;
+      dy = random() - 0.5;
+    }
+    const minimumDistance = left.radius + right.radius + 9;
+    const distanceSquared = Math.max(36, dx * dx + dy * dy);
+    const distance = Math.sqrt(distanceSquared);
+    const collisionBoost = distance < minimumDistance ? (minimumDistance - distance) * 0.22 : 0;
+    const force = layout.repulsionStrength / distanceSquared + collisionBoost;
+    left.vx -= dx / distance * force;
+    left.vy -= dy / distance * force;
+    right.vx += dx / distance * force;
+    right.vy += dy / distance * force;
+  };
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const cooling = 1 - iteration / (iterations + 24);
+    if (exactRepulsion) {
+      for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+        for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) repel(nodes[leftIndex], nodes[rightIndex]);
+      }
+    } else {
+      const sampleCount = Math.min(32, nodes.length - 1);
+      const stride = 19 + iteration % 13;
+      for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+        for (let sample = 1; sample <= sampleCount; sample += 1) {
+          const rightIndex = (leftIndex + sample * stride) % nodes.length;
+          if (rightIndex !== leftIndex) repel(nodes[leftIndex], nodes[rightIndex]);
+        }
+      }
+    }
+    for (const edge of graph.edges) {
+      const source = byId.get(edge.source);
+      const target = byId.get(edge.target);
+      if (!source || !target) continue;
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.max(1, Math.hypot(dx, dy));
+      const desiredLength = layout.desiredEdgeLength + (2 - Math.min(source.degree, target.degree)) * 7;
+      const force = (distance - desiredLength) * (0.0026 + edge.confidence * 0.0022);
+      source.vx += dx / distance * force;
+      source.vy += dy / distance * force;
+      target.vx -= dx / distance * force;
+      target.vy -= dy / distance * force;
+    }
+    for (const node of nodes) {
+      const centrality = clamp((Number(node.importance) || 0) / maxImportance, 0, 1);
+      node.vx += (centerX - node.x) * (0.00042 + centrality * 0.0012);
+      node.vy += (centerY - node.y) * (0.00042 + centrality * 0.0012);
+      node.vx = clamp(node.vx * 0.82, -10, 10);
+      node.vy = clamp(node.vy * 0.82, -10, 10);
+      node.x += node.vx * cooling;
+      node.y += node.vy * cooling;
+    }
   }
-  const visited = new Set([root.id]);
-  const first = (adjacency.get(root.id) ?? []).filter((item) => visibleIds.has(item.id));
-  first.sort((left, right) => {
-    const categoryOrder = ["family", "social", "emotional", "conflict", "uncertain"];
-    return categoryOrder.indexOf(left.edge.category) - categoryOrder.indexOf(right.edge.category);
-  });
-  first.forEach((item, index) => {
-    const angle = -Math.PI / 2 + Math.PI * 2 * index / Math.max(first.length, 1);
-    positions.set(item.id, { x: centerX + Math.cos(angle) * layout.firstRadiusX, y: centerY + Math.sin(angle) * layout.firstRadiusY, depth: 1 });
-    visited.add(item.id);
-  });
-  const second = [...visibleIds].filter((id) => !visited.has(id));
-  second.forEach((id, index) => {
-    const parent = first.length ? first[index % first.length]?.id : root.id;
-    const parentPosition = positions.get(parent) ?? positions.get(root.id);
-    const baseAngle = Math.atan2(parentPosition.y - centerY, parentPosition.x - centerX);
-    const offset = (Math.floor(index / Math.max(first.length, 1)) + 1) * 0.18 * (index % 2 ? 1 : -1);
-    positions.set(id, {
-      x: clamp(centerX + Math.cos(baseAngle + offset) * layout.secondRadiusX, layout.marginX, layout.width - layout.marginX),
-      y: clamp(centerY + Math.sin(baseAngle + offset) * layout.secondRadiusY, layout.marginY, layout.height - layout.marginY),
-      depth: 2
-    });
-  });
-  return positions;
+  if (nodes.length === 1) {
+    nodes[0].x = centerX;
+    nodes[0].y = centerY;
+  } else if (nodes.length > 1) {
+    const minX = Math.min(...nodes.map((node) => node.x));
+    const maxX = Math.max(...nodes.map((node) => node.x));
+    const minY = Math.min(...nodes.map((node) => node.y));
+    const maxY = Math.max(...nodes.map((node) => node.y));
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    for (const node of nodes) {
+      node.x = layout.marginX + (node.x - minX) / width * (layout.width - layout.marginX * 2);
+      node.y = layout.marginY + (node.y - minY) / height * (layout.height - layout.marginY * 2);
+    }
+  }
+  return { nodes, byId, width: layout.width, height: layout.height };
 }
 
 export function renderRelationshipMindMap(container, graph, options = {}) {
+  container.replaceChildren();
+  if (!graph.nodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.innerHTML = "<b>还没有角色档案</b>先创建角色，关系图会在这里出现。";
+    container.append(empty);
+    return { destroy() { container.replaceChildren(); } };
+  }
+
+  const layout = options.expanded ? NETWORK_LAYOUTS.expanded : NETWORK_LAYOUTS.standard;
+  const laidOut = layoutRelationshipNetwork(graph, options.seed ?? "relationship-network-v2", { expanded: options.expanded });
+  const positions = new Map(laidOut.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
+  const originalPositions = new Map([...positions].map(([id, position]) => [id, { ...position }]));
+  const neighbors = new Map(graph.nodes.map((node) => [node.id, new Set()]));
+  graph.edges.forEach((edge) => {
+    neighbors.get(edge.source)?.add(edge.target);
+    neighbors.get(edge.target)?.add(edge.source);
+  });
   let selectedId = graph.nodes[0]?.id ?? null;
   let selectedEdgeId = null;
-  const manualPositions = new Map();
-  const layout = options.expanded ? MINDMAP_LAYOUTS.expanded : MINDMAP_LAYOUTS.standard;
-  const render = () => {
-    container.replaceChildren();
-    if (!graph.nodes.length) {
-      const empty = document.createElement("div");
-      empty.className = "empty-state";
-      empty.innerHTML = "<b>还没有角色档案</b>先创建角色，关系图会在这里出现。";
-      container.append(empty);
-      return;
-    }
-    const visibleNodes = graph.nodes.slice(0, 30);
-    if (selectedId && !visibleNodes.some((node) => node.id === selectedId)) visibleNodes[visibleNodes.length - 1] = graph.nodeById.get(selectedId);
-    const visibleIds = new Set(visibleNodes.filter(Boolean).map((node) => node.id));
-    const positions = mindMapLayout(graph, selectedId, visibleIds, layout);
-    for (const [nodeId, position] of manualPositions) if (visibleIds.has(nodeId)) positions.set(nodeId, position);
-    const shell = document.createElement("section");
-    shell.className = `relationship-map-card${options.expanded ? " is-expanded" : ""}`;
-    shell.dataset.testid = "relationship-mindmap";
-    const toolbar = document.createElement("header");
-    toolbar.className = "relationship-map-toolbar";
-    toolbar.innerHTML = `<div><strong>人物关系思维图</strong><small>${graph.stats.nodeCount} 个角色 · ${graph.stats.edgeCount} 条关系</small></div><div class="relationship-map-legend">${Object.entries(RELATION_STYLE).map(([key, style]) => `<span><i class="${key}"></i>${style.label}</span>`).join("")}</div>`;
-    const actions = document.createElement("div");
-    actions.className = "relationship-map-actions";
-    if (!options.expanded) {
-      const expand = document.createElement("button");
-      expand.type = "button";
-      expand.className = "ghost-button";
-      expand.textContent = "放大关系图";
-      expand.dataset.testid = "relationship-map-expand";
-      expand.addEventListener("click", () => options.onOpenExpanded?.());
-      actions.append(expand);
-    }
-    const fullscreen = document.createElement("button");
-    fullscreen.type = "button";
-    fullscreen.className = "ghost-button";
-    fullscreen.textContent = "全屏银河图";
-    fullscreen.dataset.testid = "relationship-galaxy-open";
-    fullscreen.addEventListener("click", () => options.onOpenGalaxy?.());
-    actions.append(fullscreen);
-    toolbar.append(actions);
-    const viewport = document.createElement("div");
-    viewport.className = "relationship-mindmap";
-    viewport.dataset.layoutWidth = String(layout.width);
-    viewport.dataset.layoutHeight = String(layout.height);
-    const stage = document.createElement("div");
-    stage.className = "relationship-mindmap-stage";
-    viewport.append(stage);
-    let viewScale = 1;
-    let viewX = 0;
-    let viewY = 0;
-    const updateViewTransform = () => {
-      stage.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
-      viewport.dataset.graphScale = viewScale.toFixed(3);
+  let viewScale = 1;
+  let viewX = 0;
+  let viewY = 0;
+  let animationFrame = null;
+  let settleTimer = null;
+  let destroyed = false;
+
+  const shell = document.createElement("section");
+  shell.className = `relationship-map-card relationship-network-card${options.expanded ? " is-expanded" : ""}`;
+  shell.dataset.testid = "relationship-mindmap";
+  const toolbar = document.createElement("header");
+  toolbar.className = "relationship-map-toolbar";
+  toolbar.innerHTML = `<div><strong>人物关系网络</strong><small>${graph.stats.nodeCount} 个角色 · ${graph.stats.edgeCount} 条关系</small></div>`;
+  const actions = document.createElement("div");
+  actions.className = "relationship-map-actions";
+  if (!options.expanded) {
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "ghost-button";
+    expand.textContent = "放大预览";
+    expand.setAttribute("aria-label", "放大关系图");
+    expand.dataset.testid = "relationship-map-expand";
+    expand.addEventListener("click", () => options.onOpenExpanded?.());
+    actions.append(expand);
+  }
+  const fit = document.createElement("button");
+  fit.type = "button";
+  fit.className = "ghost-button";
+  fit.textContent = "适配";
+  fit.dataset.testid = "relationship-network-fit";
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.className = "ghost-button";
+  reset.textContent = "重置布局";
+  reset.dataset.testid = "relationship-network-reset";
+  const fullscreen = document.createElement("button");
+  fullscreen.type = "button";
+  fullscreen.className = "ghost-button";
+  fullscreen.textContent = "银河图";
+  fullscreen.setAttribute("aria-label", "全屏银河图");
+  fullscreen.dataset.testid = "relationship-galaxy-open";
+  fullscreen.addEventListener("click", () => options.onOpenGalaxy?.());
+  actions.append(fit, reset, fullscreen);
+  toolbar.append(actions);
+
+  const viewport = document.createElement("div");
+  viewport.className = "relationship-mindmap relationship-network";
+  viewport.dataset.testid = "relationship-network";
+  viewport.dataset.layoutWidth = String(layout.width);
+  viewport.dataset.layoutHeight = String(layout.height);
+  viewport.dataset.interaction = "idle";
+  const stage = document.createElement("div");
+  stage.className = "relationship-mindmap-stage relationship-network-stage";
+  viewport.append(stage);
+
+  const focusBadge = document.createElement("div");
+  focusBadge.className = "relationship-network-focus";
+  focusBadge.innerHTML = "<strong>人物关系网络</strong><span></span>";
+  const focusText = focusBadge.querySelector("span");
+  const help = document.createElement("div");
+  help.className = "relationship-network-help";
+  help.textContent = "滚轮缩放 · 拖拽空白处移动 · 拖拽人物固定位置 · 点击人物聚焦关系";
+  const legend = document.createElement("div");
+  legend.className = "relationship-map-legend relationship-network-legend";
+  legend.innerHTML = Object.entries(RELATION_STYLE).map(([key, style]) => `<span><i class="${key}"></i>${style.label}</span>`).join("");
+  viewport.append(focusBadge, help, legend);
+
+  const updateViewTransform = (animate = false) => {
+    stage.classList.toggle("is-view-animating", animate);
+    stage.style.transform = `translate(${viewX}px, ${viewY}px) scale(${viewScale})`;
+    viewport.dataset.graphScale = viewScale.toFixed(3);
+    viewport.dataset.viewX = viewX.toFixed(1);
+    viewport.dataset.viewY = viewY.toFixed(1);
+    if (animate) window.setTimeout(() => stage.classList.remove("is-view-animating"), 360);
+  };
+  updateViewTransform();
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("aria-label", "人物关系连线");
+  const markerId = options.expanded ? "network-arrow-expanded" : "network-arrow-inline";
+  const definitions = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  definitions.innerHTML = `<marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker>`;
+  svg.append(definitions);
+  const edgeElements = [];
+  const updateEdgeGeometry = ({ edge, hitPath, path, label }) => {
+    const from = positions.get(edge.source);
+    const to = positions.get(edge.target);
+    if (!from || !to) return;
+    const geometry = `M ${from.x.toFixed(2)} ${from.y.toFixed(2)} L ${to.x.toFixed(2)} ${to.y.toFixed(2)}`;
+    hitPath.setAttribute("d", geometry);
+    path.setAttribute("d", geometry);
+    const middleX = (from.x + to.x) / 2;
+    const middleY = (from.y + to.y) / 2 - 5;
+    let angle = Math.atan2(to.y - from.y, to.x - from.x) * 180 / Math.PI;
+    if (angle > 90 || angle < -90) angle += 180;
+    label.setAttribute("x", middleX.toFixed(2));
+    label.setAttribute("y", middleY.toFixed(2));
+    label.setAttribute("transform", `rotate(${angle.toFixed(2)} ${middleX.toFixed(2)} ${middleY.toFixed(2)})`);
+  };
+  for (const edge of graph.edges) {
+    const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    hitPath.classList.add("mind-edge-hit");
+    hitPath.dataset.edgeId = edge.id;
+    hitPath.setAttribute("role", "button");
+    hitPath.setAttribute("tabindex", "0");
+    hitPath.setAttribute("aria-label", `选择 ${graph.nodeById.get(edge.source)?.name ?? "未知角色"} 与 ${graph.nodeById.get(edge.target)?.name ?? "未知角色"} 的关系：${formatRelationshipLabel(edge)}`);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.classList.add("mind-edge", edge.category);
+    path.dataset.edgeId = edge.id;
+    path.dataset.edgeSource = edge.source;
+    path.dataset.edgeTarget = edge.target;
+    path.style.setProperty("--edge-opacity", String(0.24 + edge.confidence * 0.38));
+    path.style.setProperty("--edge-width", String(0.8 + edge.confidence * 1.35));
+    if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
+    if (edge.directed) path.setAttribute("marker-end", `url(#${markerId})`);
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("text-anchor", "middle");
+    label.classList.add("mind-edge-label", edge.category, "is-secondary-label");
+    const fullLabel = formatRelationshipLabel(edge);
+    label.textContent = fullLabel;
+    label.dataset.edgeId = edge.id;
+    label.dataset.fullLabel = label.textContent;
+    svg.append(hitPath, path, label);
+    const edgeElement = { edge, hitPath, path, label };
+    edgeElements.push(edgeElement);
+    updateEdgeGeometry(edgeElement);
+  }
+  stage.append(svg);
+
+  const nodeElements = new Map();
+  const dominantColor = (nodeId) => {
+    const related = graph.edges.filter((edge) => edge.source === nodeId || edge.target === nodeId).sort((left, right) => right.confidence - left.confidence);
+    return RELATION_STYLE[related[0]?.category]?.color ?? "#7c8b78";
+  };
+  const updateNodePosition = (nodeId) => {
+    const position = positions.get(nodeId);
+    const button = nodeElements.get(nodeId);
+    if (!position || !button) return;
+    button.style.left = `${position.x / layout.width * 100}%`;
+    button.style.top = `${position.y / layout.height * 100}%`;
+    button.dataset.graphX = position.x.toFixed(2);
+    button.dataset.graphY = position.y.toFixed(2);
+  };
+  const updateAllGeometry = () => {
+    nodeElements.forEach((_, nodeId) => updateNodePosition(nodeId));
+    edgeElements.forEach(updateEdgeGeometry);
+  };
+
+  const edgeDetail = document.createElement("div");
+  edgeDetail.className = "mind-edge-detail hidden";
+  edgeDetail.setAttribute("aria-live", "polite");
+  viewport.append(edgeDetail);
+  const clearEdgeSelectionClasses = () => {
+    nodeElements.forEach((button) => button.classList.remove("is-edge-endpoint"));
+    edgeElements.forEach((item) => {
+      item.path.classList.remove("is-edge-selected");
+      item.label.classList.remove("is-edge-selected");
+      item.hitPath.setAttribute("aria-pressed", "false");
+    });
+  };
+  const applyNodeFocus = (nodeId) => {
+    if (!nodeId) return;
+    clearEdgeSelectionClasses();
+    const relatedIds = new Set([nodeId, ...(neighbors.get(nodeId) ?? [])]);
+    nodeElements.forEach((button, id) => {
+      button.classList.toggle("is-selected", id === nodeId);
+      button.classList.toggle("is-related", id !== nodeId && relatedIds.has(id));
+      button.classList.toggle("is-dimmed", !relatedIds.has(id));
+    });
+    edgeElements.forEach((item) => {
+      const active = item.edge.source === nodeId || item.edge.target === nodeId;
+      item.path.classList.toggle("is-highlighted", active);
+      item.path.classList.toggle("is-dimmed", !active);
+      item.label.classList.toggle("is-secondary-label", !active);
+      item.label.classList.toggle("is-dimmed", !active);
+    });
+    focusText.textContent = `聚焦：${graph.nodeById.get(nodeId)?.name ?? "未知角色"}`;
+    edgeDetail.classList.add("hidden");
+    edgeDetail.replaceChildren();
+  };
+  const applyEdgeSelection = (edgeElement) => {
+    const selection = getRelationshipEdgeSelection(graph, edgeElement.edge.id);
+    if (!selection) return;
+    clearEdgeSelectionClasses();
+    const endpointIds = new Set(selection.endpointIds);
+    nodeElements.forEach((button, id) => {
+      button.classList.remove("is-selected", "is-related");
+      button.classList.toggle("is-edge-endpoint", endpointIds.has(id));
+      button.classList.toggle("is-dimmed", !endpointIds.has(id));
+    });
+    edgeElements.forEach((item) => {
+      const active = item.edge.id === selection.edgeId;
+      item.path.classList.toggle("is-highlighted", false);
+      item.path.classList.toggle("is-edge-selected", active);
+      item.path.classList.toggle("is-dimmed", !active);
+      item.label.classList.toggle("is-secondary-label", !active);
+      item.label.classList.toggle("is-edge-selected", active);
+      item.label.classList.toggle("is-dimmed", !active);
+      item.hitPath.setAttribute("aria-pressed", String(active));
+    });
+    focusText.textContent = `关系：${selection.endpointNames[0]} ↔ ${selection.endpointNames[1]}`;
+    const heading = document.createElement("b");
+    heading.textContent = `${selection.endpointNames[0]}与${selection.endpointNames[1]}`;
+    const detailText = document.createElement("span");
+    detailText.textContent = selection.label;
+    edgeDetail.replaceChildren(heading, detailText);
+    edgeDetail.classList.remove("hidden");
+  };
+  edgeElements.forEach((edgeElement) => {
+    const selectEdge = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      selectedEdgeId = edgeElement.edge.id;
+      applyEdgeSelection(edgeElement);
     };
-    updateViewTransform();
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
-    svg.setAttribute("preserveAspectRatio", "none");
-    svg.setAttribute("aria-label", "人物关系连线");
-    const marker = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-    marker.innerHTML = '<marker id="mind-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker>';
-    svg.append(marker);
-    const relevantEdges = graph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
-    const edgeElements = [];
-    const updateEdgeGeometry = ({ edge, hitPath, path, label }) => {
-      const from = positions.get(edge.source);
-      const to = positions.get(edge.target);
-      if (!from || !to) return;
-      const curve = Math.min(layout.edgeCurve, Math.abs(from.x - to.x) * 0.12);
-      const geometry = `M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${(from.y + to.y) / 2 - curve} ${to.x} ${to.y}`;
-      hitPath.setAttribute("d", geometry);
-      path.setAttribute("d", geometry);
-      if (label) {
-        label.setAttribute("x", String((from.x + to.x) / 2));
-        label.setAttribute("y", String((from.y + to.y) / 2 - curve - layout.labelOffset));
+    edgeElement.hitPath.addEventListener("click", selectEdge);
+    edgeElement.hitPath.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") selectEdge(event);
+    });
+  });
+
+  const settleInteraction = (button, neighborIds) => {
+    window.clearTimeout(settleTimer);
+    viewport.dataset.interaction = "settling";
+    button.classList.add("is-settling");
+    neighborIds.forEach((id) => nodeElements.get(id)?.classList.add("is-settling-neighbor"));
+    settleTimer = window.setTimeout(() => {
+      button.classList.remove("is-settling");
+      neighborIds.forEach((id) => nodeElements.get(id)?.classList.remove("is-settling-neighbor", "is-drag-neighbor"));
+      viewport.dataset.interaction = "idle";
+    }, 420);
+  };
+  for (const node of graph.nodes) {
+    const button = document.createElement("button");
+    const nodeSize = clamp(27 + Math.sqrt(Math.max(0, node.degree)) * 6, 27, 68);
+    button.type = "button";
+    button.className = `mind-node network-node${node.locked ? " is-locked" : ""}${node.degree === 0 ? " is-isolated" : ""}`;
+    button.dataset.nodeId = node.id;
+    button.style.setProperty("--node-size", `${nodeSize}px`);
+    button.style.setProperty("--node-color", dominantColor(node.id));
+    const label = document.createElement("span");
+    label.textContent = node.name;
+    button.append(label);
+    button.title = [node.species ? `种族：${node.species}` : "", node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
+    button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
+    button.setAttribute("aria-grabbed", "false");
+    nodeElements.set(node.id, button);
+    stage.append(button);
+    updateNodePosition(node.id);
+
+    let dragState = null;
+    let suppressClick = false;
+    button.addEventListener("mouseenter", () => { if (!selectedEdgeId && viewport.dataset.interaction === "idle") applyNodeFocus(node.id); });
+    button.addEventListener("mouseleave", () => { if (!selectedEdgeId && viewport.dataset.interaction === "idle") applyNodeFocus(selectedId); });
+    button.addEventListener("focus", () => { if (!selectedEdgeId) applyNodeFocus(node.id); });
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.stopPropagation();
+      const rect = viewport.getBoundingClientRect();
+      dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect, dragged: false, last: { ...positions.get(node.id) } };
+      selectedEdgeId = null;
+      selectedId = node.id;
+      applyNodeFocus(node.id);
+      button.setPointerCapture(event.pointerId);
+      button.classList.add("is-dragging");
+      button.setAttribute("aria-grabbed", "true");
+      const neighborIds = [...(neighbors.get(node.id) ?? [])];
+      neighborIds.forEach((id) => nodeElements.get(id)?.classList.add("is-drag-neighbor"));
+      viewport.dataset.interaction = "dragging";
+      viewport.dataset.draggedNodeId = node.id;
+    });
+    button.addEventListener("pointermove", (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) >= 3) dragState.dragged = true;
+      if (!dragState.dragged) return;
+      event.preventDefault();
+      const next = {
+        x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * layout.width, layout.marginX, layout.width - layout.marginX),
+        y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * layout.height, layout.marginY, layout.height - layout.marginY)
+      };
+      const deltaX = next.x - dragState.last.x;
+      const deltaY = next.y - dragState.last.y;
+      positions.set(node.id, next);
+      for (const neighborId of neighbors.get(node.id) ?? []) {
+        const neighbor = positions.get(neighborId);
+        if (!neighbor) continue;
+        positions.set(neighborId, {
+          x: clamp(neighbor.x + deltaX * 0.065, layout.marginX, layout.width - layout.marginX),
+          y: clamp(neighbor.y + deltaY * 0.065, layout.marginY, layout.height - layout.marginY)
+        });
+      }
+      dragState.last = next;
+      updateAllGeometry();
+    });
+    const endDrag = (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      const neighborIds = [...(neighbors.get(node.id) ?? [])];
+      suppressClick = dragState.dragged;
+      dragState = null;
+      button.classList.remove("is-dragging");
+      button.setAttribute("aria-grabbed", "false");
+      if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+      if (suppressClick) {
+        options.onSelect?.(node.id);
+        settleInteraction(button, neighborIds);
+      } else {
+        neighborIds.forEach((id) => nodeElements.get(id)?.classList.remove("is-drag-neighbor"));
+        viewport.dataset.interaction = "idle";
       }
     };
-    for (const edge of relevantEdges) {
-      const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      hitPath.classList.add("mind-edge-hit");
-      hitPath.dataset.edgeId = edge.id;
-      hitPath.setAttribute("role", "button");
-      hitPath.setAttribute("tabindex", "0");
-      hitPath.setAttribute("aria-label", `选择 ${graph.nodeById.get(edge.source)?.name ?? "未知角色"} 与 ${graph.nodeById.get(edge.target)?.name ?? "未知角色"} 的关系：${formatRelationshipLabel(edge)}`);
-      svg.append(hitPath);
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.classList.add("mind-edge", edge.category);
-      path.dataset.edgeId = edge.id;
-      path.dataset.edgeSource = edge.source;
-      path.dataset.edgeTarget = edge.target;
-      path.style.setProperty("--edge-opacity", String(0.28 + edge.confidence * 0.48));
-      path.style.setProperty("--edge-width", String(1 + edge.confidence * 1.8));
-      if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
-      if (edge.directed) path.setAttribute("marker-end", "url(#mind-arrow)");
-      svg.append(path);
-      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-      label.setAttribute("text-anchor", "middle");
-      label.classList.add("mind-edge-label");
-      if (edge.source !== selectedId && edge.target !== selectedId) label.classList.add("is-secondary-label");
-      const fullLabel = formatRelationshipLabel(edge);
-      label.textContent = fullLabel;
-      label.dataset.edgeId = edge.id;
-      label.dataset.fullLabel = fullLabel;
-      svg.append(label);
-      const edgeElement = { edge, hitPath, path, label };
-      edgeElements.push(edgeElement);
-      updateEdgeGeometry(edgeElement);
-    }
-    stage.append(svg);
-    const edgeDetail = document.createElement("div");
-    edgeDetail.className = "mind-edge-detail hidden";
-    edgeDetail.setAttribute("aria-live", "polite");
-    viewport.append(edgeDetail);
-    const applyEdgeSelection = (edgeElement) => {
-      const selection = getRelationshipEdgeSelection(graph, edgeElement.edge.id);
-      if (!selection) return;
-      const endpointIds = new Set(selection.endpointIds);
-      viewport.querySelectorAll(".mind-node").forEach((node) => {
-        const endpoint = endpointIds.has(node.dataset.nodeId);
-        node.classList.toggle("is-edge-endpoint", endpoint);
-        node.classList.toggle("is-dimmed", !endpoint);
-      });
-      edgeElements.forEach((item) => {
-        const active = item.edge.id === selection.edgeId;
-        item.path.classList.toggle("is-edge-selected", active);
-        item.path.classList.toggle("is-dimmed", !active);
-        item.label.classList.toggle("is-edge-selected", active);
-        item.label.classList.toggle("is-dimmed", !active);
-        item.hitPath.setAttribute("aria-pressed", String(active));
-      });
-      const heading = document.createElement("b");
-      heading.textContent = `${selection.endpointNames[0]}与${selection.endpointNames[1]}`;
-      const detailText = document.createElement("span");
-      detailText.textContent = selection.label;
-      edgeDetail.replaceChildren(heading, detailText);
-      edgeDetail.classList.remove("hidden");
-    };
-    edgeElements.forEach((edgeElement) => {
-      const selectEdge = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        selectedEdgeId = edgeElement.edge.id;
-        applyEdgeSelection(edgeElement);
-      };
-      edgeElement.hitPath.addEventListener("click", selectEdge);
-      edgeElement.hitPath.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") selectEdge(event);
-      });
-    });
-    const updateHighlight = (nodeId, locked = false) => {
-      if (selectedEdgeId) {
-        const selectedEdge = edgeElements.find((item) => item.edge.id === selectedEdgeId);
-        if (selectedEdge) applyEdgeSelection(selectedEdge);
+    button.addEventListener("pointerup", endDrag);
+    button.addEventListener("pointercancel", endDrag);
+    button.addEventListener("click", () => {
+      if (suppressClick) {
+        suppressClick = false;
         return;
       }
-      const related = new Set([nodeId]);
-      for (const edge of graph.edges) if (edge.source === nodeId || edge.target === nodeId) {
-        related.add(edge.source);
-        related.add(edge.target);
-      }
-      viewport.querySelectorAll(".mind-node").forEach((node) => node.classList.toggle("is-dimmed", locked && !related.has(node.dataset.nodeId)));
-      viewport.querySelectorAll(".mind-edge").forEach((edge) => {
-        const active = edge.dataset.edgeSource === nodeId || edge.dataset.edgeTarget === nodeId;
-        edge.classList.toggle("is-dimmed", locked && !active);
-        edge.classList.toggle("is-highlighted", locked && active);
+      selectedEdgeId = null;
+      selectedId = node.id;
+      options.onSelect?.(node.id);
+      applyNodeFocus(node.id);
+    });
+  }
+
+  const fitView = () => {
+    viewScale = 1;
+    viewX = 0;
+    viewY = 0;
+    updateViewTransform(true);
+  };
+  const animatePositions = (targets, duration = 650) => {
+    if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    const starts = new Map([...positions].map(([id, position]) => [id, { ...position }]));
+    const startedAt = performance.now();
+    viewport.classList.add("is-layout-animating");
+    viewport.dataset.interaction = "settling";
+    viewport.dataset.layoutAnimation = "running";
+    const tick = (now) => {
+      if (destroyed) return;
+      const progress = clamp((now - startedAt) / duration, 0, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      targets.forEach((target, id) => {
+        const start = starts.get(id) ?? target;
+        positions.set(id, { x: start.x + (target.x - start.x) * eased, y: start.y + (target.y - start.y) * eased });
       });
-      const focusedEdges = locked && nodeId !== selectedId
-        ? relevantEdges.filter((edge) => (edge.source === selectedId && edge.target === nodeId) || (edge.target === selectedId && edge.source === nodeId))
-        : [];
-      if (focusedEdges.length) {
-        const selectedName = graph.nodeById.get(selectedId)?.name ?? "当前角色";
-        const focusedName = graph.nodeById.get(nodeId)?.name ?? "关联角色";
-        const heading = document.createElement("b");
-        heading.textContent = `${selectedName}与${focusedName}`;
-        const detailText = document.createElement("span");
-        detailText.textContent = focusedEdges.map((edge) => formatRelationshipLabel(edge)).join("；");
-        edgeDetail.replaceChildren(heading, detailText);
-        edgeDetail.classList.remove("hidden");
-      } else {
-        edgeDetail.classList.add("hidden");
-        edgeDetail.replaceChildren();
+      updateAllGeometry();
+      if (progress < 1) animationFrame = window.requestAnimationFrame(tick);
+      else {
+        animationFrame = null;
+        viewport.classList.remove("is-layout-animating");
+        viewport.dataset.interaction = "idle";
+        viewport.dataset.layoutAnimation = "complete";
       }
     };
-    for (const node of visibleNodes.filter(Boolean)) {
-      const position = positions.get(node.id);
-      if (!position) continue;
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = `mind-node ${node.id === selectedId ? "is-selected" : ""} ${node.locked ? "is-locked" : ""}`;
-      button.dataset.nodeId = node.id;
-      button.style.left = `${position.x / layout.width * 100}%`;
-      button.style.top = `${position.y / layout.height * 100}%`;
-      button.textContent = node.name;
-      button.title = [node.species ? `种族：${node.species}` : "", node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
-      button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
-      button.setAttribute("aria-grabbed", "false");
-      button.addEventListener("mouseenter", () => updateHighlight(node.id, true));
-      button.addEventListener("mouseleave", () => updateHighlight(selectedId, false));
-      button.addEventListener("focus", () => updateHighlight(node.id, true));
-      let dragState = null;
-      let suppressClick = false;
-      button.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0) return;
-        const rect = viewport.getBoundingClientRect();
-        dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect, dragged: false };
-        button.setPointerCapture(event.pointerId);
-        button.classList.add("is-dragging");
-        button.setAttribute("aria-grabbed", "true");
-      });
-      button.addEventListener("pointermove", (event) => {
-        if (!dragState || event.pointerId !== dragState.pointerId) return;
-        if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) >= 3) dragState.dragged = true;
-        if (!dragState.dragged) return;
-        event.preventDefault();
-        const position = {
-          x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * layout.width, layout.marginX, layout.width - layout.marginX),
-          y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * layout.height, layout.marginY, layout.height - layout.marginY),
-          depth: positions.get(node.id)?.depth ?? 1
-        };
-        positions.set(node.id, position);
-        manualPositions.set(node.id, position);
-        button.style.left = `${position.x / layout.width * 100}%`;
-        button.style.top = `${position.y / layout.height * 100}%`;
-        viewport.dataset.draggedNodeId = node.id;
-        edgeElements.forEach(updateEdgeGeometry);
-      });
-      const endDrag = (event) => {
-        if (!dragState || event.pointerId !== dragState.pointerId) return;
-        suppressClick = dragState.dragged;
-        dragState = null;
-        button.classList.remove("is-dragging");
-        button.setAttribute("aria-grabbed", "false");
-        if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
-      };
-      button.addEventListener("pointerup", endDrag);
-      button.addEventListener("pointercancel", endDrag);
-      button.addEventListener("click", () => {
-        if (suppressClick) {
-          suppressClick = false;
-          return;
-        }
-        selectedEdgeId = null;
-        selectedId = node.id;
-        options.onSelect?.(node.id);
-        render();
-      });
-      stage.append(button);
-    }
-    if (selectedEdgeId) {
-      const selectedEdge = edgeElements.find((item) => item.edge.id === selectedEdgeId);
-      if (selectedEdge) applyEdgeSelection(selectedEdge);
-      else selectedEdgeId = null;
-    }
-    if (graph.nodes.length > visibleNodes.length) {
-      const more = document.createElement("button");
-      more.type = "button";
-      more.className = "mindmap-more";
-      more.textContent = `还有 ${graph.nodes.length - visibleNodes.length} 位角色，进入全屏查看`;
-      more.addEventListener("click", () => options.onOpenGalaxy?.());
-      viewport.append(more);
-    }
-    if (options.expanded) viewport.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      const rect = viewport.getBoundingClientRect();
-      const pointerX = event.clientX - rect.left;
-      const pointerY = event.clientY - rect.top;
-      const nextScale = clamp(viewScale * (event.deltaY > 0 ? 0.9 : 1.1), 0.5, 2.5);
-      const ratio = nextScale / viewScale;
-      viewX = pointerX - (pointerX - viewX) * ratio;
-      viewY = pointerY - (pointerY - viewY) * ratio;
-      viewScale = nextScale;
-      updateViewTransform();
-    }, { passive: false });
-    shell.append(toolbar, viewport);
-    container.append(shell);
+    animationFrame = window.requestAnimationFrame(tick);
   };
-  render();
-  return { destroy() { container.replaceChildren(); } };
+  fit.addEventListener("click", fitView);
+  reset.addEventListener("click", () => {
+    selectedEdgeId = null;
+    applyNodeFocus(selectedId);
+    fitView();
+    animatePositions(originalPositions);
+  });
+
+  let panState = null;
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || ![viewport, stage, svg].includes(event.target)) return;
+    panState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, viewX, viewY };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add("is-panning");
+    viewport.dataset.interaction = "panning";
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!panState || event.pointerId !== panState.pointerId) return;
+    viewX = panState.viewX + event.clientX - panState.startX;
+    viewY = panState.viewY + event.clientY - panState.startY;
+    updateViewTransform();
+  });
+  const endPan = (event) => {
+    if (!panState || event.pointerId !== panState.pointerId) return;
+    panState = null;
+    viewport.classList.remove("is-panning");
+    viewport.dataset.interaction = "idle";
+    if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+  };
+  viewport.addEventListener("pointerup", endPan);
+  viewport.addEventListener("pointercancel", endPan);
+  viewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const rect = viewport.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const nextScale = clamp(viewScale * (event.deltaY > 0 ? 0.9 : 1.1), 0.45, 3.2);
+    const ratio = nextScale / viewScale;
+    viewX = pointerX - (pointerX - viewX) * ratio;
+    viewY = pointerY - (pointerY - viewY) * ratio;
+    viewScale = nextScale;
+    updateViewTransform();
+  }, { passive: false });
+  viewport.addEventListener("click", (event) => {
+    if (![viewport, stage, svg].includes(event.target) || !selectedEdgeId) return;
+    selectedEdgeId = null;
+    applyNodeFocus(selectedId);
+  });
+
+  updateAllGeometry();
+  applyNodeFocus(selectedId);
+  shell.append(toolbar, viewport);
+  container.append(shell);
+  return {
+    destroy() {
+      destroyed = true;
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      window.clearTimeout(settleTimer);
+      container.replaceChildren();
+    },
+    getState() {
+      return { selectedId, selectedEdgeId, viewScale, viewX, viewY, positions: new Map(positions) };
+    }
+  };
 }
 
 export function layoutGalaxy(graph, seed) {

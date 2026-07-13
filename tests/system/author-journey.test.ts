@@ -171,7 +171,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260712-galaxy-node-focus');
+    expect(page.text).toContain('/app.js?v=20260714-obsidian-network');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
@@ -246,6 +246,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-testid="continuation-guard"');
     expect(graph.text).toContain("export function buildRelationshipGraph");
     expect(graph.text).toContain("export function formatRelationshipLabel");
+    expect(graph.text).toContain("export function layoutRelationshipNetwork");
+    expect(graph.text).toContain('viewport.dataset.testid = "relationship-network"');
+    expect(graph.text).toContain('viewport.dataset.interaction = "dragging"');
     expect(graph.text).toContain("label.textContent = fullLabel");
     expect(graph.text).toContain("export function createGalaxyRenderer");
     expect(graph.text).toContain("export function createGalaxyStarfield");
@@ -261,7 +264,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('expand.dataset.testid = "relationship-map-expand"');
     expect(graph.text).toContain("viewport.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain("viewport.dataset.graphScale = viewScale.toFixed(3)");
-    expect(graph.text).toContain("firstRadiusX: 520");
+    expect(graph.text).toContain("expanded: Object.freeze({ width: 1600, height: 900");
+    expect(graph.text).toContain("repulsionStrength: 11200");
     expect(graph.text).toContain("viewport.dataset.layoutWidth = String(layout.width)");
     expect(graph.text).toContain('edgeDetail.className = "mind-edge-detail hidden"');
     expect(styles.text).toContain(".mind-edge-detail { position: absolute;");
