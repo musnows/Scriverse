@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCharacterDetails, buildCharacterSections, normalizeCharacterDetails, normalizeCharacterSections } from "../../src/public/character-profile.js";
+import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "../../src/public/character-profile.js";
 
 describe("复杂人物设定结构", () => {
   it("清理扩展属性并保留不同泰坦的异构字段", () => {
@@ -23,5 +23,20 @@ describe("复杂人物设定结构", () => {
       { title: "新增记录 v2", content: "记录正文" }
     ]);
     expect(normalizeCharacterSections({})).toEqual([]);
+  });
+
+  it("编辑任意当前状态并保留未修改值的原始类型", () => {
+    const previous = { location: "地球", energy: 95, nested: { phase: "active" } };
+    const entries = characterStateEntries(previous);
+    expect(entries).toEqual([
+      { label: "location", value: "地球" },
+      { label: "energy", value: "95" },
+      { label: "nested", value: "{\"phase\":\"active\"}" }
+    ]);
+    expect(buildCharacterState(
+      ["location", "energy", "nested", "__proto__"],
+      ["地心", "95", "{\"phase\":\"active\"}", "blocked"],
+      previous
+    )).toEqual({ location: "地心", energy: 95, nested: { phase: "active" } });
   });
 });

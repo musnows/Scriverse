@@ -236,6 +236,38 @@
       </form>
     </dialog>
 
+    <dialog id="character-editor-dialog" class="character-editor-dialog" aria-labelledby="character-editor-title">
+      <form id="character-editor-form">
+        <header class="character-editor-header">
+          <div>
+            <span id="character-editor-eyebrow" class="eyebrow">人物主档案</span>
+            <div class="character-editor-title-row"><h2 id="character-editor-title">新建角色</h2><span id="character-editor-version" class="character-version-badge">新档案</span></div>
+          </div>
+          <div class="character-editor-header-actions">
+            <button id="character-history-button" class="ghost-button" type="button" aria-controls="character-history-panel" aria-expanded="false">版本历史</button>
+            <button id="character-editor-close" class="dialog-close" aria-label="关闭人物编辑器" type="button">×</button>
+          </div>
+        </header>
+        <div class="character-editor-workspace">
+          <nav class="character-editor-nav" role="tablist" aria-label="人物档案编辑分区">
+            <button type="button" role="tab" data-character-editor-tab="basic" aria-selected="true">基础资料<small>名称、种族与归属</small></button>
+            <button type="button" role="tab" data-character-editor-tab="profile" aria-selected="false">人物档案<small>简介、身份与动机</small></button>
+            <button type="button" role="tab" data-character-editor-tab="settings" aria-selected="false">扩展设定<small>属性与长篇章节</small></button>
+            <button type="button" role="tab" data-character-editor-tab="state" aria-selected="false">状态与约束<small>当前状态与锁定项</small></button>
+          </nav>
+          <main id="character-editor-fields" class="character-editor-fields"></main>
+          <aside id="character-history-panel" class="character-history-panel hidden" aria-label="人物版本历史">
+            <div class="character-history-heading"><div><span class="eyebrow">可回滚记录</span><h3>版本历史</h3></div><button id="character-history-close" type="button" aria-label="关闭版本历史">×</button></div>
+            <div id="character-history-list" class="character-history-list"></div>
+          </aside>
+        </div>
+        <footer class="character-editor-actions">
+          <label>版本说明<input id="character-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充红莲形态与能力限制"></label>
+          <div><button id="character-editor-cancel" class="ghost-button" type="button">取消</button><button id="character-editor-submit" class="primary-button" type="submit">保存新版本</button></div>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog id="appearance-dialog" class="dialog">
       <form id="appearance-form" method="dialog">
         <div class="dialog-header">

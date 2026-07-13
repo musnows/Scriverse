@@ -11,7 +11,8 @@ import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-ti
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260713-hover-usage";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
-import { buildCharacterDetails, buildCharacterSections, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-complex-profile";
+import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
+import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 
 const state = {
   works: [],
@@ -148,6 +149,8 @@ let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 let aiMentionMatch = null;
 let settingsReturnContext = null;
+let characterEditorItem = null;
+let characterEditorVersions = [];
 
 function setModuleNavExpanded(expanded) {
   moduleNavExpanded = expanded;
@@ -1601,9 +1604,18 @@ function field(name, label, type = "text", value = "", options = []) {
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
   if (type === "key-value-list") {
+    const config = Array.isArray(options) ? {} : options;
+    const keyName = config.keyName ?? "detailLabel";
+    const valueName = config.valueName ?? "detailValue";
+    const keyPlaceholder = config.keyPlaceholder ?? "字段名，如身高";
+    const valuePlaceholder = config.valuePlaceholder ?? "字段值，如119.786米";
+    const keyAriaLabel = config.keyAriaLabel ?? "扩展属性名称";
+    const valueAriaLabel = config.valueAriaLabel ?? "扩展属性内容";
+    const removeLabel = config.removeLabel ?? "删除此扩展属性";
+    const addLabel = config.addLabel ?? "添加属性";
     const values = normalizeCharacterDetails(value);
     const rows = values.length ? values : [{ label: "", value: "" }];
-    return `<div class="form-field structured-list-field character-profile-detail-list"><span>${esc(label)}</span><div class="structured-list-rows" data-structured-list-rows data-kind="key-value">${rows.map((item) => `<div class="structured-list-row key-value-list-row"><input name="detailLabel" value="${esc(item.label)}" placeholder="字段名，如身高" aria-label="扩展属性名称"><input name="detailValue" value="${esc(item.value)}" placeholder="字段值，如119.786米" aria-label="扩展属性内容"><button type="button" data-structured-list-remove aria-label="删除此扩展属性">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-structured-list-add>添加属性</button></div>`;
+    return `<div class="form-field structured-list-field character-profile-detail-list"><span>${esc(label)}</span><div class="structured-list-rows" data-structured-list-rows data-kind="key-value">${rows.map((item) => `<div class="structured-list-row key-value-list-row"><input name="${esc(keyName)}" value="${esc(item.label)}" placeholder="${esc(keyPlaceholder)}" aria-label="${esc(keyAriaLabel)}"><input name="${esc(valueName)}" value="${esc(item.value)}" placeholder="${esc(valuePlaceholder)}" aria-label="${esc(valueAriaLabel)}"><button type="button" data-structured-list-remove aria-label="${esc(removeLabel)}">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-structured-list-add>${esc(addLabel)}</button></div>`;
   }
   if (type === "section-list") {
     const values = normalizeCharacterSections(value);
@@ -1623,12 +1635,8 @@ function field(name, label, type = "text", value = "", options = []) {
   return `<label>${esc(label)}<input name="${esc(name)}" type="${esc(type)}" value="${esc(value)}" ${type === "password" ? 'autocomplete="new-password"' : ""} ${type === "number" ? 'step="any"' : ""}></label>`;
 }
 
-function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
-  $("#dialog-title").textContent = title;
-  $("#dialog-eyebrow").textContent = eyebrow;
-  $("#dialog-fields").innerHTML = fields;
-  $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
-  $("#dialog-fields").querySelectorAll("[data-item-list-add]").forEach((button) => button.addEventListener("click", () => {
+function bindDynamicListControls(container) {
+  container.querySelectorAll("[data-item-list-add]").forEach((button) => button.addEventListener("click", () => {
     const rows = button.previousElementSibling;
     const row = document.createElement("div");
     row.className = "item-list-row";
@@ -1644,14 +1652,14 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
     rows.append(row);
     input.focus();
   }));
-  $("#dialog-fields").querySelectorAll("[data-structured-list-add]").forEach((button) => button.addEventListener("click", () => {
+  container.querySelectorAll("[data-structured-list-add]").forEach((button) => button.addEventListener("click", () => {
     const rows = button.previousElementSibling;
     const row = rows.lastElementChild.cloneNode(true);
     row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
     rows.append(row);
     row.querySelector("input").focus();
   }));
-  $("#dialog-fields").onclick = (event) => {
+  container.onclick = (event) => {
     const remove = event.target.closest("[data-item-list-remove], [data-structured-list-remove]");
     if (!remove) return;
     const row = remove.closest(".item-list-row, .structured-list-row");
@@ -1659,6 +1667,14 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
     if (rows.children.length === 1) row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
     else row.remove();
   };
+}
+
+function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
+  $("#dialog-title").textContent = title;
+  $("#dialog-eyebrow").textContent = eyebrow;
+  $("#dialog-fields").innerHTML = fields;
+  $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
+  bindDynamicListControls($("#dialog-fields"));
   const form = $("#dynamic-form");
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") return;
@@ -1756,28 +1772,203 @@ function openSettingDialog(item) {
     }, item ? "人工修正" : "作者事实");
 }
 
+function characterEditorSection(key, title, description, content) {
+  return `<section class="character-editor-section${key === "basic" ? "" : " hidden"}" data-character-editor-panel="${esc(key)}" role="tabpanel">
+    <header><div><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3></div><p>${esc(description)}</p></header>
+    <div class="character-editor-section-fields">${content}</div>
+  </section>`;
+}
+
+function activateCharacterEditorTab(key) {
+  document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
+    const active = button.dataset.characterEditorTab === key;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-character-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.characterEditorPanel !== key));
+}
+
+function setCharacterHistoryVisible(visible) {
+  const panel = $("#character-history-panel");
+  const workspace = panel.closest(".character-editor-workspace");
+  panel.classList.toggle("hidden", !visible);
+  workspace.classList.toggle("history-open", visible);
+  $("#character-history-button").setAttribute("aria-expanded", String(visible));
+}
+
+function renderCharacterEditorFields(item) {
+  const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
+  const chapterOptions = [["", "未指定"], ...(state.work?.volumes ?? []).flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]))];
+  const stateEntries = characterStateEntries(item?.currentState ?? {});
+  $("#character-editor-fields").innerHTML = [
+    characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
+      field("name", "标准名", "text", item?.name) +
+      field("aliases", "别名", "item-list", item?.aliases ?? []) +
+      field("species", "种族", "text", item?.species) +
+      (organizationOptions.length
+        ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions)
+        : '<div class="character-editor-empty-field"><b>所属组织</b><span>尚未创建组织，可稍后在“组织”模块中补充。</span></div>') +
+      field("visibility", "可见范围", "select", item?.visibility ?? "author", [["author", "仅作者"], ["collaborators", "协作者"], ["public", "公开"]]) +
+      field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)),
+    characterEditorSection("profile", "人物档案", "记录人物定位、行为动力和便于创作时快速理解的简介。",
+      field("identity", "身份与定位", "text", item?.attributes?.identity) +
+      field("motivation", "核心动机", "textarea", item?.profile?.motivation) +
+      field("summary", "人物简介", "textarea", item?.profile?.summary)),
+    characterEditorSection("settings", "扩展设定", "可用短属性和 Markdown 长章节承载形态、能力、生态、经历与研究记录。",
+      field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
+      field("sections", "设定章节", "section-list", item?.profile?.sections)),
+    characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",
+      field("currentState", "当前状态", "key-value-list", stateEntries, {
+        keyName: "stateKey",
+        valueName: "stateValue",
+        keyPlaceholder: "状态字段，如 location",
+        valuePlaceholder: "当前值，如 地球",
+        keyAriaLabel: "状态字段名称",
+        valueAriaLabel: "状态字段内容",
+        removeLabel: "删除此状态字段",
+        addLabel: "添加状态"
+      }) +
+      '<p class="character-editor-field-help">未修改的数字、布尔值、数组和对象会保留原有数据类型；被修改的值会按文本保存。</p>' +
+      field("lockedFields", "锁定字段", "item-list", item?.lockedFields ?? []))
+  ].join("");
+  const name = $("#character-editor-fields [name='name']");
+  if (name) name.required = true;
+  bindDynamicListControls($("#character-editor-fields"));
+  activateCharacterEditorTab("basic");
+}
+
+function collectCharacterBody(form) {
+  const item = characterEditorItem;
+  return {
+    name: String(form.get("name") ?? "").trim(),
+    aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
+    species: String(form.get("species") ?? "").trim(),
+    organizationIds: form.getAll("organizationIds").map(String),
+    attributes: {
+      ...(item?.attributes ?? {}),
+      identity: String(form.get("identity") ?? "").trim(),
+      details: buildCharacterDetails(form.getAll("detailLabel"), form.getAll("detailValue"))
+    },
+    profile: {
+      ...(item?.profile ?? {}),
+      motivation: String(form.get("motivation") ?? "").trim(),
+      summary: String(form.get("summary") ?? "").trim(),
+      sections: buildCharacterSections(form.getAll("sectionTitle"), form.getAll("sectionContent"))
+    },
+    currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
+    lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
+    visibility: String(form.get("visibility") ?? "author"),
+    firstChapterId: form.get("firstChapterId") || null,
+    changeNote: String(form.get("changeNote") ?? "").trim()
+  };
+}
+
+function renderCharacterHistory() {
+  const host = $("#character-history-list");
+  if (!characterEditorVersions.length) {
+    host.innerHTML = '<p class="character-history-empty">还没有可用的历史版本。</p>';
+    return;
+  }
+  host.innerHTML = characterEditorVersions.map((version, index) => {
+    const previous = characterEditorVersions[index + 1];
+    const changes = describeCharacterVersionChanges(version.snapshot, previous?.snapshot);
+    const isCurrent = version.versionNo === characterEditorItem?.versionNo;
+    return `<article class="character-version-card${isCurrent ? " is-current" : ""}" data-character-version="${version.versionNo}">
+      <div class="character-version-card-heading"><div><strong>v${version.versionNo}</strong><span>${esc(characterVersionSourceLabel(version.source))}</span></div><time>${esc(formatDateTime(version.createdAt))}</time></div>
+      <p>${esc(version.changeNote || "未填写版本说明")}</p>
+      <div class="character-version-changes">${changes.map((change) => `<span>${esc(change)}</span>`).join("")}</div>
+      ${isCurrent ? '<button type="button" disabled>当前版本</button>' : `<button type="button" data-character-restore="${version.versionNo}">回滚到此版本</button>`}
+    </article>`;
+  }).join("");
+  host.querySelectorAll("[data-character-restore]").forEach((button) => button.addEventListener("click", async () => {
+    const versionNo = Number(button.dataset.characterRestore);
+    if (button.dataset.confirmed !== "true") {
+      host.querySelectorAll("[data-character-restore]").forEach((other) => {
+        other.dataset.confirmed = "false";
+        other.classList.remove("is-confirming");
+        other.textContent = "回滚到此版本";
+      });
+      button.dataset.confirmed = "true";
+      button.classList.add("is-confirming");
+      button.textContent = `确认回滚至 v${versionNo}`;
+      window.setTimeout(() => {
+        if (!button.isConnected || button.dataset.confirmed !== "true") return;
+        button.dataset.confirmed = "false";
+        button.classList.remove("is-confirming");
+        button.textContent = "回滚到此版本";
+      }, 5000);
+      return;
+    }
+    button.disabled = true;
+    try {
+      const restored = await api(`/api/characters/${characterEditorItem.id}/restore`, { method: "POST", body: { versionNo } });
+      characterEditorItem = restored;
+      renderCharacterEditorFields(restored);
+      $("#character-editor-title").textContent = restored.name;
+      $("#character-editor-version").textContent = `v${restored.versionNo}`;
+      $("#character-change-note").value = "";
+      await Promise.all([renderCharacters(), loadAiReferences()]);
+      await showCharacterHistory();
+      toast(`已回滚至 v${versionNo}，并生成 v${restored.versionNo}`);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function showCharacterHistory() {
+  if (!characterEditorItem?.id) return;
+  setCharacterHistoryVisible(true);
+  $("#character-history-list").innerHTML = '<p class="character-history-empty">正在读取版本历史…</p>';
+  try {
+    characterEditorVersions = await api(`/api/characters/${characterEditorItem.id}/versions`);
+    renderCharacterHistory();
+  } catch (error) {
+    setCharacterHistoryVisible(false);
+    toast(error.message, "error");
+  }
+}
+
 async function openCharacterDialog(item) {
   state.organizations = await api(`/api/works/${state.work.id}/organizations`);
-  const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
-  openDialog(item ? "编辑角色" : "新建角色",
-    field("name", "标准名", "text", item?.name) + field("aliases", "别名（用逗号分隔）", "text", item?.aliases?.join(", ")) +
-    field("species", "种族", "text", item?.species) +
-    field("identity", "身份", "text", item?.attributes?.identity) + field("motivation", "动机", "textarea", item?.profile?.motivation) +
-    field("summary", "人物简介", "textarea", item?.profile?.summary) +
-    field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
-    field("sections", "设定章节", "section-list", item?.profile?.sections) +
-    field("location", "当前位置", "text", item?.currentState?.location) +
-    (organizationOptions.length ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions) : "") +
-    field("lockedFields", "锁定字段（用逗号分隔）", "text", item?.lockedFields?.join(", ")),
-    async (form) => {
-      const split = (value) => String(value ?? "").split(/[,，]/).map((part) => part.trim()).filter(Boolean);
-      const details = buildCharacterDetails(form.getAll("detailLabel"), form.getAll("detailValue"));
-      const sections = buildCharacterSections(form.getAll("sectionTitle"), form.getAll("sectionContent"));
-      const body = { name: form.get("name"), aliases: split(form.get("aliases")), species: form.get("species"), organizationIds: form.getAll("organizationIds").map(String), attributes: { ...(item?.attributes ?? {}), identity: form.get("identity"), details }, profile: { ...(item?.profile ?? {}), motivation: form.get("motivation"), summary: form.get("summary"), sections }, currentState: { ...(item?.currentState ?? {}), location: form.get("location") }, lockedFields: split(form.get("lockedFields")) };
-      await api(item ? `/api/characters/${item.id}` : `/api/works/${state.work.id}/characters`, { method: item ? "PATCH" : "POST", body });
-      await renderCharacters();
-      await loadAiReferences();
-    }, item ? "人工修正" : "人物主档案", { wide: true });
+  characterEditorItem = item ?? null;
+  characterEditorVersions = [];
+  $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
+  $("#character-editor-title").textContent = item?.name || "新建角色";
+  $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
+  $("#character-change-note").value = "";
+  $("#character-editor-submit").textContent = item ? "保存新版本" : "创建人物档案";
+  $("#character-history-button").disabled = !item;
+  $("#character-history-button").title = item ? "查看、比较和回滚历史版本" : "创建人物档案后即可查看版本历史";
+  setCharacterHistoryVisible(false);
+  renderCharacterEditorFields(item);
+  document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
+    button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
+  });
+  const dialog = $("#character-editor-dialog");
+  const form = $("#character-editor-form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = $("#character-editor-submit");
+    submit.disabled = true;
+    try {
+      const body = collectCharacterBody(new FormData(form));
+      if (!body.name) throw new Error("请填写角色标准名");
+      const wasEditing = Boolean(characterEditorItem);
+      const previousVersion = characterEditorItem?.versionNo;
+      if (!wasEditing) delete body.changeNote;
+      const saved = await api(wasEditing ? `/api/characters/${characterEditorItem.id}` : `/api/works/${state.work.id}/characters`, { method: wasEditing ? "PATCH" : "POST", body });
+      dialog.close();
+      await Promise.all([renderCharacters(), loadAiReferences()]);
+      toast(!wasEditing ? "人物档案已创建" : saved.versionNo === previousVersion ? "没有检测到人物档案变更" : `人物档案已保存为 v${saved.versionNo}`);
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      submit.disabled = false;
+    }
+  };
+  dialog.showModal();
 }
 
 async function openOrganizationDialog(item) {
@@ -2180,6 +2371,13 @@ $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
+$("#character-editor-close").addEventListener("click", () => $("#character-editor-dialog").close());
+$("#character-editor-cancel").addEventListener("click", () => $("#character-editor-dialog").close());
+$("#character-history-button").addEventListener("click", () => {
+  if ($("#character-history-panel").classList.contains("hidden")) void showCharacterHistory();
+  else setCharacterHistoryVisible(false);
+});
+$("#character-history-close").addEventListener("click", () => setCharacterHistoryVisible(false));
 function cleanupExpandedRelationshipMap() {
   state.relationshipExpandedMap?.destroy?.();
   state.relationshipExpandedMap = null;

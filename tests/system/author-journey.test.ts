@@ -139,6 +139,24 @@ describe("作者完整创作流程", () => {
     expect(theme.text).toContain('THEME_STORAGE_KEY = "scriverse-color-theme-v1"');
   });
 
+  it("复杂人物使用分区编辑器并提供版本历史与回滚入口", async () => {
+    const page = await request(runtime.app).get("/").expect(200);
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    const styles = await request(runtime.app).get("/styles.css").expect(200);
+    await request(runtime.app).get("/character-version.js").expect(200);
+    expect(page.text).toContain('id="character-editor-dialog"');
+    expect(page.text).toContain('id="character-history-button"');
+    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(4);
+    expect(page.text).toContain("保存新版本");
+    expect(application.text).toContain("function renderCharacterEditorFields(item)");
+    expect(application.text).toContain("function renderCharacterHistory()");
+    expect(application.text).toContain("/versions`");
+    expect(application.text).toContain("/restore`");
+    expect(application.text).toContain("buildCharacterState(form.getAll");
+    expect(styles.text).toContain(".character-editor-workspace");
+    expect(styles.text).toContain(".character-version-card");
+  });
+
   it("首屏书架、大纲伏笔、续写守卫和关系银河图资源完整可达", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);

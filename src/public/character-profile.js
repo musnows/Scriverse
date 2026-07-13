@@ -33,3 +33,33 @@ export function buildCharacterSections(titles, contents) {
     content: contents[index]
   })));
 }
+
+function stateDisplayValue(value) {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+export function characterStateEntries(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.entries(value).map(([label, item]) => ({ label, value: stateDisplayValue(item) }));
+}
+
+export function buildCharacterState(labels, values, previous = {}) {
+  const forbidden = new Set(["__proto__", "constructor", "prototype"]);
+  const state = Object.create(null);
+  const size = Math.max(labels.length, values.length);
+  for (let index = 0; index < size; index += 1) {
+    const label = text(labels[index]);
+    const value = text(values[index]);
+    if (!label || !value || forbidden.has(label)) continue;
+    state[label] = Object.prototype.hasOwnProperty.call(previous, label) && stateDisplayValue(previous[label]) === value
+      ? previous[label]
+      : value;
+  }
+  return state;
+}
