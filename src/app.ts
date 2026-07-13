@@ -647,6 +647,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         callId: suggestion.callId,
         provider: suggestion.provider,
         model: suggestion.model,
+        outputTokens: suggestion.outputTokens,
         chapterVersion: suggestion.chapterVersion
       });
     } catch (error) {

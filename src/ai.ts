@@ -64,6 +64,7 @@ type GenerateInput = {
 type GenerateResult = {
   callId: string;
   content: string;
+  outputTokens: number;
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
   context: string;
@@ -81,6 +82,15 @@ export function estimateAiTokens(value: string): number {
     else narrowCharacters += 1;
   }
   return Math.max(1, Math.ceil(wideCharacters * 1.1 + narrowCharacters / 4));
+}
+
+export function resolveOutputTokens(usage: unknown, content: string): number {
+  if (usage && typeof usage === "object") {
+    const record = usage as Record<string, unknown>;
+    const reported = record.completion_tokens ?? record.output_tokens;
+    if (typeof reported === "number" && Number.isFinite(reported)) return Math.max(0, Math.round(reported));
+  }
+  return estimateAiTokens(content);
 }
 
 function normalizeModelPreset(input: Record<string, unknown>): Record<string, unknown> {
@@ -591,8 +601,8 @@ export class AiManager {
 
   listPlatformModels(): Record<string, unknown>[] {
     return this.store.db
-      .all("SELECT m.* FROM models m JOIN providers p ON p.id = m.provider_id WHERE p.work_id = ? ORDER BY p.created_at, m.created_at", PLATFORM_AI_WORK_ID)
-      .map((row) => this.mapModel(row));
+      .all("SELECT m.*, p.name AS provider_name FROM models m JOIN providers p ON p.id = m.provider_id WHERE p.work_id = ? ORDER BY p.created_at, m.created_at", PLATFORM_AI_WORK_ID)
+      .map((row) => ({ ...this.mapModel(row), providerName: stringValue(row, "provider_name") }));
   }
 
   listWorkModels(workId: string): Record<string, unknown>[] {
@@ -681,7 +691,7 @@ export class AiManager {
       now()
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return this.getSuggestion(suggestionId);
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens };
   }
 
   async createStreamingChat(
@@ -704,7 +714,7 @@ export class AiManager {
       generated.content,
       now()
     );
-    return this.getSuggestion(suggestionId);
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {
@@ -1028,6 +1038,7 @@ export class AiManager {
       }
       if (responseBody === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 请求重试后仍未返回响应");
       const payload = JSON.parse(responseBody) as {
+        usage?: { completion_tokens?: number; output_tokens?: number };
         choices?: Array<{
           finish_reason?: string | null;
           message?: { content?: string | null; reasoning_content?: string | null };
@@ -1048,7 +1059,7 @@ export class AiManager {
         now(),
         callId
       );
-      return { callId, content, provider: this.mapProvider(provider), model: this.mapModel(model), context };
+      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1085,7 +1096,7 @@ export class AiManager {
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       await this.validateOutboundUrl?.(endpoint);
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let content: string | null = null;
+      let streamedResult: { content: string; outputTokens: number } | null = null;
       let lastFailure: unknown = null;
       let emitted = false;
       for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
@@ -1100,7 +1111,7 @@ export class AiManager {
               const response = await this.fetchImpl(endpoint, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "text/event-stream" },
-                body: JSON.stringify({ model: stringValue(model, "model_id"), messages, ...parameters, stream: true }),
+                body: JSON.stringify({ model: stringValue(model, "model_id"), messages, ...parameters, stream: true, stream_options: { include_usage: true } }),
                 signal: controller.signal
               });
               if (!response.ok) return { ok: false as const, status: response.status, body: await response.text() };
@@ -1108,14 +1119,14 @@ export class AiManager {
                 emitted = true;
                 onDelta(delta);
               });
-              return { ok: true as const, status: response.status, content: streamed };
+              return { ok: true as const, status: response.status, result: streamed };
             } finally {
               clearTimeout(timeout);
               input.signal?.removeEventListener("abort", forwardAbort);
             }
           });
           if (candidate.ok) {
-            content = candidate.content;
+            streamedResult = candidate.result;
             break;
           }
           lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
@@ -1126,14 +1137,15 @@ export class AiManager {
         }
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
-      if (content === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
+      if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
+      const { content, outputTokens } = streamedResult;
       this.store.db.run(
         "UPDATE ai_calls SET status = 'completed', output_chars = ?, completed_at = ? WHERE id = ?",
         content.length,
         now(),
         callId
       );
-      return { callId, content, provider: this.mapProvider(provider), model: this.mapModel(model), context };
+      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1141,13 +1153,14 @@ export class AiManager {
     }
   }
 
-  private async readCompletionStream(response: Response, onDelta: (delta: string) => void): Promise<string> {
+  private async readCompletionStream(response: Response, onDelta: (delta: string) => void): Promise<{ content: string; outputTokens: number }> {
     if (!response.body) throw new Error("Chat Completions 流式响应缺少正文");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
     let finishReason = "unknown";
+    let usage: unknown = null;
     const consumeEvent = (eventText: string): void => {
       const data = eventText.split(/\r?\n/u)
         .filter((line) => line.startsWith("data:"))
@@ -1157,9 +1170,11 @@ export class AiManager {
       if (!data || data === "[DONE]") return;
       const payload = JSON.parse(data) as {
         error?: { message?: string };
+        usage?: { completion_tokens?: number; output_tokens?: number };
         choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null } }>;
       };
       if (payload.error) throw new Error(payload.error.message || "上游流式响应返回错误");
+      if (payload.usage) usage = payload.usage;
       const choice = payload.choices?.[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       const delta = choice?.delta?.content;
@@ -1178,7 +1193,7 @@ export class AiManager {
     }
     if (buffer.trim()) consumeEvent(buffer);
     if (!content.trim()) throw new Error(`Chat Completions 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    return content;
+    return { content, outputTokens: resolveOutputTokens(usage, content) };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
@@ -2489,6 +2504,7 @@ export class AiManager {
       content: stringValue(row, "content"),
       action: stringValue(row, "action"),
       status: stringValue(row, "status"),
+      outputTokens: estimateAiTokens(stringValue(row, "content")),
       guard,
       provider: call ? this.getProvider(stringValue(call, "provider_id")) : null,
       model: call ? this.getModel(stringValue(call, "model_id")) : null,
