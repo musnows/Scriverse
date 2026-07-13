@@ -1,6 +1,16 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260712-galaxy-node-focus";
-import { collapseExcessBlankLines, normalizeParagraphSpacing } from "/text-formatting.js?v=20260712-auto-blank-lines";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260713-edge-selection";
+import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260712-chat-markdown";
+import { applyAiMention, buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260713-at-references";
+import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
+import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260713-model-purpose-picker";
+import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
+import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260713-persisted-output-tokens";
+import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
+import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260713-hover-usage";
+import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
+import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 
 const state = {
   works: [],
@@ -12,6 +22,11 @@ const state = {
   organizations: [],
   timelineTracks: [],
   aiCitations: [],
+  aiReferences: [],
+  aiPromptSent: false,
+  aiConversationId: null,
+  aiConversations: [],
+  aiLastMessageAt: null,
   settings: [],
   dirty: false,
   pendingImportMeta: null,
@@ -26,16 +41,7 @@ const state = {
 
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
-const taskTypeLabels = [
-  ["chat", "通用对话"],
-  ["continue", "创作续写"],
-  ["polish", "文本润色"],
-  ["chapter-analysis", "章节理解"],
-  ["book-analysis", "全书分析"],
-  ["timeline-analysis", "时间轴抽取"],
-  ["relationship-analysis", "人物关系分析"],
-  ["consistency-check", "一致性校对"]
-];
+const taskTypeLabels = MODEL_PURPOSE_OPTIONS;
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
@@ -139,6 +145,8 @@ let chapterSaveInFlight = null;
 let lastSavedChapterSnapshot = null;
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
+let aiMentionMatch = null;
+let settingsReturnContext = null;
 
 function setModuleNavExpanded(expanded) {
   moduleNavExpanded = expanded;
@@ -163,6 +171,10 @@ function renderChapterLineNumbers() {
   const style = getComputedStyle(input);
   const contentWidth = Math.max(1, input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight));
   const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
+  const numberStyle = getComputedStyle($("#chapter-line-numbers"));
+  const numberLineHeight = parseFloat(numberStyle.lineHeight) || parseFloat(numberStyle.fontSize) * 1.2;
+  inner.style.top = `${calculateLineNumberTop(parseFloat(style.paddingTop), lineHeight, numberLineHeight)}px`;
+  const numberTextOffset = calculateLineNumberTextOffset(lineHeight, numberLineHeight);
   Object.assign(measure.style, {
     width: `${contentWidth}px`,
     fontFamily: style.fontFamily,
@@ -180,6 +192,7 @@ function renderChapterLineNumbers() {
     return row;
   });
   measure.replaceChildren(...measureRows);
+  const measureRect = measure.getBoundingClientRect();
   const numbers = document.createDocumentFragment();
   measureRows.forEach((row, index) => {
     const number = document.createElement("button");
@@ -194,11 +207,15 @@ function renderChapterLineNumbers() {
       number.classList.add("is-line-selected");
       number.setAttribute("aria-pressed", "true");
     }
-    const rowHeight = Math.max(lineHeight, Math.ceil(row.getBoundingClientRect().height));
+    const rowRect = row.getBoundingClientRect();
+    const rowHeight = calculateLineNumberRowHeight(lineHeight, rowRect.height);
+    number.style.top = `${calculateLineNumberRowTop(measureRect.top, rowRect.top)}px`;
     number.style.height = `${rowHeight}px`;
+    number.style.paddingTop = `${numberTextOffset}px`;
     numbers.append(number);
   });
   inner.replaceChildren(numbers);
+  inner.style.height = `${measureRect.height}px`;
   inner.dataset.lineCount = String(lines.length);
   measure.replaceChildren();
   syncChapterLineNumberScroll();
@@ -298,6 +315,258 @@ function renderAiCitations() {
   scheduleAiContextUsage();
 }
 
+function renderAiReferences() {
+  const host = $("#ai-references");
+  host.replaceChildren();
+  host.classList.toggle("hidden", state.aiReferences.length === 0);
+  for (const reference of state.aiReferences) {
+    const chip = document.createElement("span");
+    chip.className = "ai-reference-chip";
+    const label = document.createElement("span");
+    label.textContent = `${reference.kind === "character" ? "角色" : "设定"} · ${reference.name}`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `移除引用 ${reference.name}`);
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      state.aiReferences = state.aiReferences.filter((item) => !(item.kind === reference.kind && item.id === reference.id));
+      renderAiReferences();
+    });
+    chip.append(label, remove);
+    host.append(chip);
+  }
+  scheduleAiContextUsage();
+}
+
+function renderAiQuickActions() {
+  const quickActions = $(".quick-actions");
+  const visible = shouldShowAiQuickActions(state.aiPromptSent);
+  quickActions.classList.toggle("hidden", !visible);
+  quickActions.setAttribute("aria-hidden", String(!visible));
+}
+
+function attachMessageHeading(message, label, createdAt = new Date().toISOString()) {
+  const timestamp = createdAt || new Date().toISOString();
+  const previousCreatedAt = state.aiLastMessageAt;
+  const heading = document.createElement("span");
+  heading.className = "message-heading";
+  const role = document.createElement("span");
+  role.textContent = label;
+  const time = document.createElement("time");
+  time.dateTime = timestamp;
+  time.textContent = formatAiMessageTime(timestamp, previousCreatedAt);
+  heading.append(role, time);
+  message.prepend(heading);
+  message.dataset.createdAt = timestamp;
+  message.dataset.previousCreatedAt = previousCreatedAt ?? "";
+  state.aiLastMessageAt = timestamp;
+  return heading;
+}
+
+function updateMessageCreatedAt(message, createdAt) {
+  if (!message || !createdAt) return;
+  const time = message.querySelector(".message-heading time");
+  if (!time) return;
+  time.dateTime = createdAt;
+  time.textContent = formatAiMessageTime(createdAt, message.dataset.previousCreatedAt || null);
+  message.dataset.createdAt = createdAt;
+  if (message === $("#ai-feed").lastElementChild) state.aiLastMessageAt = createdAt;
+}
+
+function resetAiFeed() {
+  state.aiLastMessageAt = null;
+  $("#ai-feed").innerHTML = '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
+}
+
+function renderMessageCardActions(message) {
+  let actions = message.querySelector(".message-card-actions");
+  if (!actions) {
+    actions = document.createElement("div");
+    actions.className = "message-card-actions";
+    message.append(actions);
+  }
+  actions.replaceChildren();
+  if (Object.hasOwn(message.dataset, "rawMarkdown")) {
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className = "message-copy-button";
+    copy.setAttribute("aria-label", "复制 AI 原始 Markdown");
+    copy.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>复制</span>';
+    const copyLabel = copy.querySelector("span");
+    copy.addEventListener("click", async () => {
+      try {
+        await copyAiRawMarkdown(message.dataset.rawMarkdown);
+        copyLabel.textContent = "已复制";
+        window.setTimeout(() => { copyLabel.textContent = "复制"; }, 1200);
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    });
+    actions.append(copy);
+  }
+  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
+    const fork = document.createElement("button");
+    fork.type = "button";
+    fork.className = "message-fork-button";
+    fork.setAttribute("aria-label", "从此消息 Fork 新对话");
+    fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>分支</span>';
+    fork.addEventListener("click", async () => {
+      fork.disabled = true;
+      try {
+        const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, { method: "POST", body: { messageId: message.dataset.messageId } });
+        await loadAiConversations(false);
+        await openAiConversation(conversation.id);
+        toast("已从所选消息创建分支对话");
+      } catch (error) {
+        fork.disabled = false;
+        toast(error.message, "error");
+      }
+    });
+    actions.append(fork);
+  }
+  const copyAction = actions.querySelector(".message-copy-button");
+  if (copyAction) actions.append(copyAction);
+  message.classList.toggle("has-message-actions", actions.childElementCount > 0);
+}
+
+function attachAssistantCopyAction(message, rawMarkdown) {
+  message.dataset.rawMarkdown = String(rawMarkdown ?? "");
+  renderMessageCardActions(message);
+}
+
+function attachMessageIdentity(message, messageId) {
+  if (!messageId) return;
+  message.dataset.messageId = messageId;
+  renderMessageCardActions(message);
+}
+
+function setAiHistoryVisible(visible) {
+  $("#ai-history-panel").classList.toggle("hidden", !visible);
+  $("#ai-history-toggle").setAttribute("aria-expanded", String(visible));
+}
+
+function renderAiConversationHistory() {
+  const host = $("#ai-history-list");
+  host.replaceChildren();
+  if (!state.aiConversations.length) {
+    host.innerHTML = '<p class="ai-history-empty">还没有历史对话</p>';
+    return;
+  }
+  for (const conversation of state.aiConversations) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `ai-history-item${conversation.id === state.aiConversationId ? " is-active" : ""}`;
+    button.dataset.aiConversationId = conversation.id;
+    const title = document.createElement("strong");
+    title.textContent = conversation.title;
+    const meta = document.createElement("small");
+    meta.textContent = `${conversation.messageCount} 条 · ${formatDateTime(conversation.updatedAt)}`;
+    button.append(title, meta);
+    button.addEventListener("click", () => openAiConversation(conversation.id));
+    host.append(button);
+  }
+}
+
+async function loadAiConversations(openLatest = true) {
+  if (!state.work) return;
+  state.aiConversations = await api(`/api/works/${state.work.id}/ai-conversations`);
+  renderAiConversationHistory();
+  if (openLatest && state.aiConversations.length) await openAiConversation(state.aiConversations[0].id, false);
+  else {
+    const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+    if (current) $("#ai-conversation-title").textContent = current.title;
+  }
+}
+
+async function openAiConversation(conversationId, hideHistory = true) {
+  const conversation = await api(`/api/ai-conversations/${conversationId}`);
+  state.aiConversationId = conversation.id;
+  state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
+  $("#ai-conversation-title").textContent = conversation.title;
+  resetAiFeed();
+  for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
+  state.aiCitations = [];
+  state.aiReferences = [];
+  $("#ai-prompt").value = "";
+  renderAiCitations();
+  renderAiReferences();
+  renderAiQuickActions();
+  renderAiConversationHistory();
+  if (hideHistory) setAiHistoryVisible(false);
+}
+
+async function createNewAiConversation() {
+  if (!state.work) return;
+  const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: {} });
+  state.aiConversationId = conversation.id;
+  state.aiPromptSent = false;
+  $("#ai-conversation-title").textContent = conversation.title;
+  resetAiFeed();
+  renderAiQuickActions();
+  setAiHistoryVisible(false);
+  await loadAiConversations(false);
+}
+
+async function ensureAiConversation() {
+  if (state.aiConversationId) return state.aiConversationId;
+  await createNewAiConversation();
+  return state.aiConversationId;
+}
+
+async function persistAiConversationMessage(role, content, citations = [], metadata = {}) {
+  const conversationId = await ensureAiConversation();
+  if (!conversationId) throw new Error("无法创建 AI 对话");
+  const message = await api(`/api/ai-conversations/${conversationId}/messages`, { method: "POST", body: { role, content, citations, metadata } });
+  await loadAiConversations(false);
+  return message;
+}
+
+function hideAiMentionMenu() {
+  aiMentionMatch = null;
+  $("#ai-mention-menu").classList.add("hidden");
+}
+
+function syncAiReferencesWithPrompt() {
+  const prompt = $("#ai-prompt");
+  const activeReferences = state.aiReferences.filter((reference) => prompt.value.includes(reference.token));
+  if (activeReferences.length !== state.aiReferences.length) {
+    state.aiReferences = activeReferences;
+    renderAiReferences();
+  }
+}
+
+function updateAiMentionMenu() {
+  syncAiReferencesWithPrompt();
+  const prompt = $("#ai-prompt");
+  const match = findAiMention(prompt.value, prompt.selectionStart);
+  if (!match) return hideAiMentionMenu();
+  aiMentionMatch = match;
+  const menu = $("#ai-mention-menu");
+  const options = listAiMentionOptions(state.characters, state.settings, match.query);
+  menu.innerHTML = options.length
+    ? options.map((item) => `<button class="ai-mention-option" type="button" role="option" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
+    : '<p class="ai-mention-empty">没有匹配的角色或设定</p>';
+  menu.classList.remove("hidden");
+}
+
+function selectAiMention(button) {
+  if (!aiMentionMatch) return;
+  const prompt = $("#ai-prompt");
+  const result = applyAiMention(prompt.value, aiMentionMatch, button.dataset.aiReferenceName);
+  const reference = {
+    kind: button.dataset.aiReferenceKind,
+    id: button.dataset.aiReferenceId,
+    name: button.dataset.aiReferenceName,
+    token: result.token
+  };
+  if (!state.aiReferences.some((item) => item.kind === reference.kind && item.id === reference.id)) state.aiReferences.push(reference);
+  prompt.value = result.text;
+  prompt.focus();
+  prompt.setSelectionRange(result.cursor, result.cursor);
+  renderAiReferences();
+  hideAiMentionMenu();
+}
+
 function addSelectedLinesAsCitation() {
   if (!state.chapter || !chapterLineSelection) return;
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
@@ -386,6 +655,35 @@ function loadTypographySettings() {
 
 let typographySettings = loadTypographySettings();
 
+function currentColorTheme() {
+  return normalizeTheme(document.documentElement.dataset.theme, window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false);
+}
+
+function applyColorTheme(theme) {
+  const normalized = normalizeTheme(theme);
+  const root = document.documentElement;
+  root.dataset.theme = normalized;
+  root.style.colorScheme = normalized;
+  const label = themeToggleLabel(normalized);
+  const button = $("#theme-toggle");
+  button.setAttribute("aria-label", label);
+  button.setAttribute("title", label);
+  button.setAttribute("aria-pressed", String(normalized === "dark"));
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) themeColor.content = normalized === "dark" ? "#171714" : "#8b3d2c";
+}
+
+function saveColorTheme(theme) {
+  const normalized = normalizeTheme(theme);
+  applyColorTheme(normalized);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, normalized);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function applyTypographySettings(settings) {
   const normalized = normalizeTypographySettings(settings);
   const root = document.documentElement;
@@ -444,6 +742,7 @@ function openAppearanceDialog() {
 }
 
 applyTypographySettings(typographySettings);
+applyColorTheme(currentColorTheme());
 applyPanelLayout();
 
 async function api(path, options = {}) {
@@ -587,16 +886,75 @@ async function loadWorks(preferredId) {
 
 function showShelf() {
   state.dirty = false;
+  settingsReturnContext = null;
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.remove("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = `${state.works.length} 部作品`;
+  $("#settings-button").removeAttribute("aria-current");
   setSaveState("书架");
   renderShelf();
+}
+
+function captureSettingsReturnContext() {
+  if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
+  if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", chapterId: state.chapter?.id ?? null };
+  if (!$("#module-view").classList.contains("hidden")) return { view: "module", module: state.module };
+  if (!$("#welcome-view").classList.contains("hidden")) return { view: "welcome" };
+  return { view: state.work ? "editor" : "shelf", chapterId: state.chapter?.id ?? null };
+}
+
+function renderSettingsHub() {
+  const hasWork = Boolean(state.work);
+  $("#search-button").disabled = !hasWork;
+  $("#export-button").disabled = !hasWork;
+  $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
+  $("#settings-work-note").textContent = hasWork
+    ? `当前作品：《${state.work.title}》。全文检索与导出将作用于这部作品。`
+    : "当前未选择作品；打开作品后可使用全文检索与导出。";
+}
+
+function showSettingsHub() {
+  const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
+  if (!alreadyInSettings) {
+    if (state.dirty && !confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？")) return false;
+    settingsReturnContext = captureSettingsReturnContext();
+    state.dirty = false;
+  }
+  updateDocumentTitle(state.work);
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#settings-hub-view").classList.remove("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "设置中心";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setSaveState("设置");
+  renderSettingsHub();
+  return true;
+}
+
+async function returnFromSettings() {
+  const context = settingsReturnContext ?? { view: "shelf" };
+  settingsReturnContext = null;
+  $("#settings-button").removeAttribute("aria-current");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  if (context.view === "shelf" || !state.work) return showShelf();
+  $("#app").classList.remove("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  updateDocumentTitle(state.work);
+  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
+  if (context.view === "module") return showModule(context.module);
+  if (context.view === "editor" && context.chapterId) return selectChapter(context.chapterId);
+  return showWelcome(true);
 }
 
 async function showPlatformAi() {
@@ -606,10 +964,12 @@ async function showPlatformAi() {
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.remove("hidden");
+  $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = "平台 AI 管理";
+  $("#settings-button").setAttribute("aria-current", "page");
   setSaveState("平台 AI");
   await renderPlatformAiConfig();
   return true;
@@ -644,12 +1004,24 @@ async function selectWork(workId) {
   const nextWork = await api(`/api/works/${workId}`);
   if (state.work?.id !== nextWork.id) {
     state.aiCitations = [];
+    state.aiReferences = [];
+    state.aiPromptSent = false;
+    state.aiConversationId = null;
+    state.aiConversations = [];
     renderAiCitations();
+    renderAiReferences();
+    renderAiQuickActions();
+    resetAiFeed();
+    $("#ai-conversation-title").textContent = "新对话";
+    renderAiConversationHistory();
   }
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#settings-button").removeAttribute("aria-current");
+  settingsReturnContext = null;
   state.work = nextWork;
   state.chapter = null;
   updateDocumentTitle(state.work);
@@ -657,6 +1029,7 @@ async function selectWork(workId) {
   renderTree();
   await loadModels();
   await loadAiReferences();
+  await loadAiConversations();
   const firstChapter = state.work.volumes.flatMap((volume) => volume.chapters)[0];
   if (state.module === "editor" && firstChapter) await selectChapter(firstChapter.id);
   else if (state.module === "editor") showWelcome(true);
@@ -732,7 +1105,7 @@ async function selectChapter(chapterId) {
   $("#module-view").classList.add("hidden");
   $("#editor-view").classList.remove("hidden");
   const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
-  $("#chapter-path").textContent = `${volume?.title ?? "正文"} / 保存于 ${formatDate(state.chapter.updatedAt)}`;
+  $("#chapter-path").textContent = `${volume?.title ?? "正文"} / 保存于 ${formatDateTime(state.chapter.updatedAt)}`;
   $("#chapter-title").value = state.chapter.title;
   const normalizedContent = normalizeParagraphSpacing(state.chapter.content);
   const spacingChanged = normalizedContent !== state.chapter.content;
@@ -1020,15 +1393,15 @@ async function renderTasks() {
 }
 
 function renderProviderCards(providers, models) {
-  return providers.length ? `<div class="card-grid">${providers.map((provider) => `
-    <article class="record-card"><small>平台级 · ${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
+  return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
+    <article class="record-card provider-card"><small>平台级 · ${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
     <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit} · max_tokens：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div>${models.filter((model) => model.providerId === provider.id).map((model) => `<span class="pill">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token</span>`).join("")}</div>
+    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token · max_tokens ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI Chat Completions 兼容地址和密钥，测试成功后再添加模型。");
 }
 
-function bindPlatformProviderActions(host, providers) {
+function bindPlatformProviderActions(host, providers, models) {
   host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
     button.textContent = "测试中";
@@ -1038,6 +1411,7 @@ function bindPlatformProviderActions(host, providers) {
     await loadModels();
   }));
   host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
+  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(undefined, models.find((model) => model.id === button.dataset.editModel))));
   host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
 }
 
@@ -1067,7 +1441,7 @@ async function renderPlatformAiConfig() {
     api("/api/platform/ai/settings")
   ]);
   const host = $("#platform-ai-content");
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><label class="field-label">全局系统提示词<textarea id="platform-system-prompt" rows="7" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></label><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section>${renderProviderCards(providers, models)}`;
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section>${renderProviderCards(providers, models)}`;
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
@@ -1080,7 +1454,7 @@ async function renderPlatformAiConfig() {
       button.disabled = false;
     }
   });
-  bindPlatformProviderActions(host, providers);
+  bindPlatformProviderActions(host, providers, models);
 }
 
 async function renderBookAiSettings() {
@@ -1123,7 +1497,7 @@ async function loadModels() {
   state.models = await api(`/api/works/${state.work.id}/models`);
   const select = $("#ai-model");
   select.innerHTML = state.models.length
-    ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(model.displayName)} · ${esc(model.modelId)}</option>`).join("")
+    ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
   scheduleAiContextUsage();
 }
@@ -1141,22 +1515,21 @@ function currentAiRequestScope() {
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
     : scopeType === "selection" ? { type: "selection", chapterId: state.chapter.id, selection }
     : { type: "chapter", chapterId: state.chapter.id, ...(taskType === "polish" ? { selection } : {}) };
-  if ($("#ai-character").value) scope.characterIds = [$("#ai-character").value];
-  if ($("#ai-setting").value) scope.settingIds = [$("#ai-setting").value];
+  Object.assign(scope, buildAiReferenceScope(state.aiReferences));
   return { taskType, scope, selection };
 }
 
 function setAiContextMeter(usage) {
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
-  const label = meter.querySelector("small");
   if (!usage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
     meter.style.setProperty("--context-usage", "0");
     value.textContent = "—";
-    label.textContent = "上下文";
-    meter.title = "选择可用模型后显示当前上下文用量";
+    const tooltip = formatAiContextUsageTooltip(null);
+    meter.dataset.tooltip = tooltip;
+    meter.setAttribute("aria-label", tooltip);
     return;
   }
   const percent = Math.max(0, Math.min(100, Number(usage.usagePercent) || 0));
@@ -1165,8 +1538,9 @@ function setAiContextMeter(usage) {
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
   value.textContent = `${percent}%`;
-  label.textContent = "上下文";
-  meter.title = `当前输入约 ${Number(usage.inputTokens).toLocaleString("zh-CN")} / ${Number(usage.contextWindow).toLocaleString("zh-CN")} Token，可用 ${Number(usage.remainingTokens).toLocaleString("zh-CN")} Token`;
+  const tooltip = formatAiContextUsageTooltip(usage);
+  meter.dataset.tooltip = tooltip;
+  meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
 }
 
 function scheduleAiContextUsage() {
@@ -1209,8 +1583,6 @@ async function loadAiReferences() {
     api(`/api/works/${state.work.id}/characters`),
     api(`/api/works/${state.work.id}/settings`)
   ]);
-  $("#ai-character").innerHTML = '<option value="">附加角色：无</option>' + state.characters.map((item) => `<option value="${esc(item.id)}">角色：${esc(item.name)}</option>`).join("");
-  $("#ai-setting").innerHTML = '<option value="">附加设定：无</option>' + state.settings.map((item) => `<option value="${esc(item.id)}">设定：${esc(item.title)}</option>`).join("");
 }
 
 function field(name, label, type = "text", value = "", options = []) {
@@ -1517,12 +1889,14 @@ function openProviderDialog(item) {
   }, item ? "限流与凭据" : "OpenAI 兼容协议");
 }
 
-function openModelDialog(providerId) {
-  openDialog("添加模型", field("displayName", "显示名称") + field("modelId", "模型标识符") + field("purposes", "用途（用逗号分隔）", "text", "通用对话, 创作续写") + field("contextWindow", "模型上下文总量（Token）", "number", "128000") + field("temperature", "默认温度", "number", "0.7") + field("maxTokens", "默认 max_tokens", "number", "32000") + field("enabled", "启用模型", "checkbox", true), async (form) => {
-    await api(`/api/providers/${providerId}/models`, { method: "POST", body: { displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: String(form.get("purposes")).split(/[,，]/).map((value) => value.trim()).filter(Boolean), contextWindow: Number(form.get("contextWindow")), preset: { temperature: Number(form.get("temperature")), max_tokens: Number(form.get("maxTokens")) }, enabled: form.get("enabled") === "on" } });
+function openModelDialog(providerId, item = null) {
+  const values = modelFormValues(item);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow) + field("temperature", "默认温度", "number", values.temperature) + field("maxTokens", "默认 max_tokens", "number", values.maxTokens) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), enabled: form.get("enabled") === "on" }, item?.preset);
+    await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
-  });
+  }, item ? "模型配置" : "供应商模型");
 }
 
 async function sendAi() {
@@ -1536,21 +1910,53 @@ async function sendAi() {
   const { taskType, scope, selection } = requestScope;
   if ((scope.type === "selection" || taskType === "polish") && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-  appendMessage("user", instruction, citations);
+  let persistedUserMessage;
+  try {
+    persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
+  } catch (error) {
+    return toast(`对话记录创建失败：${error.message}`, "error");
+  }
+  state.aiPromptSent = true;
+  renderAiQuickActions();
+  appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
   try {
-    if (taskType === "chat") await streamChat({ instruction, scope, modelId, citations });
-    else {
-      const suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
-      appendSuggestion(suggestion);
+    let assistantContent = "";
+    let assistantMessage;
+    let assistantMetadata = {};
+    let suggestion = null;
+    if (taskType === "chat") {
+      const streamed = await streamChat({ instruction, scope, modelId, citations });
+      assistantContent = streamed.content;
+      assistantMessage = streamed.message;
+      assistantMetadata = streamed.metadata;
+    } else {
+      suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
+      assistantContent = suggestion.content;
+      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens };
+    }
+    try {
+      const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
+      if (assistantMessage) {
+        updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
+        attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
+      } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
+    } catch (error) {
+      if (suggestion) appendSuggestion(suggestion);
+      toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
     $("#ai-prompt").value = "";
     state.aiCitations = [];
+    state.aiReferences = [];
     renderAiCitations();
+    renderAiReferences();
     scheduleAiContextUsage();
   } catch (error) {
-    appendMessage("assistant", `调用失败：${error.message}`);
+    const failureMessage = `调用失败：${error.message}`;
+    let persistedFailureMessage = null;
+    try { persistedFailureMessage = await persistAiConversationMessage("assistant", failureMessage); } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
+    appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id);
   } finally {
     $("#ai-send").disabled = false;
     $("#ai-send").textContent = "发送";
@@ -1561,11 +1967,13 @@ async function streamChat(body) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
-  message.innerHTML = '<span>助手 · 正在生成</span><div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
+  message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
+  attachMessageHeading(message, "助手 · 正在生成");
   $("#ai-feed").append(message);
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
   let streamedText = "";
+  let generatedMetadata = {};
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -1596,8 +2004,10 @@ async function streamChat(body) {
         $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
       } else if (eventName === "complete") {
         message.classList.remove("is-streaming");
-        message.querySelector("span").textContent = "助手";
-        meta.textContent = `${payload.provider?.name ?? "AI"} · ${payload.model?.displayName ?? "模型"} · 流式完成`;
+        message.querySelector(".message-heading > span").textContent = "助手";
+        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens };
+        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
+        attachAssistantCopyAction(message, streamedText);
       } else if (eventName === "error") {
         streamError = new Error(payload.message ?? "AI 流式调用失败");
       }
@@ -1612,18 +2022,20 @@ async function streamChat(body) {
     }
     if (buffer.trim()) consume(buffer);
     if (streamError) throw streamError;
+    return { content: streamedText, message, metadata: generatedMetadata };
   } catch (error) {
     message.classList.remove("is-streaming");
-    message.querySelector("span").textContent = "助手 · 生成中断";
+    message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
     meta.textContent = "生成中断";
     throw error;
   }
 }
 
-function appendMessage(role, text, citations = []) {
+function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null) {
   const message = document.createElement("div");
   message.className = role === "user" ? "user-message" : "assistant-message";
-  message.innerHTML = `<span>${role === "user" ? "作者" : "助手"}</span><div class="message-body">${renderMarkdown(text)}</div>`;
+  message.innerHTML = `<div class="message-body">${renderMarkdown(text)}</div>`;
+  attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
   if (citations.length) {
     const references = document.createElement("div");
     references.className = "message-citations";
@@ -1634,17 +2046,31 @@ function appendMessage(role, text, citations = []) {
     }
     message.append(references);
   }
+  if (role === "assistant" && !text.startsWith("调用失败：")) {
+    const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
+    const modelDisplayName = metadata?.modelDisplayName || selectedModel?.displayName || "模型";
+    const outputTokens = Number.isFinite(metadata?.outputTokens) ? metadata.outputTokens : estimateAiMessageTokens(text);
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    meta.textContent = formatAiMessageMeta(modelDisplayName, outputTokens);
+    message.append(meta);
+    attachAssistantCopyAction(message, text);
+  }
+  attachMessageIdentity(message, messageId);
   $("#ai-feed").append(message);
   $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
 }
 
-function appendSuggestion(suggestion) {
+function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   const message = document.createElement("div");
   message.className = "assistant-message";
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(issue.severity)} · ${esc(issue.type)}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<span>助手建议</span><div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(suggestion.provider.name)} · ${esc(suggestion.model.displayName)} · 基于 v${suggestion.chapterVersion ?? "-"}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  attachMessageHeading(message, "助手建议", createdAt ?? undefined);
+  attachAssistantCopyAction(message, suggestion.content);
+  attachMessageIdentity(message, messageId);
   if (applicable) {
     message.querySelector('[data-action="accept"]').addEventListener("click", async () => {
       try {
@@ -1667,6 +2093,7 @@ function appendSuggestion(suggestion) {
   }
   $("#ai-feed").append(message);
   $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+  return message;
 }
 
 async function showVersions() {
@@ -1703,14 +2130,12 @@ async function showChapterInsight() {
   panel.innerHTML = `<strong>章节概览${esc(stale)}</strong>${esc(insight.summary || "暂无梗概")}${eventNames.length ? `<br><strong>事件</strong>${esc(eventNames.join("；"))}` : ""}${insight.uncertainties.length ? `<br><strong>待确认</strong>${esc(insight.uncertainties.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("；"))}` : ""}`;
 }
 
-function formatDate(value) {
-  return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
 $("#home-button").addEventListener("click", () => {
   if (!confirmDiscardChanges()) return;
   loadWorks().catch((error) => toast(error.message, "error"));
 });
+$("#settings-button").addEventListener("click", showSettingsHub);
+$("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
@@ -1729,6 +2154,14 @@ function cleanupExpandedRelationshipMap() {
 $("#relationship-map-close").addEventListener("click", () => $("#relationship-map-dialog").close());
 $("#relationship-map-dialog").addEventListener("close", cleanupExpandedRelationshipMap);
 $("#appearance-button").addEventListener("click", openAppearanceDialog);
+$("#theme-toggle").addEventListener("click", () => {
+  const theme = nextTheme(currentColorTheme());
+  const persisted = saveColorTheme(theme);
+  if (!persisted) toast("主题已切换，但当前浏览器无法保存偏好", "error");
+});
+window.addEventListener("storage", (event) => {
+  if (event.key === THEME_STORAGE_KEY) applyColorTheme(normalizeTheme(event.newValue));
+});
 $("#appearance-reset").addEventListener("click", () => {
   fillAppearanceForm(typographyDefaults);
   renderTypographyPreview();
@@ -1795,12 +2228,17 @@ window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLin
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
-$("#ai-prompt").addEventListener("input", scheduleAiContextUsage);
+$("#ai-prompt").addEventListener("input", () => {
+  updateAiMentionMenu();
+  scheduleAiContextUsage();
+});
 $("#ai-model").addEventListener("change", scheduleAiContextUsage);
 $("#ai-task").addEventListener("change", scheduleAiContextUsage);
 $("#ai-scope").addEventListener("change", scheduleAiContextUsage);
-$("#ai-character").addEventListener("change", scheduleAiContextUsage);
-$("#ai-setting").addEventListener("change", scheduleAiContextUsage);
+$("#ai-mention-menu").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-ai-reference-id]");
+  if (button) selectAiMention(button);
+});
 $("#import-file").addEventListener("change", async (event) => {
   if (!state.work || !event.target.files[0]) return;
   if (!confirmDiscardChanges("导入会替换当前作品目录，未保存修改将丢失。是否继续？")) {
@@ -1880,15 +2318,41 @@ $("#chapter-type-menu").addEventListener("click", async (event) => {
 document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
+  if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeChapterTypeMenu();
     closeLineCitationMenu();
+    hideAiMentionMenu();
   }
 });
 $("#ai-send").addEventListener("click", sendAi);
-$("#ai-prompt").addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") sendAi(); });
+$("#ai-new-conversation").addEventListener("click", async () => {
+  const button = $("#ai-new-conversation");
+  button.disabled = true;
+  try {
+    await createNewAiConversation();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#ai-history-toggle").addEventListener("click", () => {
+  setAiHistoryVisible($("#ai-history-panel").classList.contains("hidden"));
+});
+$("#ai-prompt").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#ai-mention-menu").classList.contains("hidden")) {
+    event.preventDefault();
+    hideAiMentionMenu();
+    return;
+  }
+  if (shouldSendAiPrompt(event)) {
+    event.preventDefault();
+    if (!$("#ai-send").disabled) void sendAi();
+  }
+});
 $(".quick-actions").addEventListener("click", (event) => {
   const button = event.target.closest("[data-task]");
   if (!button) return;

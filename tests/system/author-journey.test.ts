@@ -117,12 +117,17 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain('$("#work-picker")');
   });
 
-  it("全站使用黑体与等宽英文并提供可持久化显示设置", async () => {
+  it("全站使用黑体与等宽英文并提供可持久化显示和明暗主题", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
+    const theme = await request(runtime.app).get("/theme.js").expect(200);
+    await request(runtime.app).get("/theme-init.js").expect(200);
     expect(page.text).toContain('id="appearance-button"');
     expect(page.text).toContain('id="appearance-dialog"');
+    expect(page.text).toContain('id="theme-toggle"');
+    expect(page.text).toContain('theme-icon-moon');
+    expect(page.text).toContain('theme-icon-sun');
     expect(page.text).toContain("英文字体（仅等宽）");
     expect(styles.text).toContain('--font-cjk: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC";');
     expect(styles.text).toContain('--font-latin: "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono";');
@@ -130,11 +135,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text.replaceAll("sans-serif", "").toLowerCase()).not.toContain("serif");
     expect(application.text).toContain('const typographyStorageKey = "ai-novel-typography-v1";');
     expect(application.text).toContain("localStorage.setItem(typographyStorageKey");
+    expect(styles.text).toContain(':root[data-theme="dark"]');
+    expect(theme.text).toContain('THEME_STORAGE_KEY = "scriverse-color-theme-v1"');
   });
 
   it("首屏书架、大纲伏笔、续写守卫和关系银河图资源完整可达", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
+    const modelConfig = await request(runtime.app).get("/model-config.js").expect(200);
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const markdown = await request(runtime.app).get("/markdown.js").expect(200);
@@ -179,7 +187,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("content.innerHTML = renderMarkdown(streamedText)");
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
-    expect(styles.text).toContain(".ai-send-button { position: absolute; right: 8px; bottom: 8px;");
+    expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
@@ -202,7 +210,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
-    expect(application.text).toContain('field("contextWindow", "模型上下文总量（Token）", "number", "128000")');
+    expect(application.text).toContain('field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow)');
+    expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
+    expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
     expect(application.text).toContain('async function renderPlatformAiConfig()');
     expect(application.text).toContain('async function renderBookAiSettings()');
     expect(application.text).toContain('function scheduleAiContextUsage()');
@@ -219,7 +229,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("focusCameraOnNode(node)");
     expect(graph.text).toContain("duration: 650");
     expect(graph.text).toContain('shell.dataset.sceneDimension = "3"');
-    expect(graph.text).toContain("camera.yaw += elapsed * 0.000045");
+    expect(graph.text).toContain("export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012");
+    expect(graph.text).toContain("camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS");
     expect(page.text).toContain('data-testid="galaxy-3d-starfield"');
     expect(page.text).toContain('data-testid="galaxy-3d-relationships"');
     expect(graph.text).toContain('expand.dataset.testid = "relationship-map-expand"');
@@ -248,7 +259,8 @@ describe("作者完整创作流程", () => {
   it("从导入作品到采纳续写、抽取时间轴并安全导出", async () => {
     await request(runtime.app).get("/api/health").expect(200);
     const page = await request(runtime.app).get("/").expect(200).expect("Content-Type", /html/u);
-    expect(page.headers["x-frame-options"]).toBeUndefined();
+    expect(page.headers["x-frame-options"]).toBe("DENY");
+    expect(page.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
 
     const work = await request(runtime.app).post("/api/works").send({ title: "星际纪元", author: "作者" }).expect(201);
     const workId = work.body.data.id;
