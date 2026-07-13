@@ -21,6 +21,7 @@ const state = {
   module: "editor",
   models: [],
   characters: [],
+  races: [],
   organizations: [],
   timelineTracks: [],
   aiCitations: [],
@@ -1161,6 +1162,7 @@ function markActiveModule(module) {
 const moduleMeta = {
   settings: ["世界事实", "世界观与设定库", "锁定的设定会成为 AI 续写与校对的硬约束。", "新建设定"],
   characters: ["人物档案", "角色与人物属性", "维护别名、属性、当前状态及不可被 AI 覆盖的字段。", "新建角色"],
+  races: ["物种档案", "种族与共同设定", "先维护种族档案，再由角色选择引用；角色不能临时填写种族。", "新建种族"],
   organizations: ["世界阵营", "组织与成员", "维护组织简介、设定清单，并将角色绑定到所属组织。", "新建组织"],
   timeline: ["剧情脉络", "大事件时间轴", "候选事件经作者确认后，才进入正式时间线。", "新建事件"],
   outlines: ["创作规划", "大纲与伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
@@ -1198,6 +1200,7 @@ async function showModule(module) {
   try {
     if (module === "settings") await renderSettings();
     if (module === "characters") await renderCharacters();
+    if (module === "races") await renderRaces();
     if (module === "organizations") await renderOrganizations();
     if (module === "timeline") await renderTimeline();
     if (module === "outlines") await renderOutlines();
@@ -1225,8 +1228,9 @@ async function renderSettings() {
 }
 
 async function renderCharacters() {
-  [state.characters, state.organizations] = await Promise.all([
+  [state.characters, state.races, state.organizations] = await Promise.all([
     api(`/api/works/${state.work.id}/characters`),
+    api(`/api/works/${state.work.id}/races`),
     api(`/api/works/${state.work.id}/organizations`)
   ]);
   $("#module-content").innerHTML = state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
@@ -1254,6 +1258,21 @@ async function renderCharacters() {
     });
   });
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterDialog(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+}
+
+async function renderRaces() {
+  [state.races, state.characters] = await Promise.all([
+    api(`/api/works/${state.work.id}/races`),
+    api(`/api/works/${state.work.id}/characters`)
+  ]);
+  $("#module-content").innerHTML = state.races.length ? `<div class="card-grid race-grid">${state.races.map((item) => `
+    <article class="record-card race-card"><small>${item.memberIds.length} 位角色 · ${item.settings.length} 条共同设定</small>
+      <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写种族简介")}</p>
+      <div class="race-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无共同设定</span>'}</div>
+      <p class="race-members">角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
+      <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button></div>
+    </article>`).join("")}</div>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
+  $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
 }
 
 async function renderOrganizations() {
@@ -1797,6 +1816,7 @@ function setCharacterHistoryVisible(visible) {
 }
 
 function renderCharacterEditorFields(item) {
+  const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, race.name])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
   const chapterOptions = [["", "未指定"], ...(state.work?.volumes ?? []).flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]))];
   const stateEntries = characterStateEntries(item?.currentState ?? {});
@@ -1804,7 +1824,9 @@ function renderCharacterEditorFields(item) {
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       field("name", "标准名", "text", item?.name) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
-      field("species", "种族", "text", item?.species) +
+      (state.races.length
+        ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
+        : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>') +
       (organizationOptions.length
         ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions)
         : '<div class="character-editor-empty-field"><b>所属组织</b><span>尚未创建组织，可稍后在“组织”模块中补充。</span></div>') +
@@ -1842,7 +1864,7 @@ function collectCharacterBody(form) {
   return {
     name: String(form.get("name") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
-    species: String(form.get("species") ?? "").trim(),
+    raceId: form.get("raceId") || null,
     organizationIds: form.getAll("organizationIds").map(String),
     attributes: {
       ...(item?.attributes ?? {}),
@@ -1931,7 +1953,10 @@ async function showCharacterHistory() {
 }
 
 async function openCharacterDialog(item) {
-  state.organizations = await api(`/api/works/${state.work.id}/organizations`);
+  [state.races, state.organizations] = await Promise.all([
+    api(`/api/works/${state.work.id}/races`),
+    api(`/api/works/${state.work.id}/organizations`)
+  ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
@@ -1969,6 +1994,23 @@ async function openCharacterDialog(item) {
     }
   };
   dialog.showModal();
+}
+
+async function openRaceDialog(item) {
+  state.characters = await api(`/api/works/${state.work.id}/characters`);
+  const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
+  openDialog(item ? "编辑种族" : "新建种族",
+    field("name", "种族名称", "text", item?.name) +
+    field("description", "种族简介", "textarea", item?.description) +
+    field("settings", "种族共同设定（逐条填写）", "item-list", item?.settings ?? []) +
+    (memberOptions.length ? field("memberIds", "属于该种族的角色（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
+    async (form) => {
+      const settings = form.getAll("settings").map((value) => String(value).trim()).filter(Boolean);
+      const body = { name: form.get("name"), description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };
+      await api(item ? `/api/races/${item.id}` : `/api/works/${state.work.id}/races`, { method: item ? "PATCH" : "POST", body });
+      await renderRaces();
+      await loadAiReferences();
+    }, item ? "种族档案" : "作品内种族");
 }
 
 async function openOrganizationDialog(item) {
@@ -2458,7 +2500,7 @@ if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLin
 window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
 $("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
-$("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
+$("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", () => {
   updateAiMentionMenu();
   scheduleAiContextUsage();

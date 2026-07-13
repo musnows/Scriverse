@@ -217,6 +217,12 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="record-card character-card" data-open-character');
     expect(application.text).toContain("所属组织");
     expect(application.text).toContain('card.addEventListener("keydown"');
+    expect(page.text).toContain('data-module="races"');
+    expect(application.text).toContain("async function renderRaces()");
+    expect(application.text).toContain("async function openRaceDialog(item)");
+    expect(application.text).toContain('field("raceId", "种族", "select"');
+    expect(application.text).not.toContain('field("species", "种族", "text"');
+    expect(application.text).toContain('field("memberIds", "属于该种族的角色（可多选）", "chips"');
     expect(application.text).toContain('field("organizationIds", "所属组织（可多选）", "chips"');
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
