@@ -211,6 +211,74 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
   return { nodes, byId, width: layout.width, height: layout.height };
 }
 
+export function applyRelationshipDragInfluence(positions, draggedNodeId, nextPosition, neighborIds, nodeRadii, bounds, options = {}) {
+  const previous = positions.get(draggedNodeId);
+  if (!previous) return new Set();
+  const minimumX = Number(bounds?.minimumX ?? -Infinity);
+  const maximumX = Number(bounds?.maximumX ?? Infinity);
+  const minimumY = Number(bounds?.minimumY ?? -Infinity);
+  const maximumY = Number(bounds?.maximumY ?? Infinity);
+  const fitBounds = (position) => ({
+    x: clamp(Number(position.x) || 0, minimumX, maximumX),
+    y: clamp(Number(position.y) || 0, minimumY, maximumY)
+  });
+  const radiusOf = (nodeId) => Math.max(1, Number(nodeRadii?.get(nodeId)) || 18);
+  const separate = (position, anchor, nodeId, anchorId, padding, strength) => {
+    let dx = position.x - anchor.x;
+    let dy = position.y - anchor.y;
+    let distance = Math.hypot(dx, dy);
+    if (distance < 0.01) {
+      const angle = hashString(`${draggedNodeId}:${nodeId}:${anchorId}`) / 4294967296 * Math.PI * 2;
+      dx = Math.cos(angle);
+      dy = Math.sin(angle);
+      distance = 1;
+    }
+    const minimumDistance = radiusOf(nodeId) + radiusOf(anchorId) + padding;
+    if (distance >= minimumDistance) return position;
+    const displacement = (minimumDistance - distance) * strength;
+    return {
+      x: position.x + dx / distance * displacement,
+      y: position.y + dy / distance * displacement
+    };
+  };
+
+  const changedNodeIds = new Set([draggedNodeId]);
+  const boundedNext = fitBounds(nextPosition);
+  const deltaX = boundedNext.x - previous.x;
+  const deltaY = boundedNext.y - previous.y;
+  positions.set(draggedNodeId, boundedNext);
+  const followStrength = clamp(Number(options.neighborFollow ?? 0.24), 0, 0.5);
+  const directNeighborIds = [...new Set(neighborIds ?? [])].filter((nodeId) => nodeId !== draggedNodeId && positions.has(nodeId));
+  for (const neighborId of directNeighborIds) {
+    const current = positions.get(neighborId);
+    let next = {
+      x: current.x + deltaX * followStrength,
+      y: current.y + deltaY * followStrength
+    };
+    next = separate(next, boundedNext, neighborId, draggedNodeId, 12, 0.82);
+    positions.set(neighborId, fitBounds(next));
+    changedNodeIds.add(neighborId);
+  }
+
+  const anchorIds = [draggedNodeId, ...directNeighborIds];
+  const anchorSet = new Set(anchorIds);
+  const avoidancePadding = Math.max(0, Number(options.avoidancePadding ?? 18));
+  const avoidanceStrength = clamp(Number(options.avoidanceStrength ?? 0.68), 0, 1);
+  for (const [nodeId, current] of positions) {
+    if (anchorSet.has(nodeId)) continue;
+    let next = { ...current };
+    for (const anchorId of anchorIds) {
+      const anchor = positions.get(anchorId);
+      if (anchor) next = separate(next, anchor, nodeId, anchorId, avoidancePadding, avoidanceStrength);
+    }
+    next = fitBounds(next);
+    if (Math.hypot(next.x - current.x, next.y - current.y) < 0.05) continue;
+    positions.set(nodeId, next);
+    changedNodeIds.add(nodeId);
+  }
+  return changedNodeIds;
+}
+
 export function renderRelationshipMindMap(container, graph, options = {}) {
   container.replaceChildren();
   if (!graph.nodes.length) {
@@ -225,6 +293,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   const laidOut = layoutRelationshipNetwork(graph, options.seed ?? "relationship-network-v2", { expanded: options.expanded });
   const positions = new Map(laidOut.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
   const originalPositions = new Map([...positions].map(([id, position]) => [id, { ...position }]));
+  const nodeInfluenceRadii = new Map(graph.nodes.map((node) => [node.id, clamp(18 + Math.sqrt(Math.max(0, node.degree)) * 5, 18, 48)]));
+  const dragBounds = { minimumX: layout.marginX, maximumX: layout.width - layout.marginX, minimumY: layout.marginY, maximumY: layout.height - layout.marginY };
   const neighbors = new Map(graph.nodes.map((node) => [node.id, new Set()]));
   graph.edges.forEach((edge) => {
     neighbors.get(edge.source)?.add(edge.target);
@@ -237,6 +307,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   let viewY = 0;
   let animationFrame = null;
   let geometryFrame = null;
+  let pendingDragUpdate = null;
   let settleTimer = null;
   let destroyed = false;
 
@@ -284,7 +355,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   viewport.dataset.layoutWidth = String(layout.width);
   viewport.dataset.layoutHeight = String(layout.height);
   viewport.dataset.interaction = "idle";
-  viewport.dataset.renderStrategy = "batched-adjacent";
+  viewport.dataset.renderStrategy = "batched-local-physics";
   viewport.dataset.edgeLabelStrategy = "selected-only";
   const stage = document.createElement("div");
   stage.className = "relationship-mindmap-stage relationship-network-stage";
@@ -382,7 +453,6 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     nodeElements.forEach((_, nodeId) => updateNodePosition(nodeId));
     edgeElements.forEach(updateEdgeGeometry);
   };
-  const dirtyNodeIds = new Set();
   const updateAdjacentGeometry = (nodeIds) => {
     const dirtyEdges = new Set();
     nodeIds.forEach((nodeId) => {
@@ -395,14 +465,24 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       if (selected && dirtyEdges.has(selected)) updateLabelGeometry(selected.edge);
     }
   };
-  const scheduleAdjacentGeometry = (nodeIds) => {
-    nodeIds.forEach((nodeId) => dirtyNodeIds.add(nodeId));
+  const scheduleDragGeometry = (nodeId, nextPosition) => {
+    pendingDragUpdate = { nodeId, nextPosition };
     if (geometryFrame) return;
     geometryFrame = window.requestAnimationFrame(() => {
       geometryFrame = null;
-      const pendingNodeIds = [...dirtyNodeIds];
-      dirtyNodeIds.clear();
-      updateAdjacentGeometry(pendingNodeIds);
+      const pending = pendingDragUpdate;
+      pendingDragUpdate = null;
+      if (!pending) return;
+      const influencedNodeIds = applyRelationshipDragInfluence(
+        positions,
+        pending.nodeId,
+        pending.nextPosition,
+        neighbors.get(pending.nodeId),
+        nodeInfluenceRadii,
+        dragBounds
+      );
+      viewport.dataset.influencedNodeCount = String(influencedNodeIds.size);
+      updateAdjacentGeometry(influencedNodeIds);
     });
   };
 
@@ -518,9 +598,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       selectedEdgeId = null;
       selectedId = node.id;
       applyNodeFocus(node.id);
-      button.setPointerCapture(event.pointerId);
+      try { button.setPointerCapture(event.pointerId); } catch { /* 非标准指针环境仍允许拖拽事件继续执行。 */ }
       button.classList.add("is-dragging");
       button.setAttribute("aria-grabbed", "true");
+      for (const neighborId of neighbors.get(node.id) ?? []) nodeElements.get(neighborId)?.classList.add("is-drag-neighbor");
       viewport.dataset.interaction = "dragging";
       viewport.dataset.draggedNodeId = node.id;
     });
@@ -533,16 +614,16 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * layout.width, layout.marginX, layout.width - layout.marginX),
         y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * layout.height, layout.marginY, layout.height - layout.marginY)
       };
-      positions.set(node.id, next);
-      scheduleAdjacentGeometry([node.id]);
+      scheduleDragGeometry(node.id, next);
     });
     const endDrag = (event) => {
       if (!dragState || event.pointerId !== dragState.pointerId) return;
       suppressClick = dragState.dragged;
       dragState = null;
       button.classList.remove("is-dragging");
+      for (const neighborId of neighbors.get(node.id) ?? []) nodeElements.get(neighborId)?.classList.remove("is-drag-neighbor");
       button.setAttribute("aria-grabbed", "false");
-      if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
+      try { if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId); } catch { /* 指针已释放时无需重复处理。 */ }
       if (suppressClick) {
         options.onSelect?.(node.id);
         settleInteraction(button);
@@ -654,6 +735,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       destroyed = true;
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       if (geometryFrame) window.cancelAnimationFrame(geometryFrame);
+      pendingDragUpdate = null;
       window.clearTimeout(settleTimer);
       container.replaceChildren();
     },

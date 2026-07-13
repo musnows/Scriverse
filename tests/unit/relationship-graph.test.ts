@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -42,6 +42,30 @@ describe("人物关系图数据与布局", () => {
     expect(first.nodes.every((node: { x: number; y: number }) => node.x >= 54 && node.x <= 1146 && node.y >= 46 && node.y <= 594)).toBe(true);
     expect(new Set(first.nodes.map((node: { x: number }) => Math.round(node.x))).size).toBeGreaterThan(12);
     expect(new Set(first.nodes.map((node: { y: number }) => Math.round(node.y))).size).toBeGreaterThan(12);
+  });
+
+  it("拖拽节点时关联节点跟随且邻近节点主动避让", () => {
+    const positions = new Map([
+      ["dragged", { x: 0, y: 0 }],
+      ["related", { x: 120, y: 0 }],
+      ["nearby", { x: 38, y: 0 }],
+      ["distant", { x: 300, y: 0 }]
+    ]);
+    const radii = new Map([["dragged", 20], ["related", 20], ["nearby", 20], ["distant", 20]]);
+    const changed = applyRelationshipDragInfluence(
+      positions,
+      "dragged",
+      { x: 60, y: 0 },
+      new Set(["related"]),
+      radii,
+      { minimumX: -500, maximumX: 500, minimumY: -500, maximumY: 500 }
+    );
+
+    expect(positions.get("dragged")).toEqual({ x: 60, y: 0 });
+    expect(positions.get("related")?.x).toBeGreaterThan(120);
+    expect(positions.get("nearby")?.x).toBeLessThan(38);
+    expect(positions.get("distant")).toEqual({ x: 300, y: 0 });
+    expect(changed).toEqual(new Set(["dragged", "related", "nearby"]));
   });
 
   it("大量角色使用有界采样布局并返回全部节点", () => {

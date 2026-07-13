@@ -396,7 +396,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-network .mind-node.is-dimmed { opacity: .12; }
 .relationship-network .mind-node.is-isolated { opacity: .18; }
 .relationship-network .mind-node.is-edge-endpoint { opacity: 1; transform: translate(-50%, -50%) scale(1.22); background: #d49a62; color: #f0cda9; }
+.relationship-network[data-interaction="dragging"] .mind-node:not(.is-dragging) { transition: left .08s linear, top .08s linear, opacity .12s ease, transform .12s ease, background .12s ease; }
 .relationship-network .mind-node.is-dragging { cursor: grabbing; transform: translate(-50%, -50%) scale(1.28); background: #e0aa76; transition: opacity .1s ease, transform .1s ease; z-index: 8; }
+.relationship-network .mind-node.is-drag-neighbor { opacity: 1; background: #c8cace; z-index: 3; }
 .relationship-network .mind-node.is-settling { animation: relationship-node-settle .18s ease-out; }
 .relationship-network-focus, .relationship-network-help { position: absolute; z-index: 6; color: #a6a6a6; pointer-events: none; }
 .relationship-network-focus { top: 14px; left: 16px; display: grid; gap: 3px; }
