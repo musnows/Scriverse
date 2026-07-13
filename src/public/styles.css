@@ -462,6 +462,20 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .item-list-row button, .item-list-add { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--muted); font-size: 10px; }
 .item-list-row button { padding: 0 10px; }
 .item-list-add { justify-self: start; padding: 7px 11px; }
+.structured-list-field > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.structured-list-rows { display: grid; gap: 9px; }
+.structured-list-row { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); }
+.key-value-list-row { grid-template-columns: minmax(120px, .42fr) minmax(0, 1fr) auto; }
+.section-list-row { grid-template-columns: minmax(0, 1fr) auto; }
+.section-list-row textarea { grid-column: 1 / -1; min-height: 130px; }
+.structured-list-row button { grid-column: -2 / -1; grid-row: 1; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px; background: var(--panel); color: var(--muted); font-size: 10px; }
+.character-identity { color: var(--ink) !important; font-weight: 600; }
+.character-detail-list { display: grid; gap: 5px; margin: 12px 0; }
+.character-detail-list div { display: grid; grid-template-columns: minmax(70px, .42fr) minmax(0, 1fr); gap: 8px; font-size: 10px; }
+.character-detail-list dt { color: var(--muted); }
+.character-detail-list dd { margin: 0; overflow-wrap: anywhere; }
+.character-summary { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; white-space: normal !important; }
+.character-section-count { display: block; margin-top: 8px; color: var(--accent-dark); }
 .chip-picker { display: flex; flex-wrap: wrap; gap: 7px; max-height: 190px; overflow-y: auto; padding: 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); }
 .dialog-fields .member-chip { position: relative; display: inline-flex !important; width: auto; cursor: pointer; }
 .member-chip input { position: absolute; width: 1px !important; height: 1px; opacity: 0; }

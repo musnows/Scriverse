@@ -11,6 +11,7 @@ import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-ti
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260713-hover-usage";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
+import { buildCharacterDetails, buildCharacterSections, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-complex-profile";
 
 const state = {
   works: [],
@@ -1225,12 +1226,19 @@ async function renderCharacters() {
     api(`/api/works/${state.work.id}/characters`),
     api(`/api/works/${state.work.id}/organizations`)
   ]);
-  $("#module-content").innerHTML = state.characters.length ? `<div class="card-grid">${state.characters.map((item) => `
+  $("#module-content").innerHTML = state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
+    const details = normalizeCharacterDetails(item.attributes?.details);
+    const sections = normalizeCharacterSections(item.profile?.sections);
+    return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
     <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
+    ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
+    ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
-    <p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>
-    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`).join("")}</div>`
+    ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
+    ${sections.length ? `<small class="character-section-count">${sections.length} 个设定章节</small>` : ""}
+    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`;
+  }).join("")}</div>`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。");
   $("#module-content").querySelectorAll("[data-open-character]").forEach((card) => {
     const open = () => openCharacterDialog(state.characters.find((item) => item.id === card.dataset.openCharacter));
@@ -1591,6 +1599,16 @@ function field(name, label, type = "text", value = "", options = []) {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
+  if (type === "key-value-list") {
+    const values = normalizeCharacterDetails(value);
+    const rows = values.length ? values : [{ label: "", value: "" }];
+    return `<div class="form-field structured-list-field character-profile-detail-list"><span>${esc(label)}</span><div class="structured-list-rows" data-structured-list-rows data-kind="key-value">${rows.map((item) => `<div class="structured-list-row key-value-list-row"><input name="detailLabel" value="${esc(item.label)}" placeholder="字段名，如身高" aria-label="扩展属性名称"><input name="detailValue" value="${esc(item.value)}" placeholder="字段值，如119.786米" aria-label="扩展属性内容"><button type="button" data-structured-list-remove aria-label="删除此扩展属性">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-structured-list-add>添加属性</button></div>`;
+  }
+  if (type === "section-list") {
+    const values = normalizeCharacterSections(value);
+    const rows = values.length ? values : [{ title: "", content: "" }];
+    return `<div class="form-field structured-list-field character-profile-section-list"><span>${esc(label)}</span><small>适合记录能力、形态、生态、历史事件、传说和研究版本等长篇内容。</small><div class="structured-list-rows" data-structured-list-rows data-kind="section">${rows.map((item) => `<div class="structured-list-row section-list-row"><input name="sectionTitle" value="${esc(item.title)}" placeholder="章节标题，如能力与特征" aria-label="设定章节标题"><textarea name="sectionContent" placeholder="章节内容，支持 Markdown" aria-label="设定章节内容">${esc(item.content)}</textarea><button type="button" data-structured-list-remove aria-label="删除此设定章节">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-structured-list-add>添加设定章节</button></div>`;
+  }
   if (type === "select") return `<label>${esc(label)}<select name="${esc(name)}">${options.map(([key, text]) => `<option value="${esc(key)}" ${key === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
   if (type === "multiselect") {
     const selected = new Set((Array.isArray(value) ? value : []).map(String));
@@ -1604,10 +1622,11 @@ function field(name, label, type = "text", value = "", options = []) {
   return `<label>${esc(label)}<input name="${esc(name)}" type="${esc(type)}" value="${esc(value)}" ${type === "password" ? 'autocomplete="new-password"' : ""} ${type === "number" ? 'step="any"' : ""}></label>`;
 }
 
-function openDialog(title, fields, onSubmit, eyebrow = "新增") {
+function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-fields").innerHTML = fields;
+  $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
   $("#dialog-fields").querySelectorAll("[data-item-list-add]").forEach((button) => button.addEventListener("click", () => {
     const rows = button.previousElementSibling;
     const row = document.createElement("div");
@@ -1624,12 +1643,19 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增") {
     rows.append(row);
     input.focus();
   }));
+  $("#dialog-fields").querySelectorAll("[data-structured-list-add]").forEach((button) => button.addEventListener("click", () => {
+    const rows = button.previousElementSibling;
+    const row = rows.lastElementChild.cloneNode(true);
+    row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
+    rows.append(row);
+    row.querySelector("input").focus();
+  }));
   $("#dialog-fields").onclick = (event) => {
-    const remove = event.target.closest("[data-item-list-remove]");
+    const remove = event.target.closest("[data-item-list-remove], [data-structured-list-remove]");
     if (!remove) return;
-    const row = remove.closest(".item-list-row");
+    const row = remove.closest(".item-list-row, .structured-list-row");
     const rows = row.parentElement;
-    if (rows.children.length === 1) row.querySelector("input").value = "";
+    if (rows.children.length === 1) row.querySelectorAll("input, textarea").forEach((control) => { control.value = ""; });
     else row.remove();
   };
   const form = $("#dynamic-form");
@@ -1735,16 +1761,21 @@ async function openCharacterDialog(item) {
   openDialog(item ? "编辑角色" : "新建角色",
     field("name", "标准名", "text", item?.name) + field("aliases", "别名（用逗号分隔）", "text", item?.aliases?.join(", ")) +
     field("identity", "身份", "text", item?.attributes?.identity) + field("motivation", "动机", "textarea", item?.profile?.motivation) +
+    field("summary", "人物简介", "textarea", item?.profile?.summary) +
+    field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
+    field("sections", "设定章节", "section-list", item?.profile?.sections) +
     field("location", "当前位置", "text", item?.currentState?.location) +
     (organizationOptions.length ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions) : "") +
     field("lockedFields", "锁定字段（用逗号分隔）", "text", item?.lockedFields?.join(", ")),
     async (form) => {
       const split = (value) => String(value ?? "").split(/[,，]/).map((part) => part.trim()).filter(Boolean);
-      const body = { name: form.get("name"), aliases: split(form.get("aliases")), organizationIds: form.getAll("organizationIds").map(String), attributes: { ...(item?.attributes ?? {}), identity: form.get("identity") }, profile: { ...(item?.profile ?? {}), motivation: form.get("motivation") }, currentState: { ...(item?.currentState ?? {}), location: form.get("location") }, lockedFields: split(form.get("lockedFields")) };
+      const details = buildCharacterDetails(form.getAll("detailLabel"), form.getAll("detailValue"));
+      const sections = buildCharacterSections(form.getAll("sectionTitle"), form.getAll("sectionContent"));
+      const body = { name: form.get("name"), aliases: split(form.get("aliases")), organizationIds: form.getAll("organizationIds").map(String), attributes: { ...(item?.attributes ?? {}), identity: form.get("identity"), details }, profile: { ...(item?.profile ?? {}), motivation: form.get("motivation"), summary: form.get("summary"), sections }, currentState: { ...(item?.currentState ?? {}), location: form.get("location") }, lockedFields: split(form.get("lockedFields")) };
       await api(item ? `/api/characters/${item.id}` : `/api/works/${state.work.id}/characters`, { method: item ? "PATCH" : "POST", body });
       await renderCharacters();
       await loadAiReferences();
-    }, item ? "人工修正" : "人物主档案");
+    }, item ? "人工修正" : "人物主档案", { wide: true });
 }
 
 async function openOrganizationDialog(item) {
