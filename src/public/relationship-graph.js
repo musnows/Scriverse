@@ -11,6 +11,13 @@ const MINDMAP_LAYOUTS = Object.freeze({
   standard: Object.freeze({ width: 1000, height: 490, firstRadiusX: 270, firstRadiusY: 145, secondRadiusX: 425, secondRadiusY: 205, marginX: 65, marginY: 48, edgeCurve: 55, labelOffset: 6 }),
   expanded: Object.freeze({ width: 1400, height: 760, firstRadiusX: 520, firstRadiusY: 285, secondRadiusX: 650, secondRadiusY: 350, marginX: 72, marginY: 54, edgeCurve: 88, labelOffset: 10 })
 });
+export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
+export const GALAXY_LAYOUT_CONFIG = Object.freeze({
+  minimumRadius: 165,
+  radialSpan: 690,
+  repulsionStrength: 5200,
+  desiredEdgeLength: 210
+});
 
 export function formatRelationshipLabel(edge, separator = " · ") {
   const subtype = String(edge?.subtype ?? "").trim();
@@ -18,6 +25,17 @@ export function formatRelationshipLabel(edge, separator = " · ") {
     ? edge.keywords.map(String).map((value) => value.trim()).filter(Boolean)
     : [];
   return [subtype, ...keywords].filter(Boolean).join(separator) || "关系";
+}
+
+export function getRelationshipEdgeSelection(graph, edgeId) {
+  const edge = graph.edges.find((item) => item.id === edgeId);
+  if (!edge) return null;
+  return {
+    edgeId: edge.id,
+    endpointIds: [edge.source, edge.target],
+    endpointNames: [graph.nodeById.get(edge.source)?.name ?? "未知角色", graph.nodeById.get(edge.target)?.name ?? "未知角色"],
+    label: formatRelationshipLabel(edge)
+  };
 }
 
 function hashString(value) {
@@ -134,6 +152,7 @@ function mindMapLayout(graph, rootId, visibleIds, layout) {
 
 export function renderRelationshipMindMap(container, graph, options = {}) {
   let selectedId = graph.nodes[0]?.id ?? null;
+  let selectedEdgeId = null;
   const manualPositions = new Map();
   const layout = options.expanded ? MINDMAP_LAYOUTS.expanded : MINDMAP_LAYOUTS.standard;
   const render = () => {
@@ -193,26 +212,36 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
     svg.setAttribute("preserveAspectRatio", "none");
-    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("aria-label", "人物关系连线");
     const marker = document.createElementNS("http://www.w3.org/2000/svg", "defs");
     marker.innerHTML = '<marker id="mind-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker>';
     svg.append(marker);
     const relevantEdges = graph.edges.filter((edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target));
     const edgeElements = [];
-    const updateEdgeGeometry = ({ edge, path, label }) => {
+    const updateEdgeGeometry = ({ edge, hitPath, path, label }) => {
       const from = positions.get(edge.source);
       const to = positions.get(edge.target);
       if (!from || !to) return;
       const curve = Math.min(layout.edgeCurve, Math.abs(from.x - to.x) * 0.12);
-      path.setAttribute("d", `M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${(from.y + to.y) / 2 - curve} ${to.x} ${to.y}`);
+      const geometry = `M ${from.x} ${from.y} Q ${(from.x + to.x) / 2} ${(from.y + to.y) / 2 - curve} ${to.x} ${to.y}`;
+      hitPath.setAttribute("d", geometry);
+      path.setAttribute("d", geometry);
       if (label) {
         label.setAttribute("x", String((from.x + to.x) / 2));
         label.setAttribute("y", String((from.y + to.y) / 2 - curve - layout.labelOffset));
       }
     };
     for (const edge of relevantEdges) {
+      const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      hitPath.classList.add("mind-edge-hit");
+      hitPath.dataset.edgeId = edge.id;
+      hitPath.setAttribute("role", "button");
+      hitPath.setAttribute("tabindex", "0");
+      hitPath.setAttribute("aria-label", `选择 ${graph.nodeById.get(edge.source)?.name ?? "未知角色"} 与 ${graph.nodeById.get(edge.target)?.name ?? "未知角色"} 的关系：${formatRelationshipLabel(edge)}`);
+      svg.append(hitPath);
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.classList.add("mind-edge", edge.category);
+      path.dataset.edgeId = edge.id;
       path.dataset.edgeSource = edge.source;
       path.dataset.edgeTarget = edge.target;
       path.style.setProperty("--edge-opacity", String(0.28 + edge.confidence * 0.48));
@@ -220,17 +249,16 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
       if (edge.directed) path.setAttribute("marker-end", "url(#mind-arrow)");
       svg.append(path);
-      let label = null;
-      if (edge.source === selectedId || edge.target === selectedId) {
-        label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        label.setAttribute("text-anchor", "middle");
-        label.classList.add("mind-edge-label");
-        const fullLabel = formatRelationshipLabel(edge);
-        label.textContent = fullLabel;
-        label.dataset.fullLabel = fullLabel;
-        svg.append(label);
-      }
-      const edgeElement = { edge, path, label };
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("text-anchor", "middle");
+      label.classList.add("mind-edge-label");
+      if (edge.source !== selectedId && edge.target !== selectedId) label.classList.add("is-secondary-label");
+      const fullLabel = formatRelationshipLabel(edge);
+      label.textContent = fullLabel;
+      label.dataset.edgeId = edge.id;
+      label.dataset.fullLabel = fullLabel;
+      svg.append(label);
+      const edgeElement = { edge, hitPath, path, label };
       edgeElements.push(edgeElement);
       updateEdgeGeometry(edgeElement);
     }
@@ -239,7 +267,48 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     edgeDetail.className = "mind-edge-detail hidden";
     edgeDetail.setAttribute("aria-live", "polite");
     viewport.append(edgeDetail);
+    const applyEdgeSelection = (edgeElement) => {
+      const selection = getRelationshipEdgeSelection(graph, edgeElement.edge.id);
+      if (!selection) return;
+      const endpointIds = new Set(selection.endpointIds);
+      viewport.querySelectorAll(".mind-node").forEach((node) => {
+        const endpoint = endpointIds.has(node.dataset.nodeId);
+        node.classList.toggle("is-edge-endpoint", endpoint);
+        node.classList.toggle("is-dimmed", !endpoint);
+      });
+      edgeElements.forEach((item) => {
+        const active = item.edge.id === selection.edgeId;
+        item.path.classList.toggle("is-edge-selected", active);
+        item.path.classList.toggle("is-dimmed", !active);
+        item.label.classList.toggle("is-edge-selected", active);
+        item.label.classList.toggle("is-dimmed", !active);
+        item.hitPath.setAttribute("aria-pressed", String(active));
+      });
+      const heading = document.createElement("b");
+      heading.textContent = `${selection.endpointNames[0]}与${selection.endpointNames[1]}`;
+      const detailText = document.createElement("span");
+      detailText.textContent = selection.label;
+      edgeDetail.replaceChildren(heading, detailText);
+      edgeDetail.classList.remove("hidden");
+    };
+    edgeElements.forEach((edgeElement) => {
+      const selectEdge = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        selectedEdgeId = edgeElement.edge.id;
+        applyEdgeSelection(edgeElement);
+      };
+      edgeElement.hitPath.addEventListener("click", selectEdge);
+      edgeElement.hitPath.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") selectEdge(event);
+      });
+    });
     const updateHighlight = (nodeId, locked = false) => {
+      if (selectedEdgeId) {
+        const selectedEdge = edgeElements.find((item) => item.edge.id === selectedEdgeId);
+        if (selectedEdge) applyEdgeSelection(selectedEdge);
+        return;
+      }
       const related = new Set([nodeId]);
       for (const edge of graph.edges) if (edge.source === nodeId || edge.target === nodeId) {
         related.add(edge.source);
@@ -326,11 +395,17 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
           suppressClick = false;
           return;
         }
+        selectedEdgeId = null;
         selectedId = node.id;
         options.onSelect?.(node.id);
         render();
       });
       stage.append(button);
+    }
+    if (selectedEdgeId) {
+      const selectedEdge = edgeElements.find((item) => item.edge.id === selectedEdgeId);
+      if (selectedEdge) applyEdgeSelection(selectedEdge);
+      else selectedEdgeId = null;
     }
     if (graph.nodes.length > visibleNodes.length) {
       const more = document.createElement("button");
@@ -363,7 +438,7 @@ export function layoutGalaxy(graph, seed) {
   const random = seededRandom(hashString(seed));
   const nodes = graph.nodes.map((node, index) => {
     const angle = random() * Math.PI * 2;
-    const radius = 105 + Math.sqrt(random()) * 470;
+    const radius = GALAXY_LAYOUT_CONFIG.minimumRadius + Math.sqrt(random()) * GALAXY_LAYOUT_CONFIG.radialSpan;
     const thickness = 18 + radius * 0.12;
     return {
       ...node,
@@ -383,7 +458,7 @@ export function layoutGalaxy(graph, seed) {
         let dx = right.x - left.x;
         let dz = right.z - left.z;
         const distanceSquared = Math.max(80, dx * dx + dz * dz);
-        const force = 2600 / distanceSquared;
+        const force = GALAXY_LAYOUT_CONFIG.repulsionStrength / distanceSquared;
         const distance = Math.sqrt(distanceSquared);
         dx /= distance;
         dz /= distance;
@@ -419,7 +494,7 @@ export function layoutGalaxy(graph, seed) {
       const dx = target.x - source.x;
       const dz = target.z - source.z;
       const distance = Math.max(1, Math.hypot(dx, dz));
-      const force = (distance - 125) * 0.0028 * (0.5 + edge.confidence);
+      const force = (distance - GALAXY_LAYOUT_CONFIG.desiredEdgeLength) * 0.0028 * (0.5 + edge.confidence);
       source.vx += dx / distance * force;
       source.vz += dz / distance * force;
       target.vx -= dx / distance * force;
@@ -427,9 +502,9 @@ export function layoutGalaxy(graph, seed) {
     }
     for (const node of nodes) {
       const centrality = clamp(node.importance / Math.max(graph.nodes[0]?.importance || 1, 1), 0, 1);
-      node.vx += -node.x * (0.0008 + centrality * 0.0018);
+      node.vx += -node.x * (0.00052 + centrality * 0.0011);
       node.vy += -node.y * 0.0014;
-      node.vz += -node.z * (0.0008 + centrality * 0.0018);
+      node.vz += -node.z * (0.00052 + centrality * 0.0011);
       node.vx *= 0.84;
       node.vy *= 0.84;
       node.vz *= 0.84;
@@ -521,6 +596,29 @@ export function getGalaxyNodeAppearance(node, maxDegree) {
   };
 }
 
+export function getGalaxyNodeMarkerCenterOffset(nodeSize) {
+  return 8 + Math.max(0, Number(nodeSize) || 0) / 2;
+}
+
+export function distanceToGalaxyEdge(point, from, to) {
+  const deltaX = to.x - from.x;
+  const deltaY = to.y - from.y;
+  const lengthSquared = deltaX * deltaX + deltaY * deltaY;
+  if (lengthSquared === 0) return Math.hypot(point.x - from.x, point.y - from.y);
+  const ratio = clamp(((point.x - from.x) * deltaX + (point.y - from.y) * deltaY) / lengthSquared, 0, 1);
+  return Math.hypot(point.x - (from.x + deltaX * ratio), point.y - (from.y + deltaY * ratio));
+}
+
+export function findNearestGalaxyEdge(projectedEdges, point, threshold = 9) {
+  let nearest = null;
+  for (const projected of projectedEdges) {
+    const distance = distanceToGalaxyEdge(point, projected.from, projected.to);
+    if (distance > threshold || (nearest && distance >= nearest.distance)) continue;
+    nearest = { edge: projected.edge, distance };
+  }
+  return nearest;
+}
+
 export function createGalaxyRenderer(dialog, graph, options = {}) {
   const background = dialog.querySelector("#galaxy-background");
   const canvas = dialog.querySelector("#galaxy-graph");
@@ -537,6 +635,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const nodeElements = new Map();
   const cleanups = [];
   let selectedId = null;
+  let selectedEdgeId = null;
+  let projectedEdges = [];
   let cameraDrag = null;
   let animationFrame = 0;
   let previousFrameTime = 0;
@@ -548,6 +648,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.classList.add("is-three-dimensional");
   shell.dataset.sceneDimension = "3";
   shell.dataset.starCount = String(stars.length);
+  shell.dataset.rotationSpeed = String(GALAXY_ROTATION_RADIANS_PER_MS);
+  shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
+  shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
+  shell.dataset.layoutDesiredEdgeLength = String(GALAXY_LAYOUT_CONFIG.desiredEdgeLength);
 
   const listen = (target, type, handler, settings) => {
     target.addEventListener(type, handler, settings);
@@ -653,18 +757,37 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       edge,
       depth: ((projections.get(edge.source)?.depth ?? 0) + (projections.get(edge.target)?.depth ?? 0)) / 2
     })).sort((left, right) => right.depth - left.depth);
+    projectedEdges = orderedEdges.flatMap(({ edge, depth }) => {
+      const from = projections.get(edge.source);
+      const to = projections.get(edge.target);
+      return from?.visible && to?.visible ? [{ edge, from, to, depth }] : [];
+    });
     for (const { edge } of orderedEdges) {
       const from = projections.get(edge.source);
       const to = projections.get(edge.target);
       if (!from?.visible || !to?.visible) continue;
-      const highlighted = Boolean(selectedId) && (edge.source === selectedId || edge.target === selectedId);
-      const dimmed = Boolean(selectedId) && !highlighted;
+      const edgeSelected = edge.id === selectedEdgeId;
+      const highlighted = edgeSelected || (Boolean(selectedId) && (edge.source === selectedId || edge.target === selectedId));
+      const dimmed = selectedEdgeId ? !edgeSelected : Boolean(selectedId) && !highlighted;
       const depthFactor = clamp((from.scale + to.scale) / 1.9, 0.25, 1.6);
-      const opacity = dimmed ? 0.025 : highlighted ? 0.9 : (0.08 + edge.confidence * 0.22) * depthFactor;
+      const opacity = dimmed ? 0.018 : edgeSelected ? 1 : highlighted ? 0.9 : (0.08 + edge.confidence * 0.22) * depthFactor;
       const alpha = Math.round(clamp(opacity, 0, 1) * 255).toString(16).padStart(2, "0");
       const edgeColor = `${RELATION_STYLE[edge.category].color}${alpha}`;
+      if (edgeSelected) {
+        context.save();
+        context.strokeStyle = `${RELATION_STYLE[edge.category].color}52`;
+        context.lineWidth = 9 * clamp(depthFactor, 0.75, 1.4);
+        context.shadowColor = RELATION_STYLE[edge.category].color;
+        context.shadowBlur = 15;
+        context.setLineDash([]);
+        context.beginPath();
+        context.moveTo(from.x, from.y);
+        context.lineTo(to.x, to.y);
+        context.stroke();
+        context.restore();
+      }
       context.strokeStyle = edgeColor;
-      context.lineWidth = (highlighted ? 2.1 : 0.55 + edge.confidence) * clamp(depthFactor, 0.55, 1.45);
+      context.lineWidth = (edgeSelected ? 4 : highlighted ? 2.1 : 0.55 + edge.confidence) * clamp(depthFactor, 0.55, 1.45);
       context.setLineDash(edge.confirmationStatus === "pending" || edge.category === "uncertain" ? [5, 6] : []);
       context.beginPath();
       context.moveTo(from.x, from.y);
@@ -707,7 +830,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const perspective = clamp(point.scale / Math.max(baseScale, 0.01), 0.5, 1.8);
       const selectedScale = node.id === selectedId ? clamp(camera.zoom, 1, 1.8) : 1;
       element.hidden = !point.visible;
-      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -50%) scale(${perspective * selectedScale})`;
+      const nodeSize = Number(element.dataset.nodeSize) || 12;
+      const markerCenterOffset = getGalaxyNodeMarkerCenterOffset(nodeSize);
+      element.style.transformOrigin = `50% ${markerCenterOffset}px`;
+      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -${markerCenterOffset}px) scale(${perspective * selectedScale})`;
       element.style.zIndex = String(10000 - Math.round(point.depth));
       element.style.setProperty("--depth-opacity", String(clamp(1.45 - point.depth / 2300, 0.38, 1)));
       element.dataset.worldX = node.x.toFixed(2);
@@ -715,12 +841,17 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       element.dataset.worldZ = node.z.toFixed(2);
       element.dataset.projectedDepth = point.depth.toFixed(2);
       element.dataset.projectedScale = point.scale.toFixed(4);
+      element.dataset.projectedX = point.x.toFixed(3);
+      element.dataset.projectedY = point.y.toFixed(3);
+      const edgeEndpoint = Boolean(selectedEdgeId) && graph.edges.some((edge) => edge.id === selectedEdgeId && (edge.source === node.id || edge.target === node.id));
       element.classList.toggle("is-selected", node.id === selectedId);
       element.classList.toggle("is-related", Boolean(selectedId) && node.id !== selectedId && relatedIds.has(node.id));
-      element.classList.toggle("is-dimmed", Boolean(selectedId) && !relatedIds.has(node.id));
-      element.classList.toggle("show-label", node.index < 26 || relatedIds.has(node.id) || camera.zoom > 1.35);
+      element.classList.toggle("is-edge-endpoint", edgeEndpoint);
+      element.classList.toggle("is-dimmed", selectedEdgeId ? !edgeEndpoint : Boolean(selectedId) && !relatedIds.has(node.id));
+      element.classList.toggle("show-label", edgeEndpoint || node.index < 26 || relatedIds.has(node.id) || camera.zoom > 1.35);
     }
     shell.dataset.selectedNodeId = selectedId ?? "";
+    shell.dataset.selectedEdgeId = selectedEdgeId ?? "";
     shell.dataset.highlightedKeywords = [...new Set(highlightedKeywords)].join("|");
     shell.dataset.cameraYaw = camera.yaw.toFixed(5);
     shell.dataset.cameraPitch = camera.pitch.toFixed(5);
@@ -750,7 +881,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         shell.classList.remove("is-focusing-node");
       }
     }
-    if (!paused && !cameraDrag) camera.yaw += elapsed * 0.000045;
+    if (!paused && !cameraDrag) camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS;
     drawScene();
     animationFrame = window.requestAnimationFrame(renderFrame);
   };
@@ -814,6 +945,22 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     detail.append(list);
   };
 
+  const renderEdgeDetail = (edge) => {
+    const selection = getRelationshipEdgeSelection(graph, edge.id);
+    if (!selection) return;
+    detail.classList.remove("hidden");
+    detail.replaceChildren();
+    const heading = document.createElement("strong");
+    heading.textContent = selection.endpointNames.join(" ↔ ");
+    const category = document.createElement("small");
+    category.textContent = RELATION_STYLE[edge.category].label;
+    const description = document.createElement("p");
+    description.textContent = selection.label;
+    detail.append(heading, category, description);
+    shell.dataset.selectedEdgeSource = selection.endpointIds[0];
+    shell.dataset.selectedEdgeTarget = selection.endpointIds[1];
+  };
+
   const renderNodes = () => {
     nodeLayer.replaceChildren();
     nodeElements.clear();
@@ -825,7 +972,9 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       button.className = "galaxy-node";
       button.dataset.galaxyNode = node.id;
       button.dataset.relationshipTier = appearance.tier;
-      button.style.setProperty("--node-size", `${10 + Math.sqrt(node.degree / maxDegree) * 28}px`);
+      const nodeSize = 10 + Math.sqrt(node.degree / maxDegree) * 28;
+      button.style.setProperty("--node-size", `${nodeSize}px`);
+      button.dataset.nodeSize = nodeSize.toFixed(3);
       button.style.setProperty("--node-color", appearance.color);
       button.style.setProperty("--node-brightness", appearance.brightness);
       button.style.setProperty("--node-glow", appearance.glow);
@@ -892,6 +1041,9 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           suppressClick = false;
           return;
         }
+        selectedEdgeId = null;
+        delete shell.dataset.selectedEdgeSource;
+        delete shell.dataset.selectedEdgeTarget;
         selectedId = node.id;
         renderDetail(node);
         focusCameraOnNode(node);
@@ -907,8 +1059,12 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     Object.assign(camera, initialCamera);
     for (const node of layout.nodes) Object.assign(node, initialNodePositions.get(node.id));
     selectedId = null;
+    selectedEdgeId = null;
+    projectedEdges = [];
     delete shell.dataset.focusedNodeId;
     delete shell.dataset.draggedNodeId;
+    delete shell.dataset.selectedEdgeSource;
+    delete shell.dataset.selectedEdgeTarget;
     detail.classList.add("hidden");
     detail.replaceChildren();
     drawScene();
@@ -968,18 +1124,30 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   listen(shell, "pointerdown", (event) => {
     if (event.button !== 0 || event.target.closest("button, aside")) return;
     cancelCameraFocus();
-    cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch };
+    cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch, dragged: false };
     shell.classList.add("is-rotating-camera");
     shell.setPointerCapture(event.pointerId);
   });
   listen(shell, "pointermove", (event) => {
     if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
+    if (Math.hypot(event.clientX - cameraDrag.x, event.clientY - cameraDrag.y) >= 3) cameraDrag.dragged = true;
+    if (!cameraDrag.dragged) return;
     camera.yaw = cameraDrag.yaw + (event.clientX - cameraDrag.x) * 0.006;
     camera.pitch = clamp(cameraDrag.pitch + (event.clientY - cameraDrag.y) * 0.004, 0.16, 1.38);
     drawScene();
   });
   const endCameraDrag = (event) => {
     if (!cameraDrag || event.pointerId !== cameraDrag.pointerId) return;
+    if (!cameraDrag.dragged) {
+      const rect = shell.getBoundingClientRect();
+      const nearest = findNearestGalaxyEdge(projectedEdges, { x: event.clientX - rect.left, y: event.clientY - rect.top });
+      if (nearest) {
+        selectedId = null;
+        selectedEdgeId = nearest.edge.id;
+        renderEdgeDetail(nearest.edge);
+        drawScene();
+      }
+    }
     cameraDrag = null;
     shell.classList.remove("is-rotating-camera");
     if (shell.hasPointerCapture(event.pointerId)) shell.releasePointerCapture(event.pointerId);
