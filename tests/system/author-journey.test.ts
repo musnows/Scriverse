@@ -189,7 +189,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('<button type="button" data-module="outlines">大纲与伏笔</button>');
     expect(page.text).toContain('id="module-more-button"');
-    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(3);
+    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
+    expect(page.text).toContain('<button class="module-nav-secondary hidden" type="button" data-module="races">种族</button>');
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
