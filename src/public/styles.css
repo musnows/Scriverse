@@ -27,6 +27,24 @@
   background: var(--paper);
 }
 
+.auth-pending .app-shell { visibility: hidden; }
+.auth-view { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%), var(--paper); }
+.auth-view.hidden { display: none; }
+.auth-card { width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; }
+.auth-brand div { display: grid; }
+.auth-brand small { color: var(--muted); }
+.auth-card h1 { margin: 8px 0; font-size: 30px; }
+.auth-card > p { color: var(--muted); line-height: 1.6; }
+.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 24px 0 16px; padding: 4px; border-radius: 7px; background: var(--paper-deep); }
+.auth-tabs button { border: 0; background: transparent; }
+.auth-tabs button[aria-selected="true"] { background: var(--surface); color: var(--accent-dark); box-shadow: var(--shadow); }
+.auth-form { display: grid; gap: 14px; }
+.auth-form label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; }
+.auth-form input { width: 100%; }
+.auth-form small { color: var(--muted); line-height: 1.5; }
+.auth-error { min-height: 20px; margin: 14px 0 0 !important; color: var(--accent-dark) !important; }
+
 :root[data-theme="dark"] {
   --ink: #e8e2d8;
   --muted: #aaa398;
@@ -89,6 +107,13 @@ button { cursor: pointer; }
 :root[data-theme="dark"] .theme-icon-moon { display: none; }
 :root[data-theme="dark"] .theme-icon-sun { display: block; }
 .settings-button { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); }
+.account-button { display: flex; align-items: center; gap: 7px; min-width: 0; height: 34px; padding: 3px 9px 3px 3px; border: 1px solid var(--line); border-radius: 18px; background: transparent; color: var(--text); }
+.account-button > span:first-child { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: white; font-size: 11px; }
+.account-button > span:last-child { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.account-menu { position: absolute; z-index: 80; top: 48px; right: 84px; display: grid; min-width: 180px; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow); }
+.account-menu.hidden { display: none; }
+.account-menu small { margin-bottom: 8px; color: var(--muted); }
+.account-menu button { text-align: left; }
 .settings-button:hover, .settings-button:focus-visible, .settings-button[aria-current="page"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); }
 .settings-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -129,6 +154,18 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .settings-hub-card strong { align-self: end; font-size: 16px; }
 .settings-hub-card small { align-self: start; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .settings-work-note { max-width: 1000px; margin: 18px auto 0; color: var(--muted); font-size: 11px; }
+.access-list { display: grid; gap: 8px; max-height: min(58vh, 580px); overflow: auto; padding: 4px 1px; }
+.access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.access-row > div { display: grid; gap: 3px; min-width: 0; }
+.access-row small { color: var(--muted); }
+.access-row select { min-width: 105px; }
+.member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0 0 18px; }
+.member-invite-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.account-settings-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.account-settings-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.password-settings-form { grid-template-columns: 1fr 1fr auto; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.password-settings-form h3 { grid-column: 1 / -1; margin: 0; }
+.book-access-badge { display: inline-flex; width: fit-content; margin-top: 7px; padding: 2px 7px; border-radius: 10px; background: var(--paper-deep); color: var(--accent-dark); font-size: 9px; }
 .book-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: clamp(22px, 3vw, 38px); max-width: 1400px; margin: 0 auto; }
 .book-card { position: relative; min-width: 0; border: 0; background: transparent; text-align: left; }
 .book-open { width: 100%; padding: 0; border: 0; background: transparent; text-align: left; }

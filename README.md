@@ -59,12 +59,12 @@ npm start
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `PORT` | `13210` | HTTP 服务端口 |
-| `HOST` | `127.0.0.1` | 监听地址；服务器部署时可设为 `0.0.0.0`，同时必须配置鉴权 |
+| `HOST` | `127.0.0.1` | 监听地址；服务器部署时可设为 `0.0.0.0` |
 | `DATA_DIR` | `<项目目录>/.data` | 默认数据目录 |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite 数据库路径 |
 | `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥 |
-| `APP_AUTH_USERNAME` | 本地开发为空 | 单实例管理员账号；生产环境或非本机监听时必填 |
-| `APP_AUTH_PASSWORD` | 本地开发为空 | 单实例管理员密码，至少 12 个字符；必须通过 HTTPS 传输 |
+| `APP_AUTH_USERNAME` | 空 | 可选的部署网关账号；应用内用户系统始终启用 |
+| `APP_AUTH_PASSWORD` | 空 | 可选的部署网关密码，至少 12 个字符；必须通过 HTTPS 传输 |
 | `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | 开发环境 `true`，生产环境 `false` | 是否允许 AI 供应商连接本机或内网地址；链路本地与云元数据地址始终禁止 |
 
@@ -84,7 +84,7 @@ APP_AUTH_PASSWORD='请替换为足够长的随机密码' \
 npm start
 ```
 
-生产环境必须在可信反向代理后启用 HTTPS。HTTP Basic Auth 的凭据只是 Base64 编码，未使用 HTTPS 时不能防止链路窃听。`/api/health` 保持免认证以供探活，其余页面、静态资源和 API 均受鉴权保护。
+生产环境必须在可信反向代理后启用 HTTPS。应用首次启动时，第一个注册用户自动成为系统管理员；后续用户为普通用户。可选的 HTTP Basic Auth 仅作为额外部署网关，其凭据只是 Base64 编码，未使用 HTTPS 时不能防止链路窃听。`/api/health` 保持免认证以供探活，业务 API 需要应用内登录。
 
 ## AI 供应商配置
 

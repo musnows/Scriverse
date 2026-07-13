@@ -17,6 +17,8 @@ import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSou
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
 
 const state = {
+  user: null,
+  csrfToken: null,
   works: [],
   work: null,
   chapter: null,
@@ -781,18 +783,65 @@ applyColorTheme(currentColorTheme());
 applyPanelLayout();
 
 async function api(path, options = {}) {
-  const response = await fetch(path, options.body instanceof FormData ? options : {
+  const method = String(options.method ?? "GET").toUpperCase();
+  const headers = { ...(options.headers ?? {}) };
+  if (state.csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) headers["X-CSRF-Token"] = state.csrfToken;
+  if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, options.body instanceof FormData ? { ...options, headers } : {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
+    headers,
     body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
+    if (response.status === 401 && !path.startsWith("/api/auth/")) showAuth(false);
     throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
   }
   if (response.status === 204) return null;
   const payload = await response.json();
   return payload.data;
+}
+
+function selectAuthMode(mode) {
+  const login = mode === "login";
+  $("#auth-login-tab").setAttribute("aria-selected", String(login));
+  $("#auth-register-tab").setAttribute("aria-selected", String(!login));
+  $("#login-form").classList.toggle("hidden", !login);
+  $("#register-form").classList.toggle("hidden", login);
+  $("#auth-error").textContent = "";
+}
+
+function showAuth(setupRequired) {
+  document.body.classList.add("auth-pending");
+  $("#auth-view").classList.remove("hidden");
+  $("#auth-title").textContent = setupRequired ? "创建首个管理员账户" : "登录后继续创作";
+  $("#auth-description").textContent = setupRequired
+    ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
+    : "你的作品、协作权限和每一次修改都会绑定到账户。";
+  selectAuthMode(setupRequired ? "register" : "login");
+}
+
+function applyAuthenticatedUser(session) {
+  state.user = session.user;
+  state.csrfToken = session.csrfToken;
+  $("#account-name").textContent = session.user.displayName;
+  $("#account-avatar").textContent = Array.from(session.user.displayName)[0] ?? "作";
+  $("#account-menu-name").textContent = `${session.user.displayName} · @${session.user.username}`;
+  $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
+  $("#auth-view").classList.add("hidden");
+  document.body.classList.remove("auth-pending");
+}
+
+async function initializeAuthentication() {
+  const response = await fetch("/api/auth/session", { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error("无法读取登录状态");
+  const session = (await response.json()).data;
+  if (!session.authenticated) {
+    showAuth(session.setupRequired);
+    return false;
+  }
+  applyAuthenticatedUser(session);
+  return true;
 }
 
 function toast(message, type = "info") {
@@ -930,6 +979,10 @@ function restoredSettingsReturnContext(route) {
 }
 
 async function initializePage() {
+  if (!(await initializeAuthentication())) {
+    restoringPageRoute = false;
+    return;
+  }
   const route = parsePageRoute(window.location.hash);
   state.works = await api("/api/works");
   try {
@@ -1003,12 +1056,91 @@ function captureSettingsReturnContext() {
 
 function renderSettingsHub() {
   const hasWork = Boolean(state.work);
+  const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
+  $("#platform-ai-button").classList.toggle("hidden", state.user?.role !== "admin");
+  $("#user-management-button").classList.toggle("hidden", state.user?.role !== "admin");
+  $("#collaboration-button").disabled = !canManageWork;
   $("#search-button").disabled = !hasWork;
   $("#export-button").disabled = !hasWork;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。全文检索与导出将作用于这部作品。`
     : "当前未选择作品；打开作品后可使用全文检索与导出。";
+}
+
+function renderUsers(users) {
+  const currentUserId = state.user?.userId;
+  $("#users-list").innerHTML = users.map((user) => `<article class="access-row" data-user-row="${esc(user.userId)}">
+    <div><strong>${esc(user.displayName)} · @${esc(user.username)}</strong><small>${user.userId === currentUserId ? "当前账户 · " : ""}${user.status === "active" ? "账户可用" : "账户已停用"}</small></div>
+    <select data-user-role="${esc(user.userId)}" aria-label="${esc(user.displayName)}的角色" ${user.userId === currentUserId ? "disabled" : ""}><option value="user" ${user.role === "user" ? "selected" : ""}>普通用户</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>系统管理员</option></select>
+    <button type="button" data-user-status="${esc(user.userId)}" ${user.userId === currentUserId ? "disabled" : ""}>${user.status === "active" ? "停用" : "启用"}</button>
+  </article>`).join("");
+  $("#users-list").querySelectorAll("[data-user-role]").forEach((select) => select.addEventListener("change", async () => {
+    try {
+      const updated = await api(`/api/users/${encodeURIComponent(select.dataset.userRole)}`, { method: "PATCH", body: { role: select.value } });
+      const usersAfterUpdate = users.map((item) => item.userId === updated.userId ? updated : item);
+      renderUsers(usersAfterUpdate);
+      toast("用户角色已更新");
+    } catch (error) {
+      select.value = users.find((item) => item.userId === select.dataset.userRole)?.role ?? "user";
+      toast(error.message, "error");
+    }
+  }));
+  $("#users-list").querySelectorAll("[data-user-status]").forEach((button) => button.addEventListener("click", async () => {
+    const existing = users.find((item) => item.userId === button.dataset.userStatus);
+    if (!existing) return;
+    try {
+      const updated = await api(`/api/users/${encodeURIComponent(existing.userId)}`, { method: "PATCH", body: { status: existing.status === "active" ? "disabled" : "active" } });
+      renderUsers(users.map((item) => item.userId === updated.userId ? updated : item));
+      toast("账户状态已更新");
+    } catch (error) { toast(error.message, "error"); }
+  }));
+}
+
+async function openUsersDialog() {
+  $("#users-list").innerHTML = '<p class="empty-state">正在读取用户……</p>';
+  $("#users-dialog").showModal();
+  try { renderUsers(await api("/api/users")); }
+  catch (error) { $("#users-dialog").close(); toast(error.message, "error"); }
+}
+
+function renderMembers(members) {
+  const canManage = ["admin", "owner"].includes(String(state.work?.accessRole));
+  $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
+    <div><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div>
+    <span>${member.role === "owner" ? "所有者" : "可编辑"}</span>
+    ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
+  </article>`).join("");
+  $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
+    try {
+      const updated = await api(`/api/works/${encodeURIComponent(state.work.id)}/members/${encodeURIComponent(button.dataset.removeMember)}`, { method: "DELETE" });
+      renderMembers(updated);
+      await fillMemberCandidates(updated);
+      toast("协作者已移除");
+    } catch (error) { toast(error.message, "error"); }
+  }));
+}
+
+async function fillMemberCandidates(members) {
+  const directory = await api("/api/users/directory");
+  const memberIds = new Set(members.map((member) => member.userId));
+  const candidates = directory.filter((user) => !memberIds.has(user.userId));
+  $("#member-user-select").innerHTML = candidates.length
+    ? `<option value="">选择用户</option>${candidates.map((user) => `<option value="${esc(user.userId)}">${esc(user.displayName)} · @${esc(user.username)}</option>`).join("")}`
+    : '<option value="">没有可邀请的用户</option>';
+  $("#member-user-select").disabled = !candidates.length;
+}
+
+async function openMembersDialog() {
+  if (!state.work) return;
+  $("#members-dialog-title").textContent = `《${state.work.title}》协作成员`;
+  $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
+  $("#members-dialog").showModal();
+  try {
+    const members = await api(`/api/works/${encodeURIComponent(state.work.id)}/members`);
+    renderMembers(members);
+    await fillMemberCandidates(members);
+  } catch (error) { $("#members-dialog").close(); toast(error.message, "error"); }
 }
 
 function showSettingsHub() {
@@ -1078,7 +1210,7 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
       <div class="book-card-actions"><button type="button" data-cover-work="${esc(work.id)}">设置封面</button><button type="button" data-edit-work="${esc(work.id)}">作品信息</button></div>
     </article>`).join("")}
@@ -1317,7 +1449,7 @@ function renderEntityHistory(versions) {
   }
   host.innerHTML = versions.map((version, index) => `<article class="entity-version-card${index === 0 ? " is-current" : ""}" data-entity-version="${version.versionNo}">
     <header><strong>v${version.versionNo}</strong><span>${esc(entityVersionSourceLabel(version.source))}</span></header>
-    <time>${esc(formatDateTime(version.createdAt))}</time>
+    <time>${esc(formatDateTime(version.createdAt))} · ${esc(version.actor || "历史数据")}</time>
     <p>${esc(version.changeNote || entityVersionSnapshotSummary(entityHistoryContext.type, version.snapshot))}</p>
     <small>${esc(entityVersionSnapshotSummary(entityHistoryContext.type, version.snapshot))}</small>
     ${index === 0 ? '<button type="button" disabled>当前版本</button>' : `<button type="button" data-entity-version-restore="${version.versionNo}">回滚到此版本</button>`}
@@ -2061,7 +2193,7 @@ function renderCharacterHistory() {
     const changes = describeCharacterVersionChanges(version.snapshot, previous?.snapshot);
     const isCurrent = version.versionNo === characterEditorItem?.versionNo;
     return `<article class="character-version-card${isCurrent ? " is-current" : ""}" data-character-version="${version.versionNo}">
-      <div class="character-version-card-heading"><div><strong>v${version.versionNo}</strong><span>${esc(characterVersionSourceLabel(version.source))}</span></div><time>${esc(formatDateTime(version.createdAt))}</time></div>
+      <div class="character-version-card-heading"><div><strong>v${version.versionNo}</strong><span>${esc(characterVersionSourceLabel(version.source))}</span></div><time>${esc(formatDateTime(version.createdAt))} · ${esc(version.actor || "历史数据")}</time></div>
       <p>${esc(version.changeNote || "未填写版本说明")}</p>
       <div class="character-version-changes">${changes.map((change) => `<span>${esc(change)}</span>`).join("")}</div>
       ${isCurrent ? '<button type="button" disabled>当前版本</button>' : `<button type="button" data-character-restore="${version.versionNo}">回滚到此版本</button>`}
@@ -2408,7 +2540,7 @@ async function streamChat(body) {
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken },
       body: JSON.stringify(body)
     });
     if (!response.ok || !response.body) {
@@ -2530,7 +2662,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
 async function showVersions() {
   if (!state.chapter) return;
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
-  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p><button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button></div>`).join("");
+  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p><button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button></div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm(`将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`)) return;
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
@@ -2566,8 +2698,82 @@ $("#home-button").addEventListener("click", () => {
   loadWorks().catch((error) => toast(error.message, "error"));
 });
 $("#settings-button").addEventListener("click", showSettingsHub);
+$("#account-button").addEventListener("click", () => {
+  const expanded = $("#account-menu").classList.toggle("hidden") === false;
+  $("#account-button").setAttribute("aria-expanded", String(expanded));
+});
+$("#account-settings-button").addEventListener("click", () => {
+  $("#account-menu").classList.add("hidden");
+  $("#account-button").setAttribute("aria-expanded", "false");
+  $("#profile-display-name").value = state.user?.displayName ?? "";
+  $("#password-form").reset();
+  $("#account-dialog").showModal();
+});
+$("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
+$("#profile-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    const updated = await api("/api/auth/profile", { method: "PATCH", body: { displayName: form.get("displayName") } });
+    state.user = updated;
+    applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
+    toast("显示名称已更新");
+  } catch (error) { toast(error.message, "error"); }
+});
+$("#password-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  try {
+    await api("/api/auth/password", { method: "PATCH", body: { currentPassword: form.get("currentPassword"), newPassword: form.get("newPassword") } });
+    event.currentTarget.reset();
+    toast("密码已更新，其他设备的会话已退出");
+  } catch (error) { toast(error.message, "error"); }
+});
+$("#logout-button").addEventListener("click", async () => {
+  try {
+    await api("/api/auth/session", { method: "DELETE" });
+    state.user = null;
+    state.csrfToken = null;
+    window.location.reload();
+  } catch (error) { toast(error.message, "error"); }
+});
+$("#auth-login-tab").addEventListener("click", () => selectAuthMode("login"));
+$("#auth-register-tab").addEventListener("click", () => selectAuthMode("register"));
+$("#login-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  $("#auth-error").textContent = "";
+  try {
+    await api("/api/auth/login", { method: "POST", body: { username: form.get("username"), password: form.get("password") } });
+    window.location.reload();
+  } catch (error) { $("#auth-error").textContent = error.message; }
+});
+$("#register-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  $("#auth-error").textContent = "";
+  try {
+    await api("/api/auth/register", { method: "POST", body: { username: form.get("username"), displayName: form.get("displayName"), password: form.get("password") } });
+    window.location.reload();
+  } catch (error) { $("#auth-error").textContent = error.message; }
+});
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
+$("#user-management-button").addEventListener("click", openUsersDialog);
+$("#collaboration-button").addEventListener("click", openMembersDialog);
+$("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
+$("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
+$("#member-invite-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const userId = $("#member-user-select").value;
+  if (!state.work || !userId) return;
+  try {
+    const members = await api(`/api/works/${encodeURIComponent(state.work.id)}/members`, { method: "POST", body: { userId } });
+    renderMembers(members);
+    await fillMemberCandidates(members);
+    toast("协作者已邀请");
+  } catch (error) { toast(error.message, "error"); }
+});
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
@@ -2758,6 +2964,10 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#chapter-type-menu")) closeChapterTypeMenu();
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
+  if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
+    $("#account-menu").classList.add("hidden");
+    $("#account-button").setAttribute("aria-expanded", "false");
+  }
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {

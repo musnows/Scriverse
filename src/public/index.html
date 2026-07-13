@@ -9,9 +9,34 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260712-integrated-panel-toggles">
+    <link rel="stylesheet" href="/styles.css?v=20260714-user-system">
   </head>
-  <body>
+  <body class="auth-pending">
+    <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
+      <div class="auth-card">
+        <div class="auth-brand"><span class="brand-mark">叙</span><div><strong>叙界</strong><small>小说 AI 创作工作台</small></div></div>
+        <span class="eyebrow">账户与作品空间</span>
+        <h1 id="auth-title">登录后继续创作</h1>
+        <p id="auth-description">你的作品、协作权限和每一次修改都会绑定到账户。</p>
+        <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+          <button id="auth-login-tab" type="button" role="tab" aria-selected="true">登录</button>
+          <button id="auth-register-tab" type="button" role="tab" aria-selected="false">注册</button>
+        </div>
+        <form id="login-form" class="auth-form">
+          <label>用户名<input name="username" autocomplete="username" maxlength="100" required></label>
+          <label>密码<input name="password" type="password" autocomplete="current-password" maxlength="200" required></label>
+          <button class="primary-button" type="submit">登录</button>
+        </form>
+        <form id="register-form" class="auth-form hidden">
+          <label>用户名<input name="username" autocomplete="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9_.\-\u4e00-\u9fff]+" required></label>
+          <label>显示名称<input name="displayName" autocomplete="name" maxlength="80" required></label>
+          <label>密码<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label>
+          <small>至少 10 个字符。系统中的第一个注册用户会自动成为管理员。</small>
+          <button class="primary-button" type="submit">创建账户</button>
+        </form>
+        <p id="auth-error" class="auth-error" role="alert"></p>
+      </div>
+    </section>
     <div id="app" class="app-shell">
       <header class="topbar">
         <button id="home-button" class="brand-block" type="button" aria-label="返回书架">
@@ -24,6 +49,12 @@
         <div id="work-meta" class="work-meta">尚未选择作品</div>
         <div class="top-actions">
           <span id="save-state" class="save-state">就绪</span>
+          <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar">作</span><span id="account-name">账户</span></button>
+          <div id="account-menu" class="account-menu hidden" role="menu">
+            <strong id="account-menu-name">账户</strong><small id="account-menu-role">普通用户</small>
+            <button id="account-settings-button" type="button" role="menuitem">账户设置</button>
+            <button id="logout-button" type="button" role="menuitem">退出登录</button>
+          </div>
           <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换到黑夜模式" title="切换到黑夜模式" aria-pressed="false">
             <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.3A8.6 8.6 0 0 1 8.7 3.8 8.8 8.8 0 1 0 20.2 15.3Z"/></svg>
             <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.8"/><path d="M12 2v2.1M12 19.9V22M4.9 4.9l1.5 1.5M17.6 17.6l1.5 1.5M2 12h2.1M19.9 12H22M4.9 19.1l1.5-1.5M17.6 6.4l1.5-1.5"/></svg>
@@ -92,6 +123,8 @@
           </div>
           <div class="settings-hub-grid">
             <button id="platform-ai-button" class="settings-hub-card" type="button" data-settings-action="ai"><span class="settings-card-mark">AI</span><strong>AI 管理</strong><small>供应商、模型、上下文与全局提示词</small></button>
+            <button id="user-management-button" class="settings-hub-card" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
+            <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="search-button" class="settings-hub-card" type="button" data-settings-action="search"><span class="settings-card-mark">检</span><strong>全文检索</strong><small>搜索当前作品的正文、设定与角色</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
@@ -332,6 +365,23 @@
       <div id="versions-list" class="versions-list"></div>
     </dialog>
 
+    <dialog id="users-dialog" class="dialog wide-dialog" aria-labelledby="users-dialog-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="users-dialog-title">用户管理</h2></div><button id="users-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <div id="users-list" class="access-list"></div>
+    </dialog>
+
+    <dialog id="account-dialog" class="dialog" aria-labelledby="account-dialog-title">
+      <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <form id="profile-form" class="account-settings-form"><label>显示名称<input id="profile-display-name" name="displayName" maxlength="80" required></label><button class="primary-button" type="submit">保存名称</button></form>
+      <form id="password-form" class="account-settings-form password-settings-form"><h3>修改密码</h3><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
+    </dialog>
+
+    <dialog id="members-dialog" class="dialog wide-dialog" aria-labelledby="members-dialog-title">
+      <div class="dialog-header"><div><span class="eyebrow">作品权限</span><h2 id="members-dialog-title">协作成员</h2></div><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <form id="member-invite-form" class="member-invite-form"><label>邀请已注册用户<select id="member-user-select" required></select></label><button class="primary-button" type="submit">邀请协作</button></form>
+      <div id="members-list" class="access-list"></div>
+    </dialog>
+
     <dialog id="entity-history-dialog" class="dialog wide-dialog" aria-labelledby="entity-history-title">
       <div class="dialog-header">
         <div><span id="entity-history-eyebrow" class="eyebrow">可回滚记录</span><h2 id="entity-history-title">版本历史</h2></div>
@@ -367,6 +417,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260714-entity-versions"></script>
+    <script type="module" src="/app.js?v=20260714-user-system"></script>
   </body>
 </html>

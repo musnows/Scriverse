@@ -59,12 +59,12 @@ npm start
 | Variable | Default | Description |
 | --- | --- | --- |
 | `PORT` | `13210` | HTTP server port |
-| `HOST` | `127.0.0.1` | Listen address; use `0.0.0.0` for a server deployment and configure authentication |
+| `HOST` | `127.0.0.1` | Listen address; use `0.0.0.0` for a server deployment |
 | `DATA_DIR` | `<project>/.data` | Default data directory |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite database path |
 | `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials |
-| `APP_AUTH_USERNAME` | Empty in local development | Single-instance administrator name; required in production or for non-loopback listening |
-| `APP_AUTH_PASSWORD` | Empty in local development | Administrator password, at least 12 characters; must be transported over HTTPS |
+| `APP_AUTH_USERNAME` | Empty | Optional deployment gateway username; the in-app user system is always enabled |
+| `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
 
@@ -84,7 +84,7 @@ APP_AUTH_PASSWORD='replace-with-a-long-random-password' \
 npm start
 ```
 
-Production deployments must use HTTPS at a trusted reverse proxy. HTTP Basic Auth credentials are only Base64 encoded and are not protected against network interception without HTTPS. `/api/health` remains unauthenticated for health checks; all other pages, assets, and APIs require authentication.
+Production deployments must use HTTPS at a trusted reverse proxy. On first launch, the first registered user becomes the system administrator; later registrations are normal users. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
 
 ## AI Provider Setup
 

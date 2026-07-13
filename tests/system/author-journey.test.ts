@@ -56,6 +56,7 @@ describe("作者完整创作流程", () => {
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "system-test-master-secret-with-enough-length",
+      disableUserAuth: true,
       serveUi: true
     });
   });
@@ -171,7 +172,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260714-entity-versions');
+    expect(page.text).toContain('/app.js?v=20260714-user-system');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
