@@ -64,7 +64,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }]);
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
@@ -73,6 +73,12 @@ describe("数据库版本化迁移", () => {
       { name: "拉顿", species: "" },
       { name: "魔斯拉", species: "泰坦族" }
     ]);
+    expect(first.all("SELECT character_id, version_no, source, change_note FROM character_versions ORDER BY character_id")).toEqual([
+      { character_id: "character-a", version_no: 1, source: "migration", change_note: "建立人物版本基线" },
+      { character_id: "character-b", version_no: 1, source: "migration", change_note: "建立人物版本基线" }
+    ]);
+    const migratedSnapshot = JSON.parse(String(first.get("SELECT snapshot_json FROM character_versions WHERE character_id = 'character-a'")?.snapshot_json));
+    expect(migratedSnapshot).toMatchObject({ name: "魔斯拉", species: "泰坦族", organizationIds: [] });
     expect(first.get("SELECT COUNT(*) AS count FROM organizations")?.count).toBe(0);
     expect(first.get("SELECT COUNT(*) AS count FROM timeline_tracks")?.count).toBe(0);
     expect(first.all("PRAGMA table_info(timeline_events)").some((column) => column.name === "track_id")).toBe(true);

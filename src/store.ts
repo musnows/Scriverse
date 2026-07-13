@@ -40,6 +40,19 @@ type CharacterInput = {
   firstChapterId?: string | null;
 };
 
+type CharacterSnapshot = {
+  name: string;
+  aliases: string[];
+  species: string;
+  organizationIds: string[];
+  attributes: Record<string, unknown>;
+  profile: Record<string, unknown>;
+  currentState: Record<string, unknown>;
+  lockedFields: string[];
+  visibility: string;
+  firstChapterId: string | null;
+};
+
 type TimelineInput = {
   name: string;
   trackId?: string | null;
@@ -1126,6 +1139,7 @@ export class Store {
     this.assertOrganizationNameAvailable(workId, normalizedName);
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
+    const memberSnapshots = this.captureCharacterSnapshots(memberIds);
     const organizationId = id("organization");
     const timestamp = now();
     this.db.transaction(() => {
@@ -1142,6 +1156,7 @@ export class Store {
         timestamp
       );
       this.replaceOrganizationMembers(organizationId, memberIds);
+      this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `加入组织“${name}”`);
       this.audit(workId, "organization.created", "organization", organizationId);
     });
     return this.getOrganization(organizationId);
@@ -1169,6 +1184,8 @@ export class Store {
     this.assertOrganizationNameAvailable(workId, normalizedName, organizationId);
     const memberIds = input.memberIds === undefined ? null : [...new Set(input.memberIds)];
     if (memberIds) this.assertCharactersInWork(workId, memberIds);
+    const touchedMemberIds = memberIds ? [...new Set([...(current.memberIds as string[]), ...memberIds])] : [];
+    const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
     this.db.transaction(() => {
       this.db.run(
         `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
@@ -1179,7 +1196,10 @@ export class Store {
         now(),
         organizationId
       );
-      if (memberIds) this.replaceOrganizationMembers(organizationId, memberIds);
+      if (memberIds) {
+        this.replaceOrganizationMembers(organizationId, memberIds);
+        this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${name}”成员关系变更`);
+      }
       this.audit(workId, "organization.updated", "organization", organizationId, { fields: Object.keys(input) });
     });
     return this.getOrganization(organizationId);
@@ -1187,8 +1207,12 @@ export class Store {
 
   deleteOrganization(organizationId: string): void {
     const current = this.getOrganization(organizationId);
-    this.db.run("DELETE FROM organizations WHERE id = ?", organizationId);
-    this.audit(String(current.workId), "organization.deleted", "organization", organizationId);
+    const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM organizations WHERE id = ?", organizationId);
+      this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${String(current.name)}”已删除`);
+      this.audit(String(current.workId), "organization.deleted", "organization", organizationId);
+    });
   }
 
   private mapOrganization(row: Row): Record<string, unknown> {
@@ -1269,6 +1293,69 @@ export class Store {
     }
   }
 
+  private characterSnapshot(character: Record<string, unknown>): CharacterSnapshot {
+    return {
+      name: String(character.name),
+      aliases: [...(character.aliases as string[])],
+      species: String(character.species),
+      organizationIds: [...(character.organizationIds as string[])].sort(),
+      attributes: character.attributes as Record<string, unknown>,
+      profile: character.profile as Record<string, unknown>,
+      currentState: character.currentState as Record<string, unknown>,
+      lockedFields: [...(character.lockedFields as string[])],
+      visibility: String(character.visibility),
+      firstChapterId: character.firstChapterId as string | null
+    };
+  }
+
+  private captureCharacterSnapshots(characterIds: string[]): Map<string, CharacterSnapshot> {
+    return new Map(characterIds.map((characterId) => [characterId, this.characterSnapshot(this.getCharacter(characterId))]));
+  }
+
+  private snapshotsEqual(left: CharacterSnapshot, right: CharacterSnapshot): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  private insertCharacterVersion(
+    characterId: string,
+    versionNo: number,
+    source: string,
+    sourceRef: string | null,
+    changeNote: string,
+    timestamp = now()
+  ): void {
+    const snapshot = this.characterSnapshot(this.getCharacter(characterId));
+    this.db.run(
+      `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, source_ref, change_note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("characterVersion"),
+      characterId,
+      versionNo,
+      JSON.stringify(snapshot),
+      source,
+      sourceRef,
+      changeNote.trim(),
+      timestamp
+    );
+  }
+
+  private recordMembershipVersions(
+    snapshots: Map<string, CharacterSnapshot>,
+    source: string,
+    sourceRef: string,
+    changeNote: string
+  ): void {
+    for (const [characterId, before] of snapshots) {
+      const current = this.getCharacter(characterId);
+      if (this.snapshotsEqual(before, this.characterSnapshot(current))) continue;
+      const versionNo = Number(current.versionNo) + 1;
+      const timestamp = now();
+      this.db.run("UPDATE characters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, characterId);
+      this.insertCharacterVersion(characterId, versionNo, source, sourceRef, changeNote, timestamp);
+      this.audit(String(current.workId), "character.versioned", "character", characterId, { versionNo, source, sourceRef });
+    }
+  }
+
   createCharacter(workId: string, input: CharacterInput): Record<string, unknown> {
     this.getWork(workId);
     const characterId = id("character");
@@ -1301,6 +1388,7 @@ export class Store {
       );
       this.insertCharacterNames(workId, characterId, names.entries);
       this.replaceCharacterOrganizations(characterId, organizationIds);
+      this.insertCharacterVersion(characterId, 1, "create", null, "建立人物档案", timestamp);
       this.audit(workId, "character.created", "character", characterId);
     });
     return this.getCharacter(characterId);
@@ -1317,8 +1405,15 @@ export class Store {
     return this.mapCharacter(row);
   }
 
-  updateCharacter(characterId: string, input: Partial<CharacterInput>): Record<string, unknown> {
+  updateCharacter(
+    characterId: string,
+    input: Partial<CharacterInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const current = this.getCharacter(characterId);
+    const before = this.characterSnapshot(current);
     const workId = String(current.workId);
     const names = this.prepareCharacterNames(input.name ?? String(current.name), input.aliases ?? current.aliases as string[]);
     const attributes = input.attributes ?? current.attributes as Record<string, unknown>;
@@ -1347,9 +1442,44 @@ export class Store {
       this.db.run("DELETE FROM character_names WHERE character_id = ?", characterId);
       this.insertCharacterNames(workId, characterId, names.entries);
       if (organizationIds) this.replaceCharacterOrganizations(characterId, organizationIds);
-      this.audit(workId, "character.updated", "character", characterId, { fields: Object.keys(input) });
+      const updated = this.getCharacter(characterId);
+      if (!this.snapshotsEqual(before, this.characterSnapshot(updated))) {
+        const versionNo = Number(current.versionNo) + 1;
+        const timestamp = now();
+        this.db.run("UPDATE characters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, characterId);
+        this.insertCharacterVersion(characterId, versionNo, source, sourceRef, changeNote || "更新人物档案", timestamp);
+        this.audit(workId, "character.updated", "character", characterId, { fields: Object.keys(input), versionNo, source, sourceRef });
+      }
     });
     return this.getCharacter(characterId);
+  }
+
+  listCharacterVersions(characterId: string): Record<string, unknown>[] {
+    this.getCharacter(characterId);
+    return this.db.all("SELECT * FROM character_versions WHERE character_id = ? ORDER BY version_no DESC", characterId).map((row) => ({
+      id: requiredString(row, "id"),
+      characterId: requiredString(row, "character_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at")
+    }));
+  }
+
+  restoreCharacter(characterId: string, versionNo: number): Record<string, unknown> {
+    const version = this.db.get("SELECT * FROM character_versions WHERE character_id = ? AND version_no = ?", characterId, versionNo);
+    if (!version) throw notFound("人物版本");
+    const snapshot = json<CharacterSnapshot>(requiredString(version, "snapshot_json"), {} as CharacterSnapshot);
+    if (!snapshot.name) throw new AppError(500, "CHARACTER_VERSION_INVALID", "人物版本快照无效");
+    return this.updateCharacter(
+      characterId,
+      snapshot,
+      "restore",
+      requiredString(version, "id"),
+      `恢复至 v${versionNo}`
+    );
   }
 
   deleteCharacter(characterId: string): void {
@@ -1389,6 +1519,7 @@ export class Store {
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       visibility: requiredString(row, "visibility"),
       firstChapterId: optionalString(row, "first_chapter_id"),
+      versionNo: numberValue(row, "version_no"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };

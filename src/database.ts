@@ -162,8 +162,21 @@ export class Database {
         locked_fields_json TEXT NOT NULL DEFAULT '[]',
         visibility TEXT NOT NULL DEFAULT 'author',
         first_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        version_no INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS character_versions (
+        id TEXT PRIMARY KEY,
+        character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        version_no INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        source_ref TEXT,
+        change_note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        UNIQUE(character_id, version_no)
       );
 
       CREATE TABLE IF NOT EXISTS timeline_tracks (
@@ -471,6 +484,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_character_names_primary ON character_names(character_id) WHERE kind = 'primary';
       CREATE INDEX IF NOT EXISTS idx_character_names_character ON character_names(character_id, sort_order);
+      CREATE INDEX IF NOT EXISTS idx_character_versions_character ON character_versions(character_id, version_no DESC);
       CREATE INDEX IF NOT EXISTS idx_organizations_work ON organizations(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_memberships_organization ON character_organization_memberships(organization_id, character_id);
       CREATE INDEX IF NOT EXISTS idx_foreshadows_work ON foreshadows(work_id, status, importance);
@@ -660,6 +674,63 @@ export class Database {
           }
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (11, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(12)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("version_no")) {
+          this.run("ALTER TABLE characters ADD COLUMN version_no INTEGER NOT NULL DEFAULT 1");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS character_versions (
+          id TEXT PRIMARY KEY,
+          character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          version_no INTEGER NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'manual',
+          source_ref TEXT,
+          change_note TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          UNIQUE(character_id, version_no)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_character_versions_character ON character_versions(character_id, version_no DESC)");
+        const characters = this.all<Record<string, unknown>>("SELECT * FROM characters ORDER BY created_at, id");
+        for (const character of characters) {
+          const characterId = String(character.id);
+          const organizationIds = this.all<{ organization_id: string }>(
+            "SELECT organization_id FROM character_organization_memberships WHERE character_id = ? ORDER BY organization_id",
+            characterId
+          ).map((membership) => membership.organization_id);
+          const parseJson = (value: unknown, fallback: unknown): unknown => {
+            try {
+              return JSON.parse(String(value));
+            } catch {
+              return fallback;
+            }
+          };
+          const snapshot = {
+            name: String(character.name),
+            aliases: parseJson(character.aliases_json, []),
+            species: String(character.species ?? ""),
+            organizationIds,
+            attributes: parseJson(character.attributes_json, {}),
+            profile: parseJson(character.profile_json, {}),
+            currentState: parseJson(character.current_state_json, {}),
+            lockedFields: parseJson(character.locked_fields_json, []),
+            visibility: String(character.visibility),
+            firstChapterId: character.first_chapter_id === null ? null : String(character.first_chapter_id)
+          };
+          this.run(
+            `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, change_note, created_at)
+             VALUES (?, ?, 1, ?, 'migration', '建立人物版本基线', ?)
+             ON CONFLICT(character_id, version_no) DO NOTHING`,
+            `characterVersion_migration_${characterId}`,
+            characterId,
+            JSON.stringify(snapshot),
+            String(character.updated_at)
+          );
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (12, ?)", new Date().toISOString());
       });
     }
   }

@@ -162,6 +162,48 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(search.body.data).toContainEqual(expect.objectContaining({ type: "character", title: "魔斯拉", snippet: "原生泰坦" }));
   });
 
+  it("为人物编辑保存完整版本历史并通过新版本回滚", async () => {
+    const { workId } = await seedWork(runtime);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);
+    const created = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "哥斯拉",
+      aliases: ["吾王"],
+      species: "原生泰坦",
+      organizationIds: [organization.body.data.id],
+      attributes: { identity: "星球意志", details: [{ label: "身高", value: "119米" }] },
+      profile: { summary: "地球守护者", sections: [{ title: "能力", content: "原子吐息" }] },
+      currentState: { location: "地球" },
+      lockedFields: ["species", "location"]
+    }).expect(201);
+    expect(created.body.data.versionNo).toBe(1);
+
+    const updated = await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({
+      name: "燃烧哥斯拉",
+      species: "进化泰坦",
+      organizationIds: [],
+      profile: { summary: "能量过载形态", sections: [{ title: "形态", content: "红莲状态" }] },
+      changeNote: "补充红莲形态"
+    }).expect(200);
+    expect(updated.body.data.versionNo).toBe(2);
+
+    await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ species: "进化泰坦" }).expect(200);
+    const versions = await request(runtime.app).get(`/api/characters/${created.body.data.id}/versions`).expect(200);
+    expect(versions.body.data).toHaveLength(2);
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "manual", changeNote: "补充红莲形态" });
+    expect(versions.body.data[0].snapshot).toMatchObject({ name: "燃烧哥斯拉", species: "进化泰坦", organizationIds: [] });
+    expect(versions.body.data[1].snapshot).toMatchObject({ name: "哥斯拉", species: "原生泰坦", organizationIds: [organization.body.data.id] });
+
+    const restored = await request(runtime.app).post(`/api/characters/${created.body.data.id}/restore`).send({ versionNo: 1 }).expect(200);
+    expect(restored.body.data).toMatchObject({
+      name: "哥斯拉",
+      species: "原生泰坦",
+      organizationIds: [organization.body.data.id],
+      versionNo: 3
+    });
+    const afterRestore = await request(runtime.app).get(`/api/characters/${created.body.data.id}/versions`).expect(200);
+    expect(afterRestore.body.data[0]).toMatchObject({ versionNo: 3, source: "restore", changeNote: "恢复至 v1" });
+  });
+
   it("支持原子导入新建、上传替换和删除书籍封面", async () => {
     const before = await request(runtime.app).get("/api/works").expect(200);
     await request(runtime.app).post("/api/works/import").attach("file", Buffer.from("无效"), "bad.pdf").expect(415);

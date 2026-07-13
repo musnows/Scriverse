@@ -61,6 +61,10 @@ const characterSchema = z.object({
   firstChapterId: identifier.nullable().optional()
 });
 
+const characterUpdateSchema = characterSchema.partial().extend({
+  changeNote: z.string().trim().max(500).optional()
+});
+
 const timelineSchema = z.object({
   name: nonEmpty.max(300),
   trackId: identifier.nullable().optional(),
@@ -414,7 +418,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/characters", (request, response) => data(response, store.listCharacters(request.params.workId)));
   app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
   app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
-  app.patch("/api/characters/:characterId", (request, response) => data(response, store.updateCharacter(request.params.characterId, parse(characterSchema.partial(), request.body))));
+  app.patch("/api/characters/:characterId", (request, response) => {
+    const { changeNote, ...input } = parse(characterUpdateSchema, request.body);
+    data(response, store.updateCharacter(request.params.characterId, input, "manual", null, changeNote));
+  });
+  app.get("/api/characters/:characterId/versions", (request, response) => data(response, store.listCharacterVersions(request.params.characterId)));
+  app.post("/api/characters/:characterId/restore", (request, response) => {
+    const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
+    data(response, store.restoreCharacter(request.params.characterId, input.versionNo));
+  });
   app.delete("/api/characters/:characterId", (request, response) => {
     store.deleteCharacter(request.params.characterId);
     noContent(response);
