@@ -1,6 +1,7 @@
 const fieldLabels = Object.freeze({
   name: "标准名",
   aliases: "别名",
+  raceId: "种族",
   species: "种族",
   organizationIds: "所属组织",
   attributes: "身份与扩展属性",
@@ -13,9 +14,9 @@ const fieldLabels = Object.freeze({
 
 export function describeCharacterVersionChanges(snapshot, previousSnapshot) {
   if (!previousSnapshot) return ["建立人物档案"];
-  return Object.entries(fieldLabels).filter(([key]) => (
+  return [...new Set(Object.entries(fieldLabels).filter(([key]) => (
     JSON.stringify(snapshot?.[key] ?? null) !== JSON.stringify(previousSnapshot?.[key] ?? null)
-  )).map(([, label]) => label);
+  )).map(([, label]) => label))];
 }
 
 export function characterVersionSourceLabel(source) {
@@ -23,6 +24,7 @@ export function characterVersionSourceLabel(source) {
     create: "创建",
     manual: "手动保存",
     restore: "历史回滚",
+    race: "种族变更",
     organization: "组织变更",
     migration: "历史基线"
   })[String(source)] ?? String(source || "未知来源");

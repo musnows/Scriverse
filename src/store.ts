@@ -30,6 +30,7 @@ type SettingInput = {
 type CharacterInput = {
   name: string;
   aliases?: string[];
+  raceId?: string | null;
   species?: string;
   organizationIds?: string[];
   attributes?: Record<string, unknown>;
@@ -43,6 +44,7 @@ type CharacterInput = {
 type CharacterSnapshot = {
   name: string;
   aliases: string[];
+  raceId: string | null;
   species: string;
   organizationIds: string[];
   attributes: Record<string, unknown>;
@@ -91,6 +93,13 @@ type RelationshipInput = {
 };
 
 type OrganizationInput = {
+  name: string;
+  description?: string;
+  settings?: string[];
+  memberIds?: string[];
+};
+
+type RaceInput = {
   name: string;
   description?: string;
   settings?: string[];
@@ -1131,6 +1140,140 @@ export class Store {
     };
   }
 
+  createRace(workId: string, input: RaceInput): Record<string, unknown> {
+    this.getWork(workId);
+    const name = input.name.normalize("NFKC").trim().replace(/\s+/gu, " ");
+    const normalizedName = normalizeCharacterName(name);
+    if (!normalizedName) throw new AppError(400, "RACE_NAME_REQUIRED", "种族名称不能为空");
+    this.assertRaceNameAvailable(workId, normalizedName);
+    const memberIds = [...new Set(input.memberIds ?? [])];
+    this.assertCharactersInWork(workId, memberIds);
+    const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const raceId = id("race");
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO races (id, work_id, name, normalized_name, description, settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        raceId,
+        workId,
+        name,
+        normalizedName,
+        input.description ?? "",
+        JSON.stringify(input.settings ?? []),
+        timestamp,
+        timestamp
+      );
+      this.replaceRaceMembers(raceId, name, memberIds);
+      this.recordMembershipVersions(memberSnapshots, "race", raceId, `设为种族“${name}”`);
+      this.audit(workId, "race.created", "race", raceId);
+    });
+    return this.getRace(raceId);
+  }
+
+  listRaces(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all("SELECT * FROM races WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapRace(row));
+  }
+
+  getRace(raceId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM races WHERE id = ?", raceId);
+    if (!row) throw notFound("种族");
+    return this.mapRace(row);
+  }
+
+  updateRace(raceId: string, input: Partial<RaceInput>): Record<string, unknown> {
+    const current = this.getRace(raceId);
+    const workId = String(current.workId);
+    const name = input.name === undefined
+      ? String(current.name)
+      : input.name.normalize("NFKC").trim().replace(/\s+/gu, " ");
+    const normalizedName = normalizeCharacterName(name);
+    if (!normalizedName) throw new AppError(400, "RACE_NAME_REQUIRED", "种族名称不能为空");
+    this.assertRaceNameAvailable(workId, normalizedName, raceId);
+    const memberIds = input.memberIds === undefined ? null : [...new Set(input.memberIds)];
+    if (memberIds) this.assertCharactersInWork(workId, memberIds);
+    const nameChanged = name !== current.name;
+    const touchedMemberIds = memberIds || nameChanged
+      ? [...new Set([...(current.memberIds as string[]), ...(memberIds ?? [])])]
+      : [];
+    const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE races SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        name,
+        normalizedName,
+        input.description ?? String(current.description),
+        JSON.stringify(input.settings ?? current.settings),
+        now(),
+        raceId
+      );
+      if (nameChanged) this.db.run("UPDATE characters SET species = ?, updated_at = ? WHERE race_id = ?", name, now(), raceId);
+      if (memberIds) this.replaceRaceMembers(raceId, name, memberIds);
+      this.recordMembershipVersions(memberSnapshots, "race", raceId, nameChanged ? `种族更名为“${name}”` : `种族“${name}”成员关系变更`);
+      this.audit(workId, "race.updated", "race", raceId, { fields: Object.keys(input) });
+    });
+    return this.getRace(raceId);
+  }
+
+  deleteRace(raceId: string): void {
+    const current = this.getRace(raceId);
+    const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
+    this.db.transaction(() => {
+      this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", now(), raceId);
+      this.db.run("DELETE FROM races WHERE id = ?", raceId);
+      this.recordMembershipVersions(memberSnapshots, "race", raceId, `种族“${String(current.name)}”已删除`);
+      this.audit(String(current.workId), "race.deleted", "race", raceId);
+    });
+  }
+
+  resolveRaceReference(workId: string, value: string): string | null {
+    const normalizedName = normalizeCharacterName(value);
+    if (!normalizedName) return null;
+    const row = this.db.get("SELECT id FROM races WHERE work_id = ? AND normalized_name = ?", workId, normalizedName);
+    return row ? requiredString(row, "id") : null;
+  }
+
+  private mapRace(row: Row): Record<string, unknown> {
+    const members = this.db.all("SELECT id, name FROM characters WHERE race_id = ? ORDER BY name", requiredString(row, "id")).map((member) => ({
+      characterId: requiredString(member, "id"),
+      name: requiredString(member, "name")
+    }));
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      name: requiredString(row, "name"),
+      description: requiredString(row, "description"),
+      settings: json(requiredString(row, "settings_json"), []),
+      memberIds: members.map((member) => member.characterId),
+      members,
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private assertRaceNameAvailable(workId: string, normalizedName: string, excludeRaceId?: string): void {
+    const row = this.db.get(
+      `SELECT id FROM races WHERE work_id = ? AND normalized_name = ?${excludeRaceId ? " AND id <> ?" : ""}`,
+      ...([workId, normalizedName, ...(excludeRaceId ? [excludeRaceId] : [])])
+    );
+    if (row) throw new AppError(409, "RACE_NAME_CONFLICT", "同一作品内的种族名称不能重复", { raceId: requiredString(row, "id") });
+  }
+
+  private assertRaceInWork(workId: string, raceId: string): Record<string, unknown> {
+    const race = this.getRace(raceId);
+    if (race.workId !== workId) throw new AppError(400, "RACE_WORK_MISMATCH", "角色绑定的种族不属于当前作品");
+    return race;
+  }
+
+  private replaceRaceMembers(raceId: string, raceName: string, memberIds: string[]): void {
+    const timestamp = now();
+    this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", timestamp, raceId);
+    for (const characterId of memberIds) {
+      this.db.run("UPDATE characters SET race_id = ?, species = ?, updated_at = ? WHERE id = ?", raceId, raceName, timestamp, characterId);
+    }
+  }
+
   createOrganization(workId: string, input: OrganizationInput): Record<string, unknown> {
     this.getWork(workId);
     const name = input.name.normalize("NFKC").trim().replace(/\s+/gu, " ");
@@ -1297,6 +1440,7 @@ export class Store {
     return {
       name: String(character.name),
       aliases: [...(character.aliases as string[])],
+      raceId: character.raceId as string | null,
       species: String(character.species),
       organizationIds: [...(character.organizationIds as string[])].sort(),
       attributes: character.attributes as Record<string, unknown>,
@@ -1362,21 +1506,25 @@ export class Store {
     const timestamp = now();
     const names = this.prepareCharacterNames(input.name, input.aliases ?? []);
     const legacySpecies = typeof input.attributes?.species === "string" ? input.attributes.species.trim() : "";
-    const species = input.species?.trim() || legacySpecies;
+    const candidateSpecies = input.species?.trim() || legacySpecies;
+    const raceId = input.raceId === undefined ? (candidateSpecies ? this.resolveRaceReference(workId, candidateSpecies) : null) : input.raceId;
+    const race = raceId ? this.assertRaceInWork(workId, raceId) : null;
+    const species = race ? String(race.name) : "";
     this.assertCharacterNamesAvailable(workId, names.entries);
     if (input.firstChapterId) this.assertChapterInWork(input.firstChapterId, workId);
     const organizationIds = [...new Set(input.organizationIds ?? [])];
     this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, aliases_json, species, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          locked_fields_json, visibility, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
         JSON.stringify(names.aliases),
         species,
+        raceId,
         JSON.stringify(input.attributes ?? {}),
         JSON.stringify(input.profile ?? {}),
         JSON.stringify(input.currentState ?? {}),
@@ -1418,18 +1566,24 @@ export class Store {
     const names = this.prepareCharacterNames(input.name ?? String(current.name), input.aliases ?? current.aliases as string[]);
     const attributes = input.attributes ?? current.attributes as Record<string, unknown>;
     const legacySpecies = typeof attributes.species === "string" ? attributes.species.trim() : "";
-    const species = input.species === undefined ? String(current.species) || legacySpecies : input.species.trim();
+    let raceId = input.raceId === undefined ? current.raceId as string | null : input.raceId;
+    if (input.raceId === undefined && !raceId && input.species !== undefined) {
+      raceId = this.resolveRaceReference(workId, input.species.trim() || legacySpecies);
+    }
+    const race = raceId ? this.assertRaceInWork(workId, raceId) : null;
+    const species = race ? String(race.name) : "";
     this.assertCharacterNamesAvailable(workId, names.entries, characterId);
     if (input.firstChapterId) this.assertChapterInWork(input.firstChapterId, workId);
     const organizationIds = input.organizationIds === undefined ? null : [...new Set(input.organizationIds)];
     if (organizationIds) this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `UPDATE characters SET name = ?, aliases_json = ?, species = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
+        `UPDATE characters SET name = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
          locked_fields_json = ?, visibility = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         JSON.stringify(names.aliases),
         species,
+        raceId,
         JSON.stringify(attributes),
         JSON.stringify(input.profile ?? current.profile),
         JSON.stringify(input.currentState ?? current.currentState),
@@ -1505,12 +1659,17 @@ export class Store {
       role: requiredString(item, "role"),
       note: requiredString(item, "note")
     }));
+    const raceId = optionalString(row, "race_id");
+    const race = raceId ? this.db.get("SELECT id, name FROM races WHERE id = ?", raceId) : undefined;
+    const species = race ? requiredString(race, "name") : requiredString(row, "species");
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
-      species: requiredString(row, "species"),
+      raceId: race ? requiredString(race, "id") : null,
+      race: race ? { id: requiredString(race, "id"), name: species } : null,
+      species,
       organizationIds: organizations.map((organization) => organization.organizationId),
       organizations,
       attributes: json(requiredString(row, "attributes_json"), {}),
@@ -2398,6 +2557,13 @@ export class Store {
       pattern,
       pattern
     );
+    const races = this.db.all(
+      "SELECT id, name, description, settings_json FROM races WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
+      workId,
+      pattern,
+      pattern,
+      pattern
+    );
     const settings = this.db.all(
       "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
@@ -2427,6 +2593,7 @@ export class Store {
       ...chapters.map((row) => ({ type: "chapter", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), volumeId: requiredString(row, "volume_id") })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
       ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: [requiredString(row, "species"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、") })),
+      ...races.map((row) => ({ type: "race", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
       ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) }))
     ];
   }
@@ -2434,11 +2601,12 @@ export class Store {
   exportWork(workId: string): Record<string, unknown> {
     const tree = this.getWorkTree(workId);
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       exportedAt: now(),
       work: tree,
       settings: this.listSettings(workId),
       characters: this.listCharacters(workId),
+      races: this.listRaces(workId),
       organizations: this.listOrganizations(workId),
       timelineTracks: this.listTimelineTracks(workId),
       timeline: this.listTimelineEvents(workId),

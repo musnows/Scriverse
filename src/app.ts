@@ -51,7 +51,7 @@ const settingSchema = z.object({
 const characterSchema = z.object({
   name: nonEmpty.max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
-  species: z.string().trim().max(200).optional(),
+  raceId: identifier.nullable().optional(),
   organizationIds: z.array(identifier).max(100).optional(),
   attributes: jsonObject.optional(),
   profile: jsonObject.optional(),
@@ -59,7 +59,7 @@ const characterSchema = z.object({
   lockedFields: optionalStrings,
   visibility: z.enum(["public", "author", "collaborators"]).optional(),
   firstChapterId: identifier.nullable().optional()
-});
+}).strict();
 
 const characterUpdateSchema = characterSchema.partial().extend({
   changeNote: z.string().trim().max(500).optional()
@@ -127,6 +127,13 @@ const relationshipSchema = z.object({
 });
 
 const organizationSchema = z.object({
+  name: nonEmpty.max(200),
+  description: z.string().max(100_000).optional(),
+  settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
+  memberIds: z.array(identifier).max(1000).optional()
+});
+
+const raceSchema = z.object({
   name: nonEmpty.max(200),
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
@@ -429,6 +436,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/characters/:characterId", (request, response) => {
     store.deleteCharacter(request.params.characterId);
+    noContent(response);
+  });
+
+  app.get("/api/works/:workId/races", (request, response) => data(response, store.listRaces(request.params.workId)));
+  app.post("/api/works/:workId/races", (request, response) => {
+    data(response, store.createRace(request.params.workId, parse(raceSchema, request.body)), 201);
+  });
+  app.get("/api/races/:raceId", (request, response) => data(response, store.getRace(request.params.raceId)));
+  app.patch("/api/races/:raceId", (request, response) => {
+    data(response, store.updateRace(request.params.raceId, parse(raceSchema.partial(), request.body)));
+  });
+  app.delete("/api/races/:raceId", (request, response) => {
+    store.deleteRace(request.params.raceId);
     noContent(response);
   });
 

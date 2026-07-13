@@ -1421,6 +1421,7 @@ export class AiManager {
     const skipped: Array<{ name: string; reason: string }> = [];
     for (const group of groups) {
       const aliases = [...group.aliases].filter((alias) => this.isSafeGlobalAlias(alias));
+      const extractedRaceId = group.species ? this.store.resolveRaceReference(workId, group.species) : null;
       const existingId = [group.name, ...aliases]
         .map((value) => this.store.resolveCharacterReference(workId, value))
         .find((value): value is string => Boolean(value));
@@ -1431,7 +1432,7 @@ export class AiManager {
             .filter((alias) => this.isSafeGlobalAlias(alias) && this.normalizeReference(alias) !== this.normalizeReference(String(existing.name)));
           const updated = this.store.updateCharacter(existingId, {
             aliases: mergedAliases,
-            species: String(existing.species) || group.species,
+            raceId: (existing.raceId as string | null) ?? extractedRaceId,
             attributes: { ...(existing.attributes as Record<string, unknown>), ...(group.identity ? { identity: group.identity } : {}) },
             firstChapterId: existing.firstChapterId as string | null ?? group.firstChapterId
           });
@@ -1440,7 +1441,7 @@ export class AiManager {
           const created = this.store.createCharacter(workId, {
             name: group.name,
             aliases,
-            species: group.species,
+            raceId: extractedRaceId,
             attributes: group.identity ? { identity: group.identity } : {},
             firstChapterId: group.firstChapterId
           });

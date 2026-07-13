@@ -150,12 +150,25 @@ export class Database {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS races (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        settings_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(work_id, normalized_name)
+      );
+
       CREATE TABLE IF NOT EXISTS characters (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         aliases_json TEXT NOT NULL DEFAULT '[]',
         species TEXT NOT NULL DEFAULT '',
+        race_id TEXT REFERENCES races(id) ON DELETE SET NULL,
         attributes_json TEXT NOT NULL DEFAULT '{}',
         profile_json TEXT NOT NULL DEFAULT '{}',
         current_state_json TEXT NOT NULL DEFAULT '{}',
@@ -485,6 +498,7 @@ export class Database {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_character_names_primary ON character_names(character_id) WHERE kind = 'primary';
       CREATE INDEX IF NOT EXISTS idx_character_names_character ON character_names(character_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_character_versions_character ON character_versions(character_id, version_no DESC);
+      CREATE INDEX IF NOT EXISTS idx_races_work ON races(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_organizations_work ON organizations(work_id, name);
       CREATE INDEX IF NOT EXISTS idx_memberships_organization ON character_organization_memberships(organization_id, character_id);
       CREATE INDEX IF NOT EXISTS idx_foreshadows_work ON foreshadows(work_id, status, importance);
@@ -731,6 +745,77 @@ export class Database {
           );
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (12, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(13)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS races (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          normalized_name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          settings_json TEXT NOT NULL DEFAULT '[]',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(work_id, normalized_name)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_races_work ON races(work_id, name)");
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("race_id")) {
+          this.run("ALTER TABLE characters ADD COLUMN race_id TEXT REFERENCES races(id) ON DELETE SET NULL");
+        }
+        const legacySpecies = this.all<{ work_id: string; species: string; created_at: string; updated_at: string }>(
+          `SELECT work_id, species, MIN(created_at) AS created_at, MAX(updated_at) AS updated_at
+           FROM characters WHERE TRIM(species) <> '' GROUP BY work_id, species ORDER BY work_id, species`
+        );
+        const raceByWorkAndName = new Map<string, string>();
+        let migrationIndex = 0;
+        for (const legacy of legacySpecies) {
+          const name = legacy.species.normalize("NFKC").trim().replace(/\s+/gu, " ");
+          const normalizedName = name.toLocaleLowerCase("zh-CN");
+          const key = `${legacy.work_id}\u0000${normalizedName}`;
+          let raceId = raceByWorkAndName.get(key);
+          if (!raceId) {
+            const existing = this.get<{ id: string }>("SELECT id FROM races WHERE work_id = ? AND normalized_name = ?", legacy.work_id, normalizedName);
+            raceId = existing?.id ?? `race_migration_${++migrationIndex}`;
+            if (!existing) {
+              this.run(
+                `INSERT INTO races (id, work_id, name, normalized_name, description, settings_json, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, '由旧人物种族字段迁移生成', '[]', ?, ?)`,
+                raceId,
+                legacy.work_id,
+                name,
+                normalizedName,
+                legacy.created_at,
+                legacy.updated_at
+              );
+            }
+            raceByWorkAndName.set(key, raceId);
+          }
+          this.run("UPDATE characters SET race_id = ?, species = ? WHERE work_id = ? AND species = ?", raceId, name, legacy.work_id, legacy.species);
+        }
+        const versions = this.all<{ id: string; work_id: string; snapshot_json: string }>(
+          `SELECT cv.id, c.work_id, cv.snapshot_json FROM character_versions cv
+           JOIN characters c ON c.id = cv.character_id`
+        );
+        for (const version of versions) {
+          try {
+            const snapshot = JSON.parse(version.snapshot_json) as Record<string, unknown>;
+            const species = typeof snapshot.species === "string" ? snapshot.species.normalize("NFKC").trim().replace(/\s+/gu, " ") : "";
+            if (!species) {
+              snapshot.raceId = null;
+            } else {
+              const normalizedName = species.toLocaleLowerCase("zh-CN");
+              const race = this.get<{ id: string }>("SELECT id FROM races WHERE work_id = ? AND normalized_name = ?", version.work_id, normalizedName);
+              snapshot.raceId = race?.id ?? null;
+            }
+            this.run("UPDATE character_versions SET snapshot_json = ? WHERE id = ?", JSON.stringify(snapshot), version.id);
+          } catch {
+            // 无效历史快照保持原样，避免阻断数据库迁移。
+          }
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (13, ?)", new Date().toISOString());
       });
     }
   }
