@@ -644,6 +644,24 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (10, ?)", new Date().toISOString());
       });
     }
+    if (!applied.has(11)) {
+      this.transaction(() => {
+        const characters = this.all<{ id: string; species: string; attributes_json: string }>(
+          "SELECT id, species, attributes_json FROM characters WHERE species = ''"
+        );
+        for (const character of characters) {
+          try {
+            const attributes = JSON.parse(character.attributes_json) as Record<string, unknown>;
+            if (typeof attributes.species === "string" && attributes.species.trim()) {
+              this.run("UPDATE characters SET species = ? WHERE id = ?", attributes.species.trim(), character.id);
+            }
+          } catch {
+            // 无效的旧扩展属性保持原样，避免迁移阻断数据库启动。
+          }
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (11, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {

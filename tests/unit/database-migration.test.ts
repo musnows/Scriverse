@@ -45,6 +45,7 @@ function createLegacyDatabase(conflict = false): string {
     VALUES (?, 'work-old', ?, ?, '{}', '{}', '{}', '[]', 'author', NULL, '2025-01-01', '2025-01-01')`);
   insert.run("character-a", "魔斯拉", JSON.stringify(["小魔", "Mothra"]));
   insert.run("character-b", conflict ? "小魔" : "拉顿", JSON.stringify([]));
+  database.prepare("UPDATE characters SET attributes_json = ? WHERE id = 'character-a'").run(JSON.stringify({ species: "泰坦族" }));
   database.close();
   return filename;
 }
@@ -63,14 +64,14 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }]);
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
     expect(first.get("SELECT title, chapter_type FROM chapters WHERE id = 'chapter-old'")).toEqual({ title: "第一章", chapter_type: "正文" });
     expect(first.all("SELECT name, species FROM characters ORDER BY name")).toEqual([
       { name: "拉顿", species: "" },
-      { name: "魔斯拉", species: "" }
+      { name: "魔斯拉", species: "泰坦族" }
     ]);
     expect(first.get("SELECT COUNT(*) AS count FROM organizations")?.count).toBe(0);
     expect(first.get("SELECT COUNT(*) AS count FROM timeline_tracks")?.count).toBe(0);

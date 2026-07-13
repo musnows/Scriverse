@@ -1274,6 +1274,8 @@ export class Store {
     const characterId = id("character");
     const timestamp = now();
     const names = this.prepareCharacterNames(input.name, input.aliases ?? []);
+    const legacySpecies = typeof input.attributes?.species === "string" ? input.attributes.species.trim() : "";
+    const species = input.species?.trim() || legacySpecies;
     this.assertCharacterNamesAvailable(workId, names.entries);
     if (input.firstChapterId) this.assertChapterInWork(input.firstChapterId, workId);
     const organizationIds = [...new Set(input.organizationIds ?? [])];
@@ -1287,7 +1289,7 @@ export class Store {
         workId,
         names.name,
         JSON.stringify(names.aliases),
-        input.species?.trim() ?? "",
+        species,
         JSON.stringify(input.attributes ?? {}),
         JSON.stringify(input.profile ?? {}),
         JSON.stringify(input.currentState ?? {}),
@@ -1319,6 +1321,9 @@ export class Store {
     const current = this.getCharacter(characterId);
     const workId = String(current.workId);
     const names = this.prepareCharacterNames(input.name ?? String(current.name), input.aliases ?? current.aliases as string[]);
+    const attributes = input.attributes ?? current.attributes as Record<string, unknown>;
+    const legacySpecies = typeof attributes.species === "string" ? attributes.species.trim() : "";
+    const species = input.species === undefined ? String(current.species) || legacySpecies : input.species.trim();
     this.assertCharacterNamesAvailable(workId, names.entries, characterId);
     if (input.firstChapterId) this.assertChapterInWork(input.firstChapterId, workId);
     const organizationIds = input.organizationIds === undefined ? null : [...new Set(input.organizationIds)];
@@ -1329,8 +1334,8 @@ export class Store {
          locked_fields_json = ?, visibility = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         JSON.stringify(names.aliases),
-        input.species === undefined ? String(current.species) : input.species.trim(),
-        JSON.stringify(input.attributes ?? current.attributes),
+        species,
+        JSON.stringify(attributes),
         JSON.stringify(input.profile ?? current.profile),
         JSON.stringify(input.currentState ?? current.currentState),
         JSON.stringify(input.lockedFields ?? current.lockedFields),

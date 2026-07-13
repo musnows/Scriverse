@@ -252,7 +252,11 @@ export class ContextBuilder {
             const locked = item.lockedFields as string[];
             const attributes = item.attributes as Record<string, unknown>;
             const state = item.currentState as Record<string, unknown>;
-            const values = locked.map((key) => `${key}=${String(item[key] ?? attributes[key] ?? state[key] ?? "未填写")}`).join("；");
+            const values = locked.map((key) => {
+              const entityValue = item[key];
+              const value = entityValue === undefined || entityValue === null || entityValue === "" ? attributes[key] ?? state[key] : entityValue;
+              return `${key}=${String(value ?? "未填写")}`;
+            }).join("；");
             return `- ${String(item.name)}：${values}`;
           })
           .join("\n")}`
@@ -324,7 +328,10 @@ export class ContextBuilder {
       }
       constraints.push(
         `选定角色：\n${characters
-          .map((item) => `- ${String(item.name)}；种族=${String(item.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`)
+          .map((item) => {
+            const attributes = item.attributes as Record<string, unknown>;
+            return `- ${String(item.name)}；种族=${String(item.species || attributes.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`;
+          })
           .join("\n")}`
       );
     }
