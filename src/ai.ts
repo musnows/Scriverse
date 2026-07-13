@@ -2,6 +2,7 @@ import type { AiMessage, ContextScope, TaskType } from "./domain.js";
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { currentRequestActor } from "./request-context.js";
 import { Store } from "./store.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
 
@@ -684,7 +685,7 @@ export class AiManager {
     const suggestionId = id("suggestion");
     this.store.db.run(
       `INSERT INTO ai_suggestions (id, call_id, work_id, chapter_id, chapter_version, task_type, instruction,
-       source_text, content, action, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+       source_text, content, action, status, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       suggestionId,
       generated.callId,
       input.workId,
@@ -695,7 +696,8 @@ export class AiManager {
       effectiveInput.scope.selection ?? "",
       generated.content,
       action,
-      now()
+      now(),
+      currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
     return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens };
@@ -710,7 +712,7 @@ export class AiManager {
     const suggestionId = id("suggestion");
     this.store.db.run(
       `INSERT INTO ai_suggestions (id, call_id, work_id, chapter_id, chapter_version, task_type, instruction,
-       source_text, content, action, status, created_at) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, 'note', 'pending', ?)`,
+       source_text, content, action, status, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, 'chat', ?, ?, ?, 'note', 'pending', ?, ?)`,
       suggestionId,
       generated.callId,
       input.workId,
@@ -719,7 +721,8 @@ export class AiManager {
       input.instruction,
       input.scope.selection ?? "",
       generated.content,
-      now()
+      now(),
+      currentRequestActor()?.userId ?? null
     );
     return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens };
   }
@@ -845,7 +848,7 @@ export class AiManager {
       nextContent = String(chapter.content).replace(sourceText, content);
     }
     const updated = this.store.saveChapter(String(chapter.id), { content: nextContent }, "ai-suggestion", suggestionId);
-    this.store.db.run("UPDATE ai_suggestions SET status = 'accepted', content = ?, decided_at = ? WHERE id = ?", content, now(), suggestionId);
+    this.store.db.run("UPDATE ai_suggestions SET status = 'accepted', content = ?, decided_at = ?, decided_by_user_id = ? WHERE id = ?", content, now(), currentRequestActor()?.userId ?? null, suggestionId);
     this.store.audit(String(suggestion.workId), "suggestion.accepted", "ai-suggestion", suggestionId, { chapterId: chapter.id });
     return { suggestion: this.getSuggestion(suggestionId), chapter: updated };
   }
@@ -853,7 +856,7 @@ export class AiManager {
   rejectSuggestion(suggestionId: string): Record<string, unknown> {
     const suggestion = this.getSuggestion(suggestionId);
     if (suggestion.status !== "pending") throw new AppError(409, "SUGGESTION_DECIDED", "该建议已经处理");
-    this.store.db.run("UPDATE ai_suggestions SET status = 'rejected', decided_at = ? WHERE id = ?", now(), suggestionId);
+    this.store.db.run("UPDATE ai_suggestions SET status = 'rejected', decided_at = ?, decided_by_user_id = ? WHERE id = ?", now(), currentRequestActor()?.userId ?? null, suggestionId);
     return this.getSuggestion(suggestionId);
   }
 
@@ -987,7 +990,7 @@ export class AiManager {
     const timestamp = now();
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
-       status, input_chars, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
+       status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
       callId,
       input.workId,
       input.taskType,
@@ -996,7 +999,8 @@ export class AiManager {
       JSON.stringify(input.scope),
       JSON.stringify(parameters),
       context.length + input.instruction.length,
-      timestamp
+      timestamp,
+      currentRequestActor()?.userId ?? null
     );
     try {
       const apiKey = this.decryptKey(provider);
@@ -1087,7 +1091,7 @@ export class AiManager {
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
-       status, input_chars, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
+       status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
       callId,
       input.workId,
       input.taskType,
@@ -1096,7 +1100,8 @@ export class AiManager {
       JSON.stringify(input.scope),
       JSON.stringify(parameters),
       context.length + input.instruction.length,
-      now()
+      now(),
+      currentRequestActor()?.userId ?? null
     );
     try {
       const apiKey = this.decryptKey(provider);

@@ -855,6 +855,69 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (14, ?)", new Date().toISOString());
       });
     }
+    if (!applied.has(15)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          username TEXT NOT NULL,
+          normalized_username TEXT NOT NULL UNIQUE,
+          display_name TEXT NOT NULL,
+          password_hash TEXT NOT NULL,
+          password_salt TEXT NOT NULL,
+          role TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin', 'user')),
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_login_at TEXT
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS user_sessions (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token_hash TEXT NOT NULL UNIQUE,
+          csrf_token TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          revoked_at TEXT
+        )`);
+        const workColumns = new Set(this.all("PRAGMA table_info(works)").map((row) => String(row.name)));
+        if (!workColumns.has("owner_user_id")) {
+          this.run("ALTER TABLE works ADD COLUMN owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS work_memberships (
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK(role IN ('owner', 'editor')),
+          invited_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(work_id, user_id)
+        )`);
+        const actorColumns: Array<[string, string]> = [
+          ["file_versions", "created_by_user_id"],
+          ["chapter_versions", "created_by_user_id"],
+          ["character_versions", "created_by_user_id"],
+          ["entity_versions", "created_by_user_id"],
+          ["ai_calls", "created_by_user_id"],
+          ["ai_suggestions", "created_by_user_id"],
+          ["ai_suggestions", "decided_by_user_id"],
+          ["ai_conversations", "created_by_user_id"],
+          ["ai_conversation_messages", "created_by_user_id"],
+          ["analysis_tasks", "created_by_user_id"],
+          ["audit_logs", "user_id"],
+          ["continuation_guard_runs", "created_by_user_id"]
+        ];
+        for (const [table, column] of actorColumns) {
+          const columns = new Set(this.all(`PRAGMA table_info(${table})`).map((row) => String(row.name)));
+          if (!columns.has(column)) this.run(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT REFERENCES users(id) ON DELETE SET NULL`);
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status, username)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token_hash)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id, expires_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_work_memberships_user ON work_memberships(user_id, work_id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_works_owner ON works(owner_user_id, updated_at DESC)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (15, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {

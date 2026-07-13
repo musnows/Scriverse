@@ -2,6 +2,7 @@ import type { ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { currentRequestActor } from "./request-context.js";
 import { countWords, id, json, normalizeParagraphSpacing, now } from "./utils.js";
 
 type WorkInput = {
@@ -297,8 +298,8 @@ export class Store {
     if (latest && requiredString(latest, "snapshot_json") === snapshotJson && source !== "restore") return numberValue(latest, "version_no");
     const versionNo = latest ? numberValue(latest, "version_no") + 1 : 1;
     this.db.run(
-      `INSERT INTO entity_versions (id, work_id, entity_type, entity_id, version_no, snapshot_json, source, source_ref, change_note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO entity_versions (id, work_id, entity_type, entity_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id("entityVersion"),
       String(entity.workId),
       type,
@@ -308,7 +309,8 @@ export class Store {
       source,
       sourceRef,
       changeNote.trim(),
-      timestamp ?? now()
+      timestamp ?? now(),
+      currentRequestActor()?.userId ?? null
     );
     return versionNo;
   }
@@ -334,7 +336,9 @@ export class Store {
   listEntityVersions(type: VersionedEntityType, entityId: string): Record<string, unknown>[] {
     this.versionedEntity(type, entityId);
     return this.db.all(
-      "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? ORDER BY version_no DESC",
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM entity_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.entity_type = ? AND version.entity_id = ? ORDER BY version.version_no DESC`,
       type,
       entityId
     ).map((row) => ({
@@ -347,7 +351,8 @@ export class Store {
       source: requiredString(row, "source"),
       sourceRef: optionalString(row, "source_ref"),
       changeNote: requiredString(row, "change_note"),
-      createdAt: requiredString(row, "created_at")
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
     }));
   }
 
@@ -382,40 +387,66 @@ export class Store {
   }
 
   audit(workId: string | null, action: string, entityType: string, entityId: string | null, detail: unknown = {}): void {
+    const actor = currentRequestActor();
     this.db.run(
-      "INSERT INTO audit_logs (id, work_id, action, entity_type, entity_id, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO audit_logs (id, work_id, action, entity_type, entity_id, actor, detail_json, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
       id("audit"),
       workId,
       action,
       entityType,
       entityId,
+      actor?.displayName || actor?.username || "system",
       JSON.stringify(detail),
-      now()
+      now(),
+      actor?.userId ?? null
     );
   }
 
   createWork(input: WorkInput): Record<string, unknown> {
     const workId = id("work");
     const timestamp = now();
-    this.db.run(
-      `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      workId,
-      input.title,
-      input.author ?? "",
-      input.description ?? "",
-      input.language ?? "zh-CN",
-      input.coverUrl ?? null,
-      JSON.stringify(input.tags ?? []),
-      timestamp,
-      timestamp
-    );
-    this.audit(workId, "work.created", "work", workId);
+    const actor = currentRequestActor();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, created_at, updated_at, owner_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        workId,
+        input.title,
+        input.author ?? "",
+        input.description ?? "",
+        input.language ?? "zh-CN",
+        input.coverUrl ?? null,
+        JSON.stringify(input.tags ?? []),
+        timestamp,
+        timestamp,
+        actor?.userId ?? null
+      );
+      if (actor) {
+        this.db.run(
+          "INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at) VALUES (?, ?, 'owner', ?, ?)",
+          workId,
+          actor.userId,
+          actor.userId,
+          timestamp
+        );
+      }
+      this.audit(workId, "work.created", "work", workId);
+    });
     return this.getWork(workId);
   }
 
   listWorks(): Record<string, unknown>[] {
-    return this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC").map((row) => this.mapWork(row));
+    const actor = currentRequestActor();
+    if (!actor || actor.role === "admin") {
+      return this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC").map((row) => this.mapWork(row));
+    }
+    return this.db.all(
+      `SELECT DISTINCT work.* FROM works work LEFT JOIN work_memberships membership ON membership.work_id = work.id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND (work.owner_user_id = ? OR membership.user_id = ?)
+       ORDER BY work.updated_at DESC`,
+      actor.userId,
+      actor.userId
+    ).map((row) => this.mapWork(row));
   }
 
   getWork(workId: string): Record<string, unknown> {
@@ -487,8 +518,11 @@ export class Store {
   }
 
   deleteWork(workId: string): void {
-    this.getWork(workId);
-    this.db.run("DELETE FROM works WHERE id = ?", workId);
+    const work = this.getWork(workId);
+    this.db.transaction(() => {
+      this.audit(null, "work.deleted", "work", workId, { title: work.title });
+      this.db.run("DELETE FROM works WHERE id = ?", workId);
+    });
   }
 
   setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer): Record<string, unknown> {
@@ -554,7 +588,10 @@ export class Store {
   listFileVersions(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db
-      .all("SELECT id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, created_at FROM file_versions WHERE work_id = ? ORDER BY created_at DESC", workId)
+      .all(`SELECT version.id, version.work_id, version.file_name, version.file_type, version.word_count, version.paragraph_count,
+        version.warnings_json, version.created_at, user.display_name AS actor_display_name, user.username AS actor_username
+        FROM file_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+        WHERE version.work_id = ? ORDER BY version.created_at DESC`, workId)
       .map((row) => ({
         id: requiredString(row, "id"),
         workId: requiredString(row, "work_id"),
@@ -563,7 +600,8 @@ export class Store {
         wordCount: numberValue(row, "word_count"),
         paragraphCount: numberValue(row, "paragraph_count"),
         warnings: json(requiredString(row, "warnings_json"), []),
-        createdAt: requiredString(row, "created_at")
+        createdAt: requiredString(row, "created_at"),
+        actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
       }));
   }
 
@@ -587,8 +625,8 @@ export class Store {
     const timestamp = now();
     const snapshot = this.getWorkTree(workId);
     this.db.run(
-      `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       fileVersionId,
       workId,
       fileName,
@@ -597,7 +635,8 @@ export class Store {
       parsed.paragraphCount,
       JSON.stringify(parsed.warnings),
       JSON.stringify(snapshot),
-      timestamp
+      timestamp,
+      currentRequestActor()?.userId ?? null
     );
     this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
     for (const volume of parsed.volumes) {
@@ -715,7 +754,9 @@ export class Store {
   listChapterVersions(chapterId: string): Record<string, unknown>[] {
     this.getChapter(chapterId);
     return this.db
-      .all("SELECT * FROM chapter_versions WHERE chapter_id = ? ORDER BY version_no DESC", chapterId)
+      .all(`SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+        FROM chapter_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+        WHERE version.chapter_id = ? ORDER BY version.version_no DESC`, chapterId)
       .map((row) => ({
         id: requiredString(row, "id"),
         chapterId: requiredString(row, "chapter_id"),
@@ -724,7 +765,8 @@ export class Store {
         content: requiredString(row, "content"),
         source: requiredString(row, "source"),
         sourceRef: optionalString(row, "source_ref"),
-        createdAt: requiredString(row, "created_at")
+        createdAt: requiredString(row, "created_at"),
+        actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
       }));
   }
 
@@ -780,8 +822,8 @@ export class Store {
       );
       if (hasTextChange) {
         this.db.run(
-          `INSERT INTO chapter_versions (id, chapter_id, version_no, title, content, source, source_ref, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO chapter_versions (id, chapter_id, version_no, title, content, source, source_ref, created_at, created_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           id("chapterVersion"),
           chapterId,
           versionNo,
@@ -789,7 +831,8 @@ export class Store {
           nextContent,
           source,
           sourceRef,
-          timestamp
+          timestamp,
+          currentRequestActor()?.userId ?? null
         );
       }
       if (hasTextChange || hasTypeChange) this.invalidateChapter(String(current.workId), chapterId, versionNo);
@@ -870,15 +913,16 @@ export class Store {
       timestamp
     );
     this.db.run(
-      `INSERT INTO chapter_versions (id, chapter_id, version_no, title, content, source, source_ref, created_at)
-       VALUES (?, ?, 1, ?, ?, ?, ?, ?)`,
+      `INSERT INTO chapter_versions (id, chapter_id, version_no, title, content, source, source_ref, created_at, created_by_user_id)
+       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`,
       id("chapterVersion"),
       chapterId,
       title,
       normalizedContent,
       source,
       sourceRef,
-      timestamp
+      timestamp,
+      currentRequestActor()?.userId ?? null
     );
     return chapterId;
   }
@@ -908,14 +952,15 @@ export class Store {
     if (!existing) {
       const timestamp = now();
       this.db.run(
-        `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at)
-         VALUES (?, ?, 'chapter-analysis', ?, 'pending', ?, ?, ?)`,
+        `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
+         VALUES (?, ?, 'chapter-analysis', ?, 'pending', ?, ?, ?, ?)`,
         id("task"),
         workId,
         JSON.stringify({ type: "chapter", chapterId }),
         JSON.stringify({ [chapterId]: versionNo }),
         timestamp,
-        timestamp
+        timestamp,
+        currentRequestActor()?.userId ?? null
       );
     } else {
       this.db.run(
@@ -928,6 +973,16 @@ export class Store {
   }
 
   private mapWork(row: Row): Record<string, unknown> {
+    const actor = currentRequestActor();
+    const ownerUserId = optionalString(row, "owner_user_id");
+    const membership = actor
+      ? this.db.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
+      : undefined;
+    const accessRole = ownerUserId === actor?.userId
+      ? "owner"
+      : actor?.role === "admin"
+        ? "admin"
+        : String(membership?.role ?? "") === "editor" ? "editor" : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")
@@ -943,6 +998,8 @@ export class Store {
         ? `/api/works/${encodeURIComponent(requiredString(row, "id"))}/cover?v=${encodeURIComponent(requiredString(cover, "updated_at"))}`
         : optionalString(row, "cover_url"),
       tags: json(requiredString(row, "tags_json"), []),
+      ownerUserId,
+      accessRole,
       chapterCount: numberValue(count ?? {}, "chapter_count"),
       wordCount: numberValue(count ?? {}, "word_count"),
       createdAt: requiredString(row, "created_at"),
@@ -1733,8 +1790,8 @@ export class Store {
   ): void {
     const snapshot = this.characterSnapshot(this.getCharacter(characterId));
     this.db.run(
-      `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, source_ref, change_note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id("characterVersion"),
       characterId,
       versionNo,
@@ -1742,7 +1799,8 @@ export class Store {
       source,
       sourceRef,
       changeNote.trim(),
-      timestamp
+      timestamp,
+      currentRequestActor()?.userId ?? null
     );
   }
 
@@ -1873,7 +1931,12 @@ export class Store {
 
   listCharacterVersions(characterId: string): Record<string, unknown>[] {
     this.getCharacter(characterId);
-    return this.db.all("SELECT * FROM character_versions WHERE character_id = ? ORDER BY version_no DESC", characterId).map((row) => ({
+    return this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM character_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.character_id = ? ORDER BY version.version_no DESC`,
+      characterId
+    ).map((row) => ({
       id: requiredString(row, "id"),
       characterId: requiredString(row, "character_id"),
       versionNo: numberValue(row, "version_no"),
@@ -1881,7 +1944,8 @@ export class Store {
       source: requiredString(row, "source"),
       sourceRef: optionalString(row, "source_ref"),
       changeNote: requiredString(row, "change_note"),
-      createdAt: requiredString(row, "created_at")
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
     }));
   }
 
@@ -2535,7 +2599,7 @@ export class Store {
     const contentHash = createHash("sha256").update(input.content).digest("hex");
     this.db.run(
       `INSERT INTO continuation_guard_runs (id, suggestion_id, call_id, chapter_version, content_hash,
-       status, issues_json, context_refs_json, failure, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       status, issues_json, context_refs_json, failure, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       guardId,
       input.suggestionId,
       input.callId ?? null,
@@ -2545,7 +2609,8 @@ export class Store {
       JSON.stringify(input.issues ?? []),
       JSON.stringify(input.contextRefs ?? {}),
       input.failure ?? null,
-      now()
+      now(),
+      currentRequestActor()?.userId ?? null
     );
     this.audit(requiredString(suggestion, "work_id"), "continuation.guard.created", "continuation-guard", guardId, {
       suggestionId: input.suggestionId,
@@ -2583,12 +2648,13 @@ export class Store {
     const conversationId = id("conversation");
     const timestamp = now();
     this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)",
       conversationId,
       workId,
       title.trim() || "新对话",
       timestamp,
-      timestamp
+      timestamp,
+      currentRequestActor()?.userId ?? null
     );
     return this.getAiConversation(conversationId);
   }
@@ -2627,14 +2693,15 @@ export class Store {
       : requiredString(conversation, "title");
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         messageId,
         conversationId,
         input.role,
         input.content,
         JSON.stringify(input.citations ?? []),
         JSON.stringify(input.metadata ?? {}),
-        timestamp
+        timestamp,
+        currentRequestActor()?.userId ?? null
       );
       this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
     });
@@ -2658,23 +2725,25 @@ export class Store {
     const title = requestedTitle?.trim() || `${sourceTitle} · 分支`;
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         title.slice(0, 200),
         timestamp,
-        timestamp
+        timestamp,
+        currentRequestActor()?.userId ?? null
       );
       for (const message of messages.slice(0, targetIndex + 1)) {
         this.db.run(
-          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
           id("message"),
           forkId,
           requiredString(message, "role"),
           requiredString(message, "content"),
           requiredString(message, "citations_json"),
           requiredString(message, "metadata_json"),
-          requiredString(message, "created_at")
+          requiredString(message, "created_at"),
+          currentRequestActor()?.userId ?? null
         );
       }
     });
@@ -2746,15 +2815,16 @@ export class Store {
       }
     }
     this.db.run(
-      `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
       taskId,
       workId,
       input.taskType,
       JSON.stringify(scope),
       JSON.stringify(sourceVersions),
       timestamp,
-      timestamp
+      timestamp,
+      currentRequestActor()?.userId ?? null
     );
     this.audit(workId, "task.created", "analysis-task", taskId, { taskType: input.taskType, scope });
     return this.getTask(taskId);
@@ -2931,12 +3001,18 @@ export class Store {
 
   listAuditLogs(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM audit_logs WHERE work_id = ? ORDER BY created_at DESC LIMIT 200", workId).map((row) => ({
+    return this.db.all(
+      `SELECT log.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM audit_logs log LEFT JOIN users user ON user.id = log.user_id
+       WHERE log.work_id = ? ORDER BY log.created_at DESC LIMIT 200`,
+      workId
+    ).map((row) => ({
       id: requiredString(row, "id"),
       action: requiredString(row, "action"),
       entityType: requiredString(row, "entity_type"),
       entityId: optionalString(row, "entity_id"),
-      actor: requiredString(row, "actor"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? requiredString(row, "actor"),
+      userId: optionalString(row, "user_id"),
       detail: json(requiredString(row, "detail_json"), {}),
       createdAt: requiredString(row, "created_at")
     }));

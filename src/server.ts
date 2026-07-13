@@ -6,8 +6,7 @@ import { resolveRuntimeSecurity } from "./security.js";
 const port = Number(process.env.PORT ?? 13210);
 const host = process.env.HOST ?? "127.0.0.1";
 const dataDirectory = process.env.DATA_DIR ?? join(process.cwd(), ".data");
-const loopbackHost = ["127.0.0.1", "localhost", "::1"].includes(host);
-const security = resolveRuntimeSecurity(process.env, process.env.NODE_ENV === "production" || !loopbackHost);
+const security = resolveRuntimeSecurity(process.env);
 const runtime = createRuntime({
   databasePath: process.env.DATABASE_PATH ?? join(dataDirectory, "novel.db"),
   masterSecret: loadMasterSecret(join(dataDirectory, "master.key"), process.env.AI_NOVEL_MASTER_KEY),
@@ -15,7 +14,7 @@ const runtime = createRuntime({
 });
 
 const server = runtime.app.listen(port, host, () => {
-  console.log(`AI novel workbench listening on http://${host}:${port} (${security.auth ? "authentication enabled" : "local access only"})`);
+  console.log(`AI novel workbench listening on http://${host}:${port} (user authentication enabled${security.auth ? ", deployment gateway enabled" : ""})`);
 });
 
 function shutdown(signal: string): void {

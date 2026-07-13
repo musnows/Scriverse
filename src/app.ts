@@ -11,8 +11,16 @@ import { AppError } from "./errors.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store, versionedEntityTypes } from "./store.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
 import { assertSafeImportedPlainText } from "./import-security.js";
+import { runWithRequestActor } from "./request-context.js";
+import {
+  clearSessionCookie,
+  createUserSessionMiddleware,
+  createWorkAuthorizationMiddleware,
+  setSessionCookie,
+  UserAuthService
+} from "./user-auth.js";
 
 const nonEmpty = z.string().trim().min(1);
 const identifier = z.string().trim().min(1).max(200);
@@ -21,6 +29,19 @@ const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const maximumImportedTextLength = 20_000_000;
+
+const usernameSchema = z.string().trim().min(3).max(40).regex(/^[\p{L}\p{N}_.-]+$/u, "用户名只能包含文字、数字、点、下划线和短横线");
+const passwordSchema = z.string().min(10).max(200);
+const registrationSchema = z.object({
+  username: usernameSchema,
+  displayName: z.string().trim().min(1).max(80),
+  password: passwordSchema
+}).strict();
+const loginSchema = z.object({ username: z.string().trim().min(1).max(100), password: z.string().max(200) }).strict();
+const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
+const memberSchema = z.object({ userId: identifier }).strict();
+const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
+const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 
 function validateImportedText(text: string): string {
   if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
@@ -220,6 +241,7 @@ export type RuntimeOptions = {
   fetchImpl?: typeof fetch;
   serveUi?: boolean;
   security?: RuntimeSecurityOptions;
+  disableUserAuth?: boolean;
 };
 
 export type Runtime = {
@@ -227,6 +249,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  auth: UserAuthService;
   close: () => void;
 };
 
@@ -244,6 +267,7 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 
 export function createRuntime(options: RuntimeOptions): Runtime {
   const database = new Database(options.databasePath);
+  const auth = new UserAuthService(database);
   const store = new Store(database);
   const ai = new AiManager(
     store,
@@ -270,9 +294,59 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
+  app.use(createAuthenticationRateLimitMiddleware());
   app.use(createApiRateLimitMiddleware(options.security?.apiRateLimit, options.security?.apiRateWindowMs));
   if (options.security?.enforceSameOrigin ?? true) app.use(createSameOriginMiddleware());
   app.use(express.json({ limit: "2mb" }));
+
+  app.get("/api/auth/session", (request, response) => {
+    const session = auth.authenticate(request);
+    data(response, session
+      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false }
+      : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers() });
+  });
+  app.post("/api/auth/register", (request, response) => {
+    const result = auth.register(parse(registrationSchema, request.body));
+    setSessionCookie(response, result.token, request.secure);
+    runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
+    data(response, { user: result.session.user, csrfToken: result.session.csrfToken }, 201);
+  });
+  app.post("/api/auth/login", (request, response) => {
+    const input = parse(loginSchema, request.body);
+    const result = auth.login(input.username, input.password);
+    setSessionCookie(response, result.token, request.secure);
+    runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId));
+    data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
+  });
+  app.use(createUserSessionMiddleware(auth, options.disableUserAuth));
+  app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
+  app.delete("/api/auth/session", (request, response) => {
+    if (request.authSession) auth.revoke(request.authSession.id);
+    clearSessionCookie(response, request.secure);
+    noContent(response);
+  });
+  app.patch("/api/auth/profile", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const updated = auth.updateProfile(request.authUser.userId, parse(profileSchema, request.body).displayName);
+    store.audit(null, "user.profile-updated", "user", updated.userId);
+    data(response, updated);
+  });
+  app.patch("/api/auth/password", (request, response) => {
+    if (!request.authUser || !request.authSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const input = parse(passwordChangeSchema, request.body);
+    auth.changePassword(request.authUser.userId, request.authSession.id, input.currentPassword, input.newPassword);
+    store.audit(null, "user.password-changed", "user", request.authUser.userId);
+    noContent(response);
+  });
+
+  app.get("/api/users", (_request, response) => data(response, auth.listUsers()));
+  app.get("/api/users/directory", (request, response) => data(response, auth.directory(String(request.query.q ?? ""))));
+  app.patch("/api/users/:userId", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
+    store.audit(null, "user.updated", "user", updated.userId, { role: updated.role, status: updated.status });
+    data(response, updated);
+  });
 
   app.get("/api/works", (_request, response) => data(response, store.listWorks()));
   app.post("/api/works", (request, response) => data(response, store.createWork(parse(workSchema, request.body)), 201));
@@ -294,6 +368,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
   });
   app.get("/api/works/:workId", (request, response) => data(response, store.getWorkTree(request.params.workId)));
+  app.get("/api/works/:workId/members", (request, response) => data(response, auth.listMembers(request.params.workId)));
+  app.post("/api/works/:workId/members", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const input = parse(memberSchema, request.body);
+    const members = auth.addMember(request.params.workId, input.userId, request.authUser.userId);
+    store.audit(request.params.workId, "work.member-added", "user", input.userId);
+    data(response, members, 201);
+  });
+  app.delete("/api/works/:workId/members/:userId", (request, response) => {
+    const members = auth.removeMember(request.params.workId, request.params.userId);
+    store.audit(request.params.workId, "work.member-removed", "user", request.params.userId);
+    data(response, members);
+  });
   app.patch("/api/works/:workId", (request, response) => data(response, store.updateWork(request.params.workId, parse(workSchema.partial(), request.body))));
   app.delete("/api/works/:workId", (request, response) => {
     store.deleteWork(request.params.workId);
@@ -786,5 +873,5 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
-  return { app, database, store, ai, close: () => database.close() };
+  return { app, database, store, ai, auth, close: () => database.close() };
 }

@@ -139,6 +139,18 @@ export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000): Re
   };
 }
 
+export function createAuthenticationRateLimitMiddleware(limit = 20, windowMs = 15 * 60_000): RequestHandler {
+  const entries = new Map<string, RateEntry>();
+  return (request, response, next) => {
+    const authenticationWrite = request.method === "POST" && ["/api/auth/login", "/api/auth/register"].includes(request.path);
+    if (!authenticationWrite) return next();
+    const rate = consumeRate(entries, `${requestKey(request)}:${request.path}`, limit, windowMs);
+    if (rate.allowed) return next();
+    response.setHeader("Retry-After", String(rate.retryAfter));
+    response.status(429).json({ error: { code: "AUTH_RATE_LIMITED", message: "登录或注册尝试过于频繁，请稍后重试" } });
+  };
+}
+
 function parseIpv4(address: string): number[] | null {
   if (isIP(address) !== 4) return null;
   return address.split(".").map(Number);
@@ -177,12 +189,12 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   }
 }
 
-export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAuthentication = environment.NODE_ENV === "production"): RuntimeSecurityOptions {
+export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAuthentication = false): RuntimeSecurityOptions {
   const production = environment.NODE_ENV === "production";
   const username = environment.APP_AUTH_USERNAME?.trim() ?? "";
   const password = environment.APP_AUTH_PASSWORD ?? "";
   if (Boolean(username) !== Boolean(password)) throw new Error("APP_AUTH_USERNAME 与 APP_AUTH_PASSWORD 必须同时配置");
-  if (requireAuthentication && (!username || !password)) throw new Error("生产环境或非本机监听必须配置 APP_AUTH_USERNAME 与 APP_AUTH_PASSWORD");
+  if (requireAuthentication && (!username || !password)) throw new Error("当前部署策略要求配置 APP_AUTH_USERNAME 与 APP_AUTH_PASSWORD");
   if (password && password.length < 12) throw new Error("APP_AUTH_PASSWORD 至少需要 12 个字符");
   const trustProxyValue = environment.APP_TRUST_PROXY?.trim() ?? "";
   const trustProxy = trustProxyValue === "true" ? true : /^\d+$/u.test(trustProxyValue) ? Number(trustProxyValue) : false;
