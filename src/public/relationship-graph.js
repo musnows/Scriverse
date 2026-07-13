@@ -135,7 +135,7 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
   });
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const exactRepulsion = nodes.length <= 150;
-  const iterations = exactRepulsion ? 155 : 96;
+  const iterations = exactRepulsion ? 88 : 64;
   const repel = (left, right) => {
     let dx = right.x - left.x;
     let dy = right.y - left.y;
@@ -236,6 +236,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   let viewX = 0;
   let viewY = 0;
   let animationFrame = null;
+  let geometryFrame = null;
   let settleTimer = null;
   let destroyed = false;
 
@@ -283,6 +284,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   viewport.dataset.layoutWidth = String(layout.width);
   viewport.dataset.layoutHeight = String(layout.height);
   viewport.dataset.interaction = "idle";
+  viewport.dataset.renderStrategy = "batched-adjacent";
+  viewport.dataset.edgeLabelStrategy = "selected-only";
   const stage = document.createElement("div");
   stage.className = "relationship-mindmap-stage relationship-network-stage";
   viewport.append(stage);
@@ -294,10 +297,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   const help = document.createElement("div");
   help.className = "relationship-network-help";
   help.textContent = "滚轮缩放 · 拖拽空白处移动 · 拖拽人物固定位置 · 点击人物聚焦关系";
-  const legend = document.createElement("div");
-  legend.className = "relationship-map-legend relationship-network-legend";
-  legend.innerHTML = Object.entries(RELATION_STYLE).map(([key, style]) => `<span><i class="${key}"></i>${style.label}</span>`).join("");
-  viewport.append(focusBadge, help, legend);
+  viewport.append(focusBadge, help);
 
   const updateViewTransform = (animate = false) => {
     stage.classList.toggle("is-view-animating", animate);
@@ -318,13 +318,19 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   definitions.innerHTML = `<marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker>`;
   svg.append(definitions);
   const edgeElements = [];
-  const updateEdgeGeometry = ({ edge, hitPath, path, label }) => {
+  const edgeElementsByNode = new Map(graph.nodes.map((node) => [node.id, []]));
+  const updateEdgeGeometry = ({ edge, hitPath, path }) => {
     const from = positions.get(edge.source);
     const to = positions.get(edge.target);
     if (!from || !to) return;
     const geometry = `M ${from.x.toFixed(2)} ${from.y.toFixed(2)} L ${to.x.toFixed(2)} ${to.y.toFixed(2)}`;
     hitPath.setAttribute("d", geometry);
     path.setAttribute("d", geometry);
+  };
+  const updateLabelGeometry = (edge) => {
+    const from = positions.get(edge.source);
+    const to = positions.get(edge.target);
+    if (!from || !to) return;
     const middleX = (from.x + to.x) / 2;
     const middleY = (from.y + to.y) / 2 - 5;
     let angle = Math.atan2(to.y - from.y, to.x - from.x) * 180 / Math.PI;
@@ -349,25 +355,20 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     path.style.setProperty("--edge-width", String(0.8 + edge.confidence * 1.35));
     if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
     if (edge.directed) path.setAttribute("marker-end", `url(#${markerId})`);
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.setAttribute("text-anchor", "middle");
-    label.classList.add("mind-edge-label", edge.category, "is-secondary-label");
-    const fullLabel = formatRelationshipLabel(edge);
-    label.textContent = fullLabel;
-    label.dataset.edgeId = edge.id;
-    label.dataset.fullLabel = label.textContent;
-    svg.append(hitPath, path, label);
-    const edgeElement = { edge, hitPath, path, label };
+    svg.append(hitPath, path);
+    const edgeElement = { edge, hitPath, path };
     edgeElements.push(edgeElement);
+    edgeElementsByNode.get(edge.source)?.push(edgeElement);
+    edgeElementsByNode.get(edge.target)?.push(edgeElement);
     updateEdgeGeometry(edgeElement);
   }
+  const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  label.setAttribute("text-anchor", "middle");
+  label.classList.add("mind-edge-label", "is-edge-selected", "hidden");
+  svg.append(label);
   stage.append(svg);
 
   const nodeElements = new Map();
-  const dominantColor = (nodeId) => {
-    const related = graph.edges.filter((edge) => edge.source === nodeId || edge.target === nodeId).sort((left, right) => right.confidence - left.confidence);
-    return RELATION_STYLE[related[0]?.category]?.color ?? "#7c8b78";
-  };
   const updateNodePosition = (nodeId) => {
     const position = positions.get(nodeId);
     const button = nodeElements.get(nodeId);
@@ -381,6 +382,29 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     nodeElements.forEach((_, nodeId) => updateNodePosition(nodeId));
     edgeElements.forEach(updateEdgeGeometry);
   };
+  const dirtyNodeIds = new Set();
+  const updateAdjacentGeometry = (nodeIds) => {
+    const dirtyEdges = new Set();
+    nodeIds.forEach((nodeId) => {
+      updateNodePosition(nodeId);
+      edgeElementsByNode.get(nodeId)?.forEach((edgeElement) => dirtyEdges.add(edgeElement));
+    });
+    dirtyEdges.forEach(updateEdgeGeometry);
+    if (selectedEdgeId) {
+      const selected = edgeElements.find((edgeElement) => edgeElement.edge.id === selectedEdgeId);
+      if (selected && dirtyEdges.has(selected)) updateLabelGeometry(selected.edge);
+    }
+  };
+  const scheduleAdjacentGeometry = (nodeIds) => {
+    nodeIds.forEach((nodeId) => dirtyNodeIds.add(nodeId));
+    if (geometryFrame) return;
+    geometryFrame = window.requestAnimationFrame(() => {
+      geometryFrame = null;
+      const pendingNodeIds = [...dirtyNodeIds];
+      dirtyNodeIds.clear();
+      updateAdjacentGeometry(pendingNodeIds);
+    });
+  };
 
   const edgeDetail = document.createElement("div");
   edgeDetail.className = "mind-edge-detail hidden";
@@ -390,9 +414,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     nodeElements.forEach((button) => button.classList.remove("is-edge-endpoint"));
     edgeElements.forEach((item) => {
       item.path.classList.remove("is-edge-selected");
-      item.label.classList.remove("is-edge-selected");
       item.hitPath.setAttribute("aria-pressed", "false");
     });
+    label.classList.add("hidden");
+    label.removeAttribute("data-edge-id");
   };
   const applyNodeFocus = (nodeId) => {
     if (!nodeId) return;
@@ -407,8 +432,6 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       const active = item.edge.source === nodeId || item.edge.target === nodeId;
       item.path.classList.toggle("is-highlighted", active);
       item.path.classList.toggle("is-dimmed", !active);
-      item.label.classList.toggle("is-secondary-label", !active);
-      item.label.classList.toggle("is-dimmed", !active);
     });
     focusText.textContent = `聚焦：${graph.nodeById.get(nodeId)?.name ?? "未知角色"}`;
     edgeDetail.classList.add("hidden");
@@ -429,11 +452,14 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       item.path.classList.toggle("is-highlighted", false);
       item.path.classList.toggle("is-edge-selected", active);
       item.path.classList.toggle("is-dimmed", !active);
-      item.label.classList.toggle("is-secondary-label", !active);
-      item.label.classList.toggle("is-edge-selected", active);
-      item.label.classList.toggle("is-dimmed", !active);
       item.hitPath.setAttribute("aria-pressed", String(active));
     });
+    const fullLabel = selection.label;
+    label.textContent = fullLabel;
+    label.dataset.edgeId = selection.edgeId;
+    label.dataset.fullLabel = fullLabel;
+    label.classList.remove("hidden");
+    updateLabelGeometry(edgeElement.edge);
     focusText.textContent = `关系：${selection.endpointNames[0]} ↔ ${selection.endpointNames[1]}`;
     const heading = document.createElement("b");
     heading.textContent = `${selection.endpointNames[0]}与${selection.endpointNames[1]}`;
@@ -455,25 +481,22 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     });
   });
 
-  const settleInteraction = (button, neighborIds) => {
+  const settleInteraction = (button) => {
     window.clearTimeout(settleTimer);
     viewport.dataset.interaction = "settling";
     button.classList.add("is-settling");
-    neighborIds.forEach((id) => nodeElements.get(id)?.classList.add("is-settling-neighbor"));
     settleTimer = window.setTimeout(() => {
       button.classList.remove("is-settling");
-      neighborIds.forEach((id) => nodeElements.get(id)?.classList.remove("is-settling-neighbor", "is-drag-neighbor"));
       viewport.dataset.interaction = "idle";
-    }, 420);
+    }, 180);
   };
   for (const node of graph.nodes) {
     const button = document.createElement("button");
-    const nodeSize = clamp(27 + Math.sqrt(Math.max(0, node.degree)) * 6, 27, 68);
+    const nodeSize = clamp(10 + Math.sqrt(Math.max(0, node.degree)) * 3.2, 10, 34);
     button.type = "button";
     button.className = `mind-node network-node${node.locked ? " is-locked" : ""}${node.degree === 0 ? " is-isolated" : ""}`;
     button.dataset.nodeId = node.id;
     button.style.setProperty("--node-size", `${nodeSize}px`);
-    button.style.setProperty("--node-color", dominantColor(node.id));
     const label = document.createElement("span");
     label.textContent = node.name;
     button.append(label);
@@ -486,22 +509,18 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
 
     let dragState = null;
     let suppressClick = false;
-    button.addEventListener("mouseenter", () => { if (!selectedEdgeId && viewport.dataset.interaction === "idle") applyNodeFocus(node.id); });
-    button.addEventListener("mouseleave", () => { if (!selectedEdgeId && viewport.dataset.interaction === "idle") applyNodeFocus(selectedId); });
     button.addEventListener("focus", () => { if (!selectedEdgeId) applyNodeFocus(node.id); });
     button.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       event.stopPropagation();
       const rect = viewport.getBoundingClientRect();
-      dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect, dragged: false, last: { ...positions.get(node.id) } };
+      dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect, dragged: false };
       selectedEdgeId = null;
       selectedId = node.id;
       applyNodeFocus(node.id);
       button.setPointerCapture(event.pointerId);
       button.classList.add("is-dragging");
       button.setAttribute("aria-grabbed", "true");
-      const neighborIds = [...(neighbors.get(node.id) ?? [])];
-      neighborIds.forEach((id) => nodeElements.get(id)?.classList.add("is-drag-neighbor"));
       viewport.dataset.interaction = "dragging";
       viewport.dataset.draggedNodeId = node.id;
     });
@@ -514,23 +533,11 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
         x: clamp(((event.clientX - dragState.rect.left - viewX) / viewScale) / Math.max(dragState.rect.width, 1) * layout.width, layout.marginX, layout.width - layout.marginX),
         y: clamp(((event.clientY - dragState.rect.top - viewY) / viewScale) / Math.max(dragState.rect.height, 1) * layout.height, layout.marginY, layout.height - layout.marginY)
       };
-      const deltaX = next.x - dragState.last.x;
-      const deltaY = next.y - dragState.last.y;
       positions.set(node.id, next);
-      for (const neighborId of neighbors.get(node.id) ?? []) {
-        const neighbor = positions.get(neighborId);
-        if (!neighbor) continue;
-        positions.set(neighborId, {
-          x: clamp(neighbor.x + deltaX * 0.065, layout.marginX, layout.width - layout.marginX),
-          y: clamp(neighbor.y + deltaY * 0.065, layout.marginY, layout.height - layout.marginY)
-        });
-      }
-      dragState.last = next;
-      updateAllGeometry();
+      scheduleAdjacentGeometry([node.id]);
     });
     const endDrag = (event) => {
       if (!dragState || event.pointerId !== dragState.pointerId) return;
-      const neighborIds = [...(neighbors.get(node.id) ?? [])];
       suppressClick = dragState.dragged;
       dragState = null;
       button.classList.remove("is-dragging");
@@ -538,9 +545,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId);
       if (suppressClick) {
         options.onSelect?.(node.id);
-        settleInteraction(button, neighborIds);
+        settleInteraction(button);
       } else {
-        neighborIds.forEach((id) => nodeElements.get(id)?.classList.remove("is-drag-neighbor"));
         viewport.dataset.interaction = "idle";
       }
     };
@@ -647,6 +653,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     destroy() {
       destroyed = true;
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      if (geometryFrame) window.cancelAnimationFrame(geometryFrame);
       window.clearTimeout(settleTimer);
       container.replaceChildren();
     },
