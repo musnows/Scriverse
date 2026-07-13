@@ -13,6 +13,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
 
 const state = {
   works: [],
@@ -51,6 +52,33 @@ const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
+let restoringPageRoute = true;
+
+function settingsRouteContext() {
+  const context = settingsReturnContext ?? {};
+  return {
+    returnView: context.view,
+    returnModule: context.module,
+    returnChapterId: context.chapterId
+  };
+}
+
+function replacePageRoute(route) {
+  if (restoringPageRoute) return;
+  const hash = serializePageRoute(route);
+  if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
+}
+
+function currentPageRoute() {
+  const workId = state.work?.id ?? null;
+  if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
+  if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
+  if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
+  if (!workId) return { view: "shelf" };
+  if (!$("#editor-view").classList.contains("hidden")) return { view: "editor", workId, chapterId: state.chapter?.id ?? null };
+  if (!$("#module-view").classList.contains("hidden")) return { view: "module", workId, module: state.module };
+  return { view: "welcome", workId };
+}
 
 function loadPanelLayout() {
   try {
@@ -889,6 +917,62 @@ async function loadWorks(preferredId) {
   showShelf();
 }
 
+function restoredSettingsReturnContext(route) {
+  if (route.returnView === "module" && route.returnModule) return { view: "module", module: route.returnModule };
+  if (route.returnView === "editor" && route.returnChapterId) return { view: "editor", chapterId: route.returnChapterId };
+  if (route.returnView === "welcome") return { view: "welcome" };
+  if (route.returnView === "shelf") return { view: "shelf" };
+  if (state.work && state.chapter) return { view: "editor", chapterId: state.chapter.id };
+  if (state.work) return { view: "welcome" };
+  return { view: "shelf" };
+}
+
+async function initializePage() {
+  const route = parsePageRoute(window.location.hash);
+  state.works = await api("/api/works");
+  try {
+    if (route.view === "shelf") {
+      showShelf();
+      return;
+    }
+
+    const requestedWork = route.workId ? state.works.find((work) => work.id === route.workId) : null;
+    if (route.workId && !requestedWork) {
+      showShelf();
+      return;
+    }
+
+    if (requestedWork) {
+      state.module = route.view === "module" ? route.module : "editor";
+      await selectWork(requestedWork.id);
+    }
+
+    if (route.view === "editor") {
+      const chapterExists = state.work?.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === route.chapterId));
+      if (route.chapterId && chapterExists && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
+      return;
+    }
+    if (route.view === "module") return;
+    if (route.view === "welcome") {
+      showWelcome(true);
+      return;
+    }
+    if (route.view === "settings") {
+      showSettingsHub();
+      settingsReturnContext = restoredSettingsReturnContext(route);
+      renderSettingsHub();
+      return;
+    }
+    if (route.view === "platform-ai") {
+      await showPlatformAi();
+      settingsReturnContext = restoredSettingsReturnContext(route);
+    }
+  } finally {
+    restoringPageRoute = false;
+    replacePageRoute(currentPageRoute());
+  }
+}
+
 function showShelf() {
   state.dirty = false;
   settingsReturnContext = null;
@@ -904,6 +988,7 @@ function showShelf() {
   $("#settings-button").removeAttribute("aria-current");
   setSaveState("书架");
   renderShelf();
+  replacePageRoute({ view: "shelf" });
 }
 
 function captureSettingsReturnContext() {
@@ -943,6 +1028,7 @@ function showSettingsHub() {
   $("#settings-button").setAttribute("aria-current", "page");
   setSaveState("设置");
   renderSettingsHub();
+  replacePageRoute({ view: "settings", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
 }
 
@@ -977,6 +1063,7 @@ async function showPlatformAi() {
   $("#settings-button").setAttribute("aria-current", "page");
   setSaveState("平台 AI");
   await renderPlatformAiConfig();
+  replacePageRoute({ view: "platform-ai", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
 }
 
@@ -1122,6 +1209,7 @@ async function selectChapter(chapterId) {
   if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
+  replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
 }
 
 function updateChapterStats() {
@@ -1153,6 +1241,7 @@ function showWelcome(hasWork = false) {
   $("#welcome-view").classList.remove("hidden");
   $("#welcome-view h1").innerHTML = hasWork ? "故事已经就位，<br>从新章节继续。" : "把长篇故事的每条线索，<br>留在作者掌控之中。";
   $("#welcome-new-work").textContent = hasWork ? "新建章节" : "创建第一部作品";
+  replacePageRoute(hasWork && state.work ? { view: "welcome", workId: state.work.id } : { view: "shelf" });
 }
 
 function markActiveModule(module) {
@@ -1211,6 +1300,7 @@ async function showModule(module) {
   } catch (error) {
     $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
   }
+  replacePageRoute({ view: "module", workId: state.work.id, module });
 }
 
 function emptyModule(title, description) {
@@ -2645,4 +2735,8 @@ $("#export-button").addEventListener("click", () => {
 });
 window.addEventListener("beforeunload", (event) => { if (state.dirty) event.preventDefault(); });
 
-loadWorks().catch((error) => toast(`系统初始化失败：${error.message}`, "error"));
+initializePage().catch((error) => {
+  restoringPageRoute = false;
+  showShelf();
+  toast(`系统初始化失败：${error.message}`, "error");
+});
