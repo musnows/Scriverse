@@ -211,6 +211,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="message-body"');
     expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");
+    expect(styles.text).toContain(".account-menu button { min-height: 30px; padding: 6px 9px; border: 1px solid var(--line);");
+    expect(styles.text).toContain("font-size: 10px; }");
+    expect(styles.text).toContain(".account-menu button:hover, .account-menu button:focus-visible");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");

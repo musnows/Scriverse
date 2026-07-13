@@ -113,7 +113,8 @@ button { cursor: pointer; }
 .account-menu { position: absolute; z-index: 80; top: 48px; right: 84px; display: grid; min-width: 180px; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow); }
 .account-menu.hidden { display: none; }
 .account-menu small { margin-bottom: 8px; color: var(--muted); }
-.account-menu button { text-align: left; }
+.account-menu button { min-height: 30px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 10px; }
+.account-menu button:hover, .account-menu button:focus-visible { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
 .settings-button:hover, .settings-button:focus-visible, .settings-button[aria-current="page"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); }
 .settings-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
