@@ -63,7 +63,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }]);
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
@@ -75,6 +75,7 @@ describe("数据库版本化迁移", () => {
     expect(first.get("SELECT description, keywords_json FROM volumes WHERE id = 'volume-old'")).toEqual({ description: "", keywords_json: "[]" });
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "is_internal")).toBe(true);
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "context_window")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "metadata_json")).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
     first.run(

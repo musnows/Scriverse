@@ -120,6 +120,13 @@ type ReviewInput = {
   resolutionNote?: string;
 };
 
+type AiConversationMessageInput = {
+  role: "user" | "assistant";
+  content: string;
+  citations?: unknown[];
+  metadata?: { modelDisplayName?: string; outputTokens?: number };
+};
+
 function requiredString(row: Row, key: string): string {
   return String(row[key] ?? "");
 }
@@ -1971,6 +1978,133 @@ export class Store {
       suggestionId
     );
     return row ? this.mapContinuationGuard(row) : null;
+  }
+
+  createAiConversation(workId: string, title = "新对话"): Record<string, unknown> {
+    this.getWork(workId);
+    const conversationId = id("conversation");
+    const timestamp = now();
+    this.db.run(
+      "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      conversationId,
+      workId,
+      title.trim() || "新对话",
+      timestamp,
+      timestamp
+    );
+    return this.getAiConversation(conversationId);
+  }
+
+  listAiConversations(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT conversation.*,
+        (SELECT COUNT(*) FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id) AS message_count,
+        COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
+       FROM ai_conversations conversation
+       WHERE conversation.work_id = ?
+       ORDER BY conversation.updated_at DESC, conversation.created_at DESC
+       LIMIT 100`,
+      workId
+    ).map((row) => this.mapAiConversation(row));
+  }
+
+  getAiConversation(conversationId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!row) throw notFound("AI 对话");
+    const messages = this.db.all(
+      "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    ).map((message) => this.mapAiConversationMessage(message));
+    return { ...this.mapAiConversation(row), messageCount: messages.length, messages };
+  }
+
+  addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const messageId = id("message");
+    const timestamp = now();
+    const title = requiredString(conversation, "title") === "新对话" && input.role === "user"
+      ? input.content.replace(/\s+/gu, " ").trim().slice(0, 36) || "新对话"
+      : requiredString(conversation, "title");
+    this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        messageId,
+        conversationId,
+        input.role,
+        input.content,
+        JSON.stringify(input.citations ?? []),
+        JSON.stringify(input.metadata ?? {}),
+        timestamp
+      );
+      this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+    });
+    const message = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
+    if (!message) throw notFound("AI 对话消息");
+    return this.mapAiConversationMessage(message);
+  }
+
+  forkAiConversation(conversationId: string, messageId: string, requestedTitle?: string): Record<string, unknown> {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const messages = this.db.all(
+      "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    );
+    const targetIndex = messages.findIndex((message) => requiredString(message, "id") === messageId);
+    if (targetIndex < 0) throw notFound("AI 对话消息");
+    const forkId = id("conversation");
+    const timestamp = now();
+    const sourceTitle = requiredString(conversation, "title");
+    const title = requestedTitle?.trim() || `${sourceTitle} · 分支`;
+    this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        forkId,
+        requiredString(conversation, "work_id"),
+        title.slice(0, 200),
+        timestamp,
+        timestamp
+      );
+      for (const message of messages.slice(0, targetIndex + 1)) {
+        this.db.run(
+          "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          id("message"),
+          forkId,
+          requiredString(message, "role"),
+          requiredString(message, "content"),
+          requiredString(message, "citations_json"),
+          requiredString(message, "metadata_json"),
+          requiredString(message, "created_at")
+        );
+      }
+    });
+    return this.getAiConversation(forkId);
+  }
+
+  private mapAiConversation(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      title: requiredString(row, "title"),
+      messageCount: numberValue(row, "message_count"),
+      preview: requiredString(row, "preview"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private mapAiConversationMessage(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      conversationId: requiredString(row, "conversation_id"),
+      role: requiredString(row, "role"),
+      content: requiredString(row, "content"),
+      citations: json(requiredString(row, "citations_json"), []),
+      metadata: json(requiredString(row, "metadata_json"), {}),
+      createdAt: requiredString(row, "created_at")
+    };
   }
 
   hashContent(content: string): string {

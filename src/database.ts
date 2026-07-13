@@ -322,6 +322,24 @@ export class Database {
         decided_at TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS ai_conversations (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '新对话',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS ai_conversation_messages (
+        id TEXT PRIMARY KEY,
+        conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
+        content TEXT NOT NULL,
+        citations_json TEXT NOT NULL DEFAULT '[]',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS analysis_tasks (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -448,6 +466,8 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_reviews_work ON review_items(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_tasks_work ON analysis_tasks(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_calls_work ON ai_calls(work_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_character_names_primary ON character_names(character_id) WHERE kind = 'primary';
       CREATE INDEX IF NOT EXISTS idx_character_names_character ON character_names(character_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_organizations_work ON organizations(work_id, name);
@@ -603,6 +623,15 @@ export class Database {
         this.run("UPDATE providers SET work_id = ? WHERE work_id <> ?", PLATFORM_AI_WORK_ID, PLATFORM_AI_WORK_ID);
         this.run("CREATE INDEX IF NOT EXISTS idx_work_ai_settings_work ON work_ai_settings(work_id)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (8, ?)", timestamp);
+      });
+    }
+    if (!applied.has(9)) {
+      this.transaction(() => {
+        const messageColumns = new Set(this.all("PRAGMA table_info(ai_conversation_messages)").map((row) => String(row.name)));
+        if (!messageColumns.has("metadata_json")) {
+          this.run("ALTER TABLE ai_conversation_messages ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (9, ?)", new Date().toISOString());
       });
     }
   }

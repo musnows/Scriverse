@@ -511,6 +511,28 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.patch("/api/works/:workId/ai-settings", (request, response) => data(response, store.updateWorkAiSettings(request.params.workId, parse(aiPromptSchema, request.body))));
+  app.get("/api/works/:workId/ai-conversations", (request, response) => data(response, store.listAiConversations(request.params.workId)));
+  app.post("/api/works/:workId/ai-conversations", (request, response) => {
+    const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
+    data(response, store.createAiConversation(request.params.workId, input.title), 201);
+  });
+  app.get("/api/ai-conversations/:conversationId", (request, response) => data(response, store.getAiConversation(request.params.conversationId)));
+  app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
+    const input = parse(z.object({ messageId: identifier, title: z.string().max(200).optional() }), request.body);
+    data(response, store.forkAiConversation(request.params.conversationId, input.messageId, input.title), 201);
+  });
+  app.post("/api/ai-conversations/:conversationId/messages", (request, response) => {
+    const input = parse(z.object({
+      role: z.enum(["user", "assistant"]),
+      content: nonEmpty.max(200_000),
+      citations: z.array(z.unknown()).max(100).optional(),
+      metadata: z.object({
+        modelDisplayName: z.string().max(200).optional(),
+        outputTokens: z.number().int().min(0).max(10_000_000).optional()
+      }).optional()
+    }), request.body);
+    data(response, store.addAiConversationMessage(request.params.conversationId, input), 201);
+  });
   app.post("/api/works/:workId/ai-context-usage", (request, response) => {
     const input = parse(z.object({
       modelId: identifier.optional(),
