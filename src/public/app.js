@@ -56,6 +56,7 @@ const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
+let memberDialogWork = null;
 
 function settingsRouteContext() {
   const context = settingsReturnContext ?? {};
@@ -1105,15 +1106,17 @@ async function openUsersDialog() {
 }
 
 function renderMembers(members) {
-  const canManage = ["admin", "owner"].includes(String(state.work?.accessRole));
+  const work = memberDialogWork ?? state.work;
+  const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
     <div><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div>
     <span>${member.role === "owner" ? "所有者" : "可编辑"}</span>
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
   $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
+    if (!work) return;
     try {
-      const updated = await api(`/api/works/${encodeURIComponent(state.work.id)}/members/${encodeURIComponent(button.dataset.removeMember)}`, { method: "DELETE" });
+      const updated = await api(`/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(button.dataset.removeMember)}`, { method: "DELETE" });
       renderMembers(updated);
       await fillMemberCandidates(updated);
       toast("协作者已移除");
@@ -1131,15 +1134,18 @@ async function fillMemberCandidates(members) {
   $("#member-user-select").disabled = !candidates.length;
 }
 
-async function openMembersDialog() {
-  if (!state.work) return;
-  $("#members-dialog-title").textContent = `《${state.work.title}》协作成员`;
+async function openMembersDialog(targetWork = state.work) {
+  if (!targetWork) return;
+  memberDialogWork = targetWork;
+  const canManage = ["admin", "owner"].includes(String(targetWork.accessRole));
+  $("#members-dialog-title").textContent = `《${targetWork.title}》可访问人`;
   $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
+  $("#member-invite-form").classList.toggle("hidden", !canManage);
   $("#members-dialog").showModal();
   try {
-    const members = await api(`/api/works/${encodeURIComponent(state.work.id)}/members`);
+    const members = await api(`/api/works/${encodeURIComponent(targetWork.id)}/members`);
     renderMembers(members);
-    await fillMemberCandidates(members);
+    if (canManage) await fillMemberCandidates(members);
   } catch (error) { $("#members-dialog").close(); toast(error.message, "error"); }
 }
 
@@ -2029,14 +2035,23 @@ function openWorkDialog() {
 
 function openWorkSettingsDialog(work) {
   if (!work) return;
+  const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
+  const accessField = `<section class="work-access-field" aria-labelledby="work-access-title">
+    <div><strong id="work-access-title">可访问人</strong><small>作品创建者和受邀协作者可以访问并共同编辑这部作品。</small></div>
+    ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">添加或管理可访问人</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
+  </section>`;
   openDialog("作品信息",
-    field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description),
+    field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = await api("/api/works");
       renderShelf();
       toast("作品信息已保存");
     }, "书架设置");
+  $("#work-access-manage")?.addEventListener("click", () => {
+    $("#form-dialog").close();
+    openMembersDialog(work);
+  });
 }
 
 async function openChapterDialog() {
@@ -2760,15 +2775,17 @@ $("#register-form").addEventListener("submit", async (event) => {
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#user-management-button").addEventListener("click", openUsersDialog);
-$("#collaboration-button").addEventListener("click", openMembersDialog);
+$("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
+$("#members-dialog").addEventListener("close", () => { memberDialogWork = null; });
 $("#member-invite-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const userId = $("#member-user-select").value;
-  if (!state.work || !userId) return;
+  const work = memberDialogWork ?? state.work;
+  if (!work || !userId) return;
   try {
-    const members = await api(`/api/works/${encodeURIComponent(state.work.id)}/members`, { method: "POST", body: { userId } });
+    const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId } });
     renderMembers(members);
     await fillMemberCandidates(members);
     toast("协作者已邀请");

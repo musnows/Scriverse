@@ -172,7 +172,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260714-relationship-drag');
+    expect(page.text).toContain('/app.js?v=20260714-work-access');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');
     expect(page.text).toContain('id="ai-context-meter"');
@@ -184,6 +184,9 @@ describe("作者完整创作流程", () => {
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
     expect(application.text).toContain('data-testid="book-add-card"');
+    expect(application.text).toContain('id="work-access-title">可访问人</strong>');
+    expect(application.text).toContain('id="work-access-manage"');
+    expect(application.text).toContain("memberDialogWork ?? state.work");
     expect(application.text).toContain('const platformDocumentTitle = "叙界 · 小说 AI 创作工作台"');
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
     expect(application.text).toContain("updateDocumentTitle(state.work)");

@@ -161,6 +161,11 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .access-row select { min-width: 105px; }
 .member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0 0 18px; }
 .member-invite-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.work-access-field { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
+.work-access-field > div { display: grid; gap: 4px; min-width: 0; }
+.work-access-field strong { color: var(--ink); font-size: 12px; }
+.work-access-field small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.work-access-field .ghost-button { flex: 0 0 auto; white-space: nowrap; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
 .account-dialog .dialog-close { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid transparent; border-radius: 50%; font-size: 21px; line-height: 1; }
 .account-dialog .dialog-close:hover, .account-dialog .dialog-close:focus-visible { border-color: var(--line); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
