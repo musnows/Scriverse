@@ -65,7 +65,7 @@ function analysisTaskStatusLabel(status) {
   return ({
     pending: "待执行",
     running: "运行中",
-    review: "待审核",
+    review: "已完成",
     completed: "已完成",
     partial: "部分失败",
     expired: "已过期",
@@ -1900,7 +1900,7 @@ async function renderTasks() {
       const cancel = button.parentElement.querySelector("[data-cancel-task]");
       if (cancel) cancel.textContent = "取消运行";
       const completed = await api(`/api/tasks/${button.dataset.runTask}/run`, { method: "POST", body: { modelId: $("#ai-model").value || undefined } });
-      toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成，结果进入审核状态");
+      toast(completed.status === "cancelled" ? "分析任务已取消" : completed.status === "expired" ? "正文已变化，本次分析已过期" : "分析已完成");
       if (state.module === "tasks" && state.work?.id === workId) await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -2987,7 +2987,7 @@ async function showChapterInsight() {
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
   panel.classList.remove("hidden");
   if (!insight) {
-    panel.innerHTML = "<strong>尚无章节概览</strong>请在“分析任务”中运行章节理解，结果会先进入审核状态。";
+    panel.innerHTML = "<strong>尚无章节概览</strong>请在“分析任务”中运行章节理解，完成后可在此查看结果。";
     return;
   }
   const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
