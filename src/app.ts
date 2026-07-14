@@ -301,11 +301,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/auth/session", (request, response) => {
     const session = auth.authenticate(request);
+    const registrationOpen = !auth.hasUsers() || options.security?.allowRegistration !== false;
     data(response, session
-      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false }
-      : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers() });
+      ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
+      : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
   });
   app.post("/api/auth/register", (request, response) => {
+    if (auth.hasUsers() && options.security?.allowRegistration === false) {
+      throw new AppError(403, "REGISTRATION_DISABLED", "当前部署已关闭新用户注册");
+    }
     const result = auth.register(parse(registrationSchema, request.body));
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));

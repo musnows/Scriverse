@@ -67,6 +67,7 @@ npm start
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
+| `APP_ALLOW_REGISTRATION` | `true` | Set to `false` to disable open registration (first-admin setup remains allowed); recommended behind a public nginx reverse proxy |
 
 Custom configuration example:
 

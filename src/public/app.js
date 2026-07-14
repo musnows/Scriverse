@@ -812,13 +812,15 @@ function selectAuthMode(mode) {
   $("#auth-error").textContent = "";
 }
 
-function showAuth(setupRequired) {
+function showAuth(setupRequired, registrationOpen = true) {
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   $("#auth-title").textContent = setupRequired ? "创建首个管理员账户" : "登录后继续创作";
   $("#auth-description").textContent = setupRequired
     ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
     : "你的作品、协作权限和每一次修改都会绑定到账户。";
+  const canRegister = setupRequired || registrationOpen;
+  $("#auth-register-tab").classList.toggle("hidden", !canRegister);
   selectAuthMode(setupRequired ? "register" : "login");
 }
 

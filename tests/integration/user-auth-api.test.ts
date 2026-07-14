@@ -101,4 +101,25 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await request(runtime.app).post("/api/auth/login").send({ username: "profile_user", password: "secure-password-123" }).expect(401);
     await request(runtime.app).post("/api/auth/login").send({ username: "profile_user", password: "new-secure-password-456" }).expect(200);
   });
+
+  it("可通过 APP_ALLOW_REGISTRATION=false 关闭开放注册", async () => {
+    runtime.close();
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "user-auth-test-master-secret-with-enough-length",
+      serveUi: false,
+      security: { allowRegistration: false, enforceSameOrigin: true }
+    });
+    const openSession = await request(runtime.app).get("/api/auth/session").expect(200);
+    expect(openSession.body.data).toMatchObject({ setupRequired: true, registrationOpen: true });
+    await register(runtime, "only_admin", "唯一管理员");
+    const closedSession = await request(runtime.app).get("/api/auth/session").expect(200);
+    expect(closedSession.body.data.registrationOpen).toBe(false);
+    const rejected = await request(runtime.app).post("/api/auth/register").send({
+      username: "blocked_user",
+      displayName: "被拦截",
+      password: "secure-password-123"
+    }).expect(403);
+    expect(rejected.body.error.code).toBe("REGISTRATION_DISABLED");
+  });
 });

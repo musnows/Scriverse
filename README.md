@@ -67,6 +67,7 @@ npm start
 | `APP_AUTH_PASSWORD` | 空 | 可选的部署网关密码，至少 12 个字符；必须通过 HTTPS 传输 |
 | `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | 开发环境 `true`，生产环境 `false` | 是否允许 AI 供应商连接本机或内网地址；链路本地与云元数据地址始终禁止 |
+| `APP_ALLOW_REGISTRATION` | `true` | 设为 `false` 时关闭开放注册（仍允许首次初始化创建管理员）；公网 nginx 反代部署建议关闭 |
 
 自定义示例：
 

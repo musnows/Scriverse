@@ -19,6 +19,7 @@ export type RuntimeSecurityOptions = {
   apiRateWindowMs?: number;
   enforceSameOrigin?: boolean;
   allowPrivateAiEndpoints?: boolean;
+  allowRegistration?: boolean;
 };
 
 type RateEntry = { count: number; resetAt: number };
