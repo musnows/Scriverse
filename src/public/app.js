@@ -1152,7 +1152,8 @@ async function openMembersDialog(targetWork = state.work) {
   if (!targetWork) return;
   memberDialogWork = targetWork;
   const canManage = ["admin", "owner"].includes(String(targetWork.accessRole));
-  $("#members-dialog-title").textContent = `《${targetWork.title}》可访问人`;
+  $("#members-dialog-eyebrow").textContent = `作品权限 · 《${targetWork.title}》`;
+  $("#members-dialog-title").textContent = "可访问人";
   $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
   $("#member-invite-form").classList.toggle("hidden", !canManage);
   $("#members-dialog").showModal();

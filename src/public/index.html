@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260715-dialog-close">
+    <link rel="stylesheet" href="/styles.css?v=20260715-access-dialog">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -383,7 +383,9 @@
 
     <dialog id="users-dialog" class="dialog wide-dialog" aria-labelledby="users-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="users-dialog-title">用户管理</h2></div><button id="users-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
-      <div id="users-list" class="access-list"></div>
+      <div class="access-dialog-body">
+        <div id="users-list" class="access-list"></div>
+      </div>
     </dialog>
 
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
@@ -401,9 +403,11 @@
     </dialog>
 
     <dialog id="members-dialog" class="dialog wide-dialog" aria-labelledby="members-dialog-title">
-      <div class="dialog-header"><div><span class="eyebrow">作品权限</span><h2 id="members-dialog-title">协作成员</h2></div><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
-      <form id="member-invite-form" class="member-invite-form"><label>邀请已注册用户<select id="member-user-select" required></select></label><button class="primary-button" type="submit">邀请协作</button></form>
-      <div id="members-list" class="access-list"></div>
+      <div class="dialog-header"><div><span id="members-dialog-eyebrow" class="eyebrow">作品权限</span><h2 id="members-dialog-title">可访问人</h2></div><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <div class="access-dialog-body">
+        <form id="member-invite-form" class="member-invite-form"><label>邀请已注册用户<select id="member-user-select" required></select></label><button class="primary-button" type="submit">邀请协作</button></form>
+        <div id="members-list" class="access-list"></div>
+      </div>
     </dialog>
 
     <dialog id="entity-history-dialog" class="dialog wide-dialog" aria-labelledby="entity-history-title">

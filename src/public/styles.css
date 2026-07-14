@@ -193,13 +193,76 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .settings-hub-card strong { align-self: end; font-size: 16px; }
 .settings-hub-card small { align-self: start; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .settings-work-note { max-width: 1000px; margin: 18px auto 0; color: var(--muted); font-size: 11px; }
-.access-list { display: grid; gap: 8px; max-height: min(58vh, 580px); overflow: auto; padding: 4px 1px; }
-.access-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.access-dialog-body { display: grid; gap: 16px; padding: 18px 24px 22px; }
+.access-list { display: grid; gap: 8px; max-height: min(52vh, 480px); overflow: auto; padding: 0; }
+.access-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
 .access-row > div { display: grid; gap: 3px; min-width: 0; }
-.access-row small { color: var(--muted); }
-.access-row select { min-width: 105px; }
-.member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0 0 18px; }
+.access-row strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.access-row small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.access-row > span {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.access-row select {
+  min-width: 118px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+}
+.access-row button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.access-row button:hover:not(:disabled), .access-row button:focus-visible:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  outline: none;
+}
+.access-row button:disabled, .access-row select:disabled {
+  cursor: not-allowed;
+  opacity: .46;
+}
+.member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0; }
 .member-invite-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.member-invite-form select {
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+}
+.member-invite-form .primary-button { min-height: 38px; white-space: nowrap; }
 .work-access-field { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .work-access-field > div { display: grid; gap: 4px; min-width: 0; }
 .work-access-field strong { color: var(--ink); font-size: 12px; }
