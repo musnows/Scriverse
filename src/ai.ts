@@ -417,6 +417,8 @@ export class ContextBuilder {
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
   private readonly taskControllers = new Map<string, AbortController>();
+  private readonly autoRunBatches = new Map<string, { claimed: number; starting: Set<string> }>();
+  private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly providerSchedules = new Map<string, {
     active: number;
     starts: number[];
@@ -439,6 +441,90 @@ export class AiManager {
     private readonly validateOutboundUrl?: (url: string) => Promise<void>
   ) {
     this.contextBuilder = new ContextBuilder(store);
+    this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+  }
+
+  resetAutoRunBatch(workId: string): void {
+    this.autoRunBatches.set(workId, { claimed: 0, starting: new Set() });
+  }
+
+  scheduleAutoRun(workId: string): void {
+    try {
+      if (!this.store.getWorkAiSettings(workId).autoRunEnabled) return;
+    } catch {
+      return;
+    }
+    const existing = this.autoRunTimers.get(workId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.autoRunTimers.delete(workId);
+      void this.drainAutoRun(workId);
+    }, 0);
+    this.autoRunTimers.set(workId, timer);
+  }
+
+  startAutoRunBatch(workId: string): Record<string, unknown> {
+    this.store.getWork(workId);
+    const settings = this.store.getWorkAiSettings(workId);
+    if (!settings.autoRunEnabled) {
+      throw new AppError(400, "AUTO_RUN_DISABLED", "请先开启分析任务自动运行");
+    }
+    this.resetAutoRunBatch(workId);
+    this.scheduleAutoRun(workId);
+    return {
+      workId,
+      autoRunEnabled: true,
+      autoRunConcurrency: settings.autoRunConcurrency,
+      autoRunBatchLimit: settings.autoRunBatchLimit,
+      pendingCount: this.store.countPendingTasks(workId),
+      runningCount: this.store.countRunningTasks(workId)
+    };
+  }
+
+  dispose(): void {
+    for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
+    this.autoRunTimers.clear();
+    this.autoRunBatches.clear();
+    this.store.setAnalysisTaskQueuedHandler(null);
+  }
+
+  private getAutoRunBatch(workId: string): { claimed: number; starting: Set<string> } {
+    const existing = this.autoRunBatches.get(workId);
+    if (existing) return existing;
+    const created = { claimed: 0, starting: new Set<string>() };
+    this.autoRunBatches.set(workId, created);
+    return created;
+  }
+
+  private async drainAutoRun(workId: string): Promise<void> {
+    try {
+      const settings = this.store.getWorkAiSettings(workId);
+      if (!settings.autoRunEnabled) return;
+      const batch = this.getAutoRunBatch(workId);
+      const concurrency = Number(settings.autoRunConcurrency);
+      const batchLimit = Number(settings.autoRunBatchLimit);
+      while (true) {
+        // 只计 DB running：starting 任务会在 runTask 同步阶段立刻标为 running，再加 starting 会重复计数
+        const inFlight = this.store.countRunningTasks(workId);
+        const remainingClaims = batchLimit - batch.claimed;
+        if (inFlight >= concurrency || remainingClaims <= 0) return;
+        const candidates = this.store.listOldestPendingTaskIds(workId, remainingClaims)
+          .filter((taskId) => !batch.starting.has(taskId) && !this.taskControllers.has(taskId));
+        if (!candidates.length) return;
+        const taskId = candidates[0];
+        if (!taskId) return;
+        batch.starting.add(taskId);
+        batch.claimed += 1;
+        void this.runTask(taskId)
+          .catch(() => undefined)
+          .finally(() => {
+            batch.starting.delete(taskId);
+            this.scheduleAutoRun(workId);
+          });
+      }
+    } catch {
+      // 数据库已关闭或作品不存在时忽略自动调度
+    }
   }
 
   private outboundFetch(url: string, init: RequestInit): Promise<Awaited<ReturnType<typeof fetch>>> {
@@ -885,9 +971,19 @@ export class AiManager {
 
   async runTask(taskId: string, modelId?: string): Promise<Record<string, unknown>> {
     const task = this.store.getTask(taskId);
+    const workId = String(task.workId);
+    const batch = this.getAutoRunBatch(workId);
     if (task.status !== "pending") throw new AppError(409, "TASK_NOT_PENDING", "只有待执行任务可以运行");
     if (!this.store.isTaskSourceCurrent(taskId)) {
-      return this.store.updateTask(taskId, { status: "expired" });
+      const expired = this.store.updateTask(taskId, { status: "expired" });
+      batch.starting.delete(taskId);
+      this.scheduleAutoRun(workId);
+      return expired;
+    }
+    const settings = this.store.getWorkAiSettings(workId);
+    // 自动 drain 已在 starting 集合中认领；手动运行在开关开启时计入本轮配额
+    if (Boolean(settings.autoRunEnabled) && !batch.starting.has(taskId)) {
+      batch.claimed += 1;
     }
     this.store.updateTask(taskId, { status: "running", progress: 5 });
     const taskController = new AbortController();
@@ -897,18 +993,18 @@ export class AiManager {
       const scope = task.scope as ContextScope;
       let result: Record<string, unknown>;
       if (taskType === "chapter-analysis") {
-        result = await this.runChapterAnalysis(String(task.workId), scope, modelId, taskId);
+        result = await this.runChapterAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "character-extraction" || taskType === "character-summary") {
-        result = await this.runCharacterExtraction(String(task.workId), scope, modelId, taskId);
+        result = await this.runCharacterExtraction(workId, scope, modelId, taskId);
       } else if (taskType === "timeline-analysis") {
-        result = await this.runTimelineAnalysis(String(task.workId), scope, modelId, taskId);
+        result = await this.runTimelineAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "relationship-analysis") {
-        result = await this.runRelationshipAnalysis(String(task.workId), scope, modelId, taskId);
+        result = await this.runRelationshipAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "consistency-check") {
-        result = await this.runConsistencyCheck(String(task.workId), scope, modelId, taskId);
+        result = await this.runConsistencyCheck(workId, scope, modelId, taskId);
       } else {
         const generated = await this.generate({
-          workId: String(task.workId),
+          workId,
           taskType: taskType === "book-analysis" ? "book-analysis" : "chapter-analysis",
           instruction: "请基于上下文完成分析，给出有原文依据的中文结论。",
           scope,
@@ -926,12 +1022,16 @@ export class AiManager {
       throw error;
     } finally {
       this.taskControllers.delete(taskId);
+      batch.starting.delete(taskId);
+      this.scheduleAutoRun(workId);
     }
   }
 
   cancelTask(taskId: string): Record<string, unknown> {
     const task = this.store.cancelTask(taskId);
     this.taskControllers.get(taskId)?.abort(new Error("分析任务已取消"));
+    this.taskControllers.delete(taskId);
+    this.scheduleAutoRun(String(task.workId));
     return task;
   }
 

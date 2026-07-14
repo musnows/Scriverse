@@ -553,6 +553,65 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .platform-system-prompt-section { margin-bottom: 36px; }
+.task-auto-run-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 22px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-soft);
+}
+.task-auto-run-copy { display: grid; gap: 4px; }
+.task-auto-run-copy strong { font-size: 13px; }
+.task-auto-run-copy small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.task-auto-run-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px 12px;
+}
+.task-auto-run-controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.task-auto-run-controls input[type="number"] {
+  width: 88px;
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.task-auto-run-controls .checkbox-field {
+  align-self: center;
+  margin: 0;
+}
+.task-auto-run-meta { margin: 0; color: var(--muted); font-size: 10px; }
+.task-table .task-id {
+  display: inline-block;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  vertical-align: bottom;
+}
+.task-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-detail { display: grid; gap: 12px; }
+.task-detail p, .task-detail div { margin: 0; font-size: 12px; line-height: 1.55; }
+.task-detail ul { margin: 6px 0 0; padding-left: 18px; }
+.task-detail-result {
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 10px;
+  white-space: pre-wrap;
+}
 .config-section-header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 14px; }
 .config-section-header h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
 .config-section-header p { margin: 0; color: var(--muted); font-size: 11px; }

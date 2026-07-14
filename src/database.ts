@@ -336,6 +336,9 @@ export class Database {
       CREATE TABLE IF NOT EXISTS work_ai_settings (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
         system_prompt TEXT NOT NULL DEFAULT '',
+        auto_run_enabled INTEGER NOT NULL DEFAULT 0,
+        auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
+        auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         updated_at TEXT NOT NULL
       );
 
@@ -989,6 +992,21 @@ export class Database {
         this.run("CREATE INDEX IF NOT EXISTS idx_chapter_versions_work ON chapter_versions(work_id, chapter_id, version_no)");
         this.run("CREATE INDEX IF NOT EXISTS idx_character_versions_work ON character_versions(work_id, character_id, version_no)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (16, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(17)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!columns.has("auto_run_enabled")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_enabled INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!columns.has("auto_run_concurrency")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_concurrency INTEGER NOT NULL DEFAULT 2");
+        }
+        if (!columns.has("auto_run_batch_limit")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN auto_run_batch_limit INTEGER NOT NULL DEFAULT 20");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (17, ?)", new Date().toISOString());
       });
     }
   }

@@ -49,6 +49,29 @@ const state = {
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
 const taskTypeLabels = MODEL_PURPOSE_OPTIONS;
+const analysisTaskTypeLabels = new Map([
+  ...MODEL_PURPOSE_OPTIONS,
+  ["character-extraction", "全书角色抽取"],
+  ["character-summary", "全书角色抽取"],
+  ["structure", "结构分析"],
+  ["report-update", "报告更新"]
+]);
+
+function analysisTaskTypeLabel(taskType) {
+  return analysisTaskTypeLabels.get(String(taskType)) ?? String(taskType);
+}
+
+function analysisTaskStatusLabel(status) {
+  return ({
+    pending: "待执行",
+    running: "运行中",
+    review: "待审核",
+    completed: "已完成",
+    partial: "部分失败",
+    expired: "已过期",
+    cancelled: "已取消"
+  })[String(status)] ?? String(status);
+}
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
@@ -1797,11 +1820,79 @@ async function renderReviews() {
 }
 
 async function renderTasks() {
-  const tasks = await api(`/api/works/${state.work.id}/tasks`);
-  $("#module-content").innerHTML = tasks.length ? `<table class="table-list"><thead><tr><th>任务</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
-    <tr><td>${esc(item.taskType)}</td><td>${esc(item.scope.type ?? "book")}</td><td>${esc(item.status)}</td><td>${item.progress}%</td>
-    <td>${item.status === "pending" ? `<button class="ghost-button" data-run-task="${esc(item.id)}">运行</button>` : ""}${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}</td></tr>`).join("")}</tbody></table>`
-    : emptyModule("还没有分析任务", "保存正文时会自动创建受影响章节的待分析任务，也可手动创建全书任务。");
+  const [tasks, settings] = await Promise.all([
+    api(`/api/works/${state.work.id}/tasks`),
+    api(`/api/works/${state.work.id}/ai-settings`)
+  ]);
+  const pendingCount = tasks.filter((item) => item.status === "pending").length;
+  const runningCount = tasks.filter((item) => item.status === "running").length;
+  $("#module-content").innerHTML = `
+    <section class="task-auto-run-panel" aria-labelledby="task-auto-run-title">
+      <div class="task-auto-run-copy">
+        <strong id="task-auto-run-title">自动运行</strong>
+        <small>开启后按并发上限消化 pending 任务；每一轮最多自动认领「单次上限」个，跑完需再点「再跑一批」。</small>
+      </div>
+      <div class="task-auto-run-controls">
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>启用自动运行</span></label>
+        <label>并发上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
+        <label>单次上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
+        <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
+        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>再跑一批</button>
+      </div>
+      <p class="task-auto-run-meta">当前待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个</p>
+    </section>
+    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>ID</th><th>任务</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
+    <tr>
+      <td><code class="task-id" title="${esc(item.id)}">${esc(item.id)}</code></td>
+      <td>${esc(analysisTaskTypeLabel(item.taskType))}<br><small>${esc(item.taskType)}</small></td>
+      <td>${esc(item.scopeSummary || item.scope?.type || "book")}</td>
+      <td>${esc(analysisTaskStatusLabel(item.status))}</td>
+      <td>${Number(item.progress ?? 0)}%</td>
+      <td class="task-row-actions">
+        <button class="ghost-button" type="button" data-task-detail="${esc(item.id)}">详情</button>
+        ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
+        ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
+      </td>
+    </tr>`).join("")}</tbody></table>` : emptyModule("还没有分析任务", "保存正文时会自动创建受影响章节的待分析任务，也可手动创建全书任务。")}`;
+
+  $("#task-auto-run-save")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-save");
+    button.disabled = true;
+    try {
+      const updated = await api(`/api/works/${state.work.id}/ai-settings`, {
+        method: "PATCH",
+        body: {
+          autoRunEnabled: $("#task-auto-run-enabled").checked,
+          autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
+          autoRunBatchLimit: Number($("#task-auto-run-batch-limit").value)
+        }
+      });
+      toast(updated.autoRunEnabled
+        ? `自动运行已开启：并发 ${updated.autoRunConcurrency}，本轮最多 ${updated.autoRunBatchLimit} 个`
+        : "自动运行已关闭");
+      await renderTasks();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
+  $("#task-auto-run-continue")?.addEventListener("click", async () => {
+    const button = $("#task-auto-run-continue");
+    button.disabled = true;
+    try {
+      const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
+      toast(`已开始新一轮自动运行，待执行 ${result.pendingCount} 个`);
+      await renderTasks();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
+
+  const taskById = new Map(tasks.map((item) => [item.id, item]));
+  $("#module-content").querySelectorAll("[data-task-detail]").forEach((button) => button.addEventListener("click", () => {
+    openTaskDetailDialog(taskById.get(button.dataset.taskDetail));
+  }));
   $("#module-content").querySelectorAll("[data-run-task]").forEach((button) => button.addEventListener("click", async () => {
     const workId = state.work.id;
     try {
@@ -1828,6 +1919,47 @@ async function renderTasks() {
       button.disabled = false;
     }
   }));
+}
+
+function openTaskDetailDialog(task) {
+  if (!task) return;
+  const details = Array.isArray(task.scopeDetails) ? task.scopeDetails : [];
+  const detailHtml = details.map((item) => {
+    if (item.type === "chapter") {
+      if (item.missing) return `<li>章节已删除（${esc(item.chapterId)}）</li>`;
+      return `<li>${esc(item.volumeTitle)} · ${esc(item.title)}<br><small>ID ${esc(item.chapterId)} · v${esc(String(item.versionNo))}</small></li>`;
+    }
+    if (item.type === "volume") {
+      if (item.missing) return `<li>分卷已删除（${esc(item.volumeId)}）</li>`;
+      const chapters = Array.isArray(item.chapters) ? item.chapters : [];
+      return `<li>分卷 · ${esc(item.title)}（${chapters.length} 章）
+        <ul>${chapters.slice(0, 30).map((chapter) => `<li>${esc(chapter.title)} · v${esc(String(chapter.versionNo))}</li>`).join("")}${chapters.length > 30 ? "<li>……</li>" : ""}</ul>
+      </li>`;
+    }
+    if (item.type === "book") return "<li>全书</li>";
+    return `<li>${esc(JSON.stringify(item))}</li>`;
+  }).join("") || "<li>无范围详情</li>";
+  const failures = Array.isArray(task.failures) ? task.failures : [];
+  const failureHtml = failures.length
+    ? `<ul>${failures.map((item) => `<li>${esc(item.message || JSON.stringify(item))}</li>`).join("")}</ul>`
+    : "<p>无</p>";
+  const resultPreview = task.result && Object.keys(task.result).length
+    ? `<pre class="task-detail-result">${esc(JSON.stringify(task.result, null, 2).slice(0, 2000))}</pre>`
+    : "<p>尚无结果</p>";
+  openDialog("任务详情",
+    `<div class="task-detail">
+      <p><strong>任务 ID</strong><br><code>${esc(task.id)}</code></p>
+      <p><strong>类型</strong> ${esc(analysisTaskTypeLabel(task.taskType))}（${esc(task.taskType)}）</p>
+      <p><strong>状态</strong> ${esc(analysisTaskStatusLabel(task.status))} · 进度 ${Number(task.progress ?? 0)}%</p>
+      <p><strong>范围摘要</strong> ${esc(task.scopeSummary || "未指定")}</p>
+      <div><strong>范围详情</strong><ul>${detailHtml}</ul></div>
+      <div><strong>失败信息</strong>${failureHtml}</div>
+      <div><strong>结果摘要</strong>${resultPreview}</div>
+      <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
+    </div>`,
+    async () => undefined,
+    "分析任务",
+    { submitLabel: "关闭", wide: true });
 }
 
 function renderProviderCards(providers, models) {
@@ -2099,6 +2231,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-fields").innerHTML = fields;
+  $("#dialog-submit").textContent = options.submitLabel ?? "保存";
   $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
   bindDynamicListControls($("#dialog-fields"));
   const form = $("#dynamic-form");

@@ -236,6 +236,13 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
+const workAiSettingsSchema = z.object({
+  systemPrompt: z.string().max(100_000).optional(),
+  autoRunEnabled: z.boolean().optional(),
+  autoRunConcurrency: z.number().int().min(1).max(8).optional(),
+  autoRunBatchLimit: z.number().int().min(1).max(200).optional()
+}).strict();
+
 const contextSchema = z.object({
   type: z.enum(["selection", "chapter", "volume", "book", "entities"]),
   chapterId: identifier.optional(),
@@ -653,6 +660,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
     data(response, store.createTask(request.params.workId, input), 201);
   });
+  app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
+    data(response, ai.startAutoRunBatch(request.params.workId));
+  });
   app.get("/api/tasks/:taskId", (request, response) => data(response, store.getTask(request.params.taskId)));
   app.post("/api/tasks/:taskId/run", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }), request.body ?? {});
@@ -667,7 +677,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
-  app.patch("/api/works/:workId/ai-settings", (request, response) => data(response, store.updateWorkAiSettings(request.params.workId, parse(aiPromptSchema, request.body))));
+  app.patch("/api/works/:workId/ai-settings", (request, response) => {
+    const workId = request.params.workId;
+    const before = store.getWorkAiSettings(workId);
+    const updated = store.updateWorkAiSettings(workId, parse(workAiSettingsSchema, request.body));
+    if (updated.autoRunEnabled) {
+      if (!before.autoRunEnabled) ai.resetAutoRunBatch(workId);
+      ai.scheduleAutoRun(workId);
+    }
+    data(response, updated);
+  });
   app.get("/api/works/:workId/ai-conversations", (request, response) => data(response, store.listAiConversations(request.params.workId)));
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
@@ -899,5 +918,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
-  return { app, database, store, ai, auth, close: () => database.close() };
+  return { app, database, store, ai, auth, close: () => {
+    ai.dispose();
+    database.close();
+  } };
 }

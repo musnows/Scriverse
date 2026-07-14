@@ -172,7 +172,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260715-ai-settings-polish');
+    expect(page.text).toContain('/app.js?v=20260715-task-auto-run');
+    expect(page.text).toContain('/styles.css?v=20260715-task-auto-run');
     expect(page.text).toContain('id="top-search-button"');
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="search-dialog"');
@@ -198,6 +199,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('aria-label="本书系统提示词"');
     expect(application.text).toContain("modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })");
     expect(application.text).not.toContain("${esc(model.displayName)} · ${esc(model.modelId)}");
+    expect(application.text).toContain("function openTaskDetailDialog(task)");
+    expect(application.text).toContain('id="task-auto-run-enabled"');
+    expect(application.text).toContain("/tasks/auto-run");
+    expect(styles.text).toContain(".task-auto-run-panel");
     expect(application.text).toContain("memberDialogWork ?? state.work");
     expect(application.text).toContain('const platformDocumentTitle = "叙界 · 小说 AI 创作工作台"');
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');

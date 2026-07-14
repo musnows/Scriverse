@@ -526,27 +526,69 @@ export class Store {
     return this.getPlatformAiSettings();
   }
 
+  private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
+
+  setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
+    this.analysisTaskQueuedHandler = handler;
+  }
+
+  private notifyAnalysisTaskQueued(workId: string): void {
+    try {
+      this.analysisTaskQueuedHandler?.(workId);
+    } catch {
+      // 自动运行调度失败不影响主写入路径
+    }
+  }
+
   getWorkAiSettings(workId: string): Record<string, unknown> {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_ai_settings WHERE work_id = ?", workId);
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
+      autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
+      autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
+      autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
 
-  updateWorkAiSettings(workId: string, input: { systemPrompt?: string }): Record<string, unknown> {
+  updateWorkAiSettings(workId: string, input: {
+    systemPrompt?: string;
+    autoRunEnabled?: boolean;
+    autoRunConcurrency?: number;
+    autoRunBatchLimit?: number;
+  }): Record<string, unknown> {
     this.getWork(workId);
+    const current = this.getWorkAiSettings(workId);
     const timestamp = now();
+    const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
+    const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
+    const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
+    const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
     this.db.run(
-      `INSERT INTO work_ai_settings (work_id, system_prompt, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT(work_id) DO UPDATE SET system_prompt = excluded.system_prompt, updated_at = excluded.updated_at`,
+      `INSERT INTO work_ai_settings (
+         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(work_id) DO UPDATE SET
+         system_prompt = excluded.system_prompt,
+         auto_run_enabled = excluded.auto_run_enabled,
+         auto_run_concurrency = excluded.auto_run_concurrency,
+         auto_run_batch_limit = excluded.auto_run_batch_limit,
+         updated_at = excluded.updated_at`,
       workId,
-      input.systemPrompt ?? String(this.getWorkAiSettings(workId).systemPrompt),
+      nextPrompt,
+      nextEnabled ? 1 : 0,
+      Math.min(8, Math.max(1, nextConcurrency)),
+      Math.min(200, Math.max(1, nextBatchLimit)),
       timestamp
     );
-    this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, { systemPromptChanged: input.systemPrompt !== undefined });
+    this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
+      systemPromptChanged: input.systemPrompt !== undefined,
+      autoRunEnabled: nextEnabled,
+      autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
+      autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit))
+    });
     return this.getWorkAiSettings(workId);
   }
 
@@ -1222,6 +1264,7 @@ export class Store {
         requiredString(existing, "id")
       );
     }
+    this.notifyAnalysisTaskQueued(workId);
   }
 
   private mapWork(row: Row): Record<string, unknown> {
@@ -3266,6 +3309,7 @@ export class Store {
       currentRequestActor()?.userId ?? null
     );
     this.audit(workId, "task.created", "analysis-task", taskId, { taskType: input.taskType, scope });
+    this.notifyAnalysisTaskQueued(workId);
     return this.getTask(taskId);
   }
 
@@ -3278,6 +3322,32 @@ export class Store {
     const row = this.db.get("SELECT * FROM analysis_tasks WHERE id = ?", taskId);
     if (!row) throw notFound("分析任务");
     return this.mapTask(row);
+  }
+
+  countRunningTasks(workId: string): number {
+    const row = this.db.get(
+      "SELECT COUNT(*) AS value FROM analysis_tasks WHERE work_id = ? AND status = 'running'",
+      workId
+    );
+    return numberValue(row ?? {}, "value");
+  }
+
+  listOldestPendingTaskIds(workId: string, limit: number): string[] {
+    if (limit <= 0) return [];
+    return this.db.all(
+      `SELECT id FROM analysis_tasks WHERE work_id = ? AND status = 'pending'
+       ORDER BY created_at ASC, id ASC LIMIT ?`,
+      workId,
+      limit
+    ).map((row) => requiredString(row, "id"));
+  }
+
+  countPendingTasks(workId: string): number {
+    const row = this.db.get(
+      "SELECT COUNT(*) AS value FROM analysis_tasks WHERE work_id = ? AND status = 'pending'",
+      workId
+    );
+    return numberValue(row ?? {}, "value");
   }
 
   isTaskSourceCurrent(taskId: string): boolean {
@@ -3341,11 +3411,15 @@ export class Store {
   }
 
   private mapTask(row: Row): Record<string, unknown> {
+    const workId = requiredString(row, "work_id");
+    const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
     return {
       id: requiredString(row, "id"),
-      workId: requiredString(row, "work_id"),
+      workId,
       taskType: requiredString(row, "task_type"),
-      scope: json(requiredString(row, "scope_json"), {}),
+      scope,
+      scopeSummary: this.taskScopeSummary(workId, scope),
+      scopeDetails: this.taskScopeDetails(workId, scope),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
       result: json(requiredString(row, "result_json"), {}),
@@ -3354,6 +3428,74 @@ export class Store {
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  private taskScopeSummary(workId: string, scope: Record<string, unknown>): string {
+    if (typeof scope.chapterId === "string") {
+      const chapter = this.db.get(
+        `SELECT chapter.title AS title, volume.title AS volume_title
+         FROM chapters chapter
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE chapter.id = ? AND chapter.work_id = ?`,
+        scope.chapterId,
+        workId
+      );
+      if (!chapter) return "章节已删除";
+      const title = requiredString(chapter, "title");
+      const volumeTitle = requiredString(chapter, "volume_title");
+      return `${volumeTitle} · ${title}`;
+    }
+    if (scope.type === "volume" && typeof scope.volumeId === "string") {
+      const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
+      return volume ? `分卷 · ${requiredString(volume, "title")}` : "分卷已删除";
+    }
+    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    return "未指定范围";
+  }
+
+  private taskScopeDetails(workId: string, scope: Record<string, unknown>): Record<string, unknown>[] {
+    if (typeof scope.chapterId === "string") {
+      const chapter = this.db.get(
+        `SELECT chapter.id AS id, chapter.title AS title, chapter.version_no AS version_no,
+                volume.id AS volume_id, volume.title AS volume_title
+         FROM chapters chapter
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE chapter.id = ? AND chapter.work_id = ?`,
+        scope.chapterId,
+        workId
+      );
+      if (!chapter) return [{ type: "chapter", chapterId: scope.chapterId, missing: true }];
+      return [{
+        type: "chapter",
+        chapterId: requiredString(chapter, "id"),
+        title: requiredString(chapter, "title"),
+        versionNo: numberValue(chapter, "version_no"),
+        volumeId: requiredString(chapter, "volume_id"),
+        volumeTitle: requiredString(chapter, "volume_title")
+      }];
+    }
+    if (scope.type === "volume" && typeof scope.volumeId === "string") {
+      const volume = this.db.get("SELECT id, title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
+      if (!volume) return [{ type: "volume", volumeId: scope.volumeId, missing: true }];
+      const chapters = this.db.all(
+        "SELECT id, title, version_no FROM chapters WHERE volume_id = ? ORDER BY sort_order, created_at",
+        scope.volumeId
+      );
+      return [{
+        type: "volume",
+        volumeId: requiredString(volume, "id"),
+        title: requiredString(volume, "title"),
+        chapters: chapters.map((item) => ({
+          chapterId: requiredString(item, "id"),
+          title: requiredString(item, "title"),
+          versionNo: numberValue(item, "version_no")
+        }))
+      }];
+    }
+    if (scope.type === "book" || Object.keys(scope).length === 0) {
+      return [{ type: "book", title: "全书" }];
+    }
+    return [{ type: "unknown", scope }];
   }
 
   search(workId: string, query: string): Record<string, unknown>[] {
