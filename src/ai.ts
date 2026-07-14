@@ -3,6 +3,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { currentRequestActor } from "./request-context.js";
+import { fetchSafeAiEndpoint } from "./security.js";
 import { Store } from "./store.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
 
@@ -440,6 +441,10 @@ export class AiManager {
     this.contextBuilder = new ContextBuilder(store);
   }
 
+  private outboundFetch(url: string, init: RequestInit): Promise<Response> {
+    return fetchSafeAiEndpoint(this.fetchImpl, url, init, this.validateOutboundUrl);
+  }
+
   createProvider(input: ProviderInput): Record<string, unknown> {
     const providerId = id("provider");
     const encrypted = this.vault.encrypt(input.apiKey);
@@ -544,8 +549,7 @@ export class AiManager {
     const timeout = setTimeout(() => controller.abort(), 10_000);
     try {
       const endpoint = `${normalizeBaseUrl(stringValue(row, "base_url"))}/models`;
-      await this.validateOutboundUrl?.(endpoint);
-      const response = await this.fetchImpl(endpoint, {
+      const response = await this.outboundFetch(endpoint, {
         headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
         signal: controller.signal
       });
@@ -1005,7 +1009,6 @@ export class AiManager {
     try {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
-      await this.validateOutboundUrl?.(endpoint);
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       let responseBody: string | null = null;
@@ -1019,7 +1022,7 @@ export class AiManager {
             else input.signal?.addEventListener("abort", forwardAbort, { once: true });
             const timeout = setTimeout(() => controller.abort(), timeoutMs);
             try {
-              const response = await this.fetchImpl(endpoint, {
+              const response = await this.outboundFetch(endpoint, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
                 body: JSON.stringify({ model: stringValue(model, "model_id"), messages, ...parameters }),
@@ -1106,7 +1109,6 @@ export class AiManager {
     try {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
-      await this.validateOutboundUrl?.(endpoint);
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       let streamedResult: { content: string; outputTokens: number } | null = null;
       let lastFailure: unknown = null;
@@ -1120,7 +1122,7 @@ export class AiManager {
             else input.signal?.addEventListener("abort", forwardAbort, { once: true });
             const timeout = setTimeout(() => controller.abort(), 60_000);
             try {
-              const response = await this.fetchImpl(endpoint, {
+              const response = await this.outboundFetch(endpoint, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "text/event-stream" },
                 body: JSON.stringify({ model: stringValue(model, "model_id"), messages, ...parameters, stream: true, stream_options: { include_usage: true } }),

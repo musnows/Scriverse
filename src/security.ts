@@ -189,6 +189,46 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   }
 }
 
+const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * 出站 AI 请求：禁止浏览器式自动跟随重定向。
+ * 每一跳都重新做 SSRF 校验；跨主机跳转时剥离 Authorization，避免密钥泄露到跳转目标。
+ */
+export async function fetchSafeAiEndpoint(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  validateOutboundUrl?: (url: string) => Promise<void>,
+  maxRedirects = 5
+): Promise<Response> {
+  let currentUrl = url;
+  const baseHeaders = new Headers(init.headers);
+  for (let hop = 0; hop <= maxRedirects; hop += 1) {
+    await validateOutboundUrl?.(currentUrl);
+    const response = await fetchImpl(currentUrl, { ...init, headers: baseHeaders, redirect: "manual" });
+    if (!redirectStatuses.has(response.status)) return response;
+    const location = response.headers.get("location");
+    if (!location) {
+      throw new AppError(502, "PROVIDER_REDIRECT_INVALID", "AI 供应商返回了无效的重定向响应");
+    }
+    let nextUrl: URL;
+    try {
+      nextUrl = new URL(location, currentUrl);
+    } catch {
+      throw new AppError(502, "PROVIDER_REDIRECT_INVALID", "AI 供应商返回了无效的重定向地址");
+    }
+    if (nextUrl.origin !== new URL(currentUrl).origin) {
+      baseHeaders.delete("authorization");
+    }
+    if (response.status === 303) {
+      init = { ...init, method: "GET", body: undefined };
+    }
+    currentUrl = nextUrl.toString();
+  }
+  throw new AppError(502, "PROVIDER_REDIRECT_LIMIT", "AI 供应商重定向次数过多");
+}
+
 export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAuthentication = false): RuntimeSecurityOptions {
   const production = environment.NODE_ENV === "production";
   const username = environment.APP_AUTH_USERNAME?.trim() ?? "";
