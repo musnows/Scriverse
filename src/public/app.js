@@ -1865,7 +1865,7 @@ function renderTaskDefaults(models, providers, taskDefaults) {
         ${models.map((model) => {
           const provider = providerById.get(model.providerId);
           const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
-          return `<option value="${esc(model.id)}" ${model.id === currentModelId ? "selected" : ""} ${available || model.id === currentModelId ? "" : "disabled"}>${esc(model.displayName)} · ${esc(model.modelId)}</option>`;
+          return `<option value="${esc(model.id)}" ${model.id === currentModelId ? "selected" : ""} ${available || model.id === currentModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
         }).join("")}
       </select></td></tr>`;
     }).join("")}</tbody></table>
@@ -1903,7 +1903,7 @@ async function renderBookAiSettings() {
     api(`/api/works/${state.work.id}/task-defaults`)
   ]);
   const host = $("#module-content");
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><label class="field-label">本书追加系统提示词<textarea id="work-system-prompt" rows="8" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></label><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;

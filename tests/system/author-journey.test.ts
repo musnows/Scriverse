@@ -172,7 +172,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260715-work-settings-nav');
+    expect(page.text).toContain('/app.js?v=20260715-ai-settings-polish');
     expect(page.text).toContain('id="top-search-button"');
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="search-dialog"');
@@ -194,6 +194,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function workCoverFieldHtml(work)");
     expect(application.text).toContain('id="work-cover-upload"');
     expect(application.text).not.toContain("book-card-actions");
+    expect(application.text).not.toContain("本书追加系统提示词");
+    expect(application.text).toContain('aria-label="本书系统提示词"');
+    expect(application.text).toContain("modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })");
+    expect(application.text).not.toContain("${esc(model.displayName)} · ${esc(model.modelId)}");
     expect(application.text).toContain("memberDialogWork ?? state.work");
     expect(application.text).toContain('const platformDocumentTitle = "叙界 · 小说 AI 创作工作台"');
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
@@ -228,6 +232,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".account-menu button:hover, .account-menu button:focus-visible");
     expect(styles.text).toContain(".book-info > span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }");
     expect(styles.text).not.toContain("-webkit-box-orient: vertical; min-height: 2.8em;");
+    expect(styles.text).toContain(".config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }");
     expect(styles.text).toContain(".book-card-settings {");
     expect(styles.text).toContain("padding: 2px 6px;");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
