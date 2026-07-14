@@ -1322,15 +1322,14 @@ function renderShelf() {
         </span>
         <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
-      <div class="book-card-actions"><button type="button" data-cover-work="${esc(work.id)}">设置封面</button><button type="button" data-edit-work="${esc(work.id)}">作品信息</button></div>
+      <button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>
     </article>`).join("")}
     <button class="book-card book-add-card" id="book-add-card" type="button" aria-label="新建作品" data-testid="book-add-card"><span>＋</span><strong>新建作品</strong><small>从零开始或导入 TXT / DOCX</small></button>`;
   shelf.querySelectorAll("[data-open-work]").forEach((button) => button.addEventListener("click", () => selectWork(button.dataset.openWork)));
-  shelf.querySelectorAll("[data-cover-work]").forEach((button) => button.addEventListener("click", () => {
-    state.pendingCoverWorkId = button.dataset.coverWork;
-    $("#cover-file").click();
+  shelf.querySelectorAll("[data-edit-work]").forEach((button) => button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openWorkSettingsDialog(state.works.find((work) => work.id === button.dataset.editWork));
   }));
-  shelf.querySelectorAll("[data-edit-work]").forEach((button) => button.addEventListener("click", () => openWorkSettingsDialog(state.works.find((work) => work.id === button.dataset.editWork))));
   $("#book-add-card").addEventListener("click", openWorkDialog);
 }
 
@@ -1362,6 +1361,7 @@ async function selectWork(workId) {
   state.chapter = null;
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
+  $("#top-search-button").disabled = false;
   renderTree();
   await loadModels();
   await loadAiReferences();
@@ -2137,6 +2137,46 @@ function openWorkDialog() {
     }, "新的世界");
 }
 
+function workCoverFieldHtml(work) {
+  return `<section class="work-cover-field" aria-labelledby="work-cover-title">
+    <div class="work-cover-copy">
+      <strong id="work-cover-title">封面</strong>
+      <small>用于书架展示。支持 PNG、JPEG、WebP。</small>
+    </div>
+    <div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" aria-hidden="${work.coverUrl ? "false" : "true"}">
+      ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}
+    </div>
+    <div class="work-cover-actions">
+      <button id="work-cover-upload" class="ghost-button" type="button">${work.coverUrl ? "更换封面" : "设置封面"}</button>
+      ${work.coverUrl ? '<button id="work-cover-remove" class="ghost-button" type="button">移除封面</button>' : ""}
+    </div>
+  </section>`;
+}
+
+function bindWorkCoverControls(work) {
+  $("#work-cover-upload")?.addEventListener("click", () => {
+    state.pendingCoverWorkId = work.id;
+    $("#cover-file").click();
+  });
+  $("#work-cover-remove")?.addEventListener("click", async () => {
+    try {
+      await api(`/api/works/${work.id}/cover`, { method: "DELETE" });
+      state.works = await api("/api/works");
+      const updated = state.works.find((item) => item.id === work.id) ?? { ...work, coverUrl: null };
+      Object.assign(work, updated);
+      const coverField = $("#dialog-fields")?.querySelector(".work-cover-field");
+      if (coverField) {
+        coverField.outerHTML = workCoverFieldHtml(work);
+        bindWorkCoverControls(work);
+      }
+      renderShelf();
+      toast("封面已移除");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+}
+
 function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
@@ -2145,13 +2185,24 @@ function openWorkSettingsDialog(work) {
     ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">添加或管理可访问人</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
   </section>`;
   openDialog("作品信息",
-    field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = await api("/api/works");
+      const updated = state.works.find((item) => item.id === work.id);
+      if (updated) Object.assign(work, updated);
+      if (state.work?.id === work.id) {
+        state.work.title = String(form.get("title") ?? state.work.title);
+        state.work.author = String(form.get("author") ?? state.work.author);
+        state.work.description = String(form.get("description") ?? state.work.description);
+        if (updated?.coverUrl !== undefined) state.work.coverUrl = updated.coverUrl;
+        updateDocumentTitle(state.work);
+        $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
+      }
       renderShelf();
       toast("作品信息已保存");
-    }, "书架设置");
+    }, "作品设置");
+  bindWorkCoverControls(work);
   $("#work-access-manage")?.addEventListener("click", () => {
     $("#form-dialog").close();
     openMembersDialog(work);
@@ -3020,7 +3071,16 @@ setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
 window.addEventListener("resize", () => { applyPanelLayout(); scheduleChapterLineNumbers(); });
-$("#module-nav").addEventListener("click", (event) => event.target.dataset.module && showModule(event.target.dataset.module));
+$("#module-nav").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button || button.id === "module-more-button") return;
+  if (button.hasAttribute("data-work-settings")) {
+    const work = state.works.find((item) => item.id === state.work?.id) ?? state.work;
+    openWorkSettingsDialog(work);
+    return;
+  }
+  if (button.dataset.module) showModule(button.dataset.module);
+});
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", () => {
@@ -3082,6 +3142,12 @@ $("#cover-file").addEventListener("change", async (event) => {
   try {
     await api(`/api/works/${workId}/cover`, { method: "PUT", body });
     state.works = await api("/api/works");
+    const updated = state.works.find((item) => item.id === workId);
+    const coverField = $("#dialog-fields")?.querySelector(".work-cover-field");
+    if (updated && coverField && $("#form-dialog")?.open) {
+      coverField.outerHTML = workCoverFieldHtml(updated);
+      bindWorkCoverControls(updated);
+    }
     renderShelf();
     toast("封面已更新");
   } catch (error) {

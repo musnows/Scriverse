@@ -172,7 +172,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260715-top-search');
+    expect(page.text).toContain('/app.js?v=20260715-work-settings-nav');
     expect(page.text).toContain('id="top-search-button"');
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="search-dialog"');
@@ -190,6 +190,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-testid="book-add-card"');
     expect(application.text).toContain('id="work-access-title">可访问人</strong>');
     expect(application.text).toContain('id="work-access-manage"');
+    expect(application.text).toContain('class="book-card-settings"');
+    expect(application.text).toContain("function workCoverFieldHtml(work)");
+    expect(application.text).toContain('id="work-cover-upload"');
+    expect(application.text).not.toContain("book-card-actions");
     expect(application.text).toContain("memberDialogWork ?? state.work");
     expect(application.text).toContain('const platformDocumentTitle = "叙界 · 小说 AI 创作工作台"');
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
@@ -197,9 +201,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('<button type="button" data-module="outlines">大纲与伏笔</button>');
     expect(page.text).toContain('id="module-more-button"');
-    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
+    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(5);
     expect(page.text).toContain('<button class="module-nav-secondary hidden" type="button" data-module="races">种族</button>');
     expect(page.text).toContain('data-module="ai-settings"');
+    expect(page.text).toContain('data-work-settings');
+    expect(page.text).toContain(">作品设置</button>");
+    expect(application.text).toContain('button.hasAttribute("data-work-settings")');
+    expect(application.text).toContain("openWorkSettingsDialog(work)");
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
     expect(page.text).toContain('class="relationship-map-floating-close"');
@@ -220,6 +228,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".account-menu button:hover, .account-menu button:focus-visible");
     expect(styles.text).toContain(".book-info > span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }");
     expect(styles.text).not.toContain("-webkit-box-orient: vertical; min-height: 2.8em;");
+    expect(styles.text).toContain(".book-card-settings {");
+    expect(styles.text).toContain("padding: 2px 6px;");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
