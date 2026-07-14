@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260715-prompt-textarea">
+    <link rel="stylesheet" href="/styles.css?v=20260715-search-dialog">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -318,6 +318,22 @@
       </form>
     </dialog>
 
+    <dialog id="search-dialog" class="dialog wide-dialog" aria-labelledby="search-dialog-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">当前作品</span><h2 id="search-dialog-title">全文检索</h2></div>
+        <button id="search-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button>
+      </div>
+      <div class="access-dialog-body">
+        <form id="search-form" class="search-form">
+          <label>关键词<input id="search-query" name="query" type="search" maxlength="100" placeholder="搜索正文、设定、角色、种族或组织" required></label>
+          <button class="primary-button" type="submit">搜索</button>
+        </form>
+        <div id="search-results" class="search-results" aria-live="polite">
+          <p class="search-results-empty">输入关键词后开始检索。</p>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="appearance-dialog" class="dialog">
       <form id="appearance-form" method="dialog">
         <div class="dialog-header">
@@ -445,6 +461,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260715-access-dialog"></script>
+    <script type="module" src="/app.js?v=20260715-search-dialog"></script>
   </body>
 </html>

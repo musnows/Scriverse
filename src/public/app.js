@@ -1164,6 +1164,89 @@ async function openMembersDialog(targetWork = state.work) {
   } catch (error) { $("#members-dialog").close(); toast(error.message, "error"); }
 }
 
+const searchResultTypeLabels = {
+  chapter: "章节",
+  setting: "设定",
+  character: "角色",
+  race: "种族",
+  organization: "组织"
+};
+
+async function openSearchDialog() {
+  if (!state.work) {
+    toast("请先打开一部作品", "error");
+    return;
+  }
+  $("#search-dialog .eyebrow").textContent = `当前作品 · 《${state.work.title}》`;
+  $("#search-query").value = "";
+  $("#search-results").innerHTML = '<p class="search-results-empty">输入关键词后开始检索。</p>';
+  $("#search-dialog").showModal();
+  queueMicrotask(() => $("#search-query").focus());
+}
+
+function renderSearchResults(results) {
+  if (!results.length) {
+    $("#search-results").innerHTML = '<p class="search-results-status">未找到相关内容。</p>';
+    return;
+  }
+  $("#search-results").innerHTML = results.map((item) => `
+    <button type="button" class="search-result" data-search-type="${esc(item.type)}" data-search-id="${esc(item.id)}">
+      <div class="search-result-meta"><span>${esc(searchResultTypeLabels[item.type] ?? item.type)}</span><strong>${esc(item.title)}</strong></div>
+      <p>${esc(item.snippet || "无摘要")}</p>
+    </button>`).join("");
+  $("#search-results").querySelectorAll(".search-result").forEach((button) => {
+    button.addEventListener("click", () => {
+      openSearchResult({ type: button.dataset.searchType, id: button.dataset.searchId })
+        .catch((error) => toast(error.message, "error"));
+    });
+  });
+}
+
+async function runWorkSearch() {
+  if (!state.work) throw new Error("请先打开一部作品");
+  const query = $("#search-query").value.trim();
+  if (!query) {
+    $("#search-results").innerHTML = '<p class="search-results-empty">请输入关键词。</p>';
+    return;
+  }
+  $("#search-results").innerHTML = '<p class="search-results-status">正在检索……</p>';
+  const results = await api(`/api/works/${encodeURIComponent(state.work.id)}/search?q=${encodeURIComponent(query)}`);
+  renderSearchResults(results);
+}
+
+async function openSearchResult(result) {
+  $("#search-dialog").close();
+  const inSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
+  if (inSettings) await returnFromSettings();
+  if (result.type === "chapter") {
+    await selectChapter(result.id);
+    return;
+  }
+  if (result.type === "character") {
+    await showModule("characters");
+    const character = state.characters.find((item) => item.id === result.id);
+    if (character) openCharacterDialog(character);
+    return;
+  }
+  if (result.type === "setting") {
+    await showModule("settings");
+    const setting = await api(`/api/settings/${encodeURIComponent(result.id)}`);
+    openSettingDialog(setting);
+    return;
+  }
+  if (result.type === "race") {
+    await showModule("races");
+    const race = state.races.find((item) => item.id === result.id);
+    if (race) openRaceDialog(race);
+    return;
+  }
+  if (result.type === "organization") {
+    await showModule("organizations");
+    const organization = state.organizations.find((item) => item.id === result.id);
+    if (organization) openOrganizationDialog(organization);
+  }
+}
+
 function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
   if (!alreadyInSettings) {
@@ -3070,12 +3153,15 @@ $(".quick-actions").addEventListener("click", (event) => {
   $("#ai-prompt").value = button.dataset.prompt;
   $("#ai-prompt").focus();
 });
-$("#search-button").addEventListener("click", async () => {
-  if (!state.work) return;
-  const query = window.prompt("搜索正文、设定或角色：");
-  if (!query) return;
-  const results = await api(`/api/works/${state.work.id}/search?q=${encodeURIComponent(query)}`);
-  toast(results.length ? `找到 ${results.length} 条结果：${results.slice(0, 3).map((item) => item.title).join("、")}` : "未找到相关内容");
+$("#search-button").addEventListener("click", () => {
+  openSearchDialog().catch((error) => toast(error.message, "error"));
+});
+$("#search-dialog-close").addEventListener("click", () => $("#search-dialog").close());
+$("#search-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runWorkSearch().catch((error) => {
+    $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
+  });
 });
 $("#export-button").addEventListener("click", () => {
   if (state.work) window.location.href = `/api/works/${state.work.id}/export?format=markdown`;
