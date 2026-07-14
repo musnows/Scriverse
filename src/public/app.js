@@ -810,6 +810,18 @@ function selectAuthMode(mode) {
   $("#login-form").classList.toggle("hidden", !login);
   $("#register-form").classList.toggle("hidden", login);
   $("#auth-error").textContent = "";
+  refreshAuthCaptcha(login ? "login" : "register").catch(() => {});
+}
+
+async function refreshAuthCaptcha(target = "login") {
+  const response = await fetch("/api/auth/captcha", { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error("无法加载验证码");
+  const challenge = (await response.json()).data;
+  const prefix = target === "register" ? "register" : "login";
+  $(`#${prefix}-captcha-id`).value = challenge.captchaId;
+  $(`#${prefix}-captcha-image`).src = challenge.imageDataUrl;
+  const answerInput = $(`#${prefix}-form`).querySelector('input[name="captchaAnswer"]');
+  if (answerInput) answerInput.value = "";
 }
 
 function showAuth(setupRequired, registrationOpen = true) {
@@ -840,7 +852,7 @@ async function initializeAuthentication() {
   if (!response.ok) throw new Error("无法读取登录状态");
   const session = (await response.json()).data;
   if (!session.authenticated) {
-    showAuth(session.setupRequired);
+    showAuth(session.setupRequired, session.registrationOpen !== false);
     return false;
   }
   applyAuthenticatedUser(session);
@@ -2756,23 +2768,52 @@ $("#logout-button").addEventListener("click", async () => {
 });
 $("#auth-login-tab").addEventListener("click", () => selectAuthMode("login"));
 $("#auth-register-tab").addEventListener("click", () => selectAuthMode("register"));
+$("#login-captcha-refresh").addEventListener("click", () => {
+  refreshAuthCaptcha("login").catch((error) => { $("#auth-error").textContent = error.message; });
+});
+$("#register-captcha-refresh").addEventListener("click", () => {
+  refreshAuthCaptcha("register").catch((error) => { $("#auth-error").textContent = error.message; });
+});
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   $("#auth-error").textContent = "";
   try {
-    await api("/api/auth/login", { method: "POST", body: { username: form.get("username"), password: form.get("password") } });
+    await api("/api/auth/login", {
+      method: "POST",
+      body: {
+        username: form.get("username"),
+        password: form.get("password"),
+        captchaId: form.get("captchaId"),
+        captchaAnswer: form.get("captchaAnswer")
+      }
+    });
     window.location.reload();
-  } catch (error) { $("#auth-error").textContent = error.message; }
+  } catch (error) {
+    $("#auth-error").textContent = error.message;
+    refreshAuthCaptcha("login").catch(() => {});
+  }
 });
 $("#register-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   $("#auth-error").textContent = "";
   try {
-    await api("/api/auth/register", { method: "POST", body: { username: form.get("username"), displayName: form.get("displayName"), password: form.get("password") } });
+    await api("/api/auth/register", {
+      method: "POST",
+      body: {
+        username: form.get("username"),
+        displayName: form.get("displayName"),
+        password: form.get("password"),
+        captchaId: form.get("captchaId"),
+        captchaAnswer: form.get("captchaAnswer")
+      }
+    });
     window.location.reload();
-  } catch (error) { $("#auth-error").textContent = error.message; }
+  } catch (error) {
+    $("#auth-error").textContent = error.message;
+    refreshAuthCaptcha("register").catch(() => {});
+  }
 });
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));

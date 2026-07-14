@@ -65,6 +65,22 @@
   font-weight: 600;
 }
 .auth-form small { color: var(--muted); line-height: 1.5; font-size: 12px; }
+.auth-captcha { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.auth-captcha label { margin: 0; }
+.auth-captcha-image {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 148px;
+  min-height: 46px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper-deep);
+  cursor: pointer;
+}
+.auth-captcha-image img { display: block; width: 148px; height: 48px; border-radius: 6px; }
+.auth-captcha-hint { margin: -8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .auth-error { min-height: 20px; margin: 14px 0 0 !important; color: var(--accent-dark) !important; }
 
 :root[data-theme="dark"] {

@@ -8,9 +8,22 @@ type SessionCredentials = {
   user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
 };
 
+async function solveCaptcha(app: Runtime["app"]): Promise<{ captchaId: string; captchaAnswer: string }> {
+  const response = await request(app).get("/api/auth/captcha").expect(200);
+  expect(response.body.data.captchaId).toBeTruthy();
+  expect(response.body.data.answer).toBeTruthy();
+  return { captchaId: response.body.data.captchaId, captchaAnswer: response.body.data.answer };
+}
+
 async function register(runtime: Runtime, username: string, displayName: string): Promise<SessionCredentials> {
   const agent = request.agent(runtime.app);
-  const response = await agent.post("/api/auth/register").send({ username, displayName, password: "secure-password-123" }).expect(201);
+  const captcha = await solveCaptcha(runtime.app);
+  const response = await agent.post("/api/auth/register").send({
+    username,
+    displayName,
+    password: "secure-password-123",
+    ...captcha
+  }).expect(201);
   return { agent, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
 }
 
@@ -21,7 +34,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "user-auth-test-master-secret-with-enough-length",
-      serveUi: false
+      serveUi: false,
+      revealCaptchaAnswer: true
     });
   });
   afterEach(() => runtime.close());
@@ -98,8 +112,18 @@ describe("用户、作品权限与操作者追踪 API", () => {
       currentPassword: "secure-password-123",
       newPassword: "new-secure-password-456"
     }).expect(204);
-    await request(runtime.app).post("/api/auth/login").send({ username: "profile_user", password: "secure-password-123" }).expect(401);
-    await request(runtime.app).post("/api/auth/login").send({ username: "profile_user", password: "new-secure-password-456" }).expect(200);
+    const staleLogin = await solveCaptcha(runtime.app);
+    await request(runtime.app).post("/api/auth/login").send({
+      username: "profile_user",
+      password: "secure-password-123",
+      ...staleLogin
+    }).expect(401);
+    const loginCaptcha = await solveCaptcha(runtime.app);
+    await request(runtime.app).post("/api/auth/login").send({
+      username: "profile_user",
+      password: "new-secure-password-456",
+      ...loginCaptcha
+    }).expect(200);
   });
 
   it("可通过 APP_ALLOW_REGISTRATION=false 关闭开放注册", async () => {
@@ -108,6 +132,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       databasePath: ":memory:",
       masterSecret: "user-auth-test-master-secret-with-enough-length",
       serveUi: false,
+      revealCaptchaAnswer: true,
       security: { allowRegistration: false, enforceSameOrigin: true }
     });
     const openSession = await request(runtime.app).get("/api/auth/session").expect(200);
@@ -115,11 +140,36 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await register(runtime, "only_admin", "唯一管理员");
     const closedSession = await request(runtime.app).get("/api/auth/session").expect(200);
     expect(closedSession.body.data.registrationOpen).toBe(false);
+    const captcha = await solveCaptcha(runtime.app);
     const rejected = await request(runtime.app).post("/api/auth/register").send({
       username: "blocked_user",
       displayName: "被拦截",
-      password: "secure-password-123"
+      password: "secure-password-123",
+      ...captcha
     }).expect(403);
     expect(rejected.body.error.code).toBe("REGISTRATION_DISABLED");
+  });
+
+  it("登录与注册必须通过图片验证码", async () => {
+    await request(runtime.app).post("/api/auth/register").send({
+      username: "captcha_user",
+      displayName: "验证码用户",
+      password: "secure-password-123"
+    }).expect(400);
+    const wrong = await solveCaptcha(runtime.app);
+    await request(runtime.app).post("/api/auth/register").send({
+      username: "captcha_user",
+      displayName: "验证码用户",
+      password: "secure-password-123",
+      captchaId: wrong.captchaId,
+      captchaAnswer: "XXXX"
+    }).expect(400);
+    const user = await register(runtime, "captcha_user", "验证码用户");
+    await user.agent.post("/api/auth/login").send({
+      username: "captcha_user",
+      password: "secure-password-123",
+      captchaId: "missing",
+      captchaAnswer: "ABCD"
+    }).expect(400);
   });
 });

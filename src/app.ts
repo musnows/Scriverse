@@ -12,6 +12,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store, versionedEntityTypes } from "./store.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
+import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText } from "./import-security.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
@@ -30,14 +31,23 @@ const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"])
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const maximumImportedTextLength = 20_000_000;
 
+const captchaFields = {
+  captchaId: z.string().trim().min(1).max(200),
+  captchaAnswer: z.string().trim().min(1).max(16)
+};
 const usernameSchema = z.string().trim().min(3).max(40).regex(/^[\p{L}\p{N}_.-]+$/u, "用户名只能包含文字、数字、点、下划线和短横线");
 const passwordSchema = z.string().min(10).max(200);
 const registrationSchema = z.object({
   username: usernameSchema,
   displayName: z.string().trim().min(1).max(80),
-  password: passwordSchema
+  password: passwordSchema,
+  ...captchaFields
 }).strict();
-const loginSchema = z.object({ username: z.string().trim().min(1).max(100), password: z.string().max(200) }).strict();
+const loginSchema = z.object({
+  username: z.string().trim().min(1).max(100),
+  password: z.string().max(200),
+  ...captchaFields
+}).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
 const memberSchema = z.object({ userId: identifier }).strict();
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
@@ -242,6 +252,8 @@ export type RuntimeOptions = {
   serveUi?: boolean;
   security?: RuntimeSecurityOptions;
   disableUserAuth?: boolean;
+  /** 测试用：在验证码接口中回显答案 */
+  revealCaptchaAnswer?: boolean;
 };
 
 export type Runtime = {
@@ -269,6 +281,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const database = new Database(options.databasePath);
   const auth = new UserAuthService(database);
   const store = new Store(database);
+  const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
     new CredentialVault(options.masterSecret),
@@ -306,17 +319,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
       : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
   });
+  app.get("/api/auth/captcha", (_request, response) => {
+    data(response, captcha.create());
+  });
   app.post("/api/auth/register", (request, response) => {
     if (auth.hasUsers() && options.security?.allowRegistration === false) {
       throw new AppError(403, "REGISTRATION_DISABLED", "当前部署已关闭新用户注册");
     }
-    const result = auth.register(parse(registrationSchema, request.body));
+    const input = parse(registrationSchema, request.body);
+    captcha.consume(input.captchaId, input.captchaAnswer);
+    const result = auth.register({ username: input.username, displayName: input.displayName, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken }, 201);
   });
   app.post("/api/auth/login", (request, response) => {
     const input = parse(loginSchema, request.body);
+    captcha.consume(input.captchaId, input.captchaAnswer);
     const result = auth.login(input.username, input.password);
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId));

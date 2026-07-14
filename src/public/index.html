@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260714-no-edge-focus-ring">
+    <link rel="stylesheet" href="/styles.css?v=20260715-auth-captcha">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -25,12 +25,28 @@
         <form id="login-form" class="auth-form">
           <label>用户名<input name="username" autocomplete="username" maxlength="100" required></label>
           <label>密码<input name="password" type="password" autocomplete="current-password" maxlength="200" required></label>
+          <div class="auth-captcha">
+            <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="login-captcha-hint"></label>
+            <button id="login-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">
+              <img id="login-captcha-image" alt="验证码图片">
+            </button>
+            <input id="login-captcha-id" name="captchaId" type="hidden" required>
+          </div>
+          <p id="login-captcha-hint" class="auth-captcha-hint">点击图片可刷新</p>
           <button class="primary-button" type="submit">登录</button>
         </form>
         <form id="register-form" class="auth-form hidden">
           <label>用户名<input name="username" autocomplete="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9_.\-\u4e00-\u9fff]+" required></label>
           <label>显示名称<input name="displayName" autocomplete="name" maxlength="80" required></label>
           <label>密码<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label>
+          <div class="auth-captcha">
+            <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="register-captcha-hint"></label>
+            <button id="register-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">
+              <img id="register-captcha-image" alt="验证码图片">
+            </button>
+            <input id="register-captcha-id" name="captchaId" type="hidden" required>
+          </div>
+          <p id="register-captcha-hint" class="auth-captcha-hint">点击图片可刷新</p>
           <small>至少 10 个字符。系统中的第一个注册用户会自动成为管理员。</small>
           <button class="primary-button" type="submit">创建账户</button>
         </form>
@@ -425,6 +441,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260714-registration-gate"></script>
+    <script type="module" src="/app.js?v=20260715-auth-captcha"></script>
   </body>
 </html>
