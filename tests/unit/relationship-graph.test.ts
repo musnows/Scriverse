@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -22,6 +22,38 @@ describe("人物关系图数据与布局", () => {
     expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
   });
 
+  it("按组织、种族、身份解析 Obsidian 节点分组并映射低饱和配色", () => {
+    expect(resolveRelationshipNodeGroup({
+      organizations: [{ id: "o1", name: "北境联盟" }],
+      species: "人类",
+      identity: "将军"
+    })).toMatchObject({ type: "organization", label: "北境联盟" });
+    expect(resolveRelationshipNodeGroup({ species: "精灵", identity: "学者" })).toMatchObject({ type: "species", label: "精灵" });
+    expect(resolveRelationshipNodeGroup({ identity: "流浪商人" })).toMatchObject({ type: "identity", label: "流浪商人" });
+
+    const hub = getObsidianNodeAppearance({ degree: 12, groupKey: "species:人类", species: "人类" }, 12);
+    const leaf = getObsidianNodeAppearance({ degree: 1, groupKey: "species:精灵", species: "精灵" }, 12);
+    expect(hub.size).toBeGreaterThan(leaf.size);
+    expect(hub.color).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(hub.glow).toContain("rgba");
+    expect(hub.color).not.toBe(leaf.color);
+  });
+
+  it("构建图谱时写入分组与度数相关节点尺寸", () => {
+    const graph = buildRelationshipGraph([
+      { id: "a", name: "甲", species: "人类", organizations: [{ id: "o1", name: "朝廷" }] },
+      { id: "b", name: "乙", species: "妖族" },
+      { id: "c", name: "丙", attributes: { identity: "隐士" } }
+    ], [
+      { id: "e1", fromCharacterId: "a", toCharacterId: "b", category: "conflict", confidence: 0.9, confirmationStatus: "confirmed" },
+      { id: "e2", fromCharacterId: "a", toCharacterId: "c", category: "social", confidence: 0.7, confirmationStatus: "confirmed" }
+    ]);
+    expect(graph.stats.maxDegree).toBe(2);
+    expect(graph.nodeById.get("a")?.groupType).toBe("organization");
+    expect(graph.nodeById.get("a")?.nodeSize).toBeGreaterThan(graph.nodeById.get("b")?.nodeSize ?? 0);
+    expect(graph.nodeById.get("a")?.color).toBeTruthy();
+  });
+
   it("普通关系网络使用稳定的力导向布局并容纳全部角色", () => {
     const characters = Array.from({ length: 18 }, (_, index) => ({ id: `n-${index}`, name: `角色 ${index}` }));
     const relationships = Array.from({ length: 14 }, (_, index) => ({
@@ -39,12 +71,15 @@ describe("人物关系图数据与布局", () => {
     expect(first.nodes).toHaveLength(18);
     expect(first.nodes.map((node: { id: string; x: number; y: number }) => [node.id, node.x, node.y]))
       .toEqual(second.nodes.map((node: { id: string; x: number; y: number }) => [node.id, node.x, node.y]));
-    expect(first.nodes.every((node: { x: number; y: number }) => node.x >= 54 && node.x <= 1146 && node.y >= 46 && node.y <= 594)).toBe(true);
+    expect(first.nodes.every((node: { x: number; y: number }) => node.x >= 48 && node.x <= 1152 && node.y >= 42 && node.y <= 598)).toBe(true);
     expect(new Set(first.nodes.map((node: { x: number }) => Math.round(node.x))).size).toBeGreaterThan(12);
     expect(new Set(first.nodes.map((node: { y: number }) => Math.round(node.y))).size).toBeGreaterThan(12);
+    const hub = first.nodes.find((node: { id: string }) => node.id === "n-0");
+    const leaf = first.nodes.find((node: { id: string }) => node.id === "n-1");
+    expect(hub?.radius).toBeGreaterThan(leaf?.radius ?? 0);
   });
 
-  it("拖拽节点时关联节点跟随且邻近节点主动避让", () => {
+  it("拖拽节点时用弹簧与斥力带动关联节点并产生惯性位移", () => {
     const positions = new Map([
       ["dragged", { x: 0, y: 0 }],
       ["related", { x: 120, y: 0 }],
@@ -52,20 +87,62 @@ describe("人物关系图数据与布局", () => {
       ["distant", { x: 300, y: 0 }]
     ]);
     const radii = new Map([["dragged", 20], ["related", 20], ["nearby", 20], ["distant", 20]]);
+    const relatedBefore = positions.get("related")?.x ?? 0;
+    const nearbyBefore = positions.get("nearby")?.x ?? 0;
     const changed = applyRelationshipDragInfluence(
       positions,
       "dragged",
       { x: 60, y: 0 },
       new Set(["related"]),
       radii,
-      { minimumX: -500, maximumX: 500, minimumY: -500, maximumY: 500 }
+      { minimumX: -500, maximumX: 500, minimumY: -500, maximumY: 500 },
+      { steps: 12, springStrength: 0.12, repulsionStrength: 3200, damping: 0.8 }
     );
 
     expect(positions.get("dragged")).toEqual({ x: 60, y: 0 });
-    expect(positions.get("related")?.x).toBeGreaterThan(120);
-    expect(positions.get("nearby")?.x).toBeLessThan(38);
-    expect(positions.get("distant")).toEqual({ x: 300, y: 0 });
-    expect(changed).toEqual(new Set(["dragged", "related", "nearby"]));
+    expect(positions.get("related")?.x).toBeGreaterThan(relatedBefore);
+    expect(positions.get("nearby")?.x).toBeLessThan(nearbyBefore);
+    expect(Math.abs((positions.get("distant")?.x ?? 300) - 300)).toBeLessThan(8);
+    expect(changed.has("dragged")).toBe(true);
+    expect(changed.has("related")).toBe(true);
+  });
+
+  it("物理步进会保留速度并在松手后继续沉降", () => {
+    const positions = new Map([
+      ["a", { x: 0, y: 0 }],
+      ["b", { x: 160, y: 0 }]
+    ]);
+    const velocities = new Map([
+      ["a", { vx: 0, vy: 0 }],
+      ["b", { vx: 0, vy: 0 }]
+    ]);
+    const first = stepRelationshipDragPhysics({
+      positions,
+      velocities,
+      edges: [{ id: "e", source: "a", target: "b" }],
+      nodeRadii: new Map([["a", 16], ["b", 16]]),
+      bounds: { minimumX: -400, maximumX: 400, minimumY: -400, maximumY: 400 },
+      degrees: new Map([["a", 1], ["b", 1]]),
+      activeNodeIds: new Set(["a", "b"]),
+      pinnedNodeId: "a",
+      pinnedPosition: { x: 40, y: 0 }
+    }, { springStrength: 0.1, desiredEdgeLength: 180, damping: 0.9 });
+    expect(first.changedNodeIds.has("b")).toBe(true);
+    expect(Math.abs(velocities.get("b")?.vx ?? 0)).toBeGreaterThan(0.01);
+
+    // 松手后若继续步进仍可有能量，但产品层会立即冻结；这里只验证物理核本身仍可用
+    const afterRelease = stepRelationshipDragPhysics({
+      positions,
+      velocities,
+      edges: [{ id: "e", source: "a", target: "b" }],
+      nodeRadii: new Map([["a", 16], ["b", 16]]),
+      bounds: { minimumX: -400, maximumX: 400, minimumY: -400, maximumY: 400 },
+      degrees: new Map([["a", 1], ["b", 1]]),
+      activeNodeIds: new Set(["a", "b"]),
+      pinnedNodeId: null,
+      pinnedPosition: null
+    }, { springStrength: 0.1, desiredEdgeLength: 180, damping: 0.9 });
+    expect(afterRelease.energy).toBeGreaterThan(0);
   });
 
   it("大量角色使用有界采样布局并返回全部节点", () => {

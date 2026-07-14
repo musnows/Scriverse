@@ -6,10 +6,20 @@ const RELATION_STYLE = Object.freeze({
   uncertain: { label: "未确定", color: "#9aa5b5" }
 });
 
+/** Obsidian Graph View 风格：低饱和度分组配色 */
+export const OBSIDIAN_NODE_PALETTE = Object.freeze([
+  Object.freeze({ key: "blue", color: "#7a9bb5", glow: "rgba(122,155,181,.48)" }),
+  Object.freeze({ key: "lavender", color: "#9a8fb5", glow: "rgba(154,143,181,.48)" }),
+  Object.freeze({ key: "slate", color: "#8b9099", glow: "rgba(139,144,153,.42)" }),
+  Object.freeze({ key: "rose", color: "#b58a9a", glow: "rgba(181,138,154,.48)" }),
+  Object.freeze({ key: "mist", color: "#8aa8a3", glow: "rgba(138,168,163,.45)" }),
+  Object.freeze({ key: "sand", color: "#a89a88", glow: "rgba(168,154,136,.42)" })
+]);
+
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 const NETWORK_LAYOUTS = Object.freeze({
-  standard: Object.freeze({ width: 1200, height: 640, marginX: 54, marginY: 46, desiredEdgeLength: 105, repulsionStrength: 7800 }),
-  expanded: Object.freeze({ width: 1600, height: 900, marginX: 72, marginY: 62, desiredEdgeLength: 138, repulsionStrength: 11200 })
+  standard: Object.freeze({ width: 1200, height: 640, marginX: 48, marginY: 42, desiredEdgeLength: 196, repulsionStrength: 16800 }),
+  expanded: Object.freeze({ width: 1600, height: 900, marginX: 64, marginY: 56, desiredEdgeLength: 236, repulsionStrength: 22800 })
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
@@ -38,6 +48,35 @@ export function getRelationshipEdgeSelection(graph, edgeId) {
   };
 }
 
+export function resolveRelationshipNodeGroup(node) {
+  const organizations = Array.isArray(node?.organizations) ? node.organizations : [];
+  const orgName = organizations
+    .map((item) => String(item?.name ?? item ?? "").trim())
+    .find(Boolean);
+  const species = String(node?.species ?? "").trim();
+  const identity = String(node?.identity ?? "").trim();
+  if (orgName) return { type: "organization", key: `org:${orgName}`, label: orgName };
+  if (species) return { type: "species", key: `species:${species}`, label: species };
+  if (identity) return { type: "identity", key: `identity:${identity}`, label: identity };
+  return { type: "default", key: "default", label: "未分组" };
+}
+
+export function getObsidianNodeAppearance(node, maxDegree = 1) {
+  const group = resolveRelationshipNodeGroup(node);
+  const degree = Math.max(0, Number(node?.degree) || 0);
+  const normalizedDegree = clamp(degree / Math.max(1, Number(maxDegree) || 1), 0, 1);
+  const paletteIndex = group.key === "default" ? 2 : hashString(group.key) % OBSIDIAN_NODE_PALETTE.length;
+  const palette = OBSIDIAN_NODE_PALETTE[paletteIndex];
+  return {
+    group,
+    color: palette.color,
+    glow: palette.glow,
+    size: clamp(8 + Math.sqrt(degree) * 4.8 + normalizedDegree * 4, 8, 38),
+    degree,
+    normalizedDegree
+  };
+}
+
 function hashString(value) {
   let hash = 2166136261;
   for (let index = 0; index < value.length; index += 1) {
@@ -59,17 +98,33 @@ function seededRandom(seed) {
 }
 
 export function buildRelationshipGraph(characters, relationships) {
-  const nodes = characters.map((character) => ({
-    id: String(character.id),
-    name: String(character.name),
-    aliases: Array.isArray(character.aliases) ? character.aliases : [],
-    species: String(character.species ?? ""),
-    identity: String(character.attributes?.identity ?? ""),
-    locked: Array.isArray(character.lockedFields) && character.lockedFields.length > 0,
-    degree: 0,
-    weightedDegree: 0,
-    importance: 0
-  }));
+  const nodes = characters.map((character) => {
+    const organizations = Array.isArray(character.organizations)
+      ? character.organizations.map((item) => ({
+        id: String(item?.id ?? ""),
+        name: String(item?.name ?? item ?? "").trim()
+      })).filter((item) => item.name)
+      : Array.isArray(character.organizationIds)
+        ? character.organizationIds.map((id) => ({ id: String(id), name: String(id) }))
+        : [];
+    const node = {
+      id: String(character.id),
+      name: String(character.name),
+      aliases: Array.isArray(character.aliases) ? character.aliases : [],
+      species: String(character.species ?? ""),
+      identity: String(character.attributes?.identity ?? ""),
+      organizations,
+      locked: Array.isArray(character.lockedFields) && character.lockedFields.length > 0,
+      degree: 0,
+      weightedDegree: 0,
+      importance: 0
+    };
+    const group = resolveRelationshipNodeGroup(node);
+    node.groupKey = group.key;
+    node.groupLabel = group.label;
+    node.groupType = group.type;
+    return node;
+  });
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const warnings = [];
   const edges = [];
@@ -108,9 +163,16 @@ export function buildRelationshipGraph(characters, relationships) {
       node.weightedDegree += weight;
     }
   }
-  for (const node of nodes) node.importance = node.weightedDegree + Math.sqrt(node.degree) * 0.8;
+  const maxDegree = Math.max(1, ...nodes.map((node) => node.degree));
+  for (const node of nodes) {
+    node.importance = node.weightedDegree + Math.sqrt(node.degree) * 0.8;
+    const appearance = getObsidianNodeAppearance(node, maxDegree);
+    node.color = appearance.color;
+    node.glow = appearance.glow;
+    node.nodeSize = appearance.size;
+  }
   nodes.sort((left, right) => right.importance - left.importance || left.name.localeCompare(right.name, "zh-CN"));
-  return { nodes, edges, nodeById, warnings, stats: { nodeCount: nodes.length, edgeCount: edges.length } };
+  return { nodes, edges, nodeById, warnings, stats: { nodeCount: nodes.length, edgeCount: edges.length, maxDegree } };
 }
 
 export function layoutRelationshipNetwork(graph, seed = "relationship-network", options = {}) {
@@ -127,10 +189,10 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
     return {
       ...node,
       x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius * 0.72,
+      y: centerY + Math.sin(angle) * radius * 0.78,
       vx: 0,
       vy: 0,
-      radius: clamp(13 + Math.sqrt(Math.max(0, node.degree)) * 4.4, 13, 34)
+      radius: clamp(Number(node.nodeSize) || (8 + Math.sqrt(Math.max(0, node.degree)) * 4.8), 8, 38)
     };
   });
   const byId = new Map(nodes.map((node) => [node.id, node]));
@@ -176,8 +238,8 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
       const dx = target.x - source.x;
       const dy = target.y - source.y;
       const distance = Math.max(1, Math.hypot(dx, dy));
-      const desiredLength = layout.desiredEdgeLength + (2 - Math.min(source.degree, target.degree)) * 7;
-      const force = (distance - desiredLength) * (0.0026 + edge.confidence * 0.0022);
+      const desiredLength = layout.desiredEdgeLength + Math.sqrt(Math.max(source.degree, target.degree, 1)) * 10;
+      const force = (distance - desiredLength) * (0.0022 + edge.confidence * 0.0018);
       source.vx += dx / distance * force;
       source.vy += dy / distance * force;
       target.vx -= dx / distance * force;
@@ -185,8 +247,8 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
     }
     for (const node of nodes) {
       const centrality = clamp((Number(node.importance) || 0) / maxImportance, 0, 1);
-      node.vx += (centerX - node.x) * (0.00042 + centrality * 0.0012);
-      node.vy += (centerY - node.y) * (0.00042 + centrality * 0.0012);
+      node.vx += (centerX - node.x) * (0.00018 + centrality * 0.00055);
+      node.vy += (centerY - node.y) * (0.00018 + centrality * 0.00055);
       node.vx = clamp(node.vx * 0.82, -10, 10);
       node.vy = clamp(node.vy * 0.82, -10, 10);
       node.x += node.vx * cooling;
@@ -211,71 +273,196 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
   return { nodes, byId, width: layout.width, height: layout.height };
 }
 
-export function applyRelationshipDragInfluence(positions, draggedNodeId, nextPosition, neighborIds, nodeRadii, bounds, options = {}) {
-  const previous = positions.get(draggedNodeId);
-  if (!previous) return new Set();
-  const minimumX = Number(bounds?.minimumX ?? -Infinity);
-  const maximumX = Number(bounds?.maximumX ?? Infinity);
-  const minimumY = Number(bounds?.minimumY ?? -Infinity);
-  const maximumY = Number(bounds?.maximumY ?? Infinity);
+export const DRAG_PHYSICS_CONFIG = Object.freeze({
+  springStrength: 0.048,
+  desiredEdgeLength: 188,
+  repulsionStrength: 3200,
+  collisionPadding: 14,
+  damping: 0.9,
+  maxSpeed: 18,
+  stepsPerFrame: 2
+});
+
+export function stepRelationshipDragPhysics(state, options = {}) {
+  const positions = state.positions;
+  const velocities = state.velocities;
+  const edges = state.edges ?? [];
+  const nodeRadii = state.nodeRadii;
+  const bounds = state.bounds ?? {};
+  const pinnedNodeId = state.pinnedNodeId ?? null;
+  const pinnedPosition = state.pinnedPosition ?? null;
+  const activeNodeIds = state.activeNodeIds instanceof Set && state.activeNodeIds.size
+    ? state.activeNodeIds
+    : null;
+  const minimumX = Number(bounds.minimumX ?? -Infinity);
+  const maximumX = Number(bounds.maximumX ?? Infinity);
+  const minimumY = Number(bounds.minimumY ?? -Infinity);
+  const maximumY = Number(bounds.maximumY ?? Infinity);
   const fitBounds = (position) => ({
     x: clamp(Number(position.x) || 0, minimumX, maximumX),
     y: clamp(Number(position.y) || 0, minimumY, maximumY)
   });
   const radiusOf = (nodeId) => Math.max(1, Number(nodeRadii?.get(nodeId)) || 18);
-  const separate = (position, anchor, nodeId, anchorId, padding, strength) => {
-    let dx = position.x - anchor.x;
-    let dy = position.y - anchor.y;
+  const springStrength = Number(options.springStrength ?? DRAG_PHYSICS_CONFIG.springStrength);
+  const desiredEdgeLength = Number(options.desiredEdgeLength ?? DRAG_PHYSICS_CONFIG.desiredEdgeLength);
+  const repulsionStrength = Number(options.repulsionStrength ?? DRAG_PHYSICS_CONFIG.repulsionStrength);
+  const collisionPadding = Number(options.collisionPadding ?? DRAG_PHYSICS_CONFIG.collisionPadding);
+  const damping = clamp(Number(options.damping ?? DRAG_PHYSICS_CONFIG.damping), 0.5, 0.98);
+  const maxSpeed = Number(options.maxSpeed ?? DRAG_PHYSICS_CONFIG.maxSpeed);
+  const dt = clamp(Number(options.dt ?? 1), 0.2, 2);
+  const nodeIds = activeNodeIds ? [...activeNodeIds].filter((nodeId) => positions.has(nodeId)) : [...positions.keys()];
+  const activeSet = activeNodeIds ?? new Set(nodeIds);
+  const forces = new Map(nodeIds.map((nodeId) => [nodeId, { fx: 0, fy: 0 }]));
+
+  if (pinnedNodeId && pinnedPosition && positions.has(pinnedNodeId)) {
+    const pinned = fitBounds(pinnedPosition);
+    positions.set(pinnedNodeId, pinned);
+    velocities.set(pinnedNodeId, { vx: 0, vy: 0 });
+  }
+
+  for (const edge of edges) {
+    if (!activeSet.has(edge.source) && !activeSet.has(edge.target)) continue;
+    if (!forces.has(edge.source)) forces.set(edge.source, { fx: 0, fy: 0 });
+    if (!forces.has(edge.target)) forces.set(edge.target, { fx: 0, fy: 0 });
+    const source = positions.get(edge.source);
+    const target = positions.get(edge.target);
+    if (!source || !target) continue;
+    let dx = target.x - source.x;
+    let dy = target.y - source.y;
     let distance = Math.hypot(dx, dy);
     if (distance < 0.01) {
-      const angle = hashString(`${draggedNodeId}:${nodeId}:${anchorId}`) / 4294967296 * Math.PI * 2;
-      dx = Math.cos(angle);
-      dy = Math.sin(angle);
-      distance = 1;
+      dx = 0.01;
+      dy = 0;
+      distance = 0.01;
     }
-    const minimumDistance = radiusOf(nodeId) + radiusOf(anchorId) + padding;
-    if (distance >= minimumDistance) return position;
-    const displacement = (minimumDistance - distance) * strength;
-    return {
-      x: position.x + dx / distance * displacement,
-      y: position.y + dy / distance * displacement
-    };
-  };
-
-  const changedNodeIds = new Set([draggedNodeId]);
-  const boundedNext = fitBounds(nextPosition);
-  const deltaX = boundedNext.x - previous.x;
-  const deltaY = boundedNext.y - previous.y;
-  positions.set(draggedNodeId, boundedNext);
-  const followStrength = clamp(Number(options.neighborFollow ?? 0.24), 0, 0.5);
-  const directNeighborIds = [...new Set(neighborIds ?? [])].filter((nodeId) => nodeId !== draggedNodeId && positions.has(nodeId));
-  for (const neighborId of directNeighborIds) {
-    const current = positions.get(neighborId);
-    let next = {
-      x: current.x + deltaX * followStrength,
-      y: current.y + deltaY * followStrength
-    };
-    next = separate(next, boundedNext, neighborId, draggedNodeId, 12, 0.82);
-    positions.set(neighborId, fitBounds(next));
-    changedNodeIds.add(neighborId);
+    const sourceDegree = Math.max(1, Number(state.degrees?.get(edge.source)) || 1);
+    const targetDegree = Math.max(1, Number(state.degrees?.get(edge.target)) || 1);
+    const restLength = desiredEdgeLength + Math.sqrt(Math.max(sourceDegree, targetDegree)) * 8;
+    const stretch = distance - restLength;
+    const force = stretch * springStrength;
+    const fx = dx / distance * force;
+    const fy = dy / distance * force;
+    if (edge.source !== pinnedNodeId) {
+      forces.get(edge.source).fx += fx;
+      forces.get(edge.source).fy += fy;
+    }
+    if (edge.target !== pinnedNodeId) {
+      forces.get(edge.target).fx -= fx;
+      forces.get(edge.target).fy -= fy;
+    }
   }
 
-  const anchorIds = [draggedNodeId, ...directNeighborIds];
-  const anchorSet = new Set(anchorIds);
-  const avoidancePadding = Math.max(0, Number(options.avoidancePadding ?? 18));
-  const avoidanceStrength = clamp(Number(options.avoidanceStrength ?? 0.68), 0, 1);
-  for (const [nodeId, current] of positions) {
-    if (anchorSet.has(nodeId)) continue;
-    let next = { ...current };
-    for (const anchorId of anchorIds) {
-      const anchor = positions.get(anchorId);
-      if (anchor) next = separate(next, anchor, nodeId, anchorId, avoidancePadding, avoidanceStrength);
+  const repulsionIds = [...new Set([...nodeIds, ...(pinnedNodeId ? [pinnedNodeId] : [])])];
+  for (let leftIndex = 0; leftIndex < repulsionIds.length; leftIndex += 1) {
+    const leftId = repulsionIds[leftIndex];
+    const left = positions.get(leftId);
+    if (!left) continue;
+    for (let rightIndex = leftIndex + 1; rightIndex < repulsionIds.length; rightIndex += 1) {
+      const rightId = repulsionIds[rightIndex];
+      if (!activeSet.has(leftId) && !activeSet.has(rightId)) continue;
+      const right = positions.get(rightId);
+      if (!right) continue;
+      let dx = right.x - left.x;
+      let dy = right.y - left.y;
+      let distanceSquared = dx * dx + dy * dy;
+      if (distanceSquared < 0.0001) {
+        dx = (hashString(`${leftId}:${rightId}`) / 4294967296 - 0.5) || 0.01;
+        dy = (hashString(`${rightId}:${leftId}`) / 4294967296 - 0.5) || 0.01;
+        distanceSquared = dx * dx + dy * dy;
+      }
+      const distance = Math.sqrt(distanceSquared);
+      const minimumDistance = radiusOf(leftId) + radiusOf(rightId) + collisionPadding;
+      let force = repulsionStrength / distanceSquared;
+      if (distance < minimumDistance) force += (minimumDistance - distance) * 0.42;
+      else if (distance > minimumDistance * 3.8) continue;
+      const fx = dx / distance * force;
+      const fy = dy / distance * force;
+      if (!forces.has(leftId)) forces.set(leftId, { fx: 0, fy: 0 });
+      if (!forces.has(rightId)) forces.set(rightId, { fx: 0, fy: 0 });
+      if (leftId !== pinnedNodeId) {
+        forces.get(leftId).fx -= fx;
+        forces.get(leftId).fy -= fy;
+      }
+      if (rightId !== pinnedNodeId) {
+        forces.get(rightId).fx += fx;
+        forces.get(rightId).fy += fy;
+      }
     }
-    next = fitBounds(next);
-    if (Math.hypot(next.x - current.x, next.y - current.y) < 0.05) continue;
-    positions.set(nodeId, next);
-    changedNodeIds.add(nodeId);
   }
+
+  const changedNodeIds = new Set();
+  let energy = 0;
+  const movableIds = new Set([...forces.keys(), ...nodeIds]);
+  for (const nodeId of movableIds) {
+    const position = positions.get(nodeId);
+    if (!position) continue;
+    const force = forces.get(nodeId) ?? { fx: 0, fy: 0 };
+    let velocity = velocities.get(nodeId);
+    if (!velocity) {
+      velocity = { vx: 0, vy: 0 };
+      velocities.set(nodeId, velocity);
+    }
+    if (nodeId === pinnedNodeId) {
+      changedNodeIds.add(nodeId);
+      continue;
+    }
+    if (activeNodeIds && !activeNodeIds.has(nodeId) && Math.hypot(force.fx, force.fy) < 0.01) continue;
+    velocity.vx = clamp((velocity.vx + force.fx * dt) * damping, -maxSpeed, maxSpeed);
+    velocity.vy = clamp((velocity.vy + force.fy * dt) * damping, -maxSpeed, maxSpeed);
+    const next = fitBounds({
+      x: position.x + velocity.vx * dt,
+      y: position.y + velocity.vy * dt
+    });
+    if (next.x !== position.x || next.y !== position.y || Math.abs(velocity.vx) > 0.01 || Math.abs(velocity.vy) > 0.01) {
+      positions.set(nodeId, next);
+      changedNodeIds.add(nodeId);
+    }
+    energy += Math.hypot(velocity.vx, velocity.vy);
+  }
+  return { changedNodeIds, energy };
+}
+
+export function applyRelationshipDragInfluence(positions, draggedNodeId, nextPosition, neighborIds, nodeRadii, bounds, options = {}) {
+  const velocities = options.velocities ?? new Map([...positions.keys()].map((nodeId) => [nodeId, { vx: 0, vy: 0 }]));
+  const neighborSet = new Set([...(neighborIds ?? [])].map(String));
+  const activeNodeIds = new Set([draggedNodeId, ...neighborSet]);
+  // 邻近未连接节点也参与局部避让，避免被拖拽簇硬撞开后到处漂移
+  for (const [nodeId, position] of positions) {
+    if (activeNodeIds.has(nodeId)) continue;
+    const pinned = nextPosition;
+    if (Math.hypot(position.x - pinned.x, position.y - pinned.y) < 120) activeNodeIds.add(nodeId);
+  }
+  const syntheticEdges = [...neighborSet].map((neighborId, index) => ({
+    id: `drag-edge-${index}`,
+    source: draggedNodeId,
+    target: neighborId
+  }));
+  const degrees = new Map([...positions.keys()].map((nodeId) => [nodeId, nodeId === draggedNodeId ? neighborSet.size : neighborSet.has(nodeId) ? 1 : 0]));
+  const steps = Math.max(1, Math.round(Number(options.steps ?? 8)));
+  let changedNodeIds = new Set([draggedNodeId]);
+  for (let step = 0; step < steps; step += 1) {
+    const result = stepRelationshipDragPhysics({
+      positions,
+      velocities,
+      edges: syntheticEdges,
+      nodeRadii,
+      bounds,
+      degrees,
+      activeNodeIds,
+      pinnedNodeId: draggedNodeId,
+      pinnedPosition: nextPosition
+    }, {
+      springStrength: Number(options.springStrength ?? 0.08),
+      desiredEdgeLength: Number(options.desiredEdgeLength ?? DRAG_PHYSICS_CONFIG.desiredEdgeLength),
+      repulsionStrength: Number(options.repulsionStrength ?? 3200),
+      collisionPadding: Number(options.avoidancePadding ?? 16),
+      damping: Number(options.damping ?? 0.86),
+      maxSpeed: Number(options.maxSpeed ?? 20),
+      dt: Number(options.dt ?? 1)
+    });
+    result.changedNodeIds.forEach((nodeId) => changedNodeIds.add(nodeId));
+  }
+  if (options.velocities) options.velocities = velocities;
   return changedNodeIds;
 }
 
@@ -290,33 +477,38 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   }
 
   const layout = options.expanded ? NETWORK_LAYOUTS.expanded : NETWORK_LAYOUTS.standard;
-  const laidOut = layoutRelationshipNetwork(graph, options.seed ?? "relationship-network-v2", { expanded: options.expanded });
+  const laidOut = layoutRelationshipNetwork(graph, options.seed ?? "relationship-network-v3", { expanded: options.expanded });
   const positions = new Map(laidOut.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
   const originalPositions = new Map([...positions].map(([id, position]) => [id, { ...position }]));
-  const nodeInfluenceRadii = new Map(graph.nodes.map((node) => [node.id, clamp(18 + Math.sqrt(Math.max(0, node.degree)) * 5, 18, 48)]));
+  const velocities = new Map(graph.nodes.map((node) => [node.id, { vx: 0, vy: 0 }]));
+  const nodeInfluenceRadii = new Map(graph.nodes.map((node) => [node.id, clamp(Number(node.nodeSize) || (8 + Math.sqrt(Math.max(0, node.degree)) * 4.8), 8, 38)]));
+  const nodeDegrees = new Map(graph.nodes.map((node) => [node.id, node.degree]));
   const dragBounds = { minimumX: layout.marginX, maximumX: layout.width - layout.marginX, minimumY: layout.marginY, maximumY: layout.height - layout.marginY };
   const neighbors = new Map(graph.nodes.map((node) => [node.id, new Set()]));
   graph.edges.forEach((edge) => {
     neighbors.get(edge.source)?.add(edge.target);
     neighbors.get(edge.target)?.add(edge.source);
   });
-  let selectedId = graph.nodes[0]?.id ?? null;
+  let selectedId = null;
   let selectedEdgeId = null;
+  let hoveredId = null;
   let viewScale = 1;
   let viewX = 0;
   let viewY = 0;
   let animationFrame = null;
   let geometryFrame = null;
+  let physicsFrame = null;
   let pendingDragUpdate = null;
-  let settleTimer = null;
+  let pinnedDrag = null;
   let destroyed = false;
+  let previousPhysicsTime = 0;
 
   const shell = document.createElement("section");
-  shell.className = `relationship-map-card relationship-network-card${options.expanded ? " is-expanded" : ""}`;
+  shell.className = `relationship-map-card relationship-network-card relationship-obsidian-card${options.expanded ? " is-expanded" : ""}`;
   shell.dataset.testid = "relationship-mindmap";
   const toolbar = document.createElement("header");
   toolbar.className = "relationship-map-toolbar";
-  toolbar.innerHTML = `<div><strong>人物关系网络</strong><small>${graph.stats.nodeCount} 个角色 · ${graph.stats.edgeCount} 条关系</small></div>`;
+  toolbar.innerHTML = `<div><strong>人物关系图谱</strong><small>${graph.stats.nodeCount} 个角色 · ${graph.stats.edgeCount} 条关系</small></div>`;
   const actions = document.createElement("div");
   actions.className = "relationship-map-actions";
   if (!options.expanded) {
@@ -350,12 +542,12 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   toolbar.append(actions);
 
   const viewport = document.createElement("div");
-  viewport.className = "relationship-mindmap relationship-network";
+  viewport.className = "relationship-mindmap relationship-network relationship-obsidian";
   viewport.dataset.testid = "relationship-network";
   viewport.dataset.layoutWidth = String(layout.width);
   viewport.dataset.layoutHeight = String(layout.height);
   viewport.dataset.interaction = "idle";
-  viewport.dataset.renderStrategy = "batched-local-physics";
+  viewport.dataset.renderStrategy = "obsidian-force-graph";
   viewport.dataset.edgeLabelStrategy = "selected-only";
   const stage = document.createElement("div");
   stage.className = "relationship-mindmap-stage relationship-network-stage";
@@ -363,11 +555,11 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
 
   const focusBadge = document.createElement("div");
   focusBadge.className = "relationship-network-focus";
-  focusBadge.innerHTML = "<strong>人物关系网络</strong><span></span>";
+  focusBadge.innerHTML = "<strong>人物关系图谱</strong><span>力导向布局 · 按阵营/种族着色</span>";
   const focusText = focusBadge.querySelector("span");
   const help = document.createElement("div");
   help.className = "relationship-network-help";
-  help.textContent = "滚轮缩放 · 拖拽空白处移动 · 拖拽人物固定位置 · 点击人物聚焦关系";
+  help.textContent = "滚轮缩放 · 拖拽空白平移 · 拖拽节点固定 · 悬浮高亮关联";
   viewport.append(focusBadge, help);
 
   const updateViewTransform = (animate = false) => {
@@ -384,28 +576,33 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-label", "人物关系连线");
-  const markerId = options.expanded ? "network-arrow-expanded" : "network-arrow-inline";
-  const definitions = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-  definitions.innerHTML = `<marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke"></path></marker>`;
-  svg.append(definitions);
   const edgeElements = [];
   const edgeElementsByNode = new Map(graph.nodes.map((node) => [node.id, []]));
-  const updateEdgeGeometry = ({ edge, hitPath, path }) => {
+  const updateEdgeGeometry = ({ edge, hitPath, path }, { includeHit = true } = {}) => {
     const from = positions.get(edge.source);
     const to = positions.get(edge.target);
     if (!from || !to) return;
-    const geometry = `M ${from.x.toFixed(2)} ${from.y.toFixed(2)} L ${to.x.toFixed(2)} ${to.y.toFixed(2)}`;
-    hitPath.setAttribute("d", geometry);
+    const geometry = `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} L ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
     path.setAttribute("d", geometry);
+    if (includeHit) hitPath.setAttribute("d", geometry);
   };
   const updateLabelGeometry = (edge) => {
     const from = positions.get(edge.source);
     const to = positions.get(edge.target);
     if (!from || !to) return;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const distance = Math.max(1, Math.hypot(dx, dy));
     const middleX = (from.x + to.x) / 2;
-    const middleY = (from.y + to.y) / 2 - 5;
-    let angle = Math.atan2(to.y - from.y, to.x - from.x) * 180 / Math.PI;
+    const middleY = (from.y + to.y) / 2 - 4;
+    let angle = Math.atan2(dy, dx) * 180 / Math.PI;
     if (angle > 90 || angle < -90) angle += 180;
+    const fullLabel = label.dataset.fullLabel || label.textContent || "";
+    // 按连线长度截断，短边只显示极短摘要，完整内容在底部详情
+    const maxChars = clamp(Math.floor(distance / 18), 4, 18);
+    const shortLabel = fullLabel.length > maxChars ? `${fullLabel.slice(0, Math.max(1, maxChars - 1))}…` : fullLabel;
+    label.textContent = shortLabel;
+    label.setAttribute("font-size", String(clamp(distance / 36, 6.5, 8)));
     label.setAttribute("x", middleX.toFixed(2));
     label.setAttribute("y", middleY.toFixed(2));
     label.setAttribute("transform", `rotate(${angle.toFixed(2)} ${middleX.toFixed(2)} ${middleY.toFixed(2)})`);
@@ -418,14 +615,13 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     hitPath.setAttribute("tabindex", "0");
     hitPath.setAttribute("aria-label", `选择 ${graph.nodeById.get(edge.source)?.name ?? "未知角色"} 与 ${graph.nodeById.get(edge.target)?.name ?? "未知角色"} 的关系：${formatRelationshipLabel(edge)}`);
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.classList.add("mind-edge", edge.category);
+    path.classList.add("mind-edge", "obsidian-edge");
     path.dataset.edgeId = edge.id;
     path.dataset.edgeSource = edge.source;
     path.dataset.edgeTarget = edge.target;
-    path.style.setProperty("--edge-opacity", String(0.24 + edge.confidence * 0.38));
-    path.style.setProperty("--edge-width", String(0.8 + edge.confidence * 1.35));
+    path.style.setProperty("--edge-opacity", "0.24");
+    path.style.setProperty("--edge-width", "1");
     if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
-    if (edge.directed) path.setAttribute("marker-end", `url(#${markerId})`);
     svg.append(hitPath, path);
     const edgeElement = { edge, hitPath, path };
     edgeElements.push(edgeElement);
@@ -446,44 +642,125 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     if (!position || !button) return;
     button.style.left = `${position.x / layout.width * 100}%`;
     button.style.top = `${position.y / layout.height * 100}%`;
-    button.dataset.graphX = position.x.toFixed(2);
-    button.dataset.graphY = position.y.toFixed(2);
   };
   const updateAllGeometry = () => {
     nodeElements.forEach((_, nodeId) => updateNodePosition(nodeId));
-    edgeElements.forEach(updateEdgeGeometry);
+    edgeElements.forEach((edgeElement) => updateEdgeGeometry(edgeElement));
   };
-  const updateAdjacentGeometry = (nodeIds) => {
+  const updateAdjacentGeometry = (nodeIds, { includeHit = false } = {}) => {
     const dirtyEdges = new Set();
-    nodeIds.forEach((nodeId) => {
+    for (const nodeId of nodeIds) {
       updateNodePosition(nodeId);
-      edgeElementsByNode.get(nodeId)?.forEach((edgeElement) => dirtyEdges.add(edgeElement));
-    });
-    dirtyEdges.forEach(updateEdgeGeometry);
-    if (selectedEdgeId) {
-      const selected = edgeElements.find((edgeElement) => edgeElement.edge.id === selectedEdgeId);
-      if (selected && dirtyEdges.has(selected)) updateLabelGeometry(selected.edge);
+      const connected = edgeElementsByNode.get(nodeId);
+      if (!connected) continue;
+      for (let index = 0; index < connected.length; index += 1) dirtyEdges.add(connected[index]);
     }
+    dirtyEdges.forEach((edgeElement) => updateEdgeGeometry(edgeElement, { includeHit }));
+  };
+  const stopPhysicsLoop = () => {
+    if (physicsFrame) window.cancelAnimationFrame(physicsFrame);
+    physicsFrame = null;
+    previousPhysicsTime = 0;
+    viewport.dataset.physics = "idle";
+  };
+  const freezePhysics = () => {
+    stopPhysicsLoop();
+    pinnedDrag = null;
+    pendingDragUpdate = null;
+    velocities.forEach((velocity) => {
+      velocity.vx = 0;
+      velocity.vy = 0;
+    });
+    viewport.dataset.interaction = "idle";
+    viewport.dataset.physics = "idle";
+  };
+  const getDragActiveNodes = (nodeId) => {
+    const active = new Set([nodeId, ...(neighbors.get(nodeId) ?? [])]);
+    const anchor = pinnedDrag?.target ?? positions.get(nodeId);
+    if (!anchor) return active;
+    for (const [id, position] of positions) {
+      if (active.has(id)) continue;
+      if (Math.hypot(position.x - anchor.x, position.y - anchor.y) < 140) active.add(id);
+    }
+    return active;
+  };
+  const runPhysicsStep = (dt) => {
+    if (!pinnedDrag) return 0;
+    const steps = DRAG_PHYSICS_CONFIG.stepsPerFrame;
+    let changedNodeIds = new Set();
+    let energy = 0;
+    const activeNodeIds = getDragActiveNodes(pinnedDrag.nodeId);
+    for (let step = 0; step < steps; step += 1) {
+      const result = stepRelationshipDragPhysics({
+        positions,
+        velocities,
+        edges: graph.edges,
+        nodeRadii: nodeInfluenceRadii,
+        bounds: dragBounds,
+        degrees: nodeDegrees,
+        activeNodeIds,
+        pinnedNodeId: pinnedDrag.nodeId,
+        pinnedPosition: pinnedDrag.target
+      }, { dt: dt / steps });
+      result.changedNodeIds.forEach((nodeId) => changedNodeIds.add(nodeId));
+      energy = result.energy;
+    }
+    if (changedNodeIds.size) updateAdjacentGeometry(changedNodeIds, { includeHit: false });
+    viewport.dataset.influencedNodeCount = String(changedNodeIds.size);
+    viewport.dataset.physicsEnergy = energy.toFixed(2);
+    return energy;
+  };
+  const startPhysicsLoop = () => {
+    if (physicsFrame || destroyed || !pinnedDrag) return;
+    viewport.dataset.physics = "dragging";
+    previousPhysicsTime = 0;
+    const tick = (now) => {
+      physicsFrame = 0;
+      if (destroyed) return;
+      if (!pinnedDrag) {
+        freezePhysics();
+        return;
+      }
+      const elapsed = previousPhysicsTime ? Math.min(34, now - previousPhysicsTime) : 16;
+      previousPhysicsTime = now;
+      const dt = clamp(elapsed / 16.67, 0.5, 1.8);
+      if (pendingDragUpdate) {
+        pinnedDrag.target = {
+          x: clamp(pendingDragUpdate.nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
+          y: clamp(pendingDragUpdate.nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
+        };
+        pendingDragUpdate = null;
+      }
+      runPhysicsStep(dt);
+      physicsFrame = window.requestAnimationFrame(tick);
+    };
+    physicsFrame = window.requestAnimationFrame(tick);
   };
   const scheduleDragGeometry = (nodeId, nextPosition) => {
     pendingDragUpdate = { nodeId, nextPosition };
-    if (geometryFrame) return;
-    geometryFrame = window.requestAnimationFrame(() => {
-      geometryFrame = null;
-      const pending = pendingDragUpdate;
-      pendingDragUpdate = null;
-      if (!pending) return;
-      const influencedNodeIds = applyRelationshipDragInfluence(
-        positions,
-        pending.nodeId,
-        pending.nextPosition,
-        neighbors.get(pending.nodeId),
-        nodeInfluenceRadii,
-        dragBounds
-      );
-      viewport.dataset.influencedNodeCount = String(influencedNodeIds.size);
-      updateAdjacentGeometry(influencedNodeIds);
-    });
+    pinnedDrag = {
+      nodeId,
+      target: {
+        x: clamp(nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
+        y: clamp(nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
+      }
+    };
+    startPhysicsLoop();
+  };
+  const flushPendingDrag = () => {
+    if (!pendingDragUpdate || !pinnedDrag) return;
+    pinnedDrag.target = {
+      x: clamp(pendingDragUpdate.nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
+      y: clamp(pendingDragUpdate.nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
+    };
+    pendingDragUpdate = null;
+    runPhysicsStep(1);
+  };
+  const releasePinnedDrag = () => {
+    flushPendingDrag();
+    const touched = pinnedDrag ? getDragActiveNodes(pinnedDrag.nodeId) : new Set();
+    freezePhysics();
+    if (touched.size) updateAdjacentGeometry(touched, { includeHit: true });
   };
 
   const edgeDetail = document.createElement("div");
@@ -499,12 +776,28 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     label.classList.add("hidden");
     label.removeAttribute("data-edge-id");
   };
-  const applyNodeFocus = (nodeId) => {
-    if (!nodeId) return;
+  const clearGraphHighlight = () => {
+    clearEdgeSelectionClasses();
+    nodeElements.forEach((button) => {
+      button.classList.remove("is-selected", "is-related", "is-dimmed", "is-hovered");
+    });
+    edgeElements.forEach((item) => {
+      item.path.classList.remove("is-highlighted", "is-dimmed");
+    });
+    focusText.textContent = "力导向布局 · 按阵营/种族着色";
+    edgeDetail.classList.add("hidden");
+    edgeDetail.replaceChildren();
+  };
+  const applyNodeFocus = (nodeId, { hover = false } = {}) => {
+    if (!nodeId) {
+      clearGraphHighlight();
+      return;
+    }
     clearEdgeSelectionClasses();
     const relatedIds = new Set([nodeId, ...(neighbors.get(nodeId) ?? [])]);
     nodeElements.forEach((button, id) => {
-      button.classList.toggle("is-selected", id === nodeId);
+      button.classList.toggle("is-hovered", hover && id === nodeId);
+      button.classList.toggle("is-selected", !hover && id === nodeId);
       button.classList.toggle("is-related", id !== nodeId && relatedIds.has(id));
       button.classList.toggle("is-dimmed", !relatedIds.has(id));
     });
@@ -513,9 +806,26 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       item.path.classList.toggle("is-highlighted", active);
       item.path.classList.toggle("is-dimmed", !active);
     });
-    focusText.textContent = `聚焦：${graph.nodeById.get(nodeId)?.name ?? "未知角色"}`;
+    const name = graph.nodeById.get(nodeId)?.name ?? "未知角色";
+    focusText.textContent = hover ? `悬浮：${name}` : `聚焦：${name}`;
     edgeDetail.classList.add("hidden");
     edgeDetail.replaceChildren();
+  };
+  const refreshHighlight = () => {
+    if (selectedEdgeId) {
+      const selected = edgeElements.find((edgeElement) => edgeElement.edge.id === selectedEdgeId);
+      if (selected) applyEdgeSelection(selected);
+      return;
+    }
+    if (hoveredId) {
+      applyNodeFocus(hoveredId, { hover: true });
+      return;
+    }
+    if (selectedId) {
+      applyNodeFocus(selectedId);
+      return;
+    }
+    clearGraphHighlight();
   };
   const applyEdgeSelection = (edgeElement) => {
     const selection = getRelationshipEdgeSelection(graph, edgeElement.edge.id);
@@ -523,7 +833,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     clearEdgeSelectionClasses();
     const endpointIds = new Set(selection.endpointIds);
     nodeElements.forEach((button, id) => {
-      button.classList.remove("is-selected", "is-related");
+      button.classList.remove("is-selected", "is-related", "is-hovered");
       button.classList.toggle("is-edge-endpoint", endpointIds.has(id));
       button.classList.toggle("is-dimmed", !endpointIds.has(id));
     });
@@ -535,7 +845,6 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       item.hitPath.setAttribute("aria-pressed", String(active));
     });
     const fullLabel = selection.label;
-    label.textContent = fullLabel;
     label.dataset.edgeId = selection.edgeId;
     label.dataset.fullLabel = fullLabel;
     label.classList.remove("hidden");
@@ -561,26 +870,27 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     });
   });
 
-  const settleInteraction = (button) => {
-    window.clearTimeout(settleTimer);
-    viewport.dataset.interaction = "settling";
-    button.classList.add("is-settling");
-    settleTimer = window.setTimeout(() => {
-      button.classList.remove("is-settling");
-      viewport.dataset.interaction = "idle";
-    }, 180);
-  };
   for (const node of graph.nodes) {
     const button = document.createElement("button");
-    const nodeSize = clamp(10 + Math.sqrt(Math.max(0, node.degree)) * 3.2, 10, 34);
+    const appearance = getObsidianNodeAppearance(node, graph.stats.maxDegree ?? 1);
+    const nodeSize = appearance.size;
     button.type = "button";
-    button.className = `mind-node network-node${node.locked ? " is-locked" : ""}${node.degree === 0 ? " is-isolated" : ""}`;
+    button.className = `mind-node network-node obsidian-node${node.locked ? " is-locked" : ""}${node.degree === 0 ? " is-isolated" : ""}`;
     button.dataset.nodeId = node.id;
+    button.dataset.groupKey = node.groupKey || appearance.group.key;
     button.style.setProperty("--node-size", `${nodeSize}px`);
-    const label = document.createElement("span");
-    label.textContent = node.name;
-    button.append(label);
-    button.title = [node.species ? `种族：${node.species}` : "", node.identity, node.aliases.length ? `别名：${node.aliases.join("、")}` : "", `${node.degree} 条关系`].filter(Boolean).join("\n");
+    button.style.setProperty("--node-color", node.color || appearance.color);
+    button.style.setProperty("--node-glow", node.glow || appearance.glow);
+    const labelEl = document.createElement("span");
+    labelEl.textContent = node.name;
+    button.append(labelEl);
+    button.title = [
+      node.groupLabel ? `分组：${node.groupLabel}` : "",
+      node.species ? `种族：${node.species}` : "",
+      node.identity,
+      node.aliases.length ? `别名：${node.aliases.join("、")}` : "",
+      `${node.degree} 条关系`
+    ].filter(Boolean).join("\n");
     button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
     button.setAttribute("aria-grabbed", "false");
     nodeElements.set(node.id, button);
@@ -589,7 +899,23 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
 
     let dragState = null;
     let suppressClick = false;
-    button.addEventListener("focus", () => { if (!selectedEdgeId) applyNodeFocus(node.id); });
+    button.addEventListener("pointerenter", () => {
+      if (viewport.dataset.interaction === "dragging" || viewport.dataset.interaction === "panning") return;
+      hoveredId = node.id;
+      if (!selectedEdgeId) applyNodeFocus(node.id, { hover: true });
+    });
+    button.addEventListener("pointerleave", () => {
+      if (hoveredId !== node.id) return;
+      hoveredId = null;
+      if (viewport.dataset.interaction === "dragging") return;
+      refreshHighlight();
+    });
+    button.addEventListener("focus", () => {
+      if (!selectedEdgeId) {
+        selectedId = node.id;
+        applyNodeFocus(node.id);
+      }
+    });
     button.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       event.stopPropagation();
@@ -597,7 +923,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       dragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, rect, dragged: false };
       selectedEdgeId = null;
       selectedId = node.id;
-      applyNodeFocus(node.id);
+      hoveredId = node.id;
+      applyNodeFocus(node.id, { hover: true });
       try { button.setPointerCapture(event.pointerId); } catch { /* 非标准指针环境仍允许拖拽事件继续执行。 */ }
       button.classList.add("is-dragging");
       button.setAttribute("aria-grabbed", "true");
@@ -625,9 +952,12 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       button.setAttribute("aria-grabbed", "false");
       try { if (button.hasPointerCapture(event.pointerId)) button.releasePointerCapture(event.pointerId); } catch { /* 指针已释放时无需重复处理。 */ }
       if (suppressClick) {
+        releasePinnedDrag();
         options.onSelect?.(node.id);
-        settleInteraction(button);
+        refreshHighlight();
       } else {
+        pinnedDrag = null;
+        pendingDragUpdate = null;
         viewport.dataset.interaction = "idle";
       }
     };
@@ -652,6 +982,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     updateViewTransform(true);
   };
   const animatePositions = (targets, duration = 650) => {
+    freezePhysics();
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
     const starts = new Map([...positions].map(([id, position]) => [id, { ...position }]));
     const startedAt = performance.now();
@@ -665,6 +996,11 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       targets.forEach((target, id) => {
         const start = starts.get(id) ?? target;
         positions.set(id, { x: start.x + (target.x - start.x) * eased, y: start.y + (target.y - start.y) * eased });
+        const velocity = velocities.get(id);
+        if (velocity) {
+          velocity.vx = 0;
+          velocity.vy = 0;
+        }
       });
       updateAllGeometry();
       if (progress < 1) animationFrame = window.requestAnimationFrame(tick);
@@ -680,7 +1016,9 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   fit.addEventListener("click", fitView);
   reset.addEventListener("click", () => {
     selectedEdgeId = null;
-    applyNodeFocus(selectedId);
+    hoveredId = null;
+    freezePhysics();
+    refreshHighlight();
     fitView();
     animatePositions(originalPositions);
   });
@@ -721,26 +1059,29 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     updateViewTransform();
   }, { passive: false });
   viewport.addEventListener("click", (event) => {
-    if (![viewport, stage, svg].includes(event.target) || !selectedEdgeId) return;
+    if (![viewport, stage, svg].includes(event.target)) return;
     selectedEdgeId = null;
-    applyNodeFocus(selectedId);
+    selectedId = null;
+    hoveredId = null;
+    clearGraphHighlight();
   });
 
   updateAllGeometry();
-  applyNodeFocus(selectedId);
+  clearGraphHighlight();
   shell.append(toolbar, viewport);
   container.append(shell);
   return {
     destroy() {
       destroyed = true;
+      freezePhysics();
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
       if (geometryFrame) window.cancelAnimationFrame(geometryFrame);
       pendingDragUpdate = null;
-      window.clearTimeout(settleTimer);
+      pinnedDrag = null;
       container.replaceChildren();
     },
     getState() {
-      return { selectedId, selectedEdgeId, viewScale, viewX, viewY, positions: new Map(positions) };
+      return { selectedId, selectedEdgeId, hoveredId, viewScale, viewX, viewY, positions: new Map(positions) };
     }
   };
 }
