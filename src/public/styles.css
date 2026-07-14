@@ -138,13 +138,45 @@ button { cursor: pointer; }
 .brand-block small { color: var(--muted); font-size: 10px; margin-top: 2px; }
 .work-meta { font-size: 13px; color: var(--muted); padding-left: 26px; }
 .top-actions { display: flex; justify-content: flex-end; gap: 10px; align-items: center; padding-right: 18px; }
-.theme-toggle { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); }
-.theme-toggle:hover, .theme-toggle:focus-visible { border-color: var(--accent); color: var(--accent-dark); background: var(--paper-deep); }
-.theme-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.theme-toggle, .settings-button, .topbar-icon-button {
+  display: grid;
+  flex: 0 0 34px;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+}
+.theme-toggle:hover, .theme-toggle:focus-visible,
+.settings-button:hover, .settings-button:focus-visible, .settings-button[aria-current="page"],
+.topbar-icon-button:hover, .topbar-icon-button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent-dark);
+  background: var(--paper-deep);
+  outline: none;
+}
+.topbar-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+  border-color: var(--line);
+  color: var(--muted);
+  background: transparent;
+}
+.theme-icon, .settings-icon, .topbar-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .theme-icon-sun { display: none; }
 :root[data-theme="dark"] .theme-icon-moon { display: none; }
 :root[data-theme="dark"] .theme-icon-sun { display: block; }
-.settings-button { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: transparent; color: var(--muted); }
 .account-button { display: flex; align-items: center; gap: 7px; min-width: 0; height: 34px; padding: 3px 9px 3px 3px; border: 1px solid var(--line); border-radius: 18px; background: transparent; color: var(--text); }
 .account-button > span:first-child { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: white; font-size: 11px; }
 .account-button > span:last-child { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
@@ -153,8 +185,6 @@ button { cursor: pointer; }
 .account-menu small { margin-bottom: 8px; color: var(--muted); }
 .account-menu button { min-height: 30px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 10px; }
 .account-menu button:hover, .account-menu button:focus-visible { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
-.settings-button:hover, .settings-button:focus-visible, .settings-button[aria-current="page"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); }
-.settings-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
 .left-panel, .ai-panel { position: relative; min-height: 0; background: var(--panel); }
 .left-panel { border-right: 1px solid var(--line); padding: 14px 14px 16px; overflow-y: auto; }

@@ -1056,6 +1056,7 @@ function showShelf() {
   $("#module-view").classList.add("hidden");
   $("#work-meta").textContent = `${state.works.length} 部作品`;
   $("#settings-button").removeAttribute("aria-current");
+  $("#top-search-button").disabled = true;
   setSaveState("书架");
   renderShelf();
   replacePageRoute({ view: "shelf" });
@@ -1076,12 +1077,12 @@ function renderSettingsHub() {
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
-  $("#search-button").disabled = !hasWork;
+  $("#top-search-button").disabled = !hasWork;
   $("#export-button").disabled = !hasWork;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
-    ? `当前作品：《${state.work.title}》。全文检索与导出将作用于这部作品。`
-    : "当前未选择作品；打开作品后可使用全文检索与导出。";
+    ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
+    : "当前未选择作品；打开作品后可使用导出。";
 }
 
 function renderUsers(users) {
@@ -1114,6 +1115,10 @@ function renderUsers(users) {
 }
 
 async function openUsersDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
   $("#users-list").innerHTML = '<p class="empty-state">正在读取用户……</p>';
   $("#users-dialog").showModal();
   try { renderUsers(await api("/api/users")); }
@@ -3154,7 +3159,7 @@ $(".quick-actions").addEventListener("click", (event) => {
   $("#ai-prompt").value = button.dataset.prompt;
   $("#ai-prompt").focus();
 });
-$("#search-button").addEventListener("click", () => {
+$("#top-search-button").addEventListener("click", () => {
   openSearchDialog().catch((error) => toast(error.message, "error"));
 });
 $("#search-dialog-close").addEventListener("click", () => $("#search-dialog").close());
