@@ -214,6 +214,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".account-menu button { min-height: 30px; padding: 6px 9px; border: 1px solid var(--line);");
     expect(styles.text).toContain("font-size: 10px; }");
     expect(styles.text).toContain(".account-menu button:hover, .account-menu button:focus-visible");
+    expect(styles.text).toContain(".book-info > span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }");
+    expect(styles.text).not.toContain("-webkit-box-orient: vertical; min-height: 2.8em;");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
