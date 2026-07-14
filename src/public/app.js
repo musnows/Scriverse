@@ -1841,9 +1841,8 @@ async function renderTasks() {
       </div>
       <p class="task-auto-run-meta">当前待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个</p>
     </section>
-    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>ID</th><th>任务</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
+    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>任务</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
-      <td><code class="task-id" title="${esc(item.id)}">${esc(item.id)}</code></td>
       <td>${esc(analysisTaskTypeLabel(item.taskType))}<br><small>${esc(item.taskType)}</small></td>
       <td>${esc(item.scopeSummary || item.scope?.type || "book")}</td>
       <td>${esc(analysisTaskStatusLabel(item.status))}</td>

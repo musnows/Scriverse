@@ -596,15 +596,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   margin: 0;
 }
 .task-auto-run-meta { margin: 0; color: var(--muted); font-size: 10px; }
-.task-table .task-id {
-  display: inline-block;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 10px;
-  vertical-align: bottom;
-}
 .task-row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .task-detail { display: grid; gap: 12px; }
 .task-detail p, .task-detail div { margin: 0; font-size: 12px; line-height: 1.55; }

@@ -172,11 +172,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260715-task-auto-run');
-    expect(page.text).toContain('/styles.css?v=20260715-toast-dark');
+    expect(page.text).toContain('/app.js?v=20260715-hide-task-id');
+    expect(page.text).toContain('/styles.css?v=20260715-hide-task-id');
     expect(styles.text).toContain("--toast-bg:");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
     expect(styles.text).toContain("background: var(--toast-bg)");
+    expect(styles.text).not.toContain(".task-table .task-id");
+    expect(application.text).not.toContain("<th>ID</th><th>任务</th>");
     expect(page.text).toContain('id="top-search-button"');
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="search-dialog"');
