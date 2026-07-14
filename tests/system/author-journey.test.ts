@@ -235,6 +235,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }");
     expect(styles.text).toContain(".book-card-settings {");
     expect(styles.text).toContain("padding: 2px 6px;");
+    expect(styles.text).toContain(".left-panel { border-right: 1px solid var(--line); padding: 18px 14px 16px; overflow-y: auto; }");
+    expect(styles.text).toContain(".left-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 0 0 15px; }");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
