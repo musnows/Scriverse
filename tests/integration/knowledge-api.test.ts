@@ -144,6 +144,12 @@ describe("设定、角色、时间轴、关系和审核 API", () => {
   });
 
   it("统一检索并导出不含供应商凭据的知识包", async () => {
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "抵达北港",
+      content: "林舟抵达北港。"
+    }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/settings`).send({ title: "北港", category: "地点与地图", content: "北港是边境空间站。" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", aliases: ["北港舰长"] }).expect(201);
     const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
@@ -155,7 +161,7 @@ describe("设定、角色、时间轴、关系和审核 API", () => {
     expect(JSON.stringify(provider.body)).not.toContain("never-export-this");
 
     const search = await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("北港")}`).expect(200);
-    expect(search.body.data.map((item: { type: string }) => item.type).sort()).toEqual(["character", "setting"]);
+    expect(search.body.data.map((item: { type: string }) => item.type)).toEqual(["character", "setting", "chapter"]);
 
     const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
     const serialized = JSON.stringify(exported.body);
