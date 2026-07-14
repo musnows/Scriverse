@@ -663,6 +663,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-history-empty { margin: 0; padding: 12px 7px; color: var(--muted); font-size: 9px; text-align: center; }
 .field-label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; margin: 14px 0 10px; }
 .field-label select { padding: 8px; font-size: 12px; }
+.field-label textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 12px 14px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.65;
+  resize: vertical;
+}
 .quick-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .quick-actions button { border: 1px solid var(--line); background: transparent; border-radius: 3px; padding: 7px; color: var(--muted); font-size: 10px; }
 .quick-actions button:hover { color: var(--ink); background: var(--paper-deep); }
