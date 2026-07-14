@@ -1072,8 +1072,9 @@ function captureSettingsReturnContext() {
 function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
-  $("#platform-ai-button").classList.toggle("hidden", state.user?.role !== "admin");
-  $("#user-management-button").classList.toggle("hidden", state.user?.role !== "admin");
+  const isAdmin = state.user?.role === "admin";
+  $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
+  $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#search-button").disabled = !hasWork;
   $("#export-button").disabled = !hasWork;
