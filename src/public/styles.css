@@ -206,8 +206,6 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .work-access-field small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .work-access-field .ghost-button { flex: 0 0 auto; white-space: nowrap; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
-.account-dialog .dialog-close { display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid transparent; border-radius: 50%; font-size: 21px; line-height: 1; }
-.account-dialog .dialog-close:hover, .account-dialog .dialog-close:focus-visible { border-color: var(--line); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
 .account-settings-body { display: grid; gap: 16px; max-height: calc(88vh - 86px); overflow-y: auto; padding: 20px 24px 24px; }
 .account-settings-section { padding: 18px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
 .account-settings-section-header { display: grid; gap: 4px; }
@@ -688,7 +686,25 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog::backdrop { background: rgba(34,30,25,.42); backdrop-filter: blur(3px); }
 .dialog-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 22px 24px 16px; border-bottom: 1px solid var(--line); }
 .dialog-header h2 { margin: 0; font-size: 23px; font-weight: 500; }
-.dialog-close { border: 0; background: transparent; font-size: 24px; color: var(--muted); }
+.dialog-close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 21px;
+  line-height: 1;
+}
+.dialog-close:hover, .dialog-close:focus-visible {
+  border-color: var(--line);
+  background: var(--paper-deep);
+  color: var(--accent-dark);
+  outline: none;
+}
 .dialog-fields { display: grid; gap: 14px; padding: 22px 24px; max-height: 58vh; overflow-y: auto; }
 .dialog-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .dialog-fields input, .dialog-fields textarea, .dialog-fields select { width: 100%; padding: 9px 10px; font-size: 13px; }
