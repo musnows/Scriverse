@@ -408,8 +408,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-network-stage { contain: layout paint style; will-change: transform; }
 .relationship-network-stage.is-view-animating { transition: transform .34s cubic-bezier(.22,.78,.3,1); }
 .relationship-network svg { overflow: visible; }
-.relationship-network .mind-edge-hit { stroke-width: 14px; }
-.relationship-network .mind-edge-hit:focus-visible { stroke: rgba(255,255,255,.08); }
+.relationship-network .mind-edge-hit {
+  stroke-width: 14px;
+  outline: none;
+}
+.relationship-network .mind-edge-hit:focus,
+.relationship-network .mind-edge-hit:focus-visible {
+  outline: none;
+  stroke: transparent;
+}
 .relationship-network .mind-edge,
 .relationship-network .obsidian-edge { stroke: rgba(255,255,255,.26); stroke-width: 1px; opacity: 1; transition: opacity .12s ease, stroke .12s ease; }
 .relationship-network .mind-edge.family,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -191,5 +191,38 @@ describe("人物关系图数据与布局", () => {
     expect(Number(core.brightness)).toBeGreaterThan(Number(outer.brightness));
     expect(Number(core.glow)).toBeGreaterThan(Number(outer.glow));
     expect(core.color).not.toBe(outer.color);
+  });
+
+  it("松手惯性滑行只靠速度衰减，不会被弹簧持续拉动", () => {
+    const positions = new Map([
+      ["a", { x: 0, y: 0 }],
+      ["b", { x: 120, y: 0 }]
+    ]);
+    const velocities = new Map([
+      ["a", { vx: 8, vy: 0 }],
+      ["b", { vx: 5, vy: 0 }]
+    ]);
+    const first = stepRelationshipInertiaCoast({
+      positions,
+      velocities,
+      nodeRadii: new Map([["a", 12], ["b", 12]]),
+      bounds: { minimumX: -200, maximumX: 200, minimumY: -200, maximumY: 200 },
+      activeNodeIds: new Set(["a", "b"])
+    }, { damping: 0.88 });
+    expect(first.changedNodeIds.has("a")).toBe(true);
+    expect(positions.get("a")?.x).toBeGreaterThan(0);
+    expect(Math.abs(velocities.get("a")?.vx ?? 0)).toBeLessThan(8);
+
+    let energy = first.energy;
+    for (let step = 0; step < 40; step += 1) {
+      energy = stepRelationshipInertiaCoast({
+        positions,
+        velocities,
+        nodeRadii: new Map([["a", 12], ["b", 12]]),
+        bounds: { minimumX: -200, maximumX: 200, minimumY: -200, maximumY: 200 },
+        activeNodeIds: new Set(["a", "b"])
+      }, { damping: 0.88 }).energy;
+    }
+    expect(energy).toBeLessThan(0.5);
   });
 });

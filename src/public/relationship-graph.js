@@ -280,8 +280,89 @@ export const DRAG_PHYSICS_CONFIG = Object.freeze({
   collisionPadding: 14,
   damping: 0.9,
   maxSpeed: 18,
-  stepsPerFrame: 2
+  stepsPerFrame: 2,
+  coastDamping: 0.9,
+  coastSettleSpeed: 0.35,
+  coastMaxMs: 800
 });
+
+export function stepRelationshipInertiaCoast(state, options = {}) {
+  const positions = state.positions;
+  const velocities = state.velocities;
+  const nodeRadii = state.nodeRadii;
+  const bounds = state.bounds ?? {};
+  const activeNodeIds = state.activeNodeIds instanceof Set && state.activeNodeIds.size
+    ? [...state.activeNodeIds].filter((nodeId) => positions.has(nodeId))
+    : [...positions.keys()];
+  const minimumX = Number(bounds.minimumX ?? -Infinity);
+  const maximumX = Number(bounds.maximumX ?? Infinity);
+  const minimumY = Number(bounds.minimumY ?? -Infinity);
+  const maximumY = Number(bounds.maximumY ?? Infinity);
+  const fitBounds = (position) => ({
+    x: clamp(Number(position.x) || 0, minimumX, maximumX),
+    y: clamp(Number(position.y) || 0, minimumY, maximumY)
+  });
+  const radiusOf = (nodeId) => Math.max(1, Number(nodeRadii?.get(nodeId)) || 18);
+  const damping = clamp(Number(options.damping ?? DRAG_PHYSICS_CONFIG.coastDamping), 0.7, 0.97);
+  const collisionPadding = Number(options.collisionPadding ?? DRAG_PHYSICS_CONFIG.collisionPadding);
+  const dt = clamp(Number(options.dt ?? 1), 0.2, 2);
+  const changedNodeIds = new Set();
+  let energy = 0;
+
+  // 仅做轻量互斥，避免惯性滑行时重叠，不引入弹簧以免再次全图漂移
+  for (let leftIndex = 0; leftIndex < activeNodeIds.length; leftIndex += 1) {
+    const leftId = activeNodeIds[leftIndex];
+    const left = positions.get(leftId);
+    const leftVelocity = velocities.get(leftId) ?? { vx: 0, vy: 0 };
+    for (let rightIndex = leftIndex + 1; rightIndex < activeNodeIds.length; rightIndex += 1) {
+      const rightId = activeNodeIds[rightIndex];
+      const right = positions.get(rightId);
+      const rightVelocity = velocities.get(rightId) ?? { vx: 0, vy: 0 };
+      let dx = right.x - left.x;
+      let dy = right.y - left.y;
+      let distance = Math.hypot(dx, dy);
+      const minimumDistance = radiusOf(leftId) + radiusOf(rightId) + collisionPadding;
+      if (distance >= minimumDistance || distance < 0.001) continue;
+      if (distance < 0.001) {
+        dx = 0.01;
+        dy = 0;
+        distance = 0.01;
+      }
+      const overlap = (minimumDistance - distance) * 0.18;
+      const nx = dx / distance;
+      const ny = dy / distance;
+      leftVelocity.vx -= nx * overlap;
+      leftVelocity.vy -= ny * overlap;
+      rightVelocity.vx += nx * overlap;
+      rightVelocity.vy += ny * overlap;
+      velocities.set(leftId, leftVelocity);
+      velocities.set(rightId, rightVelocity);
+    }
+  }
+
+  for (const nodeId of activeNodeIds) {
+    const position = positions.get(nodeId);
+    let velocity = velocities.get(nodeId);
+    if (!position) continue;
+    if (!velocity) {
+      velocity = { vx: 0, vy: 0 };
+      velocities.set(nodeId, velocity);
+    }
+    velocity.vx *= damping;
+    velocity.vy *= damping;
+    if (Math.abs(velocity.vx) < 0.02) velocity.vx = 0;
+    if (Math.abs(velocity.vy) < 0.02) velocity.vy = 0;
+    if (!velocity.vx && !velocity.vy) continue;
+    const next = fitBounds({
+      x: position.x + velocity.vx * dt,
+      y: position.y + velocity.vy * dt
+    });
+    positions.set(nodeId, next);
+    changedNodeIds.add(nodeId);
+    energy += Math.hypot(velocity.vx, velocity.vy);
+  }
+  return { changedNodeIds, energy };
+}
 
 export function stepRelationshipDragPhysics(state, options = {}) {
   const positions = state.positions;
@@ -500,6 +581,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   let physicsFrame = null;
   let pendingDragUpdate = null;
   let pinnedDrag = null;
+  let coastActiveIds = null;
+  let coastStartedAt = 0;
   let destroyed = false;
   let previousPhysicsTime = 0;
 
@@ -667,6 +750,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     stopPhysicsLoop();
     pinnedDrag = null;
     pendingDragUpdate = null;
+    coastActiveIds = null;
+    coastStartedAt = 0;
     velocities.forEach((velocity) => {
       velocity.vx = 0;
       velocity.vy = 0;
@@ -674,9 +759,9 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     viewport.dataset.interaction = "idle";
     viewport.dataset.physics = "idle";
   };
-  const getDragActiveNodes = (nodeId) => {
+  const getDragActiveNodes = (nodeId, anchorPosition = null) => {
     const active = new Set([nodeId, ...(neighbors.get(nodeId) ?? [])]);
-    const anchor = pinnedDrag?.target ?? positions.get(nodeId);
+    const anchor = anchorPosition ?? pinnedDrag?.target ?? positions.get(nodeId);
     if (!anchor) return active;
     for (const [id, position] of positions) {
       if (active.has(id)) continue;
@@ -710,6 +795,20 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     viewport.dataset.physicsEnergy = energy.toFixed(2);
     return energy;
   };
+  const runCoastStep = (dt) => {
+    if (!coastActiveIds?.size) return 0;
+    const result = stepRelationshipInertiaCoast({
+      positions,
+      velocities,
+      nodeRadii: nodeInfluenceRadii,
+      bounds: dragBounds,
+      activeNodeIds: coastActiveIds
+    }, { dt });
+    if (result.changedNodeIds.size) updateAdjacentGeometry(result.changedNodeIds, { includeHit: false });
+    viewport.dataset.influencedNodeCount = String(result.changedNodeIds.size);
+    viewport.dataset.physicsEnergy = result.energy.toFixed(2);
+    return result.energy;
+  };
   const startPhysicsLoop = () => {
     if (physicsFrame || destroyed || !pinnedDrag) return;
     viewport.dataset.physics = "dragging";
@@ -725,10 +824,14 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       previousPhysicsTime = now;
       const dt = clamp(elapsed / 16.67, 0.5, 1.8);
       if (pendingDragUpdate) {
+        const previous = pinnedDrag.target;
         pinnedDrag.target = {
           x: clamp(pendingDragUpdate.nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
           y: clamp(pendingDragUpdate.nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
         };
+        const moveDt = Math.max(elapsed, 8);
+        pinnedDrag.vx = (pinnedDrag.target.x - previous.x) / (moveDt / 16.67);
+        pinnedDrag.vy = (pinnedDrag.target.y - previous.y) / (moveDt / 16.67);
         pendingDragUpdate = null;
       }
       runPhysicsStep(dt);
@@ -736,31 +839,88 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     };
     physicsFrame = window.requestAnimationFrame(tick);
   };
+  const startCoastLoop = (activeNodeIds) => {
+    if (destroyed || !activeNodeIds?.size) {
+      freezePhysics();
+      return;
+    }
+    stopPhysicsLoop();
+    pinnedDrag = null;
+    pendingDragUpdate = null;
+    coastActiveIds = activeNodeIds;
+    coastStartedAt = performance.now();
+    viewport.dataset.interaction = "settling";
+    viewport.dataset.physics = "coasting";
+    previousPhysicsTime = 0;
+    const tick = (now) => {
+      physicsFrame = 0;
+      if (destroyed) return;
+      const elapsed = previousPhysicsTime ? Math.min(34, now - previousPhysicsTime) : 16;
+      previousPhysicsTime = now;
+      const dt = clamp(elapsed / 16.67, 0.5, 1.8);
+      const energy = runCoastStep(dt);
+      const timedOut = now - coastStartedAt > DRAG_PHYSICS_CONFIG.coastMaxMs;
+      if (!timedOut && energy > DRAG_PHYSICS_CONFIG.coastSettleSpeed) {
+        physicsFrame = window.requestAnimationFrame(tick);
+        return;
+      }
+      const touched = coastActiveIds ?? new Set();
+      freezePhysics();
+      if (touched.size) updateAdjacentGeometry(touched, { includeHit: true });
+    };
+    physicsFrame = window.requestAnimationFrame(tick);
+  };
   const scheduleDragGeometry = (nodeId, nextPosition) => {
     pendingDragUpdate = { nodeId, nextPosition };
-    pinnedDrag = {
-      nodeId,
-      target: {
-        x: clamp(nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
-        y: clamp(nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
-      }
-    };
+    if (!pinnedDrag || pinnedDrag.nodeId !== nodeId) {
+      pinnedDrag = {
+        nodeId,
+        target: {
+          x: clamp(nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
+          y: clamp(nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
+        },
+        vx: 0,
+        vy: 0
+      };
+    }
     startPhysicsLoop();
   };
   const flushPendingDrag = () => {
     if (!pendingDragUpdate || !pinnedDrag) return;
+    const previous = pinnedDrag.target;
     pinnedDrag.target = {
       x: clamp(pendingDragUpdate.nextPosition.x, dragBounds.minimumX, dragBounds.maximumX),
       y: clamp(pendingDragUpdate.nextPosition.y, dragBounds.minimumY, dragBounds.maximumY)
     };
+    pinnedDrag.vx = pinnedDrag.target.x - previous.x;
+    pinnedDrag.vy = pinnedDrag.target.y - previous.y;
     pendingDragUpdate = null;
     runPhysicsStep(1);
   };
   const releasePinnedDrag = () => {
     flushPendingDrag();
-    const touched = pinnedDrag ? getDragActiveNodes(pinnedDrag.nodeId) : new Set();
-    freezePhysics();
-    if (touched.size) updateAdjacentGeometry(touched, { includeHit: true });
+    if (!pinnedDrag) {
+      freezePhysics();
+      return;
+    }
+    const releasedId = pinnedDrag.nodeId;
+    const releaseVelocity = {
+      vx: clamp(Number(pinnedDrag.vx) || 0, -DRAG_PHYSICS_CONFIG.maxSpeed, DRAG_PHYSICS_CONFIG.maxSpeed),
+      vy: clamp(Number(pinnedDrag.vy) || 0, -DRAG_PHYSICS_CONFIG.maxSpeed, DRAG_PHYSICS_CONFIG.maxSpeed)
+    };
+    const touched = getDragActiveNodes(releasedId, pinnedDrag.target);
+    // 把拖拽手感速度注入被拖节点，邻居保留拖拽过程中的弹簧速度，然后短暂惯性滑行
+    velocities.set(releasedId, releaseVelocity);
+    for (const nodeId of touched) {
+      if (nodeId === releasedId) continue;
+      const velocity = velocities.get(nodeId) ?? { vx: 0, vy: 0 };
+      velocity.vx = clamp(velocity.vx * 0.85 + releaseVelocity.vx * 0.12, -DRAG_PHYSICS_CONFIG.maxSpeed, DRAG_PHYSICS_CONFIG.maxSpeed);
+      velocity.vy = clamp(velocity.vy * 0.85 + releaseVelocity.vy * 0.12, -DRAG_PHYSICS_CONFIG.maxSpeed, DRAG_PHYSICS_CONFIG.maxSpeed);
+      velocities.set(nodeId, velocity);
+    }
+    pinnedDrag = null;
+    pendingDragUpdate = null;
+    startCoastLoop(touched);
   };
 
   const edgeDetail = document.createElement("div");
@@ -863,6 +1023,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       event.stopPropagation();
       selectedEdgeId = edgeElement.edge.id;
       applyEdgeSelection(edgeElement);
+      if (typeof event.currentTarget?.blur === "function") event.currentTarget.blur();
     };
     edgeElement.hitPath.addEventListener("click", selectEdge);
     edgeElement.hitPath.addEventListener("keydown", (event) => {
