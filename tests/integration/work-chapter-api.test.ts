@@ -176,4 +176,56 @@ describe("作品、导入和章节版本 API", () => {
     const exported = await request(runtime.app).get(`/api/works/${work.body.data.id}/export?format=json`).expect(200);
     expect(exported.body.data.work.volumes[0].chapters[0]).toMatchObject({ chapterType: "作者的话" });
   });
+
+  it("删除章节后可列出版本并恢复", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "章节删除恢复" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "正文" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "原始正文。"
+    }).expect(201);
+    const chapterId = chapter.body.data.id;
+
+    await request(runtime.app).delete(`/api/chapters/${chapterId}`).expect(204);
+    await request(runtime.app).get(`/api/chapters/${chapterId}`).expect(404);
+
+    const versions = await request(runtime.app).get(`/api/chapters/${chapterId}/versions`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "delete", title: "第一章", content: "原始正文。" });
+    expect(versions.body.data.some((item: { versionNo: number }) => item.versionNo === 1)).toBe(true);
+
+    const restored = await request(runtime.app).post(`/api/chapters/${chapterId}/restore`).send({ versionNo: 1 }).expect(200);
+    expect(restored.body.data).toMatchObject({ id: chapterId, title: "第一章", content: "原始正文。", volumeId: volume.body.data.id });
+    expect(restored.body.data.versionNo).toBeGreaterThan(2);
+  });
+
+  it("可从文件版本快照恢复作品正文树", async () => {
+    const created = await request(runtime.app).post("/api/works").send({ title: "文件版本恢复" }).expect(201);
+    const workId = created.body.data.id;
+    await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .attach("file", Buffer.from("第一卷 启航\n第一章 信号\n初版正文。"), "v1.txt")
+      .expect(201);
+
+    await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .attach("file", Buffer.from("第一卷 启航\n第一章 信号\n改写后的正文。"), "v2.txt")
+      .expect(201);
+
+    const treeBefore = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(treeBefore.body.data.volumes[0].chapters[0].content).toBe("改写后的正文。");
+
+    const fileVersions = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
+    const v2VersionId = fileVersions.body.data.find((item: { fileName: string }) => item.fileName === "v2.txt").id;
+
+    const restored = await request(runtime.app)
+      .post(`/api/works/${workId}/file-versions/${v2VersionId}/restore`)
+      .expect(200);
+    expect(restored.body.data.restoredFrom).toBe(v2VersionId);
+    expect(restored.body.data.tree.volumes[0].chapters[0].content).toBe("初版正文。");
+
+    const fileVersionsAfter = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
+    expect(fileVersionsAfter.body.data[0].fileType).toBe("snapshot");
+  });
 });

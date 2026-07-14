@@ -96,8 +96,22 @@ function workIdFromPath(database: Database, pathname: string): string | null {
   const table = tableByResource[decoded[2] ?? ""];
   if (table && decoded[3]) {
     const row = database.get<{ work_id: string }>(`SELECT work_id FROM ${table} WHERE id = ?`, decoded[3]);
-    if (!row) throw notFound("记录");
-    return row.work_id;
+    if (row) return row.work_id;
+    if (table === "chapters") {
+      const version = database.get<{ work_id: string }>(
+        "SELECT work_id FROM chapter_versions WHERE chapter_id = ? LIMIT 1",
+        decoded[3]
+      );
+      if (version) return version.work_id;
+    }
+    if (table === "characters") {
+      const version = database.get<{ work_id: string }>(
+        "SELECT work_id FROM character_versions WHERE character_id = ? LIMIT 1",
+        decoded[3]
+      );
+      if (version) return version.work_id;
+    }
+    throw notFound("记录");
   }
   if (decoded[2] === "foreshadow-occurrences" && decoded[3]) {
     const row = database.get<{ work_id: string }>(

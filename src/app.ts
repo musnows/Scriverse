@@ -410,6 +410,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/file-versions", (request, response) => data(response, store.listFileVersions(request.params.workId)));
+  app.post("/api/works/:workId/file-versions/:fileVersionId/restore", (request, response) => {
+    data(response, store.restoreFileVersion(request.params.workId, request.params.fileVersionId));
+  });
   app.post("/api/works/:workId/import", upload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要导入的 TXT 或 DOCX 文件");
     const originalFileName = normalizeUploadFileName(request.file.originalname);

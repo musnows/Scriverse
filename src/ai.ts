@@ -441,7 +441,7 @@ export class AiManager {
     this.contextBuilder = new ContextBuilder(store);
   }
 
-  private outboundFetch(url: string, init: RequestInit): Promise<Response> {
+  private outboundFetch(url: string, init: RequestInit): Promise<Awaited<ReturnType<typeof fetch>>> {
     return fetchSafeAiEndpoint(this.fetchImpl, url, init, this.validateOutboundUrl);
   }
 

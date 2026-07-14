@@ -111,13 +111,18 @@ export class Database {
 
       CREATE TABLE IF NOT EXISTS chapter_versions (
         id TEXT PRIMARY KEY,
-        chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        chapter_id TEXT NOT NULL,
         version_no INTEGER NOT NULL,
         title TEXT NOT NULL,
         content TEXT NOT NULL,
+        volume_id TEXT,
+        sort_order INTEGER,
+        chapter_type TEXT,
         source TEXT NOT NULL DEFAULT 'manual',
         source_ref TEXT,
         created_at TEXT NOT NULL,
+        created_by_user_id TEXT,
         UNIQUE(chapter_id, version_no)
       );
 
@@ -183,13 +188,15 @@ export class Database {
 
       CREATE TABLE IF NOT EXISTS character_versions (
         id TEXT PRIMARY KEY,
-        character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        character_id TEXT NOT NULL,
         version_no INTEGER NOT NULL,
         snapshot_json TEXT NOT NULL,
         source TEXT NOT NULL DEFAULT 'manual',
         source_ref TEXT,
         change_note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
+        created_by_user_id TEXT,
         UNIQUE(character_id, version_no)
       );
 
@@ -725,6 +732,7 @@ export class Database {
           UNIQUE(character_id, version_no)
         )`);
         this.run("CREATE INDEX IF NOT EXISTS idx_character_versions_character ON character_versions(character_id, version_no DESC)");
+        const characterVersionColumns = new Set(this.all("PRAGMA table_info(character_versions)").map((row) => String(row.name)));
         const characters = this.all<Record<string, unknown>>("SELECT * FROM characters ORDER BY created_at, id");
         for (const character of characters) {
           const characterId = String(character.id);
@@ -752,13 +760,16 @@ export class Database {
             firstChapterId: character.first_chapter_id === null ? null : String(character.first_chapter_id)
           };
           this.run(
-            `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, change_note, created_at)
-             VALUES (?, ?, 1, ?, 'migration', '建立人物版本基线', ?)
-             ON CONFLICT(character_id, version_no) DO NOTHING`,
-            `characterVersion_migration_${characterId}`,
-            characterId,
-            JSON.stringify(snapshot),
-            String(character.updated_at)
+            characterVersionColumns.has("work_id")
+              ? `INSERT INTO character_versions (id, work_id, character_id, version_no, snapshot_json, source, change_note, created_at)
+                 VALUES (?, ?, ?, 1, ?, 'migration', '建立人物版本基线', ?)
+                 ON CONFLICT(character_id, version_no) DO NOTHING`
+              : `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, change_note, created_at)
+                 VALUES (?, ?, 1, ?, 'migration', '建立人物版本基线', ?)
+                 ON CONFLICT(character_id, version_no) DO NOTHING`,
+            ...(characterVersionColumns.has("work_id")
+              ? [`characterVersion_migration_${characterId}`, String(character.work_id), characterId, JSON.stringify(snapshot), String(character.updated_at)]
+              : [`characterVersion_migration_${characterId}`, characterId, JSON.stringify(snapshot), String(character.updated_at)])
           );
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (12, ?)", new Date().toISOString());
@@ -916,6 +927,68 @@ export class Database {
         this.run("CREATE INDEX IF NOT EXISTS idx_work_memberships_user ON work_memberships(user_id, work_id)");
         this.run("CREATE INDEX IF NOT EXISTS idx_works_owner ON works(owner_user_id, updated_at DESC)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (15, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(16)) {
+      this.transaction(() => {
+        const chapterVersionColumns = new Set(this.all("PRAGMA table_info(chapter_versions)").map((row) => String(row.name)));
+        if (!chapterVersionColumns.has("work_id")) {
+          this.run(`CREATE TABLE chapter_versions_v16 (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            chapter_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            volume_id TEXT,
+            sort_order INTEGER,
+            chapter_type TEXT,
+            source TEXT NOT NULL DEFAULT 'manual',
+            source_ref TEXT,
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            UNIQUE(chapter_id, version_no)
+          )`);
+          this.run(`INSERT INTO chapter_versions_v16 (
+              id, work_id, chapter_id, version_no, title, content, volume_id, sort_order, chapter_type,
+              source, source_ref, created_at, created_by_user_id
+            )
+            SELECT version.id, chapter.work_id, version.chapter_id, version.version_no, version.title, version.content,
+              chapter.volume_id, chapter.sort_order, chapter.chapter_type, version.source, version.source_ref,
+              version.created_at, version.created_by_user_id
+            FROM chapter_versions version
+            JOIN chapters chapter ON chapter.id = version.chapter_id`);
+          this.run("DROP TABLE chapter_versions");
+          this.run("ALTER TABLE chapter_versions_v16 RENAME TO chapter_versions");
+        }
+        const characterVersionColumns = new Set(this.all("PRAGMA table_info(character_versions)").map((row) => String(row.name)));
+        if (!characterVersionColumns.has("work_id")) {
+          this.run(`CREATE TABLE character_versions_v16 (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            character_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'manual',
+            source_ref TEXT,
+            change_note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            UNIQUE(character_id, version_no)
+          )`);
+          this.run(`INSERT INTO character_versions_v16 (
+              id, work_id, character_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id
+            )
+            SELECT version.id, character.work_id, version.character_id, version.version_no, version.snapshot_json,
+              version.source, version.source_ref, version.change_note, version.created_at, version.created_by_user_id
+            FROM character_versions version
+            JOIN characters character ON character.id = version.character_id`);
+          this.run("DROP TABLE character_versions");
+          this.run("ALTER TABLE character_versions_v16 RENAME TO character_versions");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_versions_work ON chapter_versions(work_id, chapter_id, version_no)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_character_versions_work ON character_versions(work_id, character_id, version_no)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (16, ?)", new Date().toISOString());
       });
     }
   }

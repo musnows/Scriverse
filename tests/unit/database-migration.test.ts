@@ -64,9 +64,10 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }]);
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
+    expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
     expect(first.all("PRAGMA table_info(audit_logs)").some((column) => column.name === "user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(entity_versions)").map((column) => column.name)).toEqual(expect.arrayContaining(["entity_type", "entity_id", "version_no", "snapshot_json"]));
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);

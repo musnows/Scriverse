@@ -204,6 +204,15 @@ export class Store {
     return this.getForeshadow(entityId);
   }
 
+  private tryVersionedEntity(type: VersionedEntityType, entityId: string): Record<string, unknown> | null {
+    try {
+      return this.versionedEntity(type, entityId);
+    } catch (error) {
+      if (error instanceof AppError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
   private versionedEntitySnapshot(type: VersionedEntityType, entity: Record<string, unknown>): Record<string, unknown> {
     if (type === "setting") return {
       title: entity.title,
@@ -295,7 +304,9 @@ export class Store {
       type,
       entityId
     );
-    if (latest && requiredString(latest, "snapshot_json") === snapshotJson && source !== "restore") return numberValue(latest, "version_no");
+    if (latest && requiredString(latest, "snapshot_json") === snapshotJson && source !== "restore" && source !== "delete") {
+      return numberValue(latest, "version_no");
+    }
     const versionNo = latest ? numberValue(latest, "version_no") + 1 : 1;
     this.db.run(
       `INSERT INTO entity_versions (id, work_id, entity_type, entity_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
@@ -334,14 +345,18 @@ export class Store {
   }
 
   listEntityVersions(type: VersionedEntityType, entityId: string): Record<string, unknown>[] {
-    this.versionedEntity(type, entityId);
-    return this.db.all(
+    const rows = this.db.all(
       `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
        FROM entity_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
        WHERE version.entity_type = ? AND version.entity_id = ? ORDER BY version.version_no DESC`,
       type,
       entityId
-    ).map((row) => ({
+    );
+    if (!rows.length) {
+      this.versionedEntity(type, entityId);
+      return [];
+    }
+    return rows.map((row) => ({
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       entityType: requiredString(row, "entity_type"),
@@ -357,7 +372,6 @@ export class Store {
   }
 
   restoreEntityVersion(type: VersionedEntityType, entityId: string, versionNo: number): Record<string, unknown> {
-    this.versionedEntity(type, entityId);
     const version = this.db.get(
       "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? AND version_no = ?",
       type,
@@ -369,8 +383,12 @@ export class Store {
     if (!Object.keys(snapshot).length) throw new AppError(500, "ENTITY_VERSION_INVALID", "历史版本快照无效");
     const sourceRef = requiredString(version, "id");
     const changeNote = `恢复至 v${versionNo}`;
+    const workId = requiredString(version, "work_id");
+    const existing = this.tryVersionedEntity(type, entityId);
     let restored: Record<string, unknown>;
-    if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote);
+    if (!existing) {
+      restored = this.recreateEntityFromSnapshot(type, workId, entityId, snapshot, sourceRef, changeNote);
+    } else if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote);
     else if (type === "race") restored = this.updateRace(entityId, snapshot as Partial<RaceInput>, "restore", sourceRef, changeNote);
     else if (type === "organization") restored = this.updateOrganization(entityId, snapshot as Partial<OrganizationInput>, "restore", sourceRef, changeNote);
     else if (type === "timeline-track") restored = this.updateTimelineTrack(entityId, snapshot as Partial<TimelineTrackInput>, "restore", sourceRef, changeNote);
@@ -384,6 +402,40 @@ export class Store {
       entityId
     );
     return { ...restored, versionNo: numberValue(currentVersion ?? {}, "version_no") };
+  }
+
+  private recreateEntityFromSnapshot(
+    type: VersionedEntityType,
+    workId: string,
+    entityId: string,
+    snapshot: Record<string, unknown>,
+    sourceRef: string,
+    changeNote: string
+  ): Record<string, unknown> {
+    this.getWork(workId);
+    if (type === "setting") {
+      return this.insertSettingWithId(workId, entityId, snapshot as SettingInput, "restore", sourceRef, changeNote);
+    }
+    if (type === "race") {
+      return this.insertRaceWithId(workId, entityId, snapshot as RaceInput, "restore", sourceRef, changeNote);
+    }
+    if (type === "organization") {
+      return this.insertOrganizationWithId(workId, entityId, snapshot as OrganizationInput, "restore", sourceRef, changeNote);
+    }
+    if (type === "timeline-track") {
+      return this.insertTimelineTrackWithId(workId, entityId, snapshot as TimelineTrackInput, "restore", sourceRef, changeNote);
+    }
+    if (type === "timeline-event") {
+      return this.insertTimelineEventWithId(workId, entityId, snapshot as TimelineInput, "restore", sourceRef, changeNote);
+    }
+    if (type === "relationship") {
+      return this.insertRelationshipWithId(workId, entityId, snapshot as RelationshipInput, "restore", sourceRef, changeNote);
+    }
+    if (type === "chapter-outline") {
+      this.getChapter(entityId);
+      return this.upsertChapterOutline(entityId, snapshot as ChapterOutlineInput, "restore", sourceRef, changeNote);
+    }
+    return this.insertForeshadowWithId(workId, entityId, snapshot as ForeshadowInput, "restore", sourceRef, changeNote);
   }
 
   audit(workId: string | null, action: string, entityType: string, entityId: string | null, detail: unknown = {}): void {
@@ -605,6 +657,80 @@ export class Store {
       }));
   }
 
+  restoreFileVersion(workId: string, fileVersionId: string): Record<string, unknown> {
+    this.getWork(workId);
+    const version = this.db.get("SELECT * FROM file_versions WHERE id = ? AND work_id = ?", fileVersionId, workId);
+    if (!version) throw notFound("文件版本");
+    const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
+    const volumes = Array.isArray(snapshot.volumes) ? snapshot.volumes as Array<Record<string, unknown>> : [];
+    return this.db.transaction(() => {
+      const currentTree = this.getWorkTree(workId);
+      const currentChapters = this.db.all("SELECT content FROM chapters WHERE work_id = ?", workId);
+      const wordCount = currentChapters.reduce((sum, row) => sum + countWords(requiredString(row, "content")), 0);
+      const paragraphCount = currentChapters.reduce((sum, row) => {
+        const content = requiredString(row, "content").trim();
+        return sum + (content ? content.split(/\n+/u).filter(Boolean).length : 0);
+      }, 0);
+      const restorePointId = id("file");
+      const timestamp = now();
+      this.db.run(
+        `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        restorePointId,
+        workId,
+        `before-restore:${requiredString(version, "file_name")}`,
+        "snapshot",
+        wordCount,
+        paragraphCount,
+        "[]",
+        JSON.stringify(currentTree),
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+      for (const volume of volumes) {
+        const volumeId = id("volume");
+        const chapters = Array.isArray(volume.chapters) ? volume.chapters as Array<Record<string, unknown>> : [];
+        this.db.run(
+          `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          volumeId,
+          workId,
+          String(volume.title ?? "正文"),
+          String(volume.kind ?? "main"),
+          String(volume.source ?? "manual"),
+          String(volume.description ?? ""),
+          JSON.stringify(Array.isArray(volume.keywords) ? this.normalizeVolumeKeywords(volume.keywords as string[]) : []),
+          Number(volume.sortOrder ?? 0),
+          timestamp,
+          timestamp
+        );
+        for (const chapter of chapters) {
+          const chapterType = (["正文", "设定", "作者的话", "其他"].includes(String(chapter.chapterType))
+            ? String(chapter.chapterType)
+            : "正文") as ChapterType;
+          this.insertChapter(
+            workId,
+            volumeId,
+            String(chapter.title ?? "未命名章节"),
+            String(chapter.content ?? ""),
+            Number(chapter.sortOrder ?? 0),
+            "restore",
+            fileVersionId,
+            chapterType
+          );
+        }
+      }
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.audit(workId, "file.restored", "file-version", fileVersionId, { restorePointId });
+      return {
+        fileVersionId: restorePointId,
+        restoredFrom: fileVersionId,
+        tree: this.getWorkTree(workId)
+      };
+    });
+  }
+
   importNovel(workId: string, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
     this.getWork(workId);
     let result: Record<string, unknown> = {};
@@ -751,23 +877,74 @@ export class Store {
     return this.mapChapter(row);
   }
 
-  listChapterVersions(chapterId: string): Record<string, unknown>[] {
-    this.getChapter(chapterId);
-    return this.db
-      .all(`SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+  private findChapterVersionRows(chapterId: string): Row[] {
+    return this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
         FROM chapter_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
-        WHERE version.chapter_id = ? ORDER BY version.version_no DESC`, chapterId)
-      .map((row) => ({
-        id: requiredString(row, "id"),
-        chapterId: requiredString(row, "chapter_id"),
-        versionNo: numberValue(row, "version_no"),
-        title: requiredString(row, "title"),
-        content: requiredString(row, "content"),
-        source: requiredString(row, "source"),
-        sourceRef: optionalString(row, "source_ref"),
-        createdAt: requiredString(row, "created_at"),
-        actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
-      }));
+        WHERE version.chapter_id = ? ORDER BY version.version_no DESC`,
+      chapterId
+    );
+  }
+
+  private mapChapterVersionRow(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: optionalString(row, "work_id"),
+      chapterId: requiredString(row, "chapter_id"),
+      versionNo: numberValue(row, "version_no"),
+      title: requiredString(row, "title"),
+      content: requiredString(row, "content"),
+      volumeId: optionalString(row, "volume_id"),
+      sortOrder: row.sort_order === null || row.sort_order === undefined ? null : numberValue(row, "sort_order"),
+      chapterType: optionalString(row, "chapter_type"),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    };
+  }
+
+  private insertChapterVersionRow(input: {
+    workId: string;
+    chapterId: string;
+    versionNo: number;
+    title: string;
+    content: string;
+    volumeId: string | null;
+    sortOrder: number | null;
+    chapterType: string | null;
+    source: string;
+    sourceRef: string | null;
+    timestamp?: string;
+  }): void {
+    this.db.run(
+      `INSERT INTO chapter_versions (
+         id, work_id, chapter_id, version_no, title, content, volume_id, sort_order, chapter_type,
+         source, source_ref, created_at, created_by_user_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("chapterVersion"),
+      input.workId,
+      input.chapterId,
+      input.versionNo,
+      input.title,
+      input.content,
+      input.volumeId,
+      input.sortOrder,
+      input.chapterType,
+      input.source,
+      input.sourceRef,
+      input.timestamp ?? now(),
+      currentRequestActor()?.userId ?? null
+    );
+  }
+
+  listChapterVersions(chapterId: string): Record<string, unknown>[] {
+    const rows = this.findChapterVersionRows(chapterId);
+    if (!rows.length) {
+      this.getChapter(chapterId);
+      return [];
+    }
+    return rows.map((row) => this.mapChapterVersionRow(row));
   }
 
   listChapterInsights(chapterId: string): Record<string, unknown>[] {
@@ -821,19 +998,19 @@ export class Store {
         chapterId
       );
       if (hasTextChange) {
-        this.db.run(
-          `INSERT INTO chapter_versions (id, chapter_id, version_no, title, content, source, source_ref, created_at, created_by_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          id("chapterVersion"),
+        this.insertChapterVersionRow({
+          workId: String(current.workId),
           chapterId,
           versionNo,
-          nextTitle,
-          nextContent,
+          title: nextTitle,
+          content: nextContent,
+          volumeId: String(current.volumeId),
+          sortOrder: Number(current.sortOrder),
+          chapterType: nextChapterType,
           source,
           sourceRef,
-          timestamp,
-          currentRequestActor()?.userId ?? null
-        );
+          timestamp
+        });
       }
       if (hasTextChange || hasTypeChange) this.invalidateChapter(String(current.workId), chapterId, versionNo);
       this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, String(current.workId));
@@ -845,12 +1022,68 @@ export class Store {
   restoreChapter(chapterId: string, versionNo: number): Record<string, unknown> {
     const version = this.db.get("SELECT * FROM chapter_versions WHERE chapter_id = ? AND version_no = ?", chapterId, versionNo);
     if (!version) throw notFound("章节版本");
+    const existing = this.db.get("SELECT id FROM chapters WHERE id = ?", chapterId);
+    if (!existing) {
+      return this.recreateChapterFromVersion(chapterId, version);
+    }
     return this.saveChapter(
       chapterId,
       { title: requiredString(version, "title"), content: requiredString(version, "content") },
       "restore",
       requiredString(version, "id")
     );
+  }
+
+  private recreateChapterFromVersion(chapterId: string, version: Row): Record<string, unknown> {
+    const workId = requiredString(version, "work_id");
+    const volumeId = optionalString(version, "volume_id");
+    if (!volumeId) throw new AppError(400, "CHAPTER_RESTORE_INCOMPLETE", "历史版本缺少分卷信息，无法恢复已删除章节");
+    const volume = this.getVolume(volumeId);
+    if (volume.workId !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
+    const title = requiredString(version, "title");
+    const content = requiredString(version, "content");
+    const chapterType = (optionalString(version, "chapter_type") ?? "正文") as ChapterType;
+    const sortOrder = version.sort_order === null || version.sort_order === undefined
+      ? numberValue(this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS sort_order FROM chapters WHERE volume_id = ?", volumeId) ?? {}, "sort_order") + 1
+      : numberValue(version, "sort_order");
+    const timestamp = now();
+    const nextVersionNo = numberValue(
+      this.db.get("SELECT COALESCE(MAX(version_no), 0) AS version_no FROM chapter_versions WHERE chapter_id = ?", chapterId) ?? {},
+      "version_no"
+    ) + 1;
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO chapters (id, work_id, volume_id, title, content, chapter_type, sort_order, word_count, version_no, analysis_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        chapterId,
+        workId,
+        volumeId,
+        title,
+        content,
+        chapterType,
+        sortOrder,
+        countWords(content),
+        nextVersionNo,
+        timestamp,
+        timestamp
+      );
+      this.insertChapterVersionRow({
+        workId,
+        chapterId,
+        versionNo: nextVersionNo,
+        title,
+        content,
+        volumeId,
+        sortOrder,
+        chapterType,
+        source: "restore",
+        sourceRef: requiredString(version, "id"),
+        timestamp
+      });
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.audit(workId, "chapter.restored", "chapter", chapterId, { versionNo: nextVersionNo, fromVersion: numberValue(version, "version_no") });
+    });
+    return this.getChapter(chapterId);
   }
 
   moveChapter(chapterId: string, input: { volumeId: string; sortOrder: number }): Record<string, unknown> {
@@ -881,8 +1114,26 @@ export class Store {
 
   deleteChapter(chapterId: string): void {
     const chapter = this.getChapter(chapterId);
-    this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
-    this.audit(String(chapter.workId), "chapter.deleted", "chapter", chapterId);
+    const timestamp = now();
+    const versionNo = Number(chapter.versionNo) + 1;
+    this.db.transaction(() => {
+      this.db.run("UPDATE chapters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, chapterId);
+      this.insertChapterVersionRow({
+        workId: String(chapter.workId),
+        chapterId,
+        versionNo,
+        title: String(chapter.title),
+        content: String(chapter.content),
+        volumeId: String(chapter.volumeId),
+        sortOrder: Number(chapter.sortOrder),
+        chapterType: String(chapter.chapterType),
+        source: "delete",
+        sourceRef: null,
+        timestamp
+      });
+      this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
+      this.audit(String(chapter.workId), "chapter.deleted", "chapter", chapterId, { versionNo });
+    });
   }
 
   private insertChapter(
@@ -912,18 +1163,19 @@ export class Store {
       timestamp,
       timestamp
     );
-    this.db.run(
-      `INSERT INTO chapter_versions (id, chapter_id, version_no, title, content, source, source_ref, created_at, created_by_user_id)
-       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`,
-      id("chapterVersion"),
+    this.insertChapterVersionRow({
+      workId,
       chapterId,
+      versionNo: 1,
       title,
-      normalizedContent,
+      content: normalizedContent,
+      volumeId,
+      sortOrder,
+      chapterType,
       source,
       sourceRef,
-      timestamp,
-      currentRequestActor()?.userId ?? null
-    );
+      timestamp
+    });
     return chapterId;
   }
 
@@ -1117,8 +1369,13 @@ export class Store {
 
   deleteChapterOutline(chapterId: string): void {
     const chapter = this.getChapter(chapterId);
-    this.db.run("DELETE FROM chapter_outlines WHERE chapter_id = ?", chapterId);
-    this.audit(String(chapter.workId), "outline.deleted", "chapter-outline", chapterId);
+    const outline = this.getChapterOutline(chapterId);
+    if (!outline) return;
+    this.db.transaction(() => {
+      this.recordEntityVersion("chapter-outline", chapterId, "delete", null, "删除章节大纲");
+      this.db.run("DELETE FROM chapter_outlines WHERE chapter_id = ?", chapterId);
+      this.audit(String(chapter.workId), "outline.deleted", "chapter-outline", chapterId);
+    });
   }
 
   private mapChapterOutline(row: Row, chapter: Record<string, unknown>): Record<string, unknown> {
@@ -1140,7 +1397,18 @@ export class Store {
   createForeshadow(workId: string, input: ForeshadowInput): Record<string, unknown> {
     this.getWork(workId);
     if (input.plannedPayoffChapterId) this.assertChapterInWork(input.plannedPayoffChapterId, workId);
-    const foreshadowId = id("foreshadow");
+    return this.insertForeshadowWithId(workId, id("foreshadow"), input, "create", null);
+  }
+
+  private insertForeshadowWithId(
+    workId: string,
+    foreshadowId: string,
+    input: ForeshadowInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
+    if (input.plannedPayoffChapterId) this.assertChapterInWork(input.plannedPayoffChapterId, workId);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -1159,8 +1427,8 @@ export class Store {
         timestamp
       );
       for (const occurrence of input.occurrences ?? []) this.insertForeshadowOccurrence(foreshadowId, workId, occurrence);
-      this.recordEntityVersion("foreshadow", foreshadowId, "create", null, "建立伏笔", timestamp);
-      this.audit(workId, "foreshadow.created", "foreshadow", foreshadowId);
+      this.recordEntityVersion("foreshadow", foreshadowId, source, sourceRef, changeNote || "建立伏笔", timestamp);
+      this.audit(workId, source === "restore" ? "foreshadow.restored" : "foreshadow.created", "foreshadow", foreshadowId);
     });
     return this.getForeshadow(foreshadowId);
   }
@@ -1247,8 +1515,11 @@ export class Store {
 
   deleteForeshadow(foreshadowId: string): void {
     const current = this.getForeshadow(foreshadowId);
-    this.db.run("DELETE FROM foreshadows WHERE id = ?", foreshadowId);
-    this.audit(String(current.workId), "foreshadow.deleted", "foreshadow", foreshadowId);
+    this.db.transaction(() => {
+      this.recordEntityVersion("foreshadow", foreshadowId, "delete", null, "删除伏笔");
+      this.db.run("DELETE FROM foreshadows WHERE id = ?", foreshadowId);
+      this.audit(String(current.workId), "foreshadow.deleted", "foreshadow", foreshadowId);
+    });
   }
 
   createForeshadowOccurrence(foreshadowId: string, input: ForeshadowOccurrenceInput): Record<string, unknown> {
@@ -1353,7 +1624,17 @@ export class Store {
 
   createSetting(workId: string, input: SettingInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
-    const settingId = id("setting");
+    return this.insertSettingWithId(workId, id("setting"), input, source, sourceRef);
+  }
+
+  private insertSettingWithId(
+    workId: string,
+    settingId: string,
+    input: SettingInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -1373,8 +1654,12 @@ export class Store {
         timestamp,
         timestamp
       );
-      this.recordEntityVersion("setting", settingId, source, sourceRef, "建立世界观设定", timestamp);
-      this.audit(workId, "setting.created", "setting", settingId, { locked: input.locked ?? false, source, sourceRef });
+      this.recordEntityVersion("setting", settingId, source, sourceRef, changeNote || "建立世界观设定", timestamp);
+      this.audit(workId, source === "restore" ? "setting.restored" : "setting.created", "setting", settingId, {
+        locked: input.locked ?? false,
+        source,
+        sourceRef
+      });
     });
     return this.getSetting(settingId);
   }
@@ -1422,8 +1707,11 @@ export class Store {
 
   deleteSetting(settingId: string): void {
     const current = this.getSetting(settingId);
-    this.db.run("DELETE FROM settings WHERE id = ?", settingId);
-    this.audit(String(current.workId), "setting.deleted", "setting", settingId);
+    this.db.transaction(() => {
+      this.recordEntityVersion("setting", settingId, "delete", null, "删除世界观设定");
+      this.db.run("DELETE FROM settings WHERE id = ?", settingId);
+      this.audit(String(current.workId), "setting.deleted", "setting", settingId);
+    });
   }
 
   private mapSetting(row: Row): Record<string, unknown> {
@@ -1445,6 +1733,17 @@ export class Store {
   }
 
   createRace(workId: string, input: RaceInput): Record<string, unknown> {
+    return this.insertRaceWithId(workId, id("race"), input, "create", null);
+  }
+
+  private insertRaceWithId(
+    workId: string,
+    raceId: string,
+    input: RaceInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     this.getWork(workId);
     const name = input.name.normalize("NFKC").trim().replace(/\s+/gu, " ");
     const normalizedName = normalizeCharacterName(name);
@@ -1453,7 +1752,6 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
-    const raceId = id("race");
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -1470,8 +1768,8 @@ export class Store {
       );
       this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `设为种族“${name}”`);
-      this.recordEntityVersion("race", raceId, "create", null, "建立种族档案", timestamp);
-      this.audit(workId, "race.created", "race", raceId);
+      this.recordEntityVersion("race", raceId, source, sourceRef, changeNote || "建立种族档案", timestamp);
+      this.audit(workId, source === "restore" ? "race.restored" : "race.created", "race", raceId);
     });
     return this.getRace(raceId);
   }
@@ -1532,6 +1830,7 @@ export class Store {
     const current = this.getRace(raceId);
     const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
     this.db.transaction(() => {
+      this.recordEntityVersion("race", raceId, "delete", null, "删除种族档案");
       this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", now(), raceId);
       this.db.run("DELETE FROM races WHERE id = ?", raceId);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `种族“${String(current.name)}”已删除`);
@@ -1587,6 +1886,17 @@ export class Store {
   }
 
   createOrganization(workId: string, input: OrganizationInput): Record<string, unknown> {
+    return this.insertOrganizationWithId(workId, id("organization"), input, "create", null);
+  }
+
+  private insertOrganizationWithId(
+    workId: string,
+    organizationId: string,
+    input: OrganizationInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     this.getWork(workId);
     const name = input.name.normalize("NFKC").trim().replace(/\s+/gu, " ");
     const normalizedName = normalizeCharacterName(name);
@@ -1595,7 +1905,6 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
-    const organizationId = id("organization");
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -1612,8 +1921,8 @@ export class Store {
       );
       this.replaceOrganizationMembers(organizationId, memberIds);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `加入组织“${name}”`);
-      this.recordEntityVersion("organization", organizationId, "create", null, "建立组织档案", timestamp);
-      this.audit(workId, "organization.created", "organization", organizationId);
+      this.recordEntityVersion("organization", organizationId, source, sourceRef, changeNote || "建立组织档案", timestamp);
+      this.audit(workId, source === "restore" ? "organization.restored" : "organization.created", "organization", organizationId);
     });
     return this.getOrganization(organizationId);
   }
@@ -1672,6 +1981,7 @@ export class Store {
     const current = this.getOrganization(organizationId);
     const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
     this.db.transaction(() => {
+      this.recordEntityVersion("organization", organizationId, "delete", null, "删除组织档案");
       this.db.run("DELETE FROM organizations WHERE id = ?", organizationId);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${String(current.name)}”已删除`);
       this.audit(String(current.workId), "organization.deleted", "organization", organizationId);
@@ -1786,13 +2096,16 @@ export class Store {
     source: string,
     sourceRef: string | null,
     changeNote: string,
-    timestamp = now()
+    timestamp = now(),
+    workId?: string
   ): void {
-    const snapshot = this.characterSnapshot(this.getCharacter(characterId));
+    const character = this.getCharacter(characterId);
+    const snapshot = this.characterSnapshot(character);
     this.db.run(
-      `INSERT INTO character_versions (id, character_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO character_versions (id, work_id, character_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id("characterVersion"),
+      workId ?? String(character.workId),
       characterId,
       versionNo,
       JSON.stringify(snapshot),
@@ -1930,14 +2243,19 @@ export class Store {
   }
 
   listCharacterVersions(characterId: string): Record<string, unknown>[] {
-    this.getCharacter(characterId);
-    return this.db.all(
+    const rows = this.db.all(
       `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
        FROM character_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
        WHERE version.character_id = ? ORDER BY version.version_no DESC`,
       characterId
-    ).map((row) => ({
+    );
+    if (!rows.length) {
+      this.getCharacter(characterId);
+      return [];
+    }
+    return rows.map((row) => ({
       id: requiredString(row, "id"),
+      workId: optionalString(row, "work_id"),
       characterId: requiredString(row, "character_id"),
       versionNo: numberValue(row, "version_no"),
       snapshot: json(requiredString(row, "snapshot_json"), {}),
@@ -1954,6 +2272,10 @@ export class Store {
     if (!version) throw notFound("人物版本");
     const snapshot = json<CharacterSnapshot>(requiredString(version, "snapshot_json"), {} as CharacterSnapshot);
     if (!snapshot.name) throw new AppError(500, "CHARACTER_VERSION_INVALID", "人物版本快照无效");
+    const existing = this.db.get("SELECT id FROM characters WHERE id = ?", characterId);
+    if (!existing) {
+      return this.recreateCharacterFromVersion(characterId, version, snapshot, versionNo);
+    }
     return this.updateCharacter(
       characterId,
       snapshot,
@@ -1963,10 +2285,66 @@ export class Store {
     );
   }
 
+  private recreateCharacterFromVersion(
+    characterId: string,
+    version: Row,
+    snapshot: CharacterSnapshot,
+    versionNo: number
+  ): Record<string, unknown> {
+    const workId = requiredString(version, "work_id");
+    this.getWork(workId);
+    const names = this.prepareCharacterNames(snapshot.name, snapshot.aliases ?? []);
+    const raceId = snapshot.raceId ?? null;
+    const race = raceId ? this.assertRaceInWork(workId, raceId) : null;
+    const species = race ? String(race.name) : (snapshot.species ?? "");
+    this.assertCharacterNamesAvailable(workId, names.entries);
+    if (snapshot.firstChapterId) this.assertChapterInWork(snapshot.firstChapterId, workId);
+    const organizationIds = [...new Set(snapshot.organizationIds ?? [])];
+    this.assertOrganizationsInWork(workId, organizationIds);
+    const timestamp = now();
+    const nextVersionNo = numberValue(
+      this.db.get("SELECT COALESCE(MAX(version_no), 0) AS version_no FROM character_versions WHERE character_id = ?", characterId) ?? {},
+      "version_no"
+    ) + 1;
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO characters (id, work_id, name, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+         locked_fields_json, visibility, first_chapter_id, version_no, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        characterId,
+        workId,
+        names.name,
+        JSON.stringify(names.aliases),
+        species,
+        raceId,
+        JSON.stringify(snapshot.attributes ?? {}),
+        JSON.stringify(snapshot.profile ?? {}),
+        JSON.stringify(snapshot.currentState ?? {}),
+        JSON.stringify(snapshot.lockedFields ?? []),
+        snapshot.visibility ?? "author",
+        snapshot.firstChapterId ?? null,
+        nextVersionNo,
+        timestamp,
+        timestamp
+      );
+      this.insertCharacterNames(workId, characterId, names.entries);
+      this.replaceCharacterOrganizations(characterId, organizationIds);
+      this.insertCharacterVersion(characterId, nextVersionNo, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`, timestamp, workId);
+      this.audit(workId, "character.restored", "character", characterId, { versionNo: nextVersionNo, fromVersion: versionNo });
+    });
+    return this.getCharacter(characterId);
+  }
+
   deleteCharacter(characterId: string): void {
     const current = this.getCharacter(characterId);
-    this.db.run("DELETE FROM characters WHERE id = ?", characterId);
-    this.audit(String(current.workId), "character.deleted", "character", characterId);
+    const timestamp = now();
+    const versionNo = Number(current.versionNo) + 1;
+    this.db.transaction(() => {
+      this.db.run("UPDATE characters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, characterId);
+      this.insertCharacterVersion(characterId, versionNo, "delete", null, "删除人物", timestamp);
+      this.db.run("DELETE FROM characters WHERE id = ?", characterId);
+      this.audit(String(current.workId), "character.deleted", "character", characterId, { versionNo });
+    });
   }
 
   private mapCharacter(row: Row): Record<string, unknown> {
@@ -2088,7 +2466,17 @@ export class Store {
 
   createTimelineTrack(workId: string, input: TimelineTrackInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
-    const trackId = id("timeline-track");
+    return this.insertTimelineTrackWithId(workId, id("timeline-track"), input, source, sourceRef);
+  }
+
+  private insertTimelineTrackWithId(
+    workId: string,
+    trackId: string,
+    input: TimelineTrackInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     const timestamp = now();
     const fallbackOrder = Number(this.db.get("SELECT COALESCE(MAX(sort_order), -1) + 1 AS value FROM timeline_tracks WHERE work_id = ?", workId)?.value ?? 0);
     this.db.transaction(() => {
@@ -2103,8 +2491,8 @@ export class Store {
         timestamp,
         timestamp
       );
-      this.recordEntityVersion("timeline-track", trackId, source, sourceRef, "建立独立时间轴", timestamp);
-      this.audit(workId, "timeline-track.created", "timeline-track", trackId, { source, sourceRef });
+      this.recordEntityVersion("timeline-track", trackId, source, sourceRef, changeNote || "建立独立时间轴", timestamp);
+      this.audit(workId, source === "restore" ? "timeline-track.restored" : "timeline-track.created", "timeline-track", trackId, { source, sourceRef });
     });
     return this.getTimelineTrack(trackId);
   }
@@ -2145,8 +2533,11 @@ export class Store {
 
   deleteTimelineTrack(trackId: string): void {
     const current = this.getTimelineTrack(trackId);
-    this.db.run("DELETE FROM timeline_tracks WHERE id = ?", trackId);
-    this.audit(String(current.workId), "timeline-track.deleted", "timeline-track", trackId);
+    this.db.transaction(() => {
+      this.recordEntityVersion("timeline-track", trackId, "delete", null, "删除时间轴");
+      this.db.run("DELETE FROM timeline_tracks WHERE id = ?", trackId);
+      this.audit(String(current.workId), "timeline-track.deleted", "timeline-track", trackId);
+    });
   }
 
   createTimelineEvent(workId: string, input: TimelineInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
@@ -2155,7 +2546,21 @@ export class Store {
       const track = this.getTimelineTrack(input.trackId);
       if (track.workId !== workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "独立时间轴不属于当前作品");
     }
-    const eventId = id("event");
+    return this.insertTimelineEventWithId(workId, id("event"), input, source, sourceRef);
+  }
+
+  private insertTimelineEventWithId(
+    workId: string,
+    eventId: string,
+    input: TimelineInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
+    if (input.trackId) {
+      const track = this.getTimelineTrack(input.trackId);
+      if (track.workId !== workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "独立时间轴不属于当前作品");
+    }
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -2180,8 +2585,15 @@ export class Store {
         timestamp,
         timestamp
       );
-      this.recordEntityVersion("timeline-event", eventId, source, sourceRef, source === "analysis" ? "AI 提取时间事件" : "建立时间事件", timestamp);
-      this.audit(workId, "timeline.created", "timeline-event", eventId, { source, sourceRef });
+      this.recordEntityVersion(
+        "timeline-event",
+        eventId,
+        source,
+        sourceRef,
+        changeNote || (source === "analysis" ? "AI 提取时间事件" : "建立时间事件"),
+        timestamp
+      );
+      this.audit(workId, source === "restore" ? "timeline.restored" : "timeline.created", "timeline-event", eventId, { source, sourceRef });
     });
     return this.getTimelineEvent(eventId);
   }
@@ -2240,8 +2652,11 @@ export class Store {
 
   deleteTimelineEvent(eventId: string): void {
     const current = this.getTimelineEvent(eventId);
-    this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
-    this.audit(String(current.workId), "timeline.deleted", "timeline-event", eventId);
+    this.db.transaction(() => {
+      this.recordEntityVersion("timeline-event", eventId, "delete", null, "删除时间事件");
+      this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
+      this.audit(String(current.workId), "timeline.deleted", "timeline-event", eventId);
+    });
   }
 
   mergeTimelineEvents(
@@ -2275,7 +2690,10 @@ export class Store {
         evidence: union("evidence"),
         status: events.every((event) => event.status === "confirmed") ? "confirmed" : "pending"
       }, "merge", uniqueIds.join(","));
-      for (const eventId of uniqueIds) this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
+      for (const eventId of uniqueIds) {
+        this.recordEntityVersion("timeline-event", eventId, "delete", null, "删除时间事件");
+        this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
+      }
       this.audit(workId, "timeline.merged", "timeline-event", String(merged.id), { sourceEventIds: uniqueIds });
       return merged;
     });
@@ -2305,6 +2723,7 @@ export class Store {
         evidence: source.evidence as unknown[],
         status: String(source.status)
       }, "split", eventId));
+      this.recordEntityVersion("timeline-event", eventId, "delete", null, "删除时间事件");
       this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
       this.audit(String(source.workId), "timeline.split", "timeline-event", eventId, { createdEventIds: created.map((event) => event.id) });
       return created;
@@ -2347,6 +2766,17 @@ export class Store {
 
   createRelationship(workId: string, input: RelationshipInput, source = "create", sourceRef: string | null = null): Record<string, unknown> {
     this.getWork(workId);
+    return this.insertRelationshipWithId(workId, id("relationship"), input, source, sourceRef);
+  }
+
+  private insertRelationshipWithId(
+    workId: string,
+    relationshipId: string,
+    input: RelationshipInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     let fromCharacterId = input.fromCharacterId;
     let toCharacterId = input.toCharacterId;
     if (fromCharacterId === toCharacterId) throw new AppError(400, "SELF_RELATIONSHIP", "人物关系不能指向自身");
@@ -2355,7 +2785,6 @@ export class Store {
     if (from.workId !== workId || to.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "关系人物不属于当前作品");
     if (!input.directed && fromCharacterId.localeCompare(toCharacterId) > 0) [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
     this.assertRelationshipUnique(workId, fromCharacterId, toCharacterId, input.category, input.subtype ?? "", Boolean(input.directed));
-    const relationshipId = id("relationship");
     const timestamp = now();
     const keywords = this.normalizeRelationshipKeywords(input.keywords ?? []);
     this.db.transaction(() => {
@@ -2380,8 +2809,15 @@ export class Store {
         timestamp,
         timestamp
       );
-      this.recordEntityVersion("relationship", relationshipId, source, sourceRef, source === "analysis" ? "AI 提取人物关系" : "建立人物关系", timestamp);
-      this.audit(workId, "relationship.created", "relationship", relationshipId, { source, sourceRef });
+      this.recordEntityVersion(
+        "relationship",
+        relationshipId,
+        source,
+        sourceRef,
+        changeNote || (source === "analysis" ? "AI 提取人物关系" : "建立人物关系"),
+        timestamp
+      );
+      this.audit(workId, source === "restore" ? "relationship.restored" : "relationship.created", "relationship", relationshipId, { source, sourceRef });
     });
     return this.getRelationship(relationshipId);
   }
@@ -2452,8 +2888,11 @@ export class Store {
 
   deleteRelationship(relationshipId: string): void {
     const current = this.getRelationship(relationshipId);
-    this.db.run("DELETE FROM relationships WHERE id = ?", relationshipId);
-    this.audit(String(current.workId), "relationship.deleted", "relationship", relationshipId);
+    this.db.transaction(() => {
+      this.recordEntityVersion("relationship", relationshipId, "delete", null, "删除人物关系");
+      this.db.run("DELETE FROM relationships WHERE id = ?", relationshipId);
+      this.audit(String(current.workId), "relationship.deleted", "relationship", relationshipId);
+    });
   }
 
   private mapRelationship(row: Row): Record<string, unknown> {

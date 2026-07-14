@@ -201,7 +201,7 @@ export async function fetchSafeAiEndpoint(
   init: RequestInit,
   validateOutboundUrl?: (url: string) => Promise<void>,
   maxRedirects = 5
-): Promise<Response> {
+): Promise<Awaited<ReturnType<typeof fetch>>> {
   let currentUrl = url;
   const baseHeaders = new Headers(init.headers);
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
@@ -243,6 +243,7 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
     ...(username ? { auth: { username, password } } : {}),
     trustProxy,
     enforceSameOrigin: true,
-    allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production
+    allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production,
+    allowRegistration: environment.APP_ALLOW_REGISTRATION !== "false"
   };
 }

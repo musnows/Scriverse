@@ -163,4 +163,33 @@ describe("设定、角色、时间轴、关系和审核 API", () => {
     expect(serialized).not.toContain("sk-never-export-this-value");
     expect(serialized).not.toContain("encrypted_key");
   });
+
+  it("删除设定后可列出实体版本并恢复", async () => {
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "冷却规则",
+      category: "世界规则",
+      content: "跃迁后冷却十二小时。",
+      locked: true
+    }).expect(201);
+    const settingId = setting.body.data.id;
+
+    await request(runtime.app).patch(`/api/settings/${settingId}`).send({ content: "跃迁后冷却二十四小时。" }).expect(200);
+    await request(runtime.app).delete(`/api/settings/${settingId}`).expect(204);
+    await request(runtime.app).get(`/api/settings/${settingId}`).expect(404);
+
+    const versions = await request(runtime.app).get(`/api/entity-versions/setting/${settingId}`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({ source: "delete", changeNote: "删除世界观设定" });
+    expect(versions.body.data.some((item: { snapshot: { content: string } }) => item.snapshot.content === "跃迁后冷却十二小时。")).toBe(true);
+
+    const restored = await request(runtime.app)
+      .post(`/api/entity-versions/setting/${settingId}/restore`)
+      .send({ versionNo: 1 })
+      .expect(200);
+    expect(restored.body.data).toMatchObject({
+      id: settingId,
+      title: "冷却规则",
+      content: "跃迁后冷却十二小时。",
+      locked: true
+    });
+  });
 });
