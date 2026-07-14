@@ -15,6 +15,10 @@
   --row-active: #ebe4d8;
   --surface-hover: #dfd6c7;
   --app-glow: rgba(255,255,255,.95);
+  --toast-bg: #25231f;
+  --toast-fg: #fffefa;
+  --toast-error-bg: #6e2e21;
+  --toast-error-fg: #fffefa;
   --font-latin: "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono";
   --font-cjk: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC";
   --editor-font-size: 17px;
@@ -100,6 +104,10 @@
   --row-active: #332d27;
   --surface-hover: #3a342d;
   --app-glow: rgba(98,82,66,.18);
+  --toast-bg: #ece6dc;
+  --toast-fg: #171714;
+  --toast-error-bg: #e08a72;
+  --toast-error-fg: #171714;
   color-scheme: dark;
 }
 
@@ -950,8 +958,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
 
 .toast-region { position: fixed; right: 24px; top: 78px; z-index: 30; display: grid; gap: 8px; }
-.toast { max-width: 360px; background: var(--ink); color: #fff; padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: appear .18s ease; }
-.toast.error { background: var(--accent-dark); }
+.toast { max-width: 360px; background: var(--toast-bg); color: var(--toast-fg); padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: appear .18s ease; }
+.toast.error { background: var(--toast-error-bg); color: var(--toast-error-fg); }
 .chapter-type-menu { position: fixed; z-index: 80; width: 176px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .chapter-type-menu strong { display: block; overflow: hidden; margin: 0 2px 8px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-type-menu > div { display: grid; gap: 3px; }
