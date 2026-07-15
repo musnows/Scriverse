@@ -463,8 +463,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .left-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 0 0 15px; }
 .left-primary-actions { display: flex; grid-column: 1 / -1; width: 100%; align-items: center; gap: 8px; }
 .left-primary-actions .file-button { flex: 1 1 auto; width: auto; min-width: 0; }
-.left-primary-actions #left-panel-toggle { flex: 0 0 34px; width: 34px; height: 34px; }
-.file-button, .secondary-button { display: grid; place-items: center; min-height: 34px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: transparent; }
+.left-primary-actions #left-panel-toggle { flex: 0 0 24px; width: 24px; height: 24px; }
+.file-button, .secondary-button { display: grid; place-items: center; min-height: 24px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: transparent; }
 .file-button input { display: none; }
 .module-nav { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 8px 0 14px; border-bottom: 1px solid var(--line); }
 .module-nav button { border: 0; background: transparent; text-align: left; padding: 7px 9px; color: var(--muted); font-size: 12px; border-radius: 3px; }
@@ -509,11 +509,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
 .hidden { display: none !important; }
 .editor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
-.editor-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; gap: 20px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
-.editor-toolbar > div:first-child { min-width: 0; }
-.chapter-title { display: block; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; font-size: 27px; padding: 0; }
+.editor-toolbar { display: grid; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
+#chapter-path { grid-area: path; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-title { grid-area: title; display: block; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; font-size: 27px; padding: 0; }
 .chapter-title:focus { box-shadow: none; border-bottom: 1px solid var(--accent); }
-.editor-actions { display: flex; align-items: center; gap: 10px; }
+.editor-actions { grid-area: actions; display: flex; align-items: center; gap: 10px; }
 .chapter-stats { color: var(--muted); font-size: 11px; }
 .editor-body { display: flex; min-height: 0; flex-direction: column; }
 .chapter-editor-frame { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); flex: 1 1 auto; width: 100%; min-height: 0; margin: 0; overflow: hidden; }
@@ -1112,7 +1112,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 @media (max-width: 1100px) {
   .left-panel { padding-inline: 10px; }
   .ai-panel { padding-inline: 14px; }
-  .editor-toolbar { grid-template-columns: minmax(0, 1fr); gap: 12px; padding-inline: 6%; }
+  .editor-toolbar { grid-template-areas: "path" "title" "actions"; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-inline: 6%; }
   .editor-actions { justify-content: flex-end; flex-wrap: wrap; }
   .outline-row { grid-template-columns: 1fr 1fr; }.outline-actions { justify-items: start; }
   .character-editor-workspace, .character-editor-workspace.history-open { grid-template-columns: 150px minmax(0, 1fr); }

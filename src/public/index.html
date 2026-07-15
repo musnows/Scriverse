@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260715-hide-task-id">
+    <link rel="stylesheet" href="/styles.css?v=20260716-editor-toolbar-layout">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -165,10 +165,8 @@
 
         <section id="editor-view" class="editor-view hidden">
           <div class="editor-toolbar">
-            <div>
-              <span id="chapter-path" class="eyebrow">未选择章节</span>
-              <input id="chapter-title" class="chapter-title" aria-label="章节标题" placeholder="章节标题">
-            </div>
+            <span id="chapter-path" class="eyebrow">未选择章节</span>
+            <input id="chapter-title" class="chapter-title" aria-label="章节标题" placeholder="章节标题">
             <div class="editor-actions">
               <span id="chapter-stats" class="chapter-stats">0 字 · v0</span>
               <button id="insight-button" class="ghost-button" type="button">章节概览</button>
@@ -465,6 +463,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260715-agent-tools"></script>
+    <script type="module" src="/app.js?v=20260716-editor-toolbar-layout"></script>
   </body>
 </html>

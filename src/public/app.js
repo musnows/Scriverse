@@ -1476,7 +1476,9 @@ async function selectChapter(chapterId) {
   $("#module-view").classList.add("hidden");
   $("#editor-view").classList.remove("hidden");
   const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
-  $("#chapter-path").textContent = `${volume?.title ?? "正文"} / 保存于 ${formatDateTime(state.chapter.updatedAt)}`;
+  const chapterPath = `${volume?.title ?? "正文"} / 保存于 ${formatDateTime(state.chapter.updatedAt)}`;
+  $("#chapter-path").textContent = chapterPath;
+  $("#chapter-path").title = chapterPath;
   $("#chapter-title").value = state.chapter.title;
   const normalizedContent = normalizeParagraphSpacing(state.chapter.content);
   const spacingChanged = normalizedContent !== state.chapter.content;

@@ -23,7 +23,7 @@ describe("全书概要上下文引用", () => {
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260715-agent-tools');
+    expect(page.text).toContain('/app.js?v=20260716-editor-toolbar-layout');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain("function renderBookSummaryReference()");
     expect(application.text).toContain("scope.includeBookSummary = true");
