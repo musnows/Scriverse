@@ -305,7 +305,10 @@ export class ContextBuilder {
 
   build(workId: string, scope: ContextScope, maximumChars = 60_000, bookSummaryMaximumTokens?: number): string {
     const work = this.store.getWork(workId);
-    const constraints: string[] = [`作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`];
+    const includeAutomaticContext = scope.type !== "none";
+    const constraints: string[] = includeAutomaticContext
+      ? [`作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`]
+      : [];
     const contentSections: string[] = [];
     const lockedSettings = this.store.listSettings(workId).filter((item) => item.locked);
     const allCharacters = this.store.listCharacters(workId);
@@ -315,14 +318,14 @@ export class ContextBuilder {
     const organizations = this.store.listOrganizations(workId);
     const relationshipConstraints = selectRelationshipConstraints(this.store, workId, scope.characterIds ?? []);
 
-    if (lockedSettings.length > 0) {
+    if (includeAutomaticContext && lockedSettings.length > 0) {
       constraints.push(
         `作者锁定设定（硬约束）：\n${lockedSettings
           .map((item) => `- [${String(item.category)}] ${String(item.title)}：${String(item.content)}`)
           .join("\n")}`
       );
     }
-    if (lockedCharacters.length > 0) {
+    if (includeAutomaticContext && lockedCharacters.length > 0) {
       constraints.push(
         `作者锁定角色属性（硬约束）：\n${lockedCharacters
           .map((item) => {
@@ -339,7 +342,7 @@ export class ContextBuilder {
           .join("\n")}`
       );
     }
-    if (organizations.length > 0) {
+    if (includeAutomaticContext && organizations.length > 0) {
       constraints.push(
         `世界内组织：\n${organizations.map((item) => {
           const settings = Array.isArray(item.settings) ? item.settings.map(String).filter(Boolean) : [];
@@ -424,7 +427,7 @@ export class ContextBuilder {
       );
     }
 
-    if (scope.chapterId) this.appendChapterKnowledge(constraints, workId, scope.chapterId);
+    if (scope.type !== "none" && scope.chapterId) this.appendChapterKnowledge(constraints, workId, scope.chapterId);
 
     const hardContext = constraints.join("\n\n");
     const bodyContext = contentSections.join("\n\n");
@@ -2632,6 +2635,7 @@ export class AiManager {
     if (!scope.chapterId) throw new AppError(400, "CHAPTER_REQUIRED", "续写任务必须指定当前章节");
     const chapter = this.store.getChapter(scope.chapterId);
     if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+    if (scope.type === "none") return scope;
     const haystack = `${String(chapter.content)}\n${instruction}`;
     const ids = new Set(scope.characterIds ?? []);
     for (const character of this.store.listCharacters(workId)) {

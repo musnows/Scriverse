@@ -163,6 +163,31 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(estimateAiTokens(sentContext)).toBeLessThan(450);
   });
 
+  it("无上下文请求只携带用户主动添加的正文引用", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let sentPrompt = "";
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      sentPrompt = body.messages[1]?.content ?? "";
+      return new Response(JSON.stringify({ choices: [{ message: { content: "仅根据主动引用回答。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "只检查我添加的引用。",
+      scope: { type: "none" },
+      modelId,
+      citations: [{ chapterId, chapterTitle: "第一章", startLine: 1, endLine: 1, text: "用户主动引用的句子。" }]
+    }).expect(201);
+
+    expect(sentPrompt).toContain("[第一章 L1]");
+    expect(sentPrompt).toContain("用户主动引用的句子。");
+    expect(sentPrompt).not.toContain("林舟启动了飞船。");
+    expect(sentPrompt).not.toContain("跃迁后必须冷却十二小时");
+  });
+
   it("聊天默认暴露聚合查询工具并把结果回传给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

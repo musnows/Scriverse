@@ -255,7 +255,7 @@ const workAiSettingsSchema = z.object({
 }).strict();
 
 const contextSchema = z.object({
-  type: z.enum(["selection", "chapter", "volume", "book", "entities"]),
+  type: z.enum(["none", "selection", "chapter", "volume", "book", "entities"]),
   chapterId: identifier.optional(),
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),

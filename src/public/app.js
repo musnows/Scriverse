@@ -2232,10 +2232,11 @@ function currentAiRequestScope() {
   const selection = $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd);
   const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
   const includeBookSummary = scopeType === "chapter-summary";
-  const scope = scopeType === "book" ? { type: "book" }
+  const scope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter.id, selection }
+    : scopeType === "none" ? { type: "none", ...(taskType === "continue" ? { chapterId: state.chapter.id } : {}) }
+    : scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
-    : scopeType === "selection" ? { type: "selection", chapterId: state.chapter.id, selection }
-    : { type: "chapter", chapterId: state.chapter.id, ...(taskType === "polish" ? { selection } : {}) };
+    : { type: "chapter", chapterId: state.chapter.id };
   Object.assign(scope, buildAiReferenceScope(state.aiReferences));
   if (includeBookSummary) scope.includeBookSummary = true;
   return { taskType, scope, selection };
@@ -2304,7 +2305,7 @@ function scheduleAiContextUsage() {
 async function refreshAiContextUsage() {
   const requestScope = currentAiRequestScope();
   const modelId = $("#ai-model").value;
-  if (!requestScope || !modelId || ((requestScope.scope.type === "selection" || requestScope.taskType === "polish") && !requestScope.selection)) {
+  if (!requestScope || !modelId || (requestScope.taskType === "polish" && !requestScope.selection)) {
     setAiContextMeter(null);
     return;
   }
@@ -2955,7 +2956,7 @@ async function sendAi() {
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
-  if ((scope.type === "selection" || taskType === "polish") && !selection) return toast("请先在正文中选中一段文本", "error");
+  if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   if (taskType === "chat") {
     $("#ai-send").disabled = true;

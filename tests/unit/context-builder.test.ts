@@ -81,6 +81,27 @@ describe("AI 上下文组装", () => {
     expect(() => builder.build(String(first.work.id), { type: "chapter", chapterId: String(second.chapter.id) })).toThrow("章节不属于当前作品");
   });
 
+  it("无上下文范围不隐式引用作品内容，但保留主动添加的引用", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work, chapter } = await seedChapter(runtime, "不应被自动引用的章节正文。");
+    const setting = runtime.store.createSetting(String(work.id), {
+      title: "主动引用设定",
+      category: "世界规则",
+      content: "只有主动引用时才应出现。",
+      locked: true,
+      status: "confirmed"
+    });
+
+    expect(new ContextBuilder(runtime.store).build(String(work.id), { type: "none" })).toBe("");
+    const explicitContext = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "none",
+      settingIds: [String(setting.id)]
+    });
+    expect(explicitContext).toContain("主动引用设定");
+    expect(explicitContext).not.toContain(String(chapter.content));
+  });
+
   it("可引用各章节当前版本的概要而不带入正文", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);
