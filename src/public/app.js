@@ -519,6 +519,44 @@ function attachMessageIdentity(message, messageId) {
   renderMessageCardActions(message);
 }
 
+const AI_TOOL_DISPLAY_NAMES = {
+  story_index: "作品目录与章节概要",
+  read_chapters: "读取章节",
+  query_story_knowledge: "查询作品知识"
+};
+
+function openAiToolCallDetail(toolCall) {
+  const name = String(toolCall?.name ?? "unknown");
+  const status = toolCall?.status === "failed" ? "调用失败" : "调用成功";
+  $("#ai-tool-call-status").textContent = status;
+  $("#ai-tool-call-title").textContent = `${AI_TOOL_DISPLAY_NAMES[name] ?? name} · ${name}`;
+  $("#ai-tool-call-arguments").textContent = JSON.stringify(toolCall?.arguments ?? {}, null, 2);
+  $("#ai-tool-call-result").textContent = JSON.stringify(toolCall?.result ?? {}, null, 2);
+  $("#ai-tool-call-dialog").showModal();
+}
+
+function renderAiToolCalls(message, toolCalls) {
+  message.querySelector(".ai-tool-call-list")?.remove();
+  if (!Array.isArray(toolCalls) || !toolCalls.length) return;
+  const host = document.createElement("div");
+  host.className = "ai-tool-call-list";
+  host.setAttribute("aria-label", "AI 工具调用记录");
+  for (const toolCall of toolCalls) {
+    const name = String(toolCall?.name ?? "unknown");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `ai-tool-call-summary${toolCall?.status === "failed" ? " is-failed" : ""}`;
+    button.setAttribute("aria-haspopup", "dialog");
+    button.textContent = toolCall?.status === "failed" ? `调用 ${name} 工具失败` : `调用了 ${name} 工具`;
+    button.title = AI_TOOL_DISPLAY_NAMES[name] ?? name;
+    button.addEventListener("click", () => openAiToolCallDetail(toolCall));
+    host.append(button);
+  }
+  const body = message.querySelector(".message-body");
+  if (body) body.after(host);
+  else message.append(host);
+}
+
 function setAiHistoryVisible(visible) {
   $("#ai-history-panel").classList.toggle("hidden", !visible);
   $("#ai-history-toggle").setAttribute("aria-expanded", String(visible));
@@ -2938,6 +2976,7 @@ async function streamChat(body) {
   const meta = message.querySelector(".message-meta");
   let streamedText = "";
   let generatedMetadata = {};
+  let toolCalls = [];
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -2966,10 +3005,16 @@ async function streamChat(body) {
         content.innerHTML = renderMarkdown(streamedText);
         meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
         $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+      } else if (eventName === "tool_call") {
+        toolCalls.push(payload);
+        renderAiToolCalls(message, toolCalls);
+        meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
       } else if (eventName === "complete") {
         message.classList.remove("is-streaming");
         message.querySelector(".message-heading > span").textContent = "助手";
-        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens };
+        toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
+        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls };
+        renderAiToolCalls(message, toolCalls);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
         attachAssistantCopyAction(message, streamedText);
       } else if (eventName === "error") {
@@ -3010,6 +3055,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     }
     message.append(references);
   }
+  if (role === "assistant") renderAiToolCalls(message, metadata?.toolCalls);
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
     const modelDisplayName = metadata?.modelDisplayName || selectedModel?.displayName || "模型";
@@ -3217,6 +3263,7 @@ $("#insight-button").addEventListener("click", () => showChapterInsight().catch(
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
+$("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#character-editor-close").addEventListener("click", () => $("#character-editor-dialog").close());
 $("#character-editor-cancel").addEventListener("click", () => $("#character-editor-dialog").close());
 $("#character-history-button").addEventListener("click", () => {

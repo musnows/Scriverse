@@ -24,7 +24,7 @@ describe("全书概要上下文引用", () => {
 
     expect(page.text).toContain('<option value="chapter-summary">当前章节 + 全书概要</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260716-card-action-primary');
+    expect(page.text).toContain('/app.js?v=20260716-tool-call-details');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="ai-agent-tools"');

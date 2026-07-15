@@ -910,7 +910,7 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {

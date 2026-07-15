@@ -400,6 +400,43 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(calls.body.data[0]).toMatchObject({ taskType: "chat", status: "completed", outputChars: 4 });
   });
 
+  it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "stream-tool", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取目录。" } }], usage: { completion_tokens: 8 } }), { status: 200 });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "读取目录后回答。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain("event: tool_call");
+    expect(streamed.text).toContain('"name":"story_index"');
+    expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
+    expect(streamed.text).toContain('"result":{"ok":true');
+    expect(streamed.text).toContain('event: complete');
+    expect(streamed.text).toContain('"toolCalls":[{"id":"stream-tool"');
+
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const toolCalls = [{ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
+    await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+      role: "assistant",
+      content: "已读取目录。",
+      metadata: { modelDisplayName: "小说模型", outputTokens: 8, toolCalls }
+    }).expect(201);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.messages[0].metadata.toolCalls).toEqual(toolCalls);
+  });
+
   it("完整读取响应正文前不释放供应商并发槽", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

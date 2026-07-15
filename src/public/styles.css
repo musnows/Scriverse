@@ -913,6 +913,17 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body a { color: var(--accent-dark); text-decoration: underline; text-underline-offset: 2px; }.user-message .message-body a { color: inherit; }
 .message-body hr { margin: 12px 0; border: 0; border-top: 1px solid currentColor; opacity: .22; }
 .message-meta { margin-top: 8px; color: var(--muted); font-size: 9px; }
+.ai-tool-call-list { display: grid; gap: 5px; margin-top: 10px; }
+.ai-tool-call-summary { display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--muted); font: 9px/1.4 var(--font-latin), monospace; text-align: left; }
+.ai-tool-call-summary::after { content: "查看详情"; flex: 0 0 auto; margin-left: 8px; color: var(--accent-dark); }
+.ai-tool-call-summary:hover, .ai-tool-call-summary:focus-visible { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--surface); color: var(--ink); }
+.ai-tool-call-summary.is-failed { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent-dark); }
+.ai-tool-call-dialog { width: min(720px, 92vw); }
+.ai-tool-call-detail { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 18px 24px 24px; }
+.ai-tool-call-detail section { min-width: 0; }
+.ai-tool-call-detail h3 { margin: 0 0 7px; color: var(--muted); font-size: 10px; font-weight: 600; }
+.ai-tool-call-detail pre { min-height: 180px; max-height: 52vh; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper-deep); color: var(--ink); font: 10px/1.55 var(--font-latin), monospace; white-space: pre-wrap; word-break: break-word; }
+@media (max-width: 680px) { .ai-tool-call-detail { grid-template-columns: 1fr; }.ai-tool-call-detail pre { min-height: 120px; max-height: 30vh; } }
 .guard-card { margin-top: 10px; padding: 9px 10px; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 4px; background: var(--surface-soft); }
 .guard-card.warning { border-left-color: #c07b31; }.guard-card.failed { border-left-color: var(--accent); }
 .guard-card strong { display: block; margin-bottom: 5px; font-size: 10px; }.guard-card p { margin: 4px 0; color: var(--muted); font-size: 9px; line-height: 1.45; }.guard-card p b { color: var(--ink); }

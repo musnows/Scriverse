@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260716-card-action-primary">
+    <link rel="stylesheet" href="/styles.css?v=20260716-tool-call-details">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -435,6 +435,17 @@
       <div id="entity-history-list" class="entity-history-list" aria-live="polite"></div>
     </dialog>
 
+    <dialog id="ai-tool-call-dialog" class="dialog ai-tool-call-dialog" aria-labelledby="ai-tool-call-title">
+      <div class="dialog-header">
+        <div><span id="ai-tool-call-status" class="eyebrow">工具调用</span><h2 id="ai-tool-call-title">工具调用详情</h2></div>
+        <button id="ai-tool-call-close" class="dialog-close" aria-label="关闭工具调用详情" type="button">×</button>
+      </div>
+      <div class="ai-tool-call-detail">
+        <section><h3>参数</h3><pre id="ai-tool-call-arguments"></pre></section>
+        <section><h3>返回值</h3><pre id="ai-tool-call-result"></pre></section>
+      </div>
+    </dialog>
+
     <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
       <button id="relationship-map-close" class="relationship-map-floating-close" aria-label="关闭放大关系图" type="button">×</button>
       <div id="relationship-map-expanded-host" class="relationship-map-expanded-host"></div>
@@ -462,6 +473,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-card-action-primary"></script>
+    <script type="module" src="/app.js?v=20260716-tool-call-details"></script>
   </body>
 </html>

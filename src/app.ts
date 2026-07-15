@@ -236,6 +236,14 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
+const aiToolCallResultSchema = z.object({
+  id: z.string().min(1).max(300),
+  name: z.string().min(1).max(200),
+  arguments: z.record(z.string(), z.unknown()).nullable(),
+  status: z.enum(["completed", "failed"]),
+  result: z.record(z.string(), z.unknown())
+}).strict();
+
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
   autoRunEnabled: z.boolean().optional(),
@@ -707,7 +715,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       citations: z.array(z.unknown()).max(100).optional(),
       metadata: z.object({
         modelDisplayName: z.string().max(200).optional(),
-        outputTokens: z.number().int().min(0).max(10_000_000).optional()
+        outputTokens: z.number().int().min(0).max(10_000_000).optional(),
+        toolCalls: z.array(aiToolCallResultSchema).max(12).optional()
       }).optional()
     }), request.body);
     data(response, store.addAiConversationMessage(request.params.conversationId, input), 201);
