@@ -562,8 +562,10 @@ function renderAiToolCalls(message, toolCalls) {
 }
 
 function setAiHistoryVisible(visible) {
-  $("#ai-history-panel").classList.toggle("hidden", !visible);
-  $("#ai-history-toggle").setAttribute("aria-expanded", String(visible));
+  const dialog = $("#ai-history-dialog");
+  if (visible && !dialog.open) dialog.showModal();
+  else if (!visible && dialog.open) dialog.close();
+  $("#ai-history-toggle").setAttribute("aria-expanded", String(dialog.open));
 }
 
 function renderAiConversationHistory() {
@@ -3583,7 +3585,11 @@ $("#ai-context-new-conversation").addEventListener("click", async () => {
 });
 $("#ai-context-dismiss").addEventListener("click", hideAiContextWarning);
 $("#ai-history-toggle").addEventListener("click", () => {
-  setAiHistoryVisible($("#ai-history-panel").classList.contains("hidden"));
+  setAiHistoryVisible(!$("#ai-history-dialog").open);
+});
+$("#ai-history-close").addEventListener("click", () => setAiHistoryVisible(false));
+$("#ai-history-dialog").addEventListener("close", () => {
+  $("#ai-history-toggle").setAttribute("aria-expanded", "false");
 });
 $("#ai-prompt").addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !$("#ai-mention-menu").classList.contains("hidden")) {

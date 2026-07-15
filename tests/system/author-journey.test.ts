@@ -172,7 +172,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260716-context-none');
+    expect(page.text).toContain('/app.js?v=20260716-history-dialog');
     expect(page.text).toContain('/styles.css?v=20260716-tool-detail-stack');
     expect(application.text).toContain('review: "已完成"');
     expect(application.text).not.toContain('review: "待审核"');

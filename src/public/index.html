@@ -208,11 +208,8 @@
         <div class="ai-conversation-toolbar">
           <span id="ai-conversation-title">新对话</span>
           <button id="ai-new-conversation" type="button">新建对话</button>
-          <button id="ai-history-toggle" type="button" aria-expanded="false">历史记录</button>
+          <button id="ai-history-toggle" type="button" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog">历史记录</button>
         </div>
-        <section id="ai-history-panel" class="ai-history-panel hidden" aria-label="AI 对话历史">
-          <div id="ai-history-list" class="ai-history-list"></div>
-        </section>
         <div class="quick-actions" aria-label="快捷指令">
           <button type="button" data-task="chat" data-prompt="总结当前章节，并列出尚未解决的冲突。">总结本章</button>
           <button type="button" data-task="continue" data-prompt="续写当前章节，保持现有叙事风格和人物状态。">续写</button>
@@ -450,6 +447,16 @@
       </div>
     </dialog>
 
+    <dialog id="ai-history-dialog" class="dialog wide-dialog ai-history-dialog" aria-labelledby="ai-history-dialog-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">对话管理</span><h2 id="ai-history-dialog-title">历史记录</h2></div>
+        <button id="ai-history-close" class="dialog-close" aria-label="关闭对话历史" type="button">×</button>
+      </div>
+      <div class="ai-history-dialog-body">
+        <div id="ai-history-list" class="ai-history-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
       <button id="relationship-map-close" class="relationship-map-floating-close" aria-label="关闭放大关系图" type="button">×</button>
       <div id="relationship-map-expanded-host" class="relationship-map-expanded-host"></div>
@@ -477,6 +484,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-context-none"></script>
+    <script type="module" src="/app.js?v=20260716-history-dialog"></script>
   </body>
 </html>
