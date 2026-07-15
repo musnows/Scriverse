@@ -18,4 +18,12 @@ describe("侧边栏 Markdown 渲染", () => {
     expect(html).not.toContain("<script>");
     expect(html).not.toContain('href="javascript:');
   });
+
+  it("将连续引用行合并为一个引用块", () => {
+    const html = renderMarkdown('> "第一句"\n>\n> "第二句"\n> "第三句"');
+
+    expect(html).toBe('<blockquote>&quot;第一句&quot;<br><br>&quot;第二句&quot;<br>&quot;第三句&quot;</blockquote>');
+    expect(html.match(/<blockquote>/gu)).toHaveLength(1);
+    expect(html).not.toContain("<blockquote></blockquote>");
+  });
 });

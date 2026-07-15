@@ -44,6 +44,7 @@ export function renderMarkdown(value) {
   const output = [];
   let paragraph = [];
   let list = null;
+  let quote = null;
   let codeFence = null;
 
   const flushParagraph = () => {
@@ -56,9 +57,21 @@ export function renderMarkdown(value) {
     output.push(`<${list.tag}>${list.items.map((item) => `<li class="markdown-depth-${item.depth}">${renderInlineMarkdown(item.text)}</li>`).join("")}</${list.tag}>`);
     list = null;
   };
+  const flushQuote = () => {
+    if (!quote) return;
+    const content = quote.join("\n").trim();
+    if (content) {
+      const html = content.split(/\n\s*\n/gu)
+        .map((part) => part.split("\n").map(renderInlineMarkdown).join("<br>"))
+        .join("<br><br>");
+      output.push(`<blockquote>${html}</blockquote>`);
+    }
+    quote = null;
+  };
   const flushBlocks = () => {
     flushParagraph();
     flushList();
+    flushQuote();
   };
 
   for (const line of lines) {
@@ -77,6 +90,15 @@ export function renderMarkdown(value) {
       codeFence = { language: fence[1].replace(/[^\w-]/gu, ""), lines: [] };
       continue;
     }
+    const quoteLine = line.match(/^>\s?(.*)$/u);
+    if (quoteLine) {
+      flushParagraph();
+      flushList();
+      if (!quote) quote = [];
+      quote.push(quoteLine[1]);
+      continue;
+    }
+    flushQuote();
     if (!line.trim()) {
       flushBlocks();
       continue;
@@ -91,12 +113,6 @@ export function renderMarkdown(value) {
     if (/^\s*(---+|___+|\*\*\*+)\s*$/u.test(line)) {
       flushBlocks();
       output.push("<hr>");
-      continue;
-    }
-    const quote = line.match(/^>\s?(.*)$/u);
-    if (quote) {
-      flushBlocks();
-      output.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
       continue;
     }
     const listItem = line.match(/^(\s*)([-+*]|\d+\.)\s+(.+)$/u);
