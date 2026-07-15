@@ -323,6 +323,8 @@ export class ContextBuilder {
       );
     }
 
+    if (scope.includeBookSummary) this.appendBookSummary(contentSections, workId);
+
     if (scope.characterIds?.length) {
       const characters = scope.characterIds.map((characterId) => this.store.getCharacter(characterId));
       for (const character of characters) {
@@ -372,6 +374,24 @@ export class ContextBuilder {
         ? `当前章节：${String(chapter.title)} | 版本 ${String(chapter.versionNo)}\n${String(chapter.content)}`
         : `所在章节：${String(chapter.title)} | 版本 ${String(chapter.versionNo)}`
     );
+  }
+
+  private appendBookSummary(sections: string[], workId: string): void {
+    const insights = this.store.listCurrentChapterInsights(workId);
+    if (insights.length === 0) {
+      sections.push("全书章节概要：当前没有可用的章节概要。请先运行章节理解任务。");
+      return;
+    }
+    let currentVolume = "";
+    const lines = ["全书章节概要（基于各章节当前版本的 AI 概要，不含正文）："];
+    for (const insight of insights) {
+      if (insight.volumeTitle !== currentVolume) {
+        currentVolume = String(insight.volumeTitle);
+        lines.push(`\n# ${currentVolume}`);
+      }
+      lines.push(`- ${String(insight.chapterTitle)}：${String(insight.summary) || "暂无梗概"}`);
+    }
+    sections.push(lines.join("\n"));
   }
 
   private appendPreviousChapterTail(sections: string[], workId: string, chapterId: string): void {

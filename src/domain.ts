@@ -58,4 +58,5 @@ export type ContextScope = {
   selection?: string;
   characterIds?: string[];
   settingIds?: string[];
+  includeBookSummary?: boolean;
 };

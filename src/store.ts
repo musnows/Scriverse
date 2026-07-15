@@ -1008,6 +1008,32 @@ export class Store {
       }));
   }
 
+  listCurrentChapterInsights(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT insight.id, insight.chapter_id, insight.summary, chapter.title AS chapter_title,
+              volume.title AS volume_title, volume.sort_order AS volume_sort_order, chapter.sort_order AS chapter_sort_order
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       JOIN chapter_insights insight ON insight.chapter_id = chapter.id AND insight.chapter_version = chapter.version_no
+       WHERE chapter.work_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM chapter_insights newer
+           WHERE newer.chapter_id = insight.chapter_id
+             AND newer.chapter_version = insight.chapter_version
+             AND (newer.created_at > insight.created_at OR (newer.created_at = insight.created_at AND newer.id > insight.id))
+         )
+       ORDER BY volume.sort_order, chapter.sort_order`,
+      workId
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      chapterId: requiredString(row, "chapter_id"),
+      chapterTitle: requiredString(row, "chapter_title"),
+      volumeTitle: requiredString(row, "volume_title"),
+      summary: requiredString(row, "summary")
+    }));
+  }
+
   saveChapter(
     chapterId: string,
     input: { title?: string; content?: string; excludedFromAnalysis?: boolean; chapterType?: ChapterType },

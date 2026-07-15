@@ -80,4 +80,28 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("当前选中文本（本次修改目标）");
     expect(() => builder.build(String(first.work.id), { type: "chapter", chapterId: String(second.chapter.id) })).toThrow("章节不属于当前作品");
   });
+
+  it("可引用各章节当前版本的概要而不带入正文", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work, chapter } = await seedChapter(runtime, "不应作为全书概要引用的正文。");
+    runtime.store.db.run(
+      `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+       settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', 'review', ?)`,
+      "insight-current",
+      String(chapter.id),
+      Number(chapter.versionNo),
+      "林舟抵达北港，决定追查失踪的信号。",
+      "2026-07-15T00:00:00.000Z"
+    );
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "entities",
+      includeBookSummary: true
+    });
+
+    expect(context).toContain("全书章节概要");
+    expect(context).toContain("林舟抵达北港");
+    expect(context).not.toContain("不应作为全书概要引用的正文");
+  });
 });

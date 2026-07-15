@@ -249,7 +249,8 @@ const contextSchema = z.object({
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),
   characterIds: optionalStrings,
-  settingIds: optionalStrings
+  settingIds: optionalStrings,
+  includeBookSummary: z.boolean().optional()
 });
 
 export type RuntimeOptions = {
