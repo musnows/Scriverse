@@ -876,7 +876,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .field-label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; margin: 14px 0 10px; }
 .field-label select { padding: 8px; font-size: 12px; }
 .book-summary-context-percent-field { width: min(100%, 280px); }
-.book-summary-context-percent-field input { min-height: 40px; padding: 8px 12px; font-size: 15px; font-family: var(--font-latin), monospace; }
+.context-compact-threshold-field { width: min(100%, 280px); }
+.book-summary-context-percent-field input, .context-compact-threshold-field input { min-height: 40px; padding: 8px 12px; font-size: 15px; font-family: var(--font-latin), monospace; }
 .field-label textarea {
   width: 100%;
   min-height: 140px;
@@ -930,6 +931,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-actions { display: flex; gap: 7px; margin-top: 10px; }
 .message-actions button { border: 1px solid rgba(139,61,44,.25); background: var(--surface); color: var(--accent-dark); font-size: 10px; padding: 5px 8px; border-radius: 3px; }
 .prompt-box { border-top: 1px solid var(--line); padding-top: 12px; }
+.ai-context-warning { display: grid; gap: 9px; margin-bottom: 9px; padding: 10px; border: 1px solid color-mix(in srgb, #bf6a35 58%, var(--line)); border-radius: 5px; background: color-mix(in srgb, #bf6a35 10%, var(--surface)); }
+.ai-context-warning.hidden { display: none; }
+.ai-context-warning strong { display: block; color: var(--ink); font-size: 11px; }
+.ai-context-warning p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+.ai-context-warning > div:last-child { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-context-warning button { padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 9px; }
+.ai-context-warning button:first-child { border-color: var(--accent); background: var(--accent); color: #fff; }
+.ai-context-warning button:hover, .ai-context-warning button:focus-visible { border-color: var(--accent); color: var(--accent-dark); }
+.ai-context-warning button:first-child:hover, .ai-context-warning button:first-child:focus-visible { background: var(--accent-dark); color: #fff; }
 .prompt-options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
 .prompt-options select { padding: 6px; color: var(--muted); font-size: 10px; }
 .prompt-model-field { margin: 0 0 7px; }

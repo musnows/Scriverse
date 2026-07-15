@@ -609,6 +609,8 @@ async function openAiConversation(conversationId, hideHistory = true) {
   renderAiReferences();
   renderAiQuickActions();
   renderAiConversationHistory();
+  if (conversation.contextWarningPending) showAiContextWarning();
+  else hideAiContextWarning();
   if (hideHistory) setAiHistoryVisible(false);
 }
 
@@ -619,6 +621,7 @@ async function createNewAiConversation() {
   state.aiPromptSent = false;
   $("#ai-conversation-title").textContent = conversation.title;
   resetAiFeed();
+  hideAiContextWarning();
   renderAiQuickActions();
   setAiHistoryVisible(false);
   await loadAiConversations(false);
@@ -2143,7 +2146,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "query_story_knowledge"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时，概要最多使用所选模型上下文窗口的此比例；超过时会保留较新的章节概要。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时，概要最多使用所选模型上下文窗口的此比例；超过时会保留较新的章节概要。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文压缩</h2><p>达到阈值时先提醒；如果继续发送而未处理，系统会自动压缩较早对话。阈值最高为 90%。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文压缩提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存压缩阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -2163,6 +2166,19 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { bookSummaryContextPercent: Number($("#book-summary-context-percent").value) } });
       toast("全书概要引用配额已保存");
+      scheduleAiContextUsage();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-context-compact-threshold").addEventListener("click", async () => {
+    const button = $("#save-context-compact-threshold");
+    button.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { contextCompactThreshold: Number($("#context-compact-threshold").value) } });
+      toast("对话上下文压缩阈值已保存");
       scheduleAiContextUsage();
     } catch (error) {
       toast(error.message, "error");
@@ -2249,6 +2265,34 @@ function setAiContextMeter(usage) {
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
 }
 
+function showAiContextWarning(usage = null) {
+  const percent = Math.max(0, Math.min(100, Number(usage?.usagePercent) || 0));
+  const threshold = Math.max(50, Math.min(90, Number(usage?.compactThreshold) || 85));
+  $("#ai-context-warning-title").textContent = percent ? `对话上下文已使用 ${percent}%` : "对话上下文接近上限";
+  $("#ai-context-warning-message").textContent = `已达到 ${threshold}% 的压缩提醒阈值。现在可压缩上下文或新开对话；若继续发送，系统会先自动压缩。`;
+  $("#ai-context-warning").classList.remove("hidden");
+}
+
+function hideAiContextWarning() {
+  $("#ai-context-warning").classList.add("hidden");
+}
+
+async function prepareAiConversationContext({ instruction, scope, modelId, citations }) {
+  const conversationId = await ensureAiConversation();
+  const prepared = await api(`/api/ai-conversations/${conversationId}/context/prepare`, {
+    method: "POST",
+    body: { instruction, scope, modelId, citations }
+  });
+  setAiContextMeter(prepared.usage);
+  if (prepared.action === "warn") {
+    showAiContextWarning(prepared.usage);
+    return false;
+  }
+  hideAiContextWarning();
+  if (prepared.action === "compacted") toast("已自动压缩较早对话并继续发送");
+  return true;
+}
+
 function scheduleAiContextUsage() {
   if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
   aiContextUsageTimer = setTimeout(() => {
@@ -2274,7 +2318,8 @@ async function refreshAiContextUsage() {
         taskType: requestScope.taskType,
         scope: requestScope.scope,
         instruction: aiPromptText(),
-        citations
+        citations,
+        conversationId: state.aiConversationId || undefined
       }
     });
     if (requestId === aiContextUsageRequest) setAiContextMeter(usage);
@@ -2912,6 +2957,20 @@ async function sendAi() {
   const { taskType, scope, selection } = requestScope;
   if ((scope.type === "selection" || taskType === "polish") && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  if (taskType === "chat") {
+    $("#ai-send").disabled = true;
+    $("#ai-send").textContent = "检查上下文";
+    try {
+      const mayContinue = await prepareAiConversationContext({ instruction, scope, modelId, citations });
+      if (!mayContinue) return;
+    } catch (error) {
+      toast(`上下文检查失败：${error.message}`, "error");
+      return;
+    } finally {
+      $("#ai-send").disabled = false;
+      $("#ai-send").textContent = "发送";
+    }
+  }
   let persistedUserMessage;
   try {
     persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
@@ -2929,7 +2988,7 @@ async function sendAi() {
     let assistantMetadata = {};
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat({ instruction, scope, modelId, citations });
+      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId, currentMessageId: persistedUserMessage.id });
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
@@ -3482,6 +3541,38 @@ $("#ai-new-conversation").addEventListener("click", async () => {
     button.disabled = false;
   }
 });
+$("#ai-context-compact").addEventListener("click", async () => {
+  const requestScope = currentAiRequestScope();
+  const modelId = $("#ai-model").value;
+  if (!requestScope || !modelId) return toast("请先选择章节和模型", "error");
+  const button = $("#ai-context-compact");
+  button.disabled = true;
+  button.textContent = "压缩中";
+  try {
+    const conversationId = await ensureAiConversation();
+    const result = await api(`/api/ai-conversations/${conversationId}/compact`, {
+      method: "POST",
+      body: { modelId, scope: requestScope.scope }
+    });
+    hideAiContextWarning();
+    toast(result.changed ? `已压缩 ${result.compactedMessageCount} 条较早消息` : "当前没有需要压缩的较早消息");
+    await refreshAiContextUsage();
+  } catch (error) {
+    toast(`上下文压缩失败：${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "压缩上下文";
+  }
+});
+$("#ai-context-new-conversation").addEventListener("click", async () => {
+  try {
+    await createNewAiConversation();
+    hideAiContextWarning();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+$("#ai-context-dismiss").addEventListener("click", hideAiContextWarning);
 $("#ai-history-toggle").addEventListener("click", () => {
   setAiHistoryVisible($("#ai-history-panel").classList.contains("hidden"));
 });

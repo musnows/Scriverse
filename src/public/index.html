@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260716-tool-call-details">
+    <link rel="stylesheet" href="/styles.css?v=20260716-context-compact">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -227,6 +227,10 @@
         </div>
         <div class="prompt-box">
           <div id="ai-citations" class="ai-citations hidden" aria-label="已添加的正文引用"></div>
+          <section id="ai-context-warning" class="ai-context-warning hidden" role="status" aria-live="polite">
+            <div><strong id="ai-context-warning-title">对话上下文接近上限</strong><p id="ai-context-warning-message">建议压缩上下文或新开对话。</p></div>
+            <div><button id="ai-context-compact" type="button">压缩上下文</button><button id="ai-context-new-conversation" type="button">新开对话</button><button id="ai-context-dismiss" type="button">稍后处理</button></div>
+          </section>
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
               <option value="chat">问答</option>
@@ -473,6 +477,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-tool-call-details"></script>
+    <script type="module" src="/app.js?v=20260716-context-compact"></script>
   </body>
 </html>
