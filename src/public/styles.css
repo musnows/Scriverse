@@ -919,18 +919,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-model-field { margin: 0 0 7px; }
 .prompt-model-field select { padding: 6px; color: var(--muted); font-size: 10px; }
 .prompt-composer { position: relative; }
-.ai-references { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 7px; }
-.ai-reference-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 5px 4px 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); color: var(--muted); font-size: 9px; }
-.ai-reference-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ai-reference-chip button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; line-height: 1; }
-.ai-reference-chip button:hover { background: var(--paper-deep); color: var(--accent-dark); }
 .ai-mention-menu { position: absolute; z-index: 20; left: 0; right: 0; bottom: calc(100% + 6px); max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 12px 34px rgba(49,42,32,.18); }
 .ai-mention-option { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
 .ai-mention-option:hover, .ai-mention-option:focus-visible { background: var(--paper-deep); }
 .ai-mention-option small { color: var(--accent); font-size: 8px; }
 .ai-mention-option strong { overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .ai-mention-empty { margin: 0; padding: 10px; color: var(--muted); font-size: 10px; text-align: center; }
-.prompt-box textarea { display: block; width: 100%; min-height: 104px; resize: none; padding: 10px 10px 44px; font-size: 12px; line-height: 1.45; margin: 0; }
+.ai-prompt { display: block; width: 100%; min-height: 104px; margin: 0; padding: 10px 10px 44px; overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; cursor: text; }
+.ai-prompt:empty::before { color: var(--muted); content: attr(data-placeholder); pointer-events: none; }
+.ai-prompt:focus { border-color: #a77768; box-shadow: 0 0 0 3px rgba(167,119,104,.12); outline: 0; }
+.ai-prompt-reference { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 0 2px; padding: 2px 4px 2px 7px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 13%, var(--paper)); color: var(--accent-dark); font-size: 10px; line-height: 1.25; vertical-align: baseline; }
+.ai-prompt-reference > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-prompt-reference button { width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: 14px/1 var(--font-latin), monospace; }
+.ai-prompt-reference button:hover, .ai-prompt-reference button:focus-visible { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .prompt-composer-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; align-items: center; }
 .ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 32px; place-items: center; width: 32px; height: 32px; overflow: visible; border: 0; border-radius: 50%; background: conic-gradient(var(--context-meter-color) calc(var(--context-usage) * 1%), rgba(143,132,116,.2) 0); color: var(--ink); font-family: var(--font-latin); line-height: 1; }
 .ai-context-meter::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--paper); box-shadow: inset 0 0 0 1px rgba(143,132,116,.12); }

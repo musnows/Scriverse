@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260716-ai-summary-scope">
+    <link rel="stylesheet" href="/styles.css?v=20260716-ai-mention-chips">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -244,9 +244,8 @@
           <div class="field-label prompt-model-field">
             <select id="ai-model" aria-label="实际使用模型"></select>
           </div>
-          <div id="ai-references" class="ai-references hidden" aria-label="已引用的角色与设定"></div>
           <div class="prompt-composer">
-            <textarea id="ai-prompt" rows="4" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" placeholder="告诉 AI 你想讨论或修改什么……"></textarea>
+            <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
             <div id="ai-mention-menu" class="ai-mention-menu hidden" role="listbox" aria-label="引用角色或设定"></div>
             <div class="prompt-composer-actions">
               <output id="ai-context-meter" class="ai-context-meter is-empty" aria-live="polite" aria-label="当前上下文用量" tabindex="0"><b>—</b></output>
@@ -463,6 +462,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-ai-summary-scope"></script>
+    <script type="module" src="/app.js?v=20260716-ai-mention-chips"></script>
   </body>
 </html>

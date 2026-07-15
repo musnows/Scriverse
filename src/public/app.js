@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260714-no-edge-focus-ring";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260712-chat-markdown";
-import { applyAiMention, buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260713-at-references";
+import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260713-at-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260713-model-purpose-picker";
@@ -204,6 +204,7 @@ let lastSavedChapterSnapshot = null;
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 let aiMentionMatch = null;
+let aiMentionRange = null;
 let settingsReturnContext = null;
 let characterEditorItem = null;
 let characterEditorVersions = [];
@@ -376,25 +377,42 @@ function renderAiCitations() {
   scheduleAiContextUsage();
 }
 
+function aiReferenceKey(reference) {
+  return `${reference.kind}:${reference.id}`;
+}
+
+function createAiReferenceChip(reference) {
+  const chip = document.createElement("span");
+  chip.className = "ai-prompt-reference";
+  chip.contentEditable = "false";
+  chip.dataset.aiReferenceKey = aiReferenceKey(reference);
+  chip.setAttribute("role", "group");
+  chip.setAttribute("aria-label", `已引用${reference.kind === "character" ? "角色" : "设定"} ${reference.name}`);
+  const label = document.createElement("span");
+  label.textContent = `${reference.kind === "character" ? "角色" : "设定"} · ${reference.name}`;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.setAttribute("aria-label", `移除引用 ${reference.name}`);
+  remove.textContent = "×";
+  remove.addEventListener("click", () => {
+    state.aiReferences = state.aiReferences.filter((item) => aiReferenceKey(item) !== aiReferenceKey(reference));
+    renderAiReferences();
+    $("#ai-prompt").focus();
+  });
+  chip.append(label, remove);
+  return chip;
+}
+
 function renderAiReferences() {
-  const host = $("#ai-references");
-  host.replaceChildren();
-  host.classList.toggle("hidden", state.aiReferences.length === 0);
+  const prompt = $("#ai-prompt");
+  const references = new Map(state.aiReferences.map((reference) => [aiReferenceKey(reference), reference]));
+  prompt.querySelectorAll("[data-ai-reference-key]").forEach((chip) => {
+    if (!references.has(chip.dataset.aiReferenceKey)) chip.remove();
+  });
+  const rendered = new Set([...prompt.querySelectorAll("[data-ai-reference-key]")].map((chip) => chip.dataset.aiReferenceKey));
   for (const reference of state.aiReferences) {
-    const chip = document.createElement("span");
-    chip.className = "ai-reference-chip";
-    const label = document.createElement("span");
-    label.textContent = `${reference.kind === "character" ? "角色" : "设定"} · ${reference.name}`;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.setAttribute("aria-label", `移除引用 ${reference.name}`);
-    remove.textContent = "×";
-    remove.addEventListener("click", () => {
-      state.aiReferences = state.aiReferences.filter((item) => !(item.kind === reference.kind && item.id === reference.id));
-      renderAiReferences();
-    });
-    chip.append(label, remove);
-    host.append(chip);
+    if (rendered.has(aiReferenceKey(reference))) continue;
+    prompt.append(createAiReferenceChip(reference), document.createTextNode(" "));
   }
   scheduleAiContextUsage();
 }
@@ -548,7 +566,7 @@ async function openAiConversation(conversationId, hideHistory = true) {
   for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
   state.aiCitations = [];
   state.aiReferences = [];
-  $("#ai-prompt").value = "";
+  setAiPromptText("");
   renderAiCitations();
   renderAiReferences();
   renderAiQuickActions();
@@ -582,14 +600,48 @@ async function persistAiConversationMessage(role, content, citations = [], metad
   return message;
 }
 
+function promptTextFromNode(node, root = node) {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (!(node instanceof Element)) return "";
+  if (node.matches("[data-ai-reference-key]")) return "";
+  if (node.tagName === "BR") return "\n";
+  const text = [...node.childNodes].map((child) => promptTextFromNode(child, root)).join("");
+  return node !== root && ["DIV", "P"].includes(node.tagName) ? `${text}\n` : text;
+}
+
+function aiPromptText() {
+  return promptTextFromNode($("#ai-prompt")).replace(/\n$/u, "");
+}
+
+function setAiPromptText(value) {
+  const prompt = $("#ai-prompt");
+  prompt.replaceChildren();
+  if (value) prompt.append(document.createTextNode(value));
+  renderAiReferences();
+}
+
+function aiPromptTextBeforeCursor() {
+  const prompt = $("#ai-prompt");
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !prompt.contains(selection.anchorNode)) return aiPromptText();
+  const range = selection.getRangeAt(0).cloneRange();
+  range.selectNodeContents(prompt);
+  range.setEnd(selection.anchorNode, selection.anchorOffset);
+  const fragment = document.createElement("div");
+  fragment.append(range.cloneContents());
+  return promptTextFromNode(fragment).replace(/\n$/u, "");
+}
+
 function hideAiMentionMenu() {
   aiMentionMatch = null;
+  aiMentionRange = null;
   $("#ai-mention-menu").classList.add("hidden");
 }
 
 function syncAiReferencesWithPrompt() {
   const prompt = $("#ai-prompt");
-  const activeReferences = state.aiReferences.filter((reference) => prompt.value.includes(reference.token));
+  const activeKeys = new Set([...prompt.querySelectorAll("[data-ai-reference-key]")].map((chip) => chip.dataset.aiReferenceKey));
+  const activeReferences = state.aiReferences.filter((reference) => activeKeys.has(aiReferenceKey(reference)));
   if (activeReferences.length !== state.aiReferences.length) {
     state.aiReferences = activeReferences;
     renderAiReferences();
@@ -599,9 +651,12 @@ function syncAiReferencesWithPrompt() {
 function updateAiMentionMenu() {
   syncAiReferencesWithPrompt();
   const prompt = $("#ai-prompt");
-  const match = findAiMention(prompt.value, prompt.selectionStart);
+  const match = findAiMention(aiPromptTextBeforeCursor());
   if (!match) return hideAiMentionMenu();
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !prompt.contains(selection.anchorNode)) return hideAiMentionMenu();
   aiMentionMatch = match;
+  aiMentionRange = selection.getRangeAt(0).cloneRange();
   const menu = $("#ai-mention-menu");
   const options = listAiMentionOptions(state.characters, state.settings, match.query);
   menu.innerHTML = options.length
@@ -611,19 +666,32 @@ function updateAiMentionMenu() {
 }
 
 function selectAiMention(button) {
-  if (!aiMentionMatch) return;
+  if (!aiMentionMatch || !aiMentionRange) return;
   const prompt = $("#ai-prompt");
-  const result = applyAiMention(prompt.value, aiMentionMatch, button.dataset.aiReferenceName);
   const reference = {
     kind: button.dataset.aiReferenceKind,
     id: button.dataset.aiReferenceId,
-    name: button.dataset.aiReferenceName,
-    token: result.token
+    name: button.dataset.aiReferenceName
   };
-  if (!state.aiReferences.some((item) => item.kind === reference.kind && item.id === reference.id)) state.aiReferences.push(reference);
-  prompt.value = result.text;
+  const range = aiMentionRange.cloneRange();
+  const textNode = range.startContainer;
+  const localText = textNode.nodeType === Node.TEXT_NODE ? textNode.textContent?.slice(0, range.startOffset) ?? "" : "";
+  const localMention = findAiMention(localText);
+  if (!localMention) return hideAiMentionMenu();
+  range.setStart(textNode, localMention.start);
+  range.deleteContents();
+  const spacer = document.createTextNode(" ");
+  range.insertNode(spacer);
+  if (!state.aiReferences.some((item) => aiReferenceKey(item) === aiReferenceKey(reference))) {
+    state.aiReferences.push(reference);
+    range.insertNode(createAiReferenceChip(reference));
+  }
+  const selection = window.getSelection();
+  selection?.removeAllRanges();
+  range.setStartAfter(spacer);
+  range.collapse(true);
+  selection?.addRange(range);
   prompt.focus();
-  prompt.setSelectionRange(result.cursor, result.cursor);
   renderAiReferences();
   hideAiMentionMenu();
 }
@@ -2167,7 +2235,7 @@ async function refreshAiContextUsage() {
         modelId,
         taskType: requestScope.taskType,
         scope: requestScope.scope,
-        instruction: $("#ai-prompt").value,
+        instruction: aiPromptText(),
         citations
       }
     });
@@ -2799,7 +2867,7 @@ async function sendAi() {
   if (!state.work || !state.chapter) return toast("请先选择章节", "error");
   const modelId = $("#ai-model").value;
   if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
-  const instruction = $("#ai-prompt").value.trim();
+  const instruction = aiPromptText().trim();
   if (!instruction) return toast("请输入指令", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
@@ -3385,7 +3453,7 @@ $(".quick-actions").addEventListener("click", (event) => {
   const button = event.target.closest("[data-task]");
   if (!button) return;
   $("#ai-task").value = button.dataset.task;
-  $("#ai-prompt").value = button.dataset.prompt;
+  setAiPromptText(button.dataset.prompt);
   $("#ai-prompt").focus();
 });
 $("#top-search-button").addEventListener("click", () => {
