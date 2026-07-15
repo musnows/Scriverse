@@ -163,6 +163,34 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(estimateAiTokens(sentContext)).toBeLessThan(450);
   });
 
+  it("聊天默认暴露聚合查询工具并把结果回传给模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "query_story_knowledge"]);
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      expect(toolMessage?.content).toContain("第一章");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已根据章节目录回答。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "先查看章节目录再回答。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已根据章节目录回答。");
+    expect(completionCount).toBe(2);
+  });
+
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -222,6 +250,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("侧栏问答通过 SSE 逐段输出并在完整读取后记录建议", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });

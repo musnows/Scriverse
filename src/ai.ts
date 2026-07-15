@@ -75,6 +75,37 @@ type GenerateResult = {
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
+const AGENT_TOOL_IDS = ["story_index", "read_chapters", "query_story_knowledge"] as const;
+type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
+type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
+
+const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
+  story_index: {
+    type: "function",
+    function: {
+      name: "story_index",
+      description: "按分页列出作品卷章目录和当前章节概要。先用它定位章节 ID；不会返回正文。",
+      parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false }
+    }
+  },
+  read_chapters: {
+    type: "function",
+    function: {
+      name: "read_chapters",
+      description: "读取指定章节的当前正文与章节概要。仅在需要原文证据或精确措辞时使用；每次最多 3 章。",
+      parameters: { type: "object", properties: { chapterIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["chapterIds"], additionalProperties: false }
+    }
+  },
+  query_story_knowledge: {
+    type: "function",
+    function: {
+      name: "query_story_knowledge",
+      description: "按关键词查询作品知识：设定、人物、种族、组织、时间线、关系、大纲和伏笔。结果为简要匹配项；需要正文时再调用 read_chapters。",
+      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
+    }
+  }
+};
 
 export function estimateAiTokens(value: string): number {
   let wideCharacters = 0;
@@ -833,7 +864,10 @@ export class AiManager {
     input: Omit<GenerateInput, "taskType">,
     onDelta: (delta: string) => void
   ): Promise<Record<string, unknown>> {
-    const generated = await this.generateStream({ ...input, taskType: "chat" }, onDelta);
+    const generated = this.enabledAgentTools(input.workId, "chat").length
+      ? await this.generate({ ...input, taskType: "chat" })
+      : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
+    if (this.enabledAgentTools(input.workId, "chat").length) onDelta(generated.content);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -1114,6 +1148,69 @@ export class AiManager {
     return this.contextBuilder.build(workId, scope, 60_000, bookSummaryMaximumTokens);
   }
 
+  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
+    if (taskType !== "chat") return [];
+    const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
+      .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
+    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  }
+
+  private executeAgentTool(workId: string, name: string, rawArguments: string): Record<string, unknown> {
+    let args: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(rawArguments) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("参数必须为对象");
+      args = parsed as Record<string, unknown>;
+    } catch {
+      return { error: "TOOL_ARGUMENTS_INVALID", message: "工具参数不是有效 JSON 对象" };
+    }
+    if (name === "story_index") {
+      const offset = Math.max(0, Math.min(10_000, Math.floor(Number(args.offset) || 0)));
+      const limit = Math.max(1, Math.min(50, Math.floor(Number(args.limit) || 20)));
+      const tree = this.store.getWorkTree(workId);
+      const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
+      const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+        id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
+      })));
+      return { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null };
+    }
+    if (name === "read_chapters") {
+      const chapterIds = Array.isArray(args.chapterIds) ? args.chapterIds.filter((item): item is string => typeof item === "string").slice(0, 3) : [];
+      if (!chapterIds.length) return { error: "CHAPTER_IDS_REQUIRED", message: "chapterIds 至少需要一个章节 ID" };
+      const include = args.include === "summary" || args.include === "content" ? args.include : "both";
+      const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
+      let remainingChars = 36_000;
+      const chapters = chapterIds.map((chapterId) => {
+        try {
+          const chapter = this.store.getChapter(chapterId);
+          if (chapter.workId !== workId) return { chapterId, error: "CHAPTER_WORK_MISMATCH" };
+          const content = String(chapter.content);
+          const excerpt = content.slice(0, Math.max(0, remainingChars));
+          remainingChars -= excerpt.length;
+          return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content: excerpt, contentTruncated: excerpt.length < content.length } : {}) };
+        } catch {
+          return { chapterId, error: "CHAPTER_NOT_FOUND" };
+        }
+      });
+      return { chapters, contentLimitChars: 36_000 };
+    }
+    if (name === "query_story_knowledge") {
+      const query = typeof args.query === "string" ? args.query.trim().slice(0, 200) : "";
+      if (!query) return { error: "QUERY_REQUIRED", message: "query 不能为空" };
+      const categories = new Set(Array.isArray(args.categories) ? args.categories.filter((item): item is string => typeof item === "string") : []);
+      const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
+      const matches = this.store.search(workId, query).filter((item) => !categories.size || categories.has(String(item.type))).slice(0, 20);
+      const extra = [
+        ...this.store.listTimelineEvents(workId).map((item) => ({ type: "timeline", id: item.id, title: item.name, snippet: `${item.description} ${item.timeLabel}` })),
+        ...this.store.listRelationships(workId).map((item) => ({ type: "relationship", id: item.id, title: `${item.fromCharacterId} / ${item.toCharacterId}`, snippet: `${item.category} ${item.subtype} ${(item.keywords as string[]).join(" ")}` })),
+        ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
+        ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
+      ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
+      return { query, matches: [...matches, ...extra].slice(0, 30) };
+    }
+    return { error: "TOOL_NOT_AVAILABLE", message: "该工具未启用或不存在" };
+  }
+
   private constrainParametersForContext(model: ModelRow, messages: AiMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
@@ -1131,6 +1228,8 @@ export class AiManager {
     const context = this.buildContext(input.workId, input.scope, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
+    const tools = this.enabledAgentTools(input.workId, input.taskType);
+    const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(
       model,
       messages,
@@ -1171,7 +1270,7 @@ export class AiManager {
               const response = await this.outboundFetch(endpoint, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-                body: JSON.stringify({ model: stringValue(model, "model_id"), messages, ...parameters }),
+                body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: "auto" } : {}) }),
                 signal: controller.signal
               });
               return { ok: response.ok, status: response.status, body: await response.text() };
@@ -1197,14 +1296,44 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (responseBody === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 请求重试后仍未返回响应");
-      const payload = JSON.parse(responseBody) as {
+      let payload = JSON.parse(responseBody) as {
         usage?: { completion_tokens?: number; output_tokens?: number };
         choices?: Array<{
           finish_reason?: string | null;
-          message?: { content?: string | null; reasoning_content?: string | null };
+          message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
         }>;
       };
-      const choice = payload.choices?.[0];
+      let choice = payload.choices?.[0];
+      for (let round = 0; choice?.message?.tool_calls?.length; round += 1) {
+        if (round >= 3) throw new Error("AI 工具调用超过 3 轮上限");
+        const toolCalls = choice.message.tool_calls;
+        completionMessages.push({ role: "assistant", content: choice.message.content ?? null, tool_calls: toolCalls });
+        for (const toolCall of toolCalls) {
+          const result = this.executeAgentTool(input.workId, toolCall.function.name, toolCall.function.arguments);
+          completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(result) });
+        }
+        const response = await this.scheduleProviderRequest(provider, input.signal, async () => {
+          const controller = new AbortController();
+          const forwardAbort = (): void => controller.abort(input.signal?.reason);
+          if (input.signal?.aborted) forwardAbort();
+          else input.signal?.addEventListener("abort", forwardAbort, { once: true });
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            return await this.outboundFetch(endpoint, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: "auto" } : {}) }),
+              signal: controller.signal
+            });
+          } finally {
+            clearTimeout(timeout);
+            input.signal?.removeEventListener("abort", forwardAbort);
+          }
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+        payload = JSON.parse(await response.text()) as typeof payload;
+        choice = payload.choices?.[0];
+      }
       const content = choice?.message?.content;
       if (!content?.trim()) {
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;

@@ -95,7 +95,8 @@ describe("分析任务自动运行", () => {
       autoRunEnabled: false,
       autoRunConcurrency: 2,
       autoRunBatchLimit: 20,
-      bookSummaryContextPercent: 50
+      bookSummaryContextPercent: 50,
+      agentTools: ["story_index", "read_chapters", "query_story_knowledge"]
     });
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({

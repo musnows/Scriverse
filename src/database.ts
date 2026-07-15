@@ -340,6 +340,7 @@ export class Database {
         auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge"]',
         updated_at TEXT NOT NULL
       );
 
@@ -1017,6 +1018,15 @@ export class Database {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN book_summary_context_percent INTEGER NOT NULL DEFAULT 50");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (18, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(19)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!columns.has("agent_tools_json")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN agent_tools_json TEXT NOT NULL DEFAULT '[\"story_index\",\"read_chapters\",\"query_story_knowledge\"]'");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?)", new Date().toISOString());
       });
     }
   }

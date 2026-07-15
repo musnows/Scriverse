@@ -550,6 +550,7 @@ export class Store {
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge"]'), ["story_index", "read_chapters", "query_story_knowledge"]),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -560,6 +561,7 @@ export class Store {
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
     bookSummaryContextPercent?: number;
+    agentTools?: string[];
   }): Record<string, unknown> {
     this.getWork(workId);
     const current = this.getWorkAiSettings(workId);
@@ -569,16 +571,18 @@ export class Store {
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
+    const nextAgentTools = input.agentTools ?? current.agentTools as string[];
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, book_summary_context_percent, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, book_summary_context_percent, agent_tools_json, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
          book_summary_context_percent = excluded.book_summary_context_percent,
+         agent_tools_json = excluded.agent_tools_json,
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
@@ -586,6 +590,7 @@ export class Store {
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
+      JSON.stringify(nextAgentTools),
       timestamp
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
@@ -593,7 +598,8 @@ export class Store {
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
-      bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent))
+      bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
+      agentTools: nextAgentTools
     });
     return this.getWorkAiSettings(workId);
   }
