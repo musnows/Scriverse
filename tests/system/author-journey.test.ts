@@ -293,7 +293,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("export function layoutRelationshipNetwork");
     expect(graph.text).toContain('viewport.dataset.testid = "relationship-network"');
     expect(graph.text).toContain('viewport.dataset.interaction = "dragging"');
-    expect(graph.text).toContain("label.textContent = fullLabel");
+    expect(graph.text).toContain("highlightedKeywords.push(fullLabel)");
+    expect(graph.text).toContain("const label = fullLabel.length > 42");
     expect(graph.text).toContain("export function createGalaxyRenderer");
     expect(graph.text).toContain("export function createGalaxyStarfield");
     expect(graph.text).toContain("export function projectGalaxyPoint");
@@ -309,7 +310,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("viewport.dataset.draggedNodeId = node.id");
     expect(graph.text).toContain("viewport.dataset.graphScale = viewScale.toFixed(3)");
     expect(graph.text).toContain("expanded: Object.freeze({ width: 1600, height: 900");
-    expect(graph.text).toContain("repulsionStrength: 11200");
+    expect(graph.text).toContain("repulsionStrength: 22800");
     expect(graph.text).toContain("viewport.dataset.layoutWidth = String(layout.width)");
     expect(graph.text).toContain('edgeDetail.className = "mind-edge-detail hidden"');
     expect(styles.text).toContain(".mind-edge-detail { position: absolute;");
@@ -379,8 +380,7 @@ describe("作者完整创作流程", () => {
       scope: { type: "chapter", chapterId },
       modelId: model.body.data.id
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，"}');
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"飞船离开北港。"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，林舟望向逐渐远去的北港。"}');
     expect(streamed.text).toContain("event: complete");
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
