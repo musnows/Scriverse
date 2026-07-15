@@ -250,6 +250,7 @@ const workAiSettingsSchema = z.object({
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
+  contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "query_story_knowledge"])).max(3).optional()
 }).strict();
 
@@ -721,20 +722,50 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }), request.body);
     data(response, store.addAiConversationMessage(request.params.conversationId, input), 201);
   });
+  app.post("/api/ai-conversations/:conversationId/context/prepare", async (request, response) => {
+    const input = parse(z.object({
+      modelId: identifier.optional(),
+      scope: contextSchema,
+      instruction: z.string().max(100_000).default(""),
+      citations: aiCitationsSchema.optional()
+    }), request.body ?? {});
+    const conversation = store.getAiConversation(request.params.conversationId);
+    data(response, await ai.prepareConversationContext({
+      conversationId: request.params.conversationId,
+      workId: String(conversation.workId),
+      modelId: input.modelId,
+      scope: input.scope,
+      instruction: instructionWithCitations(input.instruction, input.citations ?? [])
+    }));
+  });
+  app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
+    const input = parse(z.object({ modelId: identifier.optional(), scope: contextSchema }), request.body);
+    const conversation = store.getAiConversation(request.params.conversationId);
+    data(response, await ai.compactConversation({
+      conversationId: request.params.conversationId,
+      workId: String(conversation.workId),
+      modelId: input.modelId,
+      scope: input.scope
+    }));
+  });
   app.post("/api/works/:workId/ai-context-usage", (request, response) => {
     const input = parse(z.object({
       modelId: identifier.optional(),
       taskType: z.enum(TASK_TYPES).default("chat"),
       scope: contextSchema,
       instruction: z.string().max(100_000).default(""),
-      citations: aiCitationsSchema.optional()
+      citations: aiCitationsSchema.optional(),
+      conversationId: identifier.optional(),
+      currentMessageId: identifier.optional()
     }), request.body ?? {});
     data(response, ai.getContextUsage({
       workId: request.params.workId,
       modelId: input.modelId,
       taskType: input.taskType,
       scope: input.scope,
-      instruction: instructionWithCitations(input.instruction, input.citations ?? [])
+      instruction: instructionWithCitations(input.instruction, input.citations ?? []),
+      conversationId: input.conversationId,
+      excludeConversationMessageId: input.currentMessageId
     }));
   });
 
@@ -801,7 +832,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       scope: contextSchema,
       modelId: identifier.optional(),
       parameters: jsonObject.optional(),
-      citations: aiCitationsSchema.optional()
+      citations: aiCitationsSchema.optional(),
+      conversationId: identifier.optional(),
+      currentMessageId: identifier.optional()
     }), request.body);
     const citations = input.citations ?? [];
     for (const citation of citations) {
@@ -828,6 +861,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope: input.scope as ContextScope,
         signal: controller.signal,
         onToolCall: (toolCall) => sendEvent("tool_call", toolCall),
+        conversationId: input.conversationId,
+        excludeConversationMessageId: input.currentMessageId,
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));

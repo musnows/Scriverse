@@ -161,7 +161,16 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
-  metadata?: { modelDisplayName?: string; outputTokens?: number };
+  metadata?: { modelDisplayName?: string; outputTokens?: number; toolCalls?: unknown[] };
+};
+
+export type AiConversationContext = {
+  workId: string;
+  summary: string;
+  compactedMessageCount: number;
+  totalMessageCount: number;
+  warningPending: boolean;
+  messages: Array<{ id: string; role: "user" | "assistant"; content: string }>;
 };
 
 function requiredString(row: Row, key: string): string {
@@ -550,6 +559,7 @@ export class Store {
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
+      contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge"]'), ["story_index", "read_chapters", "query_story_knowledge"]),
       updatedAt: String(row?.updated_at ?? "")
     };
@@ -561,6 +571,7 @@ export class Store {
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
     bookSummaryContextPercent?: number;
+    contextCompactThreshold?: number;
     agentTools?: string[];
   }): Record<string, unknown> {
     this.getWork(workId);
@@ -571,17 +582,19 @@ export class Store {
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
+    const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentTools = input.agentTools ?? current.agentTools as string[];
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, book_summary_context_percent, agent_tools_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, book_summary_context_percent, context_compact_threshold, agent_tools_json, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
          book_summary_context_percent = excluded.book_summary_context_percent,
+         context_compact_threshold = excluded.context_compact_threshold,
          agent_tools_json = excluded.agent_tools_json,
          updated_at = excluded.updated_at`,
       workId,
@@ -590,6 +603,7 @@ export class Store {
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
+      Math.min(90, Math.max(50, nextContextCompactThreshold)),
       JSON.stringify(nextAgentTools),
       timestamp
     );
@@ -599,6 +613,7 @@ export class Store {
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
+      contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
       agentTools: nextAgentTools
     });
     return this.getWorkAiSettings(workId);
@@ -3203,6 +3218,50 @@ export class Store {
     return { ...this.mapAiConversation(row), messageCount: messages.length, messages };
   }
 
+  getAiConversationContext(conversationId: string, workId: string, excludeMessageId?: string): AiConversationContext {
+    const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const rows = this.db.all(
+      "SELECT id, role, content FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    );
+    const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    return {
+      workId,
+      summary: requiredString(conversation, "compacted_summary"),
+      compactedMessageCount,
+      totalMessageCount: rows.length,
+      warningPending: Boolean(optionalString(conversation, "context_warning_at")),
+      messages: rows.slice(compactedMessageCount)
+        .filter((message) => requiredString(message, "id") !== excludeMessageId)
+        .map((message) => ({
+          id: requiredString(message, "id"),
+          role: requiredString(message, "role") === "assistant" ? "assistant" : "user",
+          content: requiredString(message, "content")
+        }))
+    };
+  }
+
+  setAiConversationContextWarning(conversationId: string, pending: boolean): void {
+    const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    this.db.run("UPDATE ai_conversations SET context_warning_at = ? WHERE id = ?", pending ? now() : null, conversationId);
+  }
+
+  saveAiConversationCompaction(conversationId: string, summary: string, compactedMessageCount: number): Record<string, unknown> {
+    const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    this.db.run(
+      "UPDATE ai_conversations SET compacted_summary = ?, compacted_message_count = ?, context_warning_at = NULL, updated_at = ? WHERE id = ?",
+      summary,
+      Math.max(0, compactedMessageCount),
+      now(),
+      conversationId
+    );
+    return this.getAiConversation(conversationId);
+  }
+
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -3243,12 +3302,17 @@ export class Store {
     const timestamp = now();
     const sourceTitle = requiredString(conversation, "title");
     const title = requestedTitle?.trim() || `${sourceTitle} · 分支`;
+    const sourceCompactedCount = Math.max(0, numberValue(conversation, "compacted_message_count"));
+    const forkCompactedCount = targetIndex + 1 >= sourceCompactedCount ? Math.min(sourceCompactedCount, targetIndex + 1) : 0;
+    const forkSummary = forkCompactedCount ? requiredString(conversation, "compacted_summary") : "";
     this.db.transaction(() => {
       this.db.run(
-        "INSERT INTO ai_conversations (id, work_id, title, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ai_conversations (id, work_id, title, compacted_summary, compacted_message_count, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
         requiredString(conversation, "work_id"),
         title.slice(0, 200),
+        forkSummary,
+        forkCompactedCount,
         timestamp,
         timestamp,
         currentRequestActor()?.userId ?? null
@@ -3277,6 +3341,9 @@ export class Store {
       title: requiredString(row, "title"),
       messageCount: numberValue(row, "message_count"),
       preview: requiredString(row, "preview"),
+      compactedMessageCount: numberValue(row, "compacted_message_count"),
+      hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
+      contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };

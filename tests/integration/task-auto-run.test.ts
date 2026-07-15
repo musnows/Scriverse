@@ -96,6 +96,7 @@ describe("分析任务自动运行", () => {
       autoRunConcurrency: 2,
       autoRunBatchLimit: 20,
       bookSummaryContextPercent: 50,
+      contextCompactThreshold: 85,
       agentTools: ["story_index", "read_chapters", "query_story_knowledge"]
     });
 
@@ -108,10 +109,15 @@ describe("分析任务自动运行", () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       bookSummaryContextPercent: 91
     }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      contextCompactThreshold: 91
+    }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      bookSummaryContextPercent: 35
+      bookSummaryContextPercent: 35,
+      contextCompactThreshold: 90
     }).expect(200);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
+    expect(updated.body.data.contextCompactThreshold).toBe(90);
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     expect(tasks.body.data.length).toBeGreaterThanOrEqual(5);

@@ -340,6 +340,7 @@ export class Database {
         auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
+        context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
         agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge"]',
         updated_at TEXT NOT NULL
       );
@@ -380,6 +381,9 @@ export class Database {
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         title TEXT NOT NULL DEFAULT '新对话',
+        compacted_summary TEXT NOT NULL DEFAULT '',
+        compacted_message_count INTEGER NOT NULL DEFAULT 0,
+        context_warning_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1027,6 +1031,25 @@ export class Database {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN agent_tools_json TEXT NOT NULL DEFAULT '[\"story_index\",\"read_chapters\",\"query_story_knowledge\"]'");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (19, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(20)) {
+      this.transaction(() => {
+        const settingsColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!settingsColumns.has("context_compact_threshold")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN context_compact_threshold INTEGER NOT NULL DEFAULT 85");
+        }
+        const conversationColumns = new Set(this.all("PRAGMA table_info(ai_conversations)").map((row) => String(row.name)));
+        if (!conversationColumns.has("compacted_summary")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN compacted_summary TEXT NOT NULL DEFAULT ''");
+        }
+        if (!conversationColumns.has("compacted_message_count")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN compacted_message_count INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!conversationColumns.has("context_warning_at")) {
+          this.run("ALTER TABLE ai_conversations ADD COLUMN context_warning_at TEXT");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?)", new Date().toISOString());
       });
     }
   }

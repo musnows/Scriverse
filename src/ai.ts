@@ -63,6 +63,9 @@ type GenerateInput = {
   signal?: AbortSignal;
   maxAttempts?: number;
   onToolCall?: (call: AgentToolCallResult) => void;
+  conversationId?: string;
+  excludeConversationMessageId?: string;
+  disableTools?: boolean;
 };
 
 type GenerateResult = {
@@ -1131,23 +1134,86 @@ export class AiManager {
     return task;
   }
 
-  getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction">): Record<string, unknown> {
+  getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId">): Record<string, unknown> {
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const context = this.buildContext(input.workId, input.scope, model);
     const messages = this.buildMessages(input, context);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
+    const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
+    const conversation = input.conversationId
+      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+      : null;
     return {
       modelId: stringValue(model, "id"),
       contextWindow,
       inputTokens,
       remainingTokens,
-      usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100))
+      usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
+      compactThreshold: threshold,
+      compactRecommended: inputTokens / contextWindow * 100 >= threshold,
+      contextWarningPending: conversation?.warningPending ?? false,
+      compactedMessageCount: conversation?.compactedMessageCount ?? 0
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "instruction" | "extraSystemPrompt">, context: string): AiMessage[] {
+  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction"> & { conversationId: string }): Promise<Record<string, unknown>> {
+    const usage = this.getContextUsage({ ...input, taskType: "chat" });
+    const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+    if (!usage.compactRecommended) {
+      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
+      return { action: "ready", usage: { ...usage, contextWarningPending: false } };
+    }
+    if (!conversation.warningPending) {
+      this.store.setAiConversationContextWarning(input.conversationId, true);
+      return { action: "warn", usage: { ...usage, contextWarningPending: true } };
+    }
+    const compaction = await this.compactConversation(input);
+    const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
+    return { action: "compacted", usage: compactedUsage, compaction };
+  }
+
+  async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
+    const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+    const targetMessageCount = conversation.totalMessageCount <= 2
+      ? conversation.totalMessageCount
+      : Math.max(conversation.compactedMessageCount, conversation.totalMessageCount - 2);
+    const numberToCompact = targetMessageCount - conversation.compactedMessageCount;
+    if (numberToCompact <= 0) {
+      this.store.setAiConversationContextWarning(input.conversationId, false);
+      return {
+        conversationId: input.conversationId,
+        compactedMessageCount: conversation.compactedMessageCount,
+        retainedMessageCount: conversation.totalMessageCount - conversation.compactedMessageCount,
+        changed: false
+      };
+    }
+    const transcript = conversation.messages.slice(0, numberToCompact)
+      .map((message) => `${message.role === "user" ? "作者" : "助手"}：${message.content}`)
+      .join("\n\n");
+    const source = [conversation.summary ? `已有摘要：\n${conversation.summary}` : "", `待压缩对话：\n${transcript}`].filter(Boolean).join("\n\n");
+    const generated = await this.generate({
+      workId: input.workId,
+      taskType: "chat",
+      instruction: `将下面的历史对话压缩为可供后续创作对话继续使用的中文上下文摘要。保留作者目标、明确事实、决定、限制、未解决问题和重要引用；删除寒暄、重复表达和已经被后文取代的信息。只输出摘要正文。\n\n${source}`,
+      scope: { type: "entities" },
+      modelId: input.modelId,
+      parameters: { temperature: 0.2 },
+      extraSystemPrompt: "你正在执行对话上下文压缩。不得调用工具，不得回答原问题，只能生成忠实、紧凑且可继续使用的摘要。",
+      disableTools: true
+    });
+    this.store.saveAiConversationCompaction(input.conversationId, generated.content, targetMessageCount);
+    return {
+      conversationId: input.conversationId,
+      compactedMessageCount: targetMessageCount,
+      retainedMessageCount: conversation.totalMessageCount - targetMessageCount,
+      summaryTokens: estimateAiTokens(generated.content),
+      changed: true
+    };
+  }
+
+  private buildMessages(input: Pick<GenerateInput, "workId" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
     const systemPrompt = [
@@ -1158,9 +1224,22 @@ export class AiManager {
       workPrompt ? `本书追加系统提示词：\n${workPrompt}` : "",
       input.extraSystemPrompt ?? ""
     ].filter(Boolean).join("\n\n");
+    const conversation = input.conversationId
+      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+      : null;
+    if (!conversation) {
+      return [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
+      ];
+    }
+    const conversationMessages: AiMessage[] = conversation?.messages.map((message) => ({ role: message.role, content: message.content })) ?? [];
     return [
       { role: "system", content: systemPrompt },
-      { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
+      ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的压缩摘要：\n${conversation.summary}` }] : []),
+      { role: "user", content: `本次创作上下文如下：\n\n${context}` },
+      ...conversationMessages,
+      { role: "user", content: `作者当前指令：\n${input.instruction}` }
     ];
   }
 
@@ -1285,7 +1364,7 @@ export class AiManager {
     const context = this.buildContext(input.workId, input.scope, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
-    const tools = this.enabledAgentTools(input.workId, input.taskType);
+    const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType);
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(
       model,
