@@ -17,6 +17,7 @@
     "test:integration": "vitest run tests/integration",
     "test:system": "vitest run tests/system",
     "test:e2e:real": "tsx tests/e2e/real-all-features.ts",
+    "test:e2e:ai-tools": "tsx tests/e2e/real-ai-agent-tools.ts",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
