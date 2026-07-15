@@ -173,7 +173,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/app.js?v=20260716-editor-toolbar-layout');
-    expect(page.text).toContain('/styles.css?v=20260716-editor-toolbar-layout');
+    expect(page.text).toContain('/styles.css?v=20260716-sidebar-controls-30');
     expect(application.text).toContain('review: "已完成"');
     expect(application.text).not.toContain('review: "待审核"');
     expect(application.text).toContain('"分析已完成"');
