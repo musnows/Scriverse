@@ -9,7 +9,7 @@ describe("编辑器工具栏布局", () => {
     while (runtimes.length) runtimes.pop()?.close();
   });
 
-  it("让章节路径独占首行，并统一左侧工具按钮高度", async () => {
+  it("让章节路径独占首行，并统一侧栏工具按钮尺寸", async () => {
     const runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "editor-toolbar-layout-system-test-secret",
@@ -24,7 +24,8 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
-    expect(styles.text).toContain('.file-button, .secondary-button { display: grid; place-items: center; min-height: 24px;');
-    expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 24px; width: 24px; height: 24px; }');
+    expect(styles.text).toContain('.file-button, .secondary-button { display: grid; place-items: center; min-height: 30px;');
+    expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
+    expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
   });
 });
