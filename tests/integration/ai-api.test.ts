@@ -276,6 +276,25 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.content).toBe("工具失败信息已正确处理。");
   });
 
+  it("上游返回非限流 4xx 时不进行无效重试", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { message: "invalid request" } }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" }
+    }));
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "触发上游参数错误。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(502);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("工具连续调用达到安全轮次后强制模型生成最终回答", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

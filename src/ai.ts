@@ -1402,6 +1402,7 @@ export class AiManager {
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+          let retryable = true;
           try {
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
               const controller = new AbortController();
@@ -1430,11 +1431,14 @@ export class AiManager {
               }
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
-            if (candidate.status !== 429 && candidate.status < 500) throw lastFailure;
+            if (candidate.status !== 429 && candidate.status < 500) {
+              retryable = false;
+              throw lastFailure;
+            }
           } catch (error) {
             lastFailure = error;
             if (input.signal?.aborted) throw error;
-            if (attempt >= maximumAttempts) throw error;
+            if (!retryable || attempt >= maximumAttempts) throw error;
           }
           if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
         }
