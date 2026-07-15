@@ -426,6 +426,21 @@ export class ContextBuilder {
         `选定设定：\n${settings.map((item) => `- [${String(item.category)}] ${String(item.title)}：${String(item.content)}`).join("\n")}`
       );
     }
+    if (scope.chapterIds?.length) {
+      const chapterIds = [...new Set(scope.chapterIds)]
+        .filter((chapterId) => scope.type !== "chapter" || chapterId !== scope.chapterId);
+      const chapters = chapterIds.map((chapterId) => this.store.getChapter(chapterId));
+      for (const chapter of chapters) {
+        if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "引用章节不属于当前作品");
+      }
+      if (chapters.length) {
+        contentSections.push(
+          `作者主动引用的章节：\n${chapters
+            .map((chapter) => `[${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`)
+            .join("\n\n")}`
+        );
+      }
+    }
 
     if (scope.type !== "none" && scope.chapterId) this.appendChapterKnowledge(constraints, workId, scope.chapterId);
 

@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260714-no-edge-focus-ring";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260716-contiguous-quotes";
-import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260713-at-references";
+import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260713-model-purpose-picker";
@@ -381,15 +381,19 @@ function aiReferenceKey(reference) {
   return `${reference.kind}:${reference.id}`;
 }
 
+function aiReferenceKindLabel(reference) {
+  return ({ character: "角色", setting: "设定", chapter: "章节" })[reference.kind] ?? "引用";
+}
+
 function createAiReferenceChip(reference) {
   const chip = document.createElement("span");
   chip.className = "ai-prompt-reference";
   chip.contentEditable = "false";
   chip.dataset.aiReferenceKey = aiReferenceKey(reference);
   chip.setAttribute("role", "group");
-  chip.setAttribute("aria-label", `已引用${reference.kind === "character" ? "角色" : "设定"} ${reference.name}`);
+  chip.setAttribute("aria-label", `已引用${aiReferenceKindLabel(reference)} ${reference.name}`);
   const label = document.createElement("span");
-  label.textContent = `${reference.kind === "character" ? "角色" : "设定"} · ${reference.name}`;
+  label.textContent = `${aiReferenceKindLabel(reference)} · ${reference.name}`;
   const remove = document.createElement("button");
   remove.type = "button";
   remove.setAttribute("aria-label", `移除引用 ${reference.name}`);
@@ -699,10 +703,14 @@ function updateAiMentionMenu() {
   aiMentionMatch = match;
   aiMentionRange = selection.getRangeAt(0).cloneRange();
   const menu = $("#ai-mention-menu");
-  const options = listAiMentionOptions(state.characters, state.settings, match.query);
+  const chapters = state.work?.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
+    ...chapter,
+    volumeTitle: volume.title
+  }))) ?? [];
+  const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query);
   menu.innerHTML = options.length
     ? options.map((item) => `<button class="ai-mention-option" type="button" role="option" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
-    : '<p class="ai-mention-empty">没有匹配的角色或设定</p>';
+    : '<p class="ai-mention-empty">没有匹配的角色、设定或章节</p>';
   menu.classList.remove("hidden");
 }
 

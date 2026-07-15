@@ -102,6 +102,26 @@ describe("AI 上下文组装", () => {
     expect(explicitContext).not.toContain(String(chapter.content));
   });
 
+  it("将用户主动引用的章节正文加入无上下文请求并拒绝跨作品引用", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const first = await seedChapter(runtime, "第一本作品需要主动引用的正文。");
+    const second = await seedChapter(runtime, "另一本作品的正文。");
+    const builder = new ContextBuilder(runtime.store);
+
+    const context = builder.build(String(first.work.id), {
+      type: "none",
+      chapterIds: [String(first.chapter.id)]
+    });
+    expect(context).toContain("作者主动引用的章节");
+    expect(context).toContain("第一章 抵达");
+    expect(context).toContain("第一本作品需要主动引用的正文");
+    expect(() => builder.build(String(first.work.id), {
+      type: "none",
+      chapterIds: [String(second.chapter.id)]
+    })).toThrow("引用章节不属于当前作品");
+  });
+
   it("可引用各章节当前版本的概要而不带入正文", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);

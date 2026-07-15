@@ -56,6 +56,7 @@ export type ContextScope = {
   chapterId?: string;
   volumeId?: string;
   selection?: string;
+  chapterIds?: string[];
   characterIds?: string[];
   settingIds?: string[];
   includeBookSummary?: boolean;

@@ -259,6 +259,7 @@ const contextSchema = z.object({
   chapterId: identifier.optional(),
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),
+  chapterIds: z.array(identifier).max(20).optional(),
   characterIds: optionalStrings,
   settingIds: optionalStrings,
   includeBookSummary: z.boolean().optional()

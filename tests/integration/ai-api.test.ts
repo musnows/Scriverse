@@ -188,6 +188,30 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(sentPrompt).not.toContain("跃迁后必须冷却十二小时");
   });
 
+  it("无上下文请求将 @ 章节的当前保存正文作为显式上下文发送", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let sentPrompt = "";
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      sentPrompt = body.messages[1]?.content ?? "";
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取主动引用章节。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "概括我 @ 的章节。",
+      scope: { type: "none", chapterIds: [chapterId] },
+      modelId
+    }).expect(201);
+
+    expect(sentPrompt).toContain("作者主动引用的章节");
+    expect(sentPrompt).toContain("第一章");
+    expect(sentPrompt).toContain("林舟启动了飞船。");
+    expect(sentPrompt).not.toContain("跃迁后必须冷却十二小时");
+  });
+
   it("聊天默认暴露聚合查询工具并把结果回传给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
