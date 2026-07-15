@@ -6,6 +6,7 @@ import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { Store } from "./store.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
+import { z } from "zod";
 
 type ProviderInput = {
   name: string;
@@ -61,6 +62,7 @@ type GenerateInput = {
   extraSystemPrompt?: string;
   signal?: AbortSignal;
   maxAttempts?: number;
+  onToolCall?: (call: AgentToolCallResult) => void;
 };
 
 type GenerateResult = {
@@ -70,6 +72,7 @@ type GenerateResult = {
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
   context: string;
+  toolCalls: AgentToolCallResult[];
 };
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
@@ -77,8 +80,31 @@ const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const AGENT_TOOL_IDS = ["story_index", "read_chapters", "query_story_knowledge"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
-type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
+
+export type AgentToolCallResult = {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown> | null;
+  status: "completed" | "failed";
+  result: Record<string, unknown>;
+};
+
+const MAX_AGENT_TOOL_ROUNDS = 6;
+const MAX_AGENT_TOOL_CALLS = 12;
+const storyIndexArguments = z.object({
+  offset: z.number().int().min(0).max(10_000).default(0),
+  limit: z.number().int().min(1).max(50).default(20)
+}).strict();
+const readChaptersArguments = z.object({
+  chapterIds: z.array(z.string().min(1).max(200)).min(1).max(3),
+  include: z.enum(["summary", "content", "both"]).default("both")
+}).strict();
+const queryStoryKnowledgeArguments = z.object({
+  query: z.string().trim().min(1).max(200),
+  categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([])
+}).strict();
 
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
   story_index: {
@@ -857,7 +883,7 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls };
   }
 
   async createStreamingChat(
@@ -1155,49 +1181,80 @@ export class AiManager {
     return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
-  private executeAgentTool(workId: string, name: string, rawArguments: string): Record<string, unknown> {
-    let args: Record<string, unknown>;
-    try {
-      const parsed = JSON.parse(rawArguments) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("参数必须为对象");
-      args = parsed as Record<string, unknown>;
-    } catch {
-      return { error: "TOOL_ARGUMENTS_INVALID", message: "工具参数不是有效 JSON 对象" };
+  private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
+    const name = toolCall.function.name;
+    let rawArguments: unknown = toolCall.function.arguments;
+    if (typeof rawArguments === "string") {
+      try {
+        rawArguments = JSON.parse(rawArguments) as unknown;
+      } catch {
+        return {
+          id: toolCall.id,
+          name,
+          arguments: null,
+          status: "failed",
+          result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID_JSON", message: `Invalid arguments for ${name}: expected a JSON object.` } }
+        };
+      }
     }
+    const suppliedArguments = rawArguments && typeof rawArguments === "object" && !Array.isArray(rawArguments)
+      ? rawArguments as Record<string, unknown>
+      : null;
+    const schema = name === "story_index" ? storyIndexArguments
+      : name === "read_chapters" ? readChaptersArguments
+      : name === "query_story_knowledge" ? queryStoryKnowledgeArguments
+      : null;
+    if (!schema) {
+      return {
+        id: toolCall.id,
+        name,
+        arguments: suppliedArguments,
+        status: "failed",
+        result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE", message: `Tool '${name}' is not available for this request.` } }
+      };
+    }
+    const parsed = schema.safeParse(suppliedArguments);
+    if (!parsed.success) {
+      const details = parsed.error.issues.map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`).join("; ");
+      return {
+        id: toolCall.id,
+        name,
+        arguments: suppliedArguments,
+        status: "failed",
+        result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID", message: `Invalid arguments for ${name}: ${details}` } }
+      };
+    }
+    const args = parsed.data;
     if (name === "story_index") {
-      const offset = Math.max(0, Math.min(10_000, Math.floor(Number(args.offset) || 0)));
-      const limit = Math.max(1, Math.min(50, Math.floor(Number(args.limit) || 20)));
+      const { offset, limit } = args as z.infer<typeof storyIndexArguments>;
       const tree = this.store.getWorkTree(workId);
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
       const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
         id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
       })));
-      return { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null };
+      return { id: toolCall.id, name, arguments: { offset, limit }, status: "completed", result: { ok: true, data: { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null } } };
     }
     if (name === "read_chapters") {
-      const chapterIds = Array.isArray(args.chapterIds) ? args.chapterIds.filter((item): item is string => typeof item === "string").slice(0, 3) : [];
-      if (!chapterIds.length) return { error: "CHAPTER_IDS_REQUIRED", message: "chapterIds 至少需要一个章节 ID" };
-      const include = args.include === "summary" || args.include === "content" ? args.include : "both";
+      const { chapterIds, include } = args as z.infer<typeof readChaptersArguments>;
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
       let remainingChars = 36_000;
       const chapters = chapterIds.map((chapterId) => {
         try {
           const chapter = this.store.getChapter(chapterId);
-          if (chapter.workId !== workId) return { chapterId, error: "CHAPTER_WORK_MISMATCH" };
+          if (chapter.workId !== workId) return { chapterId, error: { code: "CHAPTER_WORK_MISMATCH", message: "The requested chapter belongs to a different work." } };
           const content = String(chapter.content);
           const excerpt = content.slice(0, Math.max(0, remainingChars));
           remainingChars -= excerpt.length;
           return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content: excerpt, contentTruncated: excerpt.length < content.length } : {}) };
         } catch {
-          return { chapterId, error: "CHAPTER_NOT_FOUND" };
+          return { chapterId, error: { code: "CHAPTER_NOT_FOUND", message: "The requested chapter was not found." } };
         }
       });
-      return { chapters, contentLimitChars: 36_000 };
+      return { id: toolCall.id, name, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
     }
     if (name === "query_story_knowledge") {
-      const query = typeof args.query === "string" ? args.query.trim().slice(0, 200) : "";
-      if (!query) return { error: "QUERY_REQUIRED", message: "query 不能为空" };
-      const categories = new Set(Array.isArray(args.categories) ? args.categories.filter((item): item is string => typeof item === "string") : []);
+      const { query, categories: categoryList } = args as z.infer<typeof queryStoryKnowledgeArguments>;
+      const categories = new Set<string>(categoryList);
       const allowed = new Set(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"]);
       const matches = this.store.search(workId, query).filter((item) => !categories.size || categories.has(String(item.type))).slice(0, 20);
       const extra = [
@@ -1206,9 +1263,9 @@ export class AiManager {
         ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
         ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
       ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
-      return { query, matches: [...matches, ...extra].slice(0, 30) };
+      return { id: toolCall.id, name, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
     }
-    return { error: "TOOL_NOT_AVAILABLE", message: "该工具未启用或不存在" };
+    throw new Error(`Unhandled agent tool: ${name}`);
   }
 
   private constrainParametersForContext(model: ModelRow, messages: AiMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
@@ -1256,83 +1313,84 @@ export class AiManager {
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let responseBody: string | null = null;
-      let lastFailure: unknown = null;
-      for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-        try {
-          const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
-            const controller = new AbortController();
-            const forwardAbort = (): void => controller.abort(input.signal?.reason);
-            if (input.signal?.aborted) forwardAbort();
-            else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-            const timeout = setTimeout(() => controller.abort(), timeoutMs);
-            try {
-              const response = await this.outboundFetch(endpoint, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-                body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: "auto" } : {}) }),
-                signal: controller.signal
-              });
-              return { ok: response.ok, status: response.status, body: await response.text() };
-            } finally {
-              clearTimeout(timeout);
-              input.signal?.removeEventListener("abort", forwardAbort);
-            }
-          });
-          if (candidate.ok) {
-            responseBody = candidate.body;
-            break;
-          }
-          lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
-          if (candidate.status !== 429 && candidate.status < 500) {
-            attempt = maximumAttempts;
-            continue;
-          }
-        } catch (error) {
-          lastFailure = error;
-          if (input.signal?.aborted) throw error;
-          if (attempt >= maximumAttempts) throw error;
-        }
-        if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
-      }
-      if (responseBody === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 请求重试后仍未返回响应");
-      let payload = JSON.parse(responseBody) as {
+      type CompletionPayload = {
         usage?: { completion_tokens?: number; output_tokens?: number };
         choices?: Array<{
           finish_reason?: string | null;
           message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
         }>;
       };
-      let choice = payload.choices?.[0];
-      for (let round = 0; choice?.message?.tool_calls?.length; round += 1) {
-        if (round >= 3) throw new Error("AI 工具调用超过 3 轮上限");
-        const toolCalls = choice.message.tool_calls;
-        completionMessages.push({ role: "assistant", content: choice.message.content ?? null, tool_calls: toolCalls });
-        for (const toolCall of toolCalls) {
-          const result = this.executeAgentTool(input.workId, toolCall.function.name, toolCall.function.arguments);
-          completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(result) });
-        }
-        const response = await this.scheduleProviderRequest(provider, input.signal, async () => {
-          const controller = new AbortController();
-          const forwardAbort = (): void => controller.abort(input.signal?.reason);
-          if (input.signal?.aborted) forwardAbort();
-          else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
+        let lastFailure: unknown = null;
+        for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           try {
-            return await this.outboundFetch(endpoint, {
-              method: "POST",
-              headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-              body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: "auto" } : {}) }),
-              signal: controller.signal
+            const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
+              const controller = new AbortController();
+              const forwardAbort = (): void => controller.abort(input.signal?.reason);
+              if (input.signal?.aborted) forwardAbort();
+              else input.signal?.addEventListener("abort", forwardAbort, { once: true });
+              const timeout = setTimeout(() => controller.abort(), timeoutMs);
+              try {
+                const response = await this.outboundFetch(endpoint, {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
+                  body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: toolChoice } : {}) }),
+                  signal: controller.signal
+                });
+                return { ok: response.ok, status: response.status, body: await response.text() };
+              } finally {
+                clearTimeout(timeout);
+                input.signal?.removeEventListener("abort", forwardAbort);
+              }
             });
-          } finally {
-            clearTimeout(timeout);
-            input.signal?.removeEventListener("abort", forwardAbort);
+            if (candidate.ok) {
+              try {
+                return JSON.parse(candidate.body) as CompletionPayload;
+              } catch {
+                throw new Error(`Chat Completions returned invalid JSON: ${candidate.body.slice(0, 500)}`);
+              }
+            }
+            lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
+            if (candidate.status !== 429 && candidate.status < 500) throw lastFailure;
+          } catch (error) {
+            lastFailure = error;
+            if (input.signal?.aborted) throw error;
+            if (attempt >= maximumAttempts) throw error;
           }
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
-        payload = JSON.parse(await response.text()) as typeof payload;
+          if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
+        }
+        throw lastFailure instanceof Error ? lastFailure : new Error("AI request failed after all retries.");
+      };
+      let payload = await requestCompletion("auto");
+      let choice = payload.choices?.[0];
+      const executedToolCalls: AgentToolCallResult[] = [];
+      let toolRound = 0;
+      while (choice?.message?.tool_calls?.length) {
+        const toolCalls = choice.message.tool_calls;
+        if (executedToolCalls.length + toolCalls.length > MAX_AGENT_TOOL_CALLS) {
+          throw new Error(`AI requested more than ${MAX_AGENT_TOOL_CALLS} tool calls in one response cycle.`);
+        }
+        const normalizedToolCalls = toolCalls.map((toolCall) => ({
+          ...toolCall,
+          function: {
+            ...toolCall.function,
+            arguments: typeof toolCall.function.arguments === "string" ? toolCall.function.arguments : JSON.stringify(toolCall.function.arguments ?? {})
+          }
+        }));
+        completionMessages.push({ role: "assistant", content: choice.message.content ?? null, tool_calls: normalizedToolCalls });
+        for (const toolCall of toolCalls) {
+          const execution = this.executeAgentTool(input.workId, toolCall);
+          executedToolCalls.push(execution);
+          input.onToolCall?.(execution);
+          completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(execution.result) });
+        }
+        toolRound += 1;
+        const forceFinalAnswer = toolRound >= MAX_AGENT_TOOL_ROUNDS;
+        payload = await requestCompletion(forceFinalAnswer ? "none" : "auto");
         choice = payload.choices?.[0];
+        if (forceFinalAnswer && choice?.message?.tool_calls?.length) {
+          throw new Error(`AI returned tool calls after tool_choice was set to none at the ${MAX_AGENT_TOOL_ROUNDS}-round safety limit.`);
+        }
       }
       const content = choice?.message?.content;
       if (!content?.trim()) {
@@ -1348,7 +1406,7 @@ export class AiManager {
         now(),
         callId
       );
-      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context };
+      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1434,7 +1492,7 @@ export class AiManager {
         now(),
         callId
       );
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context };
+      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [] };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);

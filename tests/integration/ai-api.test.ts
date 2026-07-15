@@ -188,7 +188,118 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
 
     expect(response.body.data.content).toBe("已根据章节目录回答。");
+    expect(response.body.data.toolCalls).toEqual([
+      expect.objectContaining({ id: "tool-call-1", name: "story_index", status: "completed", arguments: { offset: 0, limit: 1 } })
+    ]);
     expect(completionCount).toBe(2);
+  });
+
+  it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const calls = [
+      { id: "index-default", name: "story_index", arguments: {} },
+      { id: "index-page", name: "story_index", arguments: { offset: 0, limit: 1 } },
+      { id: "chapter-summary", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "summary" } },
+      { id: "chapter-content", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } },
+      { id: "chapter-both", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
+      { id: "knowledge-default", name: "query_story_knowledge", arguments: { query: "跃迁" } },
+      { id: "knowledge-categories", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } }
+    ];
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: calls.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) } }] }), { status: 200 });
+      }
+      const results = new Map(body.messages.filter((message) => message.role === "tool").map((message) => [message.tool_call_id, JSON.parse(message.content ?? "{}") as Record<string, unknown>]));
+      expect(results.size).toBe(calls.length);
+      expect(results.get("index-default")).toMatchObject({ ok: true, data: { offset: 0, totalChapters: 1 } });
+      expect(results.get("index-page")).toMatchObject({ ok: true, data: { chapters: [{ title: "第一章" }] } });
+      expect(results.get("chapter-summary")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "" }] } });
+      expect(results.get("chapter-summary")).not.toHaveProperty("data.chapters.0.content");
+      expect(results.get("chapter-content")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, content: "林舟启动了飞船。" }] } });
+      expect(results.get("chapter-content")).not.toHaveProperty("data.chapters.0.summary");
+      expect(results.get("chapter-both")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "", content: "林舟启动了飞船。" }] } });
+      expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁" } });
+      expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matches: expect.any(Array) } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "工具参数组合均已处理。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "依次验证所有查询工具。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("工具参数组合均已处理。");
+    expect(response.body.data.toolCalls).toHaveLength(calls.length);
+    expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
+  });
+
+  it("把无效工具参数和未知工具作为英文错误结果反馈给模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
+          { id: "bad-json", type: "function", function: { name: "story_index", arguments: "{" } },
+          { id: "bad-index", type: "function", function: { name: "story_index", arguments: { limit: 0, extra: true } } },
+          { id: "bad-read", type: "function", function: { name: "read_chapters", arguments: { chapterIds: [], include: "invalid" } } },
+          { id: "bad-query", type: "function", function: { name: "query_story_knowledge", arguments: { query: "", categories: ["unknown"] } } },
+          { id: "unknown", type: "function", function: { name: "write_chapter", arguments: {} } }
+        ] } }] }), { status: 200 });
+      }
+      const errors = body.messages.filter((message) => message.role === "tool").map((message) => JSON.parse(message.content ?? "{}") as { ok: boolean; error: { code: string; message: string } });
+      expect(errors).toHaveLength(5);
+      expect(errors.every((result) => result.ok === false && /^[A-Z_]+$/u.test(result.error.code))).toBe(true);
+      expect(errors.every((result) => /Invalid|not available/u.test(result.error.message))).toBe(true);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "工具失败信息已正确处理。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证工具错误。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.toolCalls).toHaveLength(5);
+    expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "failed")).toBe(true);
+    expect(response.body.data.content).toBe("工具失败信息已正确处理。");
+  });
+
+  it("工具连续调用达到安全轮次后强制模型生成最终回答", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { tool_choice?: string };
+      if (body.tool_choice === "none") {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "已基于六轮工具结果回答。" } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: `round-${completionCount}`, type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "反复检查后给出结论。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已基于六轮工具结果回答。");
+    expect(response.body.data.toolCalls).toHaveLength(6);
+    expect(completionCount).toBe(7);
   });
 
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {

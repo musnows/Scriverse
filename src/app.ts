@@ -818,6 +818,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         instruction: instructionWithCitations(input.instruction, citations),
         scope: input.scope as ContextScope,
         signal: controller.signal,
+        onToolCall: (toolCall) => sendEvent("tool_call", toolCall),
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
@@ -827,7 +828,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         provider: suggestion.provider,
         model: suggestion.model,
         outputTokens: suggestion.outputTokens,
-        chapterVersion: suggestion.chapterVersion
+        chapterVersion: suggestion.chapterVersion,
+        toolCalls: suggestion.toolCalls
       });
     } catch (error) {
       if (!controller.signal.aborted) {
