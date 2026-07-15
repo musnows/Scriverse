@@ -18,5 +18,6 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("renderAiToolCalls(message, metadata?.toolCalls)");
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");
+    expect(styles).toContain(".ai-tool-call-detail { display: grid; grid-template-columns: minmax(0, 1fr);");
   });
 });
