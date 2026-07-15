@@ -24,10 +24,12 @@ describe("全书概要上下文引用", () => {
 
     expect(page.text).toContain('<option value="chapter-summary">当前章节 + 全书概要</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260716-ai-mention-chips');
+    expect(page.text).toContain('/app.js?v=20260716-summary-percent-input');
     expect(application.text).toContain('id="save-agent-tools"');
+    expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
     expect(application.text).toContain("if (includeBookSummary) scope.includeBookSummary = true;");
     expect(styles.text).not.toContain(".ai-book-summary-reference");
+    expect(styles.text).toContain(".book-summary-context-percent-field input { min-height: 40px;");
   });
 });
