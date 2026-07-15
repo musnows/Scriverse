@@ -918,9 +918,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-options select { padding: 6px; color: var(--muted); font-size: 10px; }
 .prompt-model-field { margin: 0 0 7px; }
 .prompt-model-field select { padding: 6px; color: var(--muted); font-size: 10px; }
-.ai-book-summary-reference { margin: 0 0 7px; border: 1px solid var(--line); background: var(--surface-soft); color: var(--muted); font-size: 10px; }
-.ai-book-summary-reference:hover, .ai-book-summary-reference:focus-visible, .ai-book-summary-reference.is-active { border-color: var(--accent); color: var(--accent-dark); }
-.ai-book-summary-reference.is-active { background: var(--paper-deep); }
 .prompt-composer { position: relative; }
 .ai-references { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 7px; }
 .ai-reference-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 5px 4px 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); color: var(--muted); font-size: 9px; }

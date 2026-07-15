@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260716-sidebar-controls-30">
+    <link rel="stylesheet" href="/styles.css?v=20260716-ai-summary-scope">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -235,6 +235,7 @@
             </select>
             <select id="ai-scope" aria-label="上下文范围">
               <option value="chapter">当前章节</option>
+              <option value="chapter-summary">当前章节 + 全书概要</option>
               <option value="volume">当前卷</option>
               <option value="book">全书</option>
               <option value="selection">选中文本</option>
@@ -243,7 +244,6 @@
           <div class="field-label prompt-model-field">
             <select id="ai-model" aria-label="实际使用模型"></select>
           </div>
-          <button id="ai-book-summary-reference" class="ai-book-summary-reference" type="button" aria-pressed="false">引用全书概要</button>
           <div id="ai-references" class="ai-references hidden" aria-label="已引用的角色与设定"></div>
           <div class="prompt-composer">
             <textarea id="ai-prompt" rows="4" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" placeholder="告诉 AI 你想讨论或修改什么……"></textarea>
@@ -463,6 +463,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-editor-toolbar-layout"></script>
+    <script type="module" src="/app.js?v=20260716-ai-summary-scope"></script>
   </body>
 </html>

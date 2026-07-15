@@ -9,7 +9,7 @@ describe("全书概要上下文引用", () => {
     while (runtimes.length) runtimes.pop()?.close();
   });
 
-  it("提供可切换的全书概要引用按钮并加载对应交互", async () => {
+  it("将全书概要作为当前章节的上下文范围选项", async () => {
     const runtime = createRuntime({
       databasePath: ":memory:",
       masterSecret: "book-summary-reference-system-test-secret",
@@ -22,11 +22,12 @@ describe("全书概要上下文引用", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
-    expect(page.text).toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260716-editor-toolbar-layout');
+    expect(page.text).toContain('<option value="chapter-summary">当前章节 + 全书概要</option>');
+    expect(page.text).not.toContain('id="ai-book-summary-reference"');
+    expect(page.text).toContain('/app.js?v=20260716-ai-summary-scope');
     expect(application.text).toContain('id="save-agent-tools"');
-    expect(application.text).toContain("function renderBookSummaryReference()");
-    expect(application.text).toContain("scope.includeBookSummary = true");
-    expect(styles.text).toContain(".ai-book-summary-reference.is-active");
+    expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
+    expect(application.text).toContain("if (includeBookSummary) scope.includeBookSummary = true;");
+    expect(styles.text).not.toContain(".ai-book-summary-reference");
   });
 });

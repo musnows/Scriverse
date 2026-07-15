@@ -30,7 +30,6 @@ const state = {
   timelineTracks: [],
   aiCitations: [],
   aiReferences: [],
-  includeBookSummary: false,
   aiPromptSent: false,
   aiConversationId: null,
   aiConversations: [],
@@ -400,13 +399,6 @@ function renderAiReferences() {
   scheduleAiContextUsage();
 }
 
-function renderBookSummaryReference() {
-  const button = $("#ai-book-summary-reference");
-  button.setAttribute("aria-pressed", String(state.includeBookSummary));
-  button.classList.toggle("is-active", state.includeBookSummary);
-  button.textContent = state.includeBookSummary ? "已引用全书概要" : "引用全书概要";
-}
-
 function renderAiQuickActions() {
   const quickActions = $(".quick-actions");
   const visible = shouldShowAiQuickActions(state.aiPromptSent);
@@ -556,11 +548,9 @@ async function openAiConversation(conversationId, hideHistory = true) {
   for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
   state.aiCitations = [];
   state.aiReferences = [];
-  state.includeBookSummary = false;
   $("#ai-prompt").value = "";
   renderAiCitations();
   renderAiReferences();
-  renderBookSummaryReference();
   renderAiQuickActions();
   renderAiConversationHistory();
   if (hideHistory) setAiHistoryVisible(false);
@@ -1373,13 +1363,11 @@ async function selectWork(workId) {
   if (state.work?.id !== nextWork.id) {
     state.aiCitations = [];
     state.aiReferences = [];
-    state.includeBookSummary = false;
     state.aiPromptSent = false;
     state.aiConversationId = null;
     state.aiConversations = [];
     renderAiCitations();
     renderAiReferences();
-    renderBookSummaryReference();
     renderAiQuickActions();
     resetAiFeed();
     $("#ai-conversation-title").textContent = "新对话";
@@ -2121,12 +2109,13 @@ function currentAiRequestScope() {
   const scopeType = $("#ai-scope").value;
   const selection = $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd);
   const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
+  const includeBookSummary = scopeType === "chapter-summary";
   const scope = scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
     : scopeType === "selection" ? { type: "selection", chapterId: state.chapter.id, selection }
     : { type: "chapter", chapterId: state.chapter.id, ...(taskType === "polish" ? { selection } : {}) };
   Object.assign(scope, buildAiReferenceScope(state.aiReferences));
-  if (state.includeBookSummary) scope.includeBookSummary = true;
+  if (includeBookSummary) scope.includeBookSummary = true;
   return { taskType, scope, selection };
 }
 
@@ -2856,10 +2845,8 @@ async function sendAi() {
     $("#ai-prompt").value = "";
     state.aiCitations = [];
     state.aiReferences = [];
-    state.includeBookSummary = false;
     renderAiCitations();
     renderAiReferences();
-    renderBookSummaryReference();
     scheduleAiContextUsage();
   } catch (error) {
     const failureMessage = `调用失败：${error.message}`;
@@ -3266,11 +3253,6 @@ $("#ai-prompt").addEventListener("input", () => {
 $("#ai-model").addEventListener("change", scheduleAiContextUsage);
 $("#ai-task").addEventListener("change", scheduleAiContextUsage);
 $("#ai-scope").addEventListener("change", scheduleAiContextUsage);
-$("#ai-book-summary-reference").addEventListener("click", () => {
-  state.includeBookSummary = !state.includeBookSummary;
-  renderBookSummaryReference();
-  scheduleAiContextUsage();
-});
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
