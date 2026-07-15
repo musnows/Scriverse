@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ContextBuilder } from "../../src/ai.js";
+import { ContextBuilder, estimateAiTokens } from "../../src/ai.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 
 describe("AI 上下文组装", () => {
@@ -103,5 +103,29 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("全书章节概要");
     expect(context).toContain("林舟抵达北港");
     expect(context).not.toContain("不应作为全书概要引用的正文");
+  });
+
+  it("按配额裁剪全书概要并保留较新的内容", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work, chapter } = await seedChapter(runtime);
+    runtime.store.db.run(
+      `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+       settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', 'review', ?)`,
+      "insight-long",
+      String(chapter.id),
+      Number(chapter.versionNo),
+      `${"早期概要。".repeat(120)}保留最新概要。`,
+      "2026-07-15T00:00:00.000Z"
+    );
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "entities",
+      includeBookSummary: true
+    }, 60_000, 80);
+
+    expect(context).toContain("已裁剪较早概要");
+    expect(context).toContain("保留最新概要");
+    expect(estimateAiTokens(context)).toBeLessThan(160);
   });
 });

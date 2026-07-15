@@ -240,7 +240,8 @@ const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
   autoRunEnabled: z.boolean().optional(),
   autoRunConcurrency: z.number().int().min(1).max(8).optional(),
-  autoRunBatchLimit: z.number().int().min(1).max(200).optional()
+  autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
+  bookSummaryContextPercent: z.number().int().min(1).max(90).optional()
 }).strict();
 
 const contextSchema = z.object({

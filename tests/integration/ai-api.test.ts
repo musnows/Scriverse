@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
+import { estimateAiTokens } from "../../src/ai.js";
 import { createTestRuntime } from "../helpers.js";
 
 describe("AI 供应商、模型与建议 API", () => {
@@ -126,6 +127,40 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     await request(runtime.app).put(`/api/works/${secondWork.body.data.id}/task-defaults/chat`).send({ modelId }).expect(200);
     expect(secondChapter.body.data.title).toBe("第二章");
+  });
+
+  it("按模型上下文比例裁剪全书概要引用", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ contextWindow: 1024 }).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ bookSummaryContextPercent: 25 }).expect(200);
+    runtime.store.db.run(
+      `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+       settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', 'review', ?)`,
+      "insight-book-summary-budget",
+      chapterId,
+      1,
+      `${"较早概要。".repeat(120)}保留最新概要。`,
+      "2026-07-15T00:00:00.000Z"
+    );
+    let sentContext = "";
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      sentContext = body.messages[1]?.content ?? "";
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已根据概要回答。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "根据全书概要回答。",
+      scope: { type: "entities", includeBookSummary: true },
+      modelId
+    }).expect(201);
+
+    expect(sentContext).toContain("已裁剪较早概要");
+    expect(sentContext).toContain("保留最新概要");
+    expect(estimateAiTokens(sentContext)).toBeLessThan(450);
   });
 
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {

@@ -94,7 +94,8 @@ describe("分析任务自动运行", () => {
     expect(defaults.body.data).toMatchObject({
       autoRunEnabled: false,
       autoRunConcurrency: 2,
-      autoRunBatchLimit: 20
+      autoRunBatchLimit: 20,
+      bookSummaryContextPercent: 50
     });
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
@@ -103,6 +104,13 @@ describe("分析任务自动运行", () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunBatchLimit: 201
     }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      bookSummaryContextPercent: 91
+    }).expect(400);
+    const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      bookSummaryContextPercent: 35
+    }).expect(200);
+    expect(updated.body.data.bookSummaryContextPercent).toBe(35);
 
     const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
     expect(tasks.body.data.length).toBeGreaterThanOrEqual(5);

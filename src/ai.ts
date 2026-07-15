@@ -86,6 +86,21 @@ export function estimateAiTokens(value: string): number {
   return Math.max(1, Math.ceil(wideCharacters * 1.1 + narrowCharacters / 4));
 }
 
+function truncateBookSummary(value: string, maximumTokens: number): string {
+  if (estimateAiTokens(value) <= maximumTokens) return value;
+  const notice = "[全书章节概要超过配额，已裁剪较早概要]";
+  const prefix = estimateAiTokens(notice) < maximumTokens ? `${notice}\n` : "";
+  const remainingTokens = Math.max(1, maximumTokens - estimateAiTokens(prefix));
+  let start = 0;
+  let end = value.length;
+  while (start < end) {
+    const middle = Math.floor((start + end) / 2);
+    if (estimateAiTokens(value.slice(middle)) > remainingTokens) start = middle + 1;
+    else end = middle;
+  }
+  return `${prefix}${value.slice(start)}`;
+}
+
 export function resolveOutputTokens(usage: unknown, content: string): number {
   if (usage && typeof usage === "object") {
     const record = usage as Record<string, unknown>;
@@ -228,7 +243,7 @@ function selectRelationshipConstraints(store: Store, workId: string, characterId
 export class ContextBuilder {
   constructor(private readonly store: Store) {}
 
-  build(workId: string, scope: ContextScope, maximumChars = 60_000): string {
+  build(workId: string, scope: ContextScope, maximumChars = 60_000, bookSummaryMaximumTokens?: number): string {
     const work = this.store.getWork(workId);
     const constraints: string[] = [`作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`];
     const contentSections: string[] = [];
@@ -323,7 +338,7 @@ export class ContextBuilder {
       );
     }
 
-    if (scope.includeBookSummary) this.appendBookSummary(contentSections, workId);
+    if (scope.includeBookSummary) this.appendBookSummary(contentSections, workId, bookSummaryMaximumTokens);
 
     if (scope.characterIds?.length) {
       const characters = scope.characterIds.map((characterId) => this.store.getCharacter(characterId));
@@ -376,7 +391,7 @@ export class ContextBuilder {
     );
   }
 
-  private appendBookSummary(sections: string[], workId: string): void {
+  private appendBookSummary(sections: string[], workId: string, maximumTokens?: number): void {
     const insights = this.store.listCurrentChapterInsights(workId);
     if (insights.length === 0) {
       sections.push("全书章节概要：当前没有可用的章节概要。请先运行章节理解任务。");
@@ -391,7 +406,8 @@ export class ContextBuilder {
       }
       lines.push(`- ${String(insight.chapterTitle)}：${String(insight.summary) || "暂无梗概"}`);
     }
-    sections.push(lines.join("\n"));
+    const summary = lines.join("\n");
+    sections.push(maximumTokens === undefined ? summary : truncateBookSummary(summary, maximumTokens));
   }
 
   private appendPreviousChapterTail(sections: string[], workId: string, chapterId: string): void {
@@ -1056,8 +1072,8 @@ export class AiManager {
   }
 
   getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction">): Record<string, unknown> {
-    const context = this.contextBuilder.build(input.workId, input.scope);
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    const context = this.buildContext(input.workId, input.scope, model);
     const messages = this.buildMessages(input, context);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
@@ -1088,6 +1104,16 @@ export class AiManager {
     ];
   }
 
+  private buildContext(workId: string, scope: ContextScope, model: ModelRow): string {
+    const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+    const settings = this.store.getWorkAiSettings(workId);
+    const percentage = Math.min(90, Math.max(1, Number(settings.bookSummaryContextPercent) || 50));
+    const bookSummaryMaximumTokens = scope.includeBookSummary
+      ? Math.max(1, Math.floor(contextWindow * percentage / 100))
+      : undefined;
+    return this.contextBuilder.build(workId, scope, 60_000, bookSummaryMaximumTokens);
+  }
+
   private constrainParametersForContext(model: ModelRow, messages: AiMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
@@ -1101,8 +1127,8 @@ export class AiManager {
   }
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
-    const context = this.contextBuilder.build(input.workId, input.scope);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    const context = this.buildContext(input.workId, input.scope, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(
@@ -1202,8 +1228,8 @@ export class AiManager {
   }
 
   private async generateStream(input: GenerateInput, onDelta: (delta: string) => void): Promise<GenerateResult> {
-    const context = this.contextBuilder.build(input.workId, input.scope);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
+    const context = this.buildContext(input.workId, input.scope, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(

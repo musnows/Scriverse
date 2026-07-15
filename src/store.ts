@@ -549,6 +549,7 @@ export class Store {
       autoRunEnabled: Number(row?.auto_run_enabled ?? 0) === 1,
       autoRunConcurrency: Math.min(8, Math.max(1, Number(row?.auto_run_concurrency ?? 2) || 2)),
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
+      bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -558,6 +559,7 @@ export class Store {
     autoRunEnabled?: boolean;
     autoRunConcurrency?: number;
     autoRunBatchLimit?: number;
+    bookSummaryContextPercent?: number;
   }): Record<string, unknown> {
     this.getWork(workId);
     const current = this.getWorkAiSettings(workId);
@@ -566,28 +568,32 @@ export class Store {
     const nextEnabled = input.autoRunEnabled ?? Boolean(current.autoRunEnabled);
     const nextConcurrency = input.autoRunConcurrency ?? Number(current.autoRunConcurrency);
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
+    const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     this.db.run(
       `INSERT INTO work_ai_settings (
-         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?)
+         work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit, book_summary_context_percent, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
          auto_run_concurrency = excluded.auto_run_concurrency,
          auto_run_batch_limit = excluded.auto_run_batch_limit,
+         book_summary_context_percent = excluded.book_summary_context_percent,
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
       nextEnabled ? 1 : 0,
       Math.min(8, Math.max(1, nextConcurrency)),
       Math.min(200, Math.max(1, nextBatchLimit)),
+      Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       timestamp
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
       systemPromptChanged: input.systemPrompt !== undefined,
       autoRunEnabled: nextEnabled,
       autoRunConcurrency: Math.min(8, Math.max(1, nextConcurrency)),
-      autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit))
+      autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
+      bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent))
     });
     return this.getWorkAiSettings(workId);
   }
