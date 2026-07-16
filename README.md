@@ -15,6 +15,10 @@
 </p>
 
 <p align="center">
+  在线演示：<a href="https://scriverse.top/">https://scriverse.top/</a>
+</p>
+
+<p align="center">
   <a href="https://scriverse.top/">
     <img src="./assets/readme/scriverse-overview.png" alt="叙界 Scriverse：让宏大的故事，有迹可循" width="100%">
   </a>
@@ -22,10 +26,6 @@
 
 <p align="center">
   叙界是一个面向长篇小说的本地 AI 创作工作台。它把正文、分卷、角色、组织、世界设定、时间线、人物关系、大纲伏笔和 AI 辅助集中在同一个项目中，适合管理大体量、设定密集的小说工程。
-</p>
-
-<p align="center">
-  在线演示：<a href="https://scriverse.top/">https://scriverse.top/</a>
 </p>
 
 ## 主要能力
