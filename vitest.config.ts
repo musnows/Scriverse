@@ -6,6 +6,7 @@ export default defineConfig({
     globals: false,
     pool: "forks",
     fileParallelism: false,
+    include: ["tests/**/*.test.ts"],
     exclude: ["dist/**", "node_modules/**"],
     coverage: {
       reporter: ["text", "json-summary"]
