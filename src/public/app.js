@@ -3018,7 +3018,7 @@ async function sendAi() {
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
-    $("#ai-prompt").value = "";
+    setAiPromptText("");
     state.aiCitations = [];
     state.aiReferences = [];
     renderAiCitations();
