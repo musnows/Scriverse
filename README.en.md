@@ -191,3 +191,12 @@ Expected response:
 ## Project Status
 
 Scriverse is currently an MVP. APIs and data structures may still change. Back up the `.data` directory before upgrading.
+
+## 🌟 Special Thanks
+
+<p align="center">
+  <a href="https://linux.do">
+    <img src="showcase/public/linuxdo.png" alt="LINUX DO" width="420" />
+  </a>
+</p>
+<p align="center"><b>学AI，上L站！祝小破站越来越好～</b></p>

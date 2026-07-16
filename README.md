@@ -191,3 +191,12 @@ curl http://127.0.0.1:13210/api/health
 ## 项目状态
 
 当前为 MVP 版本，接口和数据结构仍可能调整。升级前请备份 `.data` 目录。
+
+## 🌟 Special Thanks
+
+<p align="center">
+  <a href="https://linux.do">
+    <img src="showcase/public/linuxdo.png" alt="LINUX DO" width="420" />
+  </a>
+</p>
+<p align="center"><b>学AI，上L站！祝小破站越来越好～</b></p>
