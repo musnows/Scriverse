@@ -15,17 +15,33 @@ export type AuthSession = {
   csrfToken: string;
 };
 
+export type AuthApiKey = {
+  user: AuthUser;
+  prefix: string;
+};
+
+export type ApiKeyStatus = {
+  configured: boolean;
+  prefix: string | null;
+  createdAt: string | null;
+  rotatedAt: string | null;
+  lastUsedAt: string | null;
+};
+
 declare global {
   namespace Express {
     interface Request {
       authSession?: AuthSession;
       authUser?: AuthUser;
+      authMethod?: "session" | "api-key";
+      authApiKey?: AuthApiKey;
     }
   }
 }
 
 const sessionCookieName = "scriverse_session";
 const sessionLifetimeMs = 30 * 24 * 60 * 60_000;
+const apiKeyPrefix = "scrv_";
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -54,6 +70,14 @@ function parseCookies(header: string | undefined): Map<string, string> {
     }
   }
   return result;
+}
+
+function apiKeyCredential(request: Request): string | null {
+  const direct = request.get("x-scriverse-api-key")?.trim();
+  if (direct) return direct;
+  const authorization = request.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) return null;
+  return authorization.slice(7).trim();
 }
 
 function mapUser(row: Row): AuthUser {
@@ -231,6 +255,62 @@ export class UserAuthService {
     return { id: String(row.session_id), csrfToken: String(row.csrf_token), user };
   }
 
+  authenticateApiKey(request: Request): AuthApiKey | null {
+    const key = apiKeyCredential(request);
+    if (!key || !key.startsWith(apiKeyPrefix) || key.length > 200) return null;
+    const row = this.database.get(
+      `SELECT api_key.key_prefix, user.* FROM user_api_keys api_key
+       JOIN users user ON user.id = api_key.user_id WHERE api_key.key_hash = ?`,
+      sha256(key)
+    );
+    if (!row) return null;
+    const user = mapUser(row);
+    if (user.status !== "active") return null;
+    this.database.run("UPDATE user_api_keys SET last_used_at = ? WHERE user_id = ?", new Date().toISOString(), user.userId);
+    return { user, prefix: String(row.key_prefix) };
+  }
+
+  hasApiKeyCredential(request: Request): boolean {
+    return apiKeyCredential(request) !== null;
+  }
+
+  getApiKeyStatus(userId: string): ApiKeyStatus {
+    this.getUser(userId);
+    const row = this.database.get("SELECT * FROM user_api_keys WHERE user_id = ?", userId);
+    if (!row) {
+      return { configured: false, prefix: null, createdAt: null, rotatedAt: null, lastUsedAt: null };
+    }
+    return {
+      configured: true,
+      prefix: String(row.key_prefix),
+      createdAt: String(row.created_at),
+      rotatedAt: String(row.rotated_at),
+      lastUsedAt: row.last_used_at === null ? null : String(row.last_used_at)
+    };
+  }
+
+  resetApiKey(userId: string): ApiKeyStatus & { apiKey: string } {
+    this.getUser(userId);
+    const apiKey = `${apiKeyPrefix}${randomBytes(32).toString("base64url")}`;
+    const prefix = apiKey.slice(0, 13);
+    const timestamp = new Date().toISOString();
+    this.database.run(
+      `INSERT INTO user_api_keys (user_id, key_hash, key_prefix, created_at, rotated_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(user_id) DO UPDATE SET
+         key_hash = excluded.key_hash,
+         key_prefix = excluded.key_prefix,
+         rotated_at = excluded.rotated_at,
+         last_used_at = NULL`,
+      userId,
+      sha256(apiKey),
+      prefix,
+      timestamp,
+      timestamp
+    );
+    return { ...this.getApiKeyStatus(userId), apiKey };
+  }
+
   revoke(sessionId: string): void {
     this.database.run("UPDATE user_sessions SET revoked_at = ? WHERE id = ?", new Date().toISOString(), sessionId);
   }
@@ -327,8 +407,8 @@ export class UserAuthService {
     return this.listMembers(workId);
   }
 
-  workRole(user: AuthUser, workId: string): "admin" | "owner" | "editor" | null {
-    if (user.role === "admin") return "admin";
+  workRole(user: AuthUser, workId: string, allowAdminAccess = true): "admin" | "owner" | "editor" | null {
+    if (allowAdminAccess && user.role === "admin") return "admin";
     const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return "owner";
@@ -336,9 +416,9 @@ export class UserAuthService {
     return String(membership?.role ?? "") === "editor" ? "editor" : null;
   }
 
-  assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false): void {
-    if (workId === PLATFORM_AI_WORK_ID && user.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
-    const role = this.workRole(user, workId);
+  assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false, allowAdminAccess = true): void {
+    if (workId === PLATFORM_AI_WORK_ID && (!allowAdminAccess || user.role !== "admin")) throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    const role = this.workRole(user, workId, allowAdminAccess);
     if (!role) throw new AppError(403, "WORK_ACCESS_DENIED", "你没有访问这部作品的权限");
     if (ownerOnly && role !== "admin" && role !== "owner") throw new AppError(403, "WORK_OWNER_REQUIRED", "该操作仅限作品创建者或系统管理员");
     if (write && !["admin", "owner", "editor"].includes(role)) throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
@@ -362,17 +442,27 @@ export function clearSessionCookie(response: Response, secure: boolean): void {
 export function createUserSessionMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
   return (request, response, next) => {
     if (disabled) return runWithRequestActor(null, next);
-    const session = auth.authenticate(request);
-    if (session) {
+    const apiKey = auth.authenticateApiKey(request);
+    if (auth.hasApiKeyCredential(request) && !apiKey) {
+      response.status(401).json({ error: { code: "API_KEY_INVALID", message: "API Key 无效或已失效" } });
+      return;
+    }
+    const session = apiKey ? null : auth.authenticate(request);
+    if (apiKey) {
+      request.authApiKey = apiKey;
+      request.authUser = apiKey.user;
+      request.authMethod = "api-key";
+    } else if (session) {
       request.authSession = session;
       request.authUser = session.user;
+      request.authMethod = "session";
     }
     const isPublic = request.path === "/api/health"
       || request.path === "/api/auth/session"
       || (request.path === "/api/auth/register" && request.method === "POST")
       || (request.path === "/api/auth/login" && request.method === "POST")
       || !request.path.startsWith("/api/");
-    if (!session && !isPublic) {
+    if (!session && !apiKey && !isPublic) {
       response.status(401).json({ error: { code: "AUTH_REQUIRED", message: "请先登录" } });
       return;
     }
@@ -383,7 +473,34 @@ export function createUserSessionMiddleware(auth: UserAuthService, disabled = fa
         return;
       }
     }
-    return runWithRequestActor(session?.user ?? null, next);
+    const user = apiKey?.user ?? session?.user ?? null;
+    return runWithRequestActor(user ? { ...user, authentication: apiKey ? "api-key" : "session" } : null, next);
+  };
+}
+
+const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
+  { methods: ["GET"], path: /^\/api\/cli\/session$/u },
+  { methods: ["GET", "POST"], path: /^\/api\/works$/u },
+  { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships|search|export|audit-logs)$/u },
+  { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
+  { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
+  { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
+  { methods: ["GET"], path: /^\/api\/chapters\/[^/]+\/(?:versions|outline)$/u },
+  { methods: ["POST"], path: /^\/api\/chapters\/[^/]+\/(?:restore|move)$/u },
+  { methods: ["PUT"], path: /^\/api\/chapters\/[^/]+\/outline$/u },
+  { methods: ["GET", "PATCH"], path: /^\/api\/(?:settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)\/[^/]+$/u },
+  { methods: ["GET"], path: /^\/api\/characters\/[^/]+\/versions$/u },
+  { methods: ["POST"], path: /^\/api\/characters\/[^/]+\/restore$/u },
+  { methods: ["GET"], path: /^\/api\/entity-versions\/[^/]+\/[^/]+$/u },
+  { methods: ["POST"], path: /^\/api\/entity-versions\/[^/]+\/[^/]+\/restore$/u }
+];
+
+export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
+  return (request, response, next) => {
+    if (disabled || request.authMethod !== "api-key") return next();
+    if (cliApiRules.some((rule) => rule.methods.includes(request.method) && rule.path.test(request.path))) return next();
+    response.status(403).json({ error: { code: "CLI_SCOPE_DENIED", message: "API Key 不能访问用户管理、系统管理或未开放给 CLI 的接口" } });
   };
 }
 
@@ -412,7 +529,7 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
       || /^\/api\/works\/[^/]+\/cover$/u.test(request.path)
       || /^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(request.path)
     );
-    auth.assertWorkAccess(user, workId, write, ownerOnly);
+    auth.assertWorkAccess(user, workId, write, ownerOnly, request.authMethod !== "api-key");
     next();
   };
 }

@@ -498,7 +498,7 @@ export class Store {
 
   listWorks(): Record<string, unknown>[] {
     const actor = currentRequestActor();
-    if (!actor || actor.role === "admin") {
+    if (!actor || (actor.role === "admin" && actor.authentication !== "api-key")) {
       return this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC").map((row) => this.mapWork(row));
     }
     return this.db.all(

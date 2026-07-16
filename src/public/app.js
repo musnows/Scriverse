@@ -3224,7 +3224,17 @@ $("#account-settings-button").addEventListener("click", () => {
   $("#account-button").setAttribute("aria-expanded", "false");
   $("#profile-display-name").value = state.user?.displayName ?? "";
   $("#password-form").reset();
+  $("#api-key-result").classList.add("hidden");
+  $("#api-key-value").value = "";
   $("#account-dialog").showModal();
+  api("/api/auth/api-key").then((status) => {
+    $("#api-key-status").textContent = status.configured
+      ? `已配置 ${status.prefix}…${status.lastUsedAt ? `，最近使用：${formatDateTime(status.lastUsedAt)}` : "，尚未使用"}`
+      : "尚未生成 API Key。";
+    $("#api-key-reset-button").textContent = status.configured ? "重置 API Key" : "生成 API Key";
+  }).catch((error) => {
+    $("#api-key-status").textContent = error.message;
+  });
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
 $("#profile-form").addEventListener("submit", async (event) => {
@@ -3245,6 +3255,31 @@ $("#password-form").addEventListener("submit", async (event) => {
     event.currentTarget.reset();
     toast("密码已更新，其他设备的会话已退出");
   } catch (error) { toast(error.message, "error"); }
+});
+$("#api-key-reset-button").addEventListener("click", async () => {
+  if ($("#api-key-reset-button").textContent.includes("重置") && !window.confirm("重置后，所有使用旧 API Key 的 CLI 会立即退出登录。确定继续吗？")) return;
+  try {
+    const result = await api("/api/auth/api-key/reset", { method: "POST", body: {} });
+    $("#api-key-status").textContent = `已配置 ${result.prefix}…，尚未使用`;
+    $("#api-key-reset-button").textContent = "重置 API Key";
+    $("#api-key-value").value = result.apiKey;
+    $("#api-key-result").classList.remove("hidden");
+    $("#api-key-value").focus();
+    $("#api-key-value").select();
+    toast("新的 API Key 已生成，请立即保存");
+  } catch (error) { toast(error.message, "error"); }
+});
+$("#api-key-copy-button").addEventListener("click", async () => {
+  const value = $("#api-key-value").value;
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+    toast("API Key 已复制");
+  } catch {
+    $("#api-key-value").focus();
+    $("#api-key-value").select();
+    toast("无法自动复制，请手动复制", "error");
+  }
 });
 $("#logout-button").addEventListener("click", async () => {
   try {

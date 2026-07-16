@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260716-auth-forms">
+    <link rel="stylesheet" href="/styles.css?v=20260717-api-key">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -417,6 +417,17 @@
           <header class="account-settings-section-header"><h3 id="password-settings-title">修改密码</h3><p>新密码至少需要 10 个字符。</p></header>
           <form id="password-form" class="account-settings-form password-settings-form"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
         </section>
+        <section class="account-settings-section" aria-labelledby="api-key-settings-title">
+          <header class="account-settings-section-header"><h3 id="api-key-settings-title">CLI API Key</h3><p>用于 CLI 登录。服务端只保存摘要，重置后旧 Key 会立即失效，新 Key 仅显示一次。</p></header>
+          <div class="api-key-settings">
+            <p id="api-key-status">正在读取 API Key 状态…</p>
+            <button id="api-key-reset-button" class="primary-button" type="button">生成 API Key</button>
+            <div id="api-key-result" class="api-key-result hidden">
+              <label>请立即保存<input id="api-key-value" readonly spellcheck="false"></label>
+              <button id="api-key-copy-button" type="button">复制</button>
+            </div>
+          </div>
+        </section>
       </div>
     </dialog>
 
@@ -484,6 +495,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-auth-registration"></script>
+    <script type="module" src="/app.js?v=20260717-api-key"></script>
   </body>
 </html>

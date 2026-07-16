@@ -64,7 +64,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }]);
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
@@ -102,6 +102,9 @@ describe("数据库版本化迁移", () => {
     );
     expect(first.all("PRAGMA table_info(ai_conversations)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["compacted_summary", "compacted_message_count", "context_warning_at"])
+    );
+    expect(first.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["user_id", "key_hash", "key_prefix", "created_at", "rotated_at", "last_used_at"])
     );
     first.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, status, created_at)

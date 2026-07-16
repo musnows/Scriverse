@@ -127,6 +127,93 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(200);
   });
 
+  it("用户可重置 API Key，且密钥仅访问所属用户的作品数据和 CLI 白名单", async () => {
+    const admin = await register(runtime, "api_admin");
+    const writer = await register(runtime, "api_writer");
+    const adminWork = await admin.agent.post("/api/works").set("X-CSRF-Token", admin.csrfToken).send({ title: "管理员私有作品" }).expect(201);
+    const writerWork = await writer.agent.post("/api/works").set("X-CSRF-Token", writer.csrfToken).send({ title: "作者私有作品" }).expect(201);
+    const adminWorkId = String(adminWork.body.data.id);
+    const writerWorkId = String(writerWork.body.data.id);
+
+    const emptyStatus = await admin.agent.get("/api/auth/api-key").expect(200);
+    expect(emptyStatus.body.data).toEqual({
+      configured: false,
+      prefix: null,
+      createdAt: null,
+      rotatedAt: null,
+      lastUsedAt: null
+    });
+
+    const firstReset = await admin.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(200);
+    const firstKey = String(firstReset.body.data.apiKey);
+    expect(firstKey).toMatch(/^scrv_[A-Za-z0-9_-]{43}$/u);
+    expect(firstReset.body.data).toMatchObject({ configured: true, prefix: firstKey.slice(0, 13), lastUsedAt: null });
+    const storedKey = runtime.database.get("SELECT * FROM user_api_keys WHERE user_id = ?", admin.user.userId);
+    expect(storedKey?.key_hash).not.toBe(firstKey);
+    expect(JSON.stringify(storedKey)).not.toContain(firstKey);
+
+    const cliSession = await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${firstKey}`).expect(200);
+    expect(cliSession.body.data).toMatchObject({
+      authenticated: true,
+      user: { userId: admin.user.userId, username: "api_admin" },
+      apiKeyPrefix: firstKey.slice(0, 13)
+    });
+    const adminKeyWorks = await request(runtime.app).get("/api/works").set("Authorization", `Bearer ${firstKey}`).expect(200);
+    expect(adminKeyWorks.body.data.map((work: { id: string }) => work.id)).toEqual([adminWorkId]);
+    await request(runtime.app).get(`/api/works/${writerWorkId}`).set("Authorization", `Bearer ${firstKey}`).expect(403);
+
+    const volume = await request(runtime.app).post(`/api/works/${adminWorkId}/volumes`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .send({ title: "CLI 正文" })
+      .expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${adminWorkId}/chapters`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .send({ volumeId: volume.body.data.id, title: "CLI 第一章", content: "初始正文。" })
+      .expect(201);
+    await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`)
+      .set("X-Scriverse-API-Key", firstKey)
+      .send({ content: "API Key 修改后的正文。" })
+      .expect(200);
+    const versions = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/versions`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .expect(200);
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, actor: "api_admin" });
+
+    await request(runtime.app).get("/api/users").set("Authorization", `Bearer ${firstKey}`).expect(403);
+    await request(runtime.app).get("/api/platform/ai/providers").set("Authorization", `Bearer ${firstKey}`).expect(403);
+    await request(runtime.app).get(`/api/works/${adminWorkId}/members`).set("Authorization", `Bearer ${firstKey}`).expect(403);
+    await request(runtime.app).post("/api/auth/api-key/reset").set("Authorization", `Bearer ${firstKey}`).send({}).expect(403);
+    await request(runtime.app).delete(`/api/chapters/${chapter.body.data.id}`).set("Authorization", `Bearer ${firstKey}`).expect(403);
+
+    const secondReset = await admin.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({})
+      .expect(200);
+    const secondKey = String(secondReset.body.data.apiKey);
+    expect(secondKey).not.toBe(firstKey);
+    await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${firstKey}`).expect(401);
+    await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${secondKey}`).expect(200);
+    await request(runtime.app).get("/api/cli/session").set("Authorization", "Bearer scrv_invalid").expect(401);
+
+    const writerReset = await writer.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({})
+      .expect(200);
+    const writerKey = String(writerReset.body.data.apiKey);
+    const writerKeyWorks = await request(runtime.app).get("/api/works").set("Authorization", `Bearer ${writerKey}`).expect(200);
+    expect(writerKeyWorks.body.data.map((work: { id: string }) => work.id)).toEqual([writerWorkId]);
+
+    await admin.agent.patch(`/api/users/${writer.user.userId}`)
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ status: "disabled" })
+      .expect(200);
+    await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${writerKey}`).expect(401);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("可通过 APP_ALLOW_REGISTRATION=false 关闭开放注册", async () => {
     runtime.close();
     runtime = createRuntime({

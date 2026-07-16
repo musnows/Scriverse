@@ -17,6 +17,7 @@ import { assertSafeImportedPlainText } from "./import-security.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
   clearSessionCookie,
+  createCliApiScopeMiddleware,
   createUserSessionMiddleware,
   createWorkAuthorizationMiddleware,
   setSessionCookie,
@@ -365,7 +366,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
   });
   app.use(createUserSessionMiddleware(auth, options.disableUserAuth));
+  app.use(createCliApiScopeMiddleware(options.disableUserAuth));
   app.use(createWorkAuthorizationMiddleware(auth, options.disableUserAuth));
+  app.get("/api/cli/session", (request, response) => {
+    if (!request.authUser || request.authMethod !== "api-key") throw new AppError(401, "API_KEY_REQUIRED", "请使用 API Key 登录");
+    data(response, { authenticated: true, user: request.authUser, apiKeyPrefix: request.authApiKey?.prefix ?? null });
+  });
   app.delete("/api/auth/session", (request, response) => {
     if (request.authSession) auth.revoke(request.authSession.id);
     clearSessionCookie(response, request.secure);
@@ -383,6 +389,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     auth.changePassword(request.authUser.userId, request.authSession.id, input.currentPassword, input.newPassword);
     store.audit(null, "user.password-changed", "user", request.authUser.userId);
     noContent(response);
+  });
+  app.get("/api/auth/api-key", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    data(response, auth.getApiKeyStatus(request.authUser.userId));
+  });
+  app.post("/api/auth/api-key/reset", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理 API Key");
+    parse(z.object({}).strict(), request.body ?? {});
+    const userId = request.authUser.userId;
+    const result = database.transaction(() => {
+      const reset = auth.resetApiKey(userId);
+      store.audit(null, "user.api-key-reset", "user", userId, { prefix: reset.prefix });
+      return reset;
+    });
+    data(response, result);
   });
 
   app.get("/api/users", (_request, response) => data(response, auth.listUsers()));
@@ -481,6 +502,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), sortOrder: z.number().int().min(0).optional() }), request.body);
     data(response, store.updateVolume(request.params.volumeId, input));
   });
+  app.get("/api/volumes/:volumeId", (request, response) => data(response, store.getVolume(request.params.volumeId)));
   app.delete("/api/volumes/:volumeId", (request, response) => {
     store.deleteVolume(request.params.volumeId);
     noContent(response);

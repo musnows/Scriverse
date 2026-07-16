@@ -1052,6 +1052,20 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (20, ?)", new Date().toISOString());
       });
     }
+    if (!applied.has(21)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS user_api_keys (
+          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          key_hash TEXT NOT NULL UNIQUE,
+          key_prefix TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          rotated_at TEXT NOT NULL,
+          last_used_at TEXT
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_user_api_keys_hash ON user_api_keys(key_hash)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (21, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {

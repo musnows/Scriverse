@@ -5,6 +5,7 @@ export type RequestActor = {
   username: string;
   displayName: string;
   role: "admin" | "user";
+  authentication?: "session" | "api-key";
 };
 
 const actorStorage = new AsyncLocalStorage<RequestActor | null>();
