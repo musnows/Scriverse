@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { shouldRenderGalaxyLabel } from "../app/galaxy-visibility.js";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -35,4 +36,9 @@ test("关系节点的交互锚点与可见圆点保持重合", async () => {
   assert.doesNotMatch(nodeRule, /transition:[^;}]*\b(?:left|top)\b/);
   assert.match(dotRule, /width:\s*100%/);
   assert.match(dotRule, /height:\s*100%/);
+});
+
+test("银河图关闭名称后不再显示选中或关联角色名称", () => {
+  assert.equal(shouldRenderGalaxyLabel(true), true);
+  assert.equal(shouldRenderGalaxyLabel(false), false);
 });

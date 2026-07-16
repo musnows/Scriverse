@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { shouldRenderGalaxyLabel } from "./galaxy-visibility.js";
 
 type RelationKind = "亲属" | "社交" | "情感" | "冲突";
 
@@ -343,7 +344,7 @@ function GalaxyGraph() {
         context.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
         context.fill();
         context.restore();
-        if (labelsRef.current || active || related) {
+        if (shouldRenderGalaxyLabel(labelsRef.current)) {
           context.font = `${active ? 600 : 400} 11px ui-monospace, SFMono-Regular, monospace`;
           context.textAlign = "center";
           context.fillStyle = active ? "#ffffff" : "rgba(224,236,251,.76)";
