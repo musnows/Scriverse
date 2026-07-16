@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 async function render() {
@@ -21,4 +22,17 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /银河图/);
   assert.match(html, /AI 创作助手/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
+});
+
+test("关系节点的交互锚点与可见圆点保持重合", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const nodeRule = css.match(/\.relation-node \{([^}]+)\}/)?.[1] ?? "";
+  const dotRule = css.match(/\.relation-node i \{([^}]+)\}/)?.[1] ?? "";
+
+  assert.match(nodeRule, /width:\s*var\(--node-size\)/);
+  assert.match(nodeRule, /height:\s*var\(--node-size\)/);
+  assert.match(nodeRule, /padding:\s*0/);
+  assert.doesNotMatch(nodeRule, /transition:[^;}]*\b(?:left|top)\b/);
+  assert.match(dotRule, /width:\s*100%/);
+  assert.match(dotRule, /height:\s*100%/);
 });
