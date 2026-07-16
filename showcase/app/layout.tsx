@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -12,6 +13,8 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+const baiduAnalyticsId = process.env.BAIDU_ANALYTICS_ID?.trim();
 
 export async function generateMetadata(): Promise<Metadata> {
   const incomingHeaders = await headers();
@@ -45,7 +48,16 @@ export async function generateMetadata(): Promise<Metadata> {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>{children}</body>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        {children}
+        {baiduAnalyticsId ? (
+          <Script
+            id="baidu-analytics"
+            src={`https://hm.baidu.com/hm.js?${encodeURIComponent(baiduAnalyticsId)}`}
+            strategy="beforeInteractive"
+          />
+        ) : null}
+      </body>
     </html>
   );
 }
