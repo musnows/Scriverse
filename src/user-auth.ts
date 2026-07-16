@@ -165,7 +165,7 @@ export class UserAuthService {
     return { token, session: { id: sessionId, user, csrfToken } };
   }
 
-  register(input: { username: string; displayName: string; password: string }): { token: string; session: AuthSession } {
+  register(input: { username: string; password: string }): { token: string; session: AuthSession } {
     const normalizedUsername = normalizeUsername(input.username);
     const timestamp = new Date().toISOString();
     const userId = randomUUID();
@@ -178,7 +178,7 @@ export class UserAuthService {
         userId,
         input.username.trim(),
         normalizedUsername,
-        input.displayName.trim(),
+        input.username.trim(),
         passwordDigest(input.password, salt),
         salt,
         role,

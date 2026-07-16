@@ -32,17 +32,68 @@
 }
 
 .auth-pending .app-shell { visibility: hidden; }
-.auth-view { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%), var(--paper); }
+.auth-view { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; align-content: safe center; padding: 24px; overflow-y: auto; overscroll-behavior: contain; background: radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%), var(--paper); }
 .auth-view.hidden { display: none; }
-.auth-card { width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
+.auth-card { box-sizing: border-box; width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
 .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; }
 .auth-brand div { display: grid; }
 .auth-brand small { color: var(--muted); }
 .auth-card h1 { margin: 8px 0; font-size: 30px; }
 .auth-card > p { color: var(--muted); line-height: 1.6; }
-.auth-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 24px 0 18px; padding: 4px; border-radius: 7px; background: var(--paper-deep); }
-.auth-tabs button { min-height: 38px; border: 0; border-radius: 5px; background: transparent; font-size: 13px; }
-.auth-tabs button[aria-selected="true"] { background: var(--surface); color: var(--accent-dark); box-shadow: var(--shadow); }
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  margin: 24px 0 18px;
+  padding: 3px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 9px;
+  background: var(--paper-deep);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--surface) 65%, transparent);
+}
+.auth-tabs button {
+  position: relative;
+  z-index: 0;
+  min-height: 42px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  transition: background .16s ease, color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+.auth-tabs button + button::before {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: -3px;
+  width: 1px;
+  background: var(--line);
+  content: "";
+}
+.auth-tabs button:not([aria-selected="true"]):hover { background: color-mix(in srgb, var(--surface) 62%, transparent); color: var(--ink); }
+.auth-tabs button[aria-selected="true"] {
+  z-index: 1;
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: var(--accent-dark);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 58%, transparent), 0 2px 7px color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 750;
+}
+.auth-tabs button[aria-selected="true"]::after {
+  position: absolute;
+  right: 24%;
+  bottom: 5px;
+  left: 24%;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+}
+.auth-tabs button:focus-visible { z-index: 2; outline: 2px solid color-mix(in srgb, var(--accent) 82%, white); outline-offset: -2px; }
 .auth-form { display: grid; gap: 16px; }
 .auth-form label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }
 .auth-form input {
@@ -59,6 +110,29 @@
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
+.password-field { position: relative; display: block; }
+.password-field input { padding-right: 62px; }
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: grid;
+  min-width: 36px;
+  min-height: 30px;
+  padding: 5px 7px;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--accent-dark);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+.password-toggle svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.9; }
+.password-toggle:hover { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
+.password-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .auth-form .primary-button {
   width: 100%;
   min-height: 46px;

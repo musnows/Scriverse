@@ -3262,6 +3262,32 @@ $("#login-captcha-refresh").addEventListener("click", () => {
 $("#register-captcha-refresh").addEventListener("click", () => {
   refreshAuthCaptcha("register").catch((error) => { $("#auth-error").textContent = error.message; });
 });
+function validatePasswordConfirmation() {
+  const passwordInput = $("#register-form input[name='password']");
+  const confirmationInput = $("#register-form input[name='passwordConfirmation']");
+  const matches = !confirmationInput.value || passwordInput.value === confirmationInput.value;
+  confirmationInput.setCustomValidity(matches ? "" : "两次输入的密码不一致");
+  return matches;
+}
+$("#register-form input[name='password']").addEventListener("input", validatePasswordConfirmation);
+$("#register-form input[name='passwordConfirmation']").addEventListener("input", validatePasswordConfirmation);
+function passwordVisibilityIcon(visible) {
+  const eye = '<path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/>';
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${eye}${visible ? '<path d="M3.5 3.5 20.5 20.5"/>' : ""}</svg>`;
+}
+document.querySelectorAll("[data-password-toggle]").forEach((button) => {
+  const input = document.getElementById(button.dataset.passwordToggle ?? "");
+  if (!(input instanceof HTMLInputElement)) return;
+  button.addEventListener("click", () => {
+    const visible = input.type === "password";
+    input.type = visible ? "text" : "password";
+    button.innerHTML = passwordVisibilityIcon(visible);
+    button.setAttribute("aria-pressed", String(visible));
+    const label = `${visible ? "隐藏" : "显示"}${input.name === "passwordConfirmation" ? "确认密码" : "密码"}`;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
+  });
+});
 $("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
@@ -3286,13 +3312,18 @@ $("#register-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   $("#auth-error").textContent = "";
+  if (!validatePasswordConfirmation()) {
+    $("#auth-error").textContent = "两次输入的密码不一致，请重新确认。";
+    $("#register-form input[name='passwordConfirmation']").focus();
+    return;
+  }
   try {
     await api("/api/auth/register", {
       method: "POST",
       body: {
         username: form.get("username"),
-        displayName: form.get("displayName"),
         password: form.get("password"),
+        passwordConfirmation: form.get("passwordConfirmation"),
         captchaId: form.get("captchaId"),
         captchaAnswer: form.get("captchaAnswer")
       }

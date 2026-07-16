@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260716-tool-detail-stack">
+    <link rel="stylesheet" href="/styles.css?v=20260716-auth-forms">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -24,7 +24,7 @@
         </div>
         <form id="login-form" class="auth-form">
           <label>用户名<input name="username" autocomplete="username" maxlength="100" required></label>
-          <label>密码<input name="password" type="password" autocomplete="current-password" maxlength="200" required></label>
+          <label>密码<span class="password-field"><input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="200" required><button class="password-toggle" type="button" data-password-toggle="login-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button></span></label>
           <div class="auth-captcha">
             <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="login-captcha-hint"></label>
             <button id="login-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">
@@ -37,8 +37,8 @@
         </form>
         <form id="register-form" class="auth-form hidden">
           <label>用户名<input name="username" autocomplete="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9_.\-\u4e00-\u9fff]+" required></label>
-          <label>显示名称<input name="displayName" autocomplete="name" maxlength="80" required></label>
-          <label>密码<input name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label>
+          <label>密码<span class="password-field"><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><button class="password-toggle" type="button" data-password-toggle="register-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button></span></label>
+          <label>确认密码<span class="password-field"><input id="register-password-confirmation" name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><button class="password-toggle" type="button" data-password-toggle="register-password-confirmation" aria-label="显示确认密码" aria-pressed="false" title="显示确认密码"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button></span></label>
           <div class="auth-captcha">
             <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="register-captcha-hint"></label>
             <button id="register-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">
@@ -484,6 +484,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260716-history-dialog"></script>
+    <script type="module" src="/app.js?v=20260716-auth-registration"></script>
   </body>
 </html>

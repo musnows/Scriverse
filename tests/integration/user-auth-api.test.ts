@@ -15,15 +15,16 @@ async function solveCaptcha(app: Runtime["app"]): Promise<{ captchaId: string; c
   return { captchaId: response.body.data.captchaId, captchaAnswer: response.body.data.answer };
 }
 
-async function register(runtime: Runtime, username: string, displayName: string): Promise<SessionCredentials> {
+async function register(runtime: Runtime, username: string): Promise<SessionCredentials> {
   const agent = request.agent(runtime.app);
   const captcha = await solveCaptcha(runtime.app);
   const response = await agent.post("/api/auth/register").send({
     username,
-    displayName,
     password: "secure-password-123",
+    passwordConfirmation: "secure-password-123",
     ...captcha
   }).expect(201);
+  expect(response.body.data.user.displayName).toBe(username);
   return { agent, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
 }
 
@@ -45,8 +46,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const initialSession = await request(runtime.app).get("/api/auth/session").expect(200);
     expect(initialSession.body.data).toMatchObject({ authenticated: false, setupRequired: true });
 
-    const admin = await register(runtime, "admin", "总编");
-    const writer = await register(runtime, "writer", "协作者");
+    const admin = await register(runtime, "admin");
+    const writer = await register(runtime, "writer");
     expect(admin.user.role).toBe("admin");
     expect(writer.user.role).toBe("user");
 
@@ -72,10 +73,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await writer.agent.patch(`/api/chapters/${chapter.body.data.id}`).set("X-CSRF-Token", writer.csrfToken).send({ content: "协作修改。" }).expect(200);
 
     const versions = await writer.agent.get(`/api/chapters/${chapter.body.data.id}/versions`).expect(200);
-    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, actor: "协作者" });
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, actor: "writer" });
     const auditLogs = await admin.agent.get(`/api/works/${adminWorkId}/audit-logs`).expect(200);
     expect(auditLogs.body.data).toEqual(expect.arrayContaining([
-      expect.objectContaining({ action: "chapter.saved", actor: "协作者", userId: writer.user.userId })
+      expect.objectContaining({ action: "chapter.saved", actor: "writer", userId: writer.user.userId })
     ]));
 
     await writer.agent.delete(`/api/works/${adminWorkId}`).set("X-CSRF-Token", writer.csrfToken).expect(403);
@@ -86,7 +87,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {
     const legacyWork = runtime.store.createWork({ title: "既有作品" });
-    const admin = await register(runtime, "first_admin", "首位管理员");
+    const admin = await register(runtime, "first_admin");
     const works = await admin.agent.get("/api/works").expect(200);
     expect(works.body.data).toEqual(expect.arrayContaining([expect.objectContaining({ id: legacyWork.id, accessRole: "owner" })]));
     expect(runtime.database.get("SELECT owner_user_id FROM works WHERE id = ?", String(legacyWork.id))?.owner_user_id).toBe(admin.user.userId);
@@ -94,8 +95,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
   });
 
   it("管理员可管理账户，但不能停用自己或移除最后一名管理员", async () => {
-    const admin = await register(runtime, "root_admin", "管理员");
-    const writer = await register(runtime, "normal_writer", "普通用户");
+    const admin = await register(runtime, "root_admin");
+    const writer = await register(runtime, "normal_writer");
     await admin.agent.patch(`/api/users/${admin.user.userId}`).set("X-CSRF-Token", admin.csrfToken).send({ role: "user" }).expect(409);
     const promoted = await admin.agent.patch(`/api/users/${writer.user.userId}`).set("X-CSRF-Token", admin.csrfToken).send({ role: "admin" }).expect(200);
     expect(promoted.body.data.role).toBe("admin");
@@ -105,7 +106,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
   });
 
   it("用户可修改自己的显示名称和密码", async () => {
-    const user = await register(runtime, "profile_user", "旧名称");
+    const user = await register(runtime, "profile_user");
     const profile = await user.agent.patch("/api/auth/profile").set("X-CSRF-Token", user.csrfToken).send({ displayName: "新名称" }).expect(200);
     expect(profile.body.data.displayName).toBe("新名称");
     await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
@@ -137,14 +138,14 @@ describe("用户、作品权限与操作者追踪 API", () => {
     });
     const openSession = await request(runtime.app).get("/api/auth/session").expect(200);
     expect(openSession.body.data).toMatchObject({ setupRequired: true, registrationOpen: true });
-    await register(runtime, "only_admin", "唯一管理员");
+    await register(runtime, "only_admin");
     const closedSession = await request(runtime.app).get("/api/auth/session").expect(200);
     expect(closedSession.body.data.registrationOpen).toBe(false);
     const captcha = await solveCaptcha(runtime.app);
     const rejected = await request(runtime.app).post("/api/auth/register").send({
       username: "blocked_user",
-      displayName: "被拦截",
       password: "secure-password-123",
+      passwordConfirmation: "secure-password-123",
       ...captcha
     }).expect(403);
     expect(rejected.body.error.code).toBe("REGISTRATION_DISABLED");
@@ -153,23 +154,36 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("登录与注册必须通过图片验证码", async () => {
     await request(runtime.app).post("/api/auth/register").send({
       username: "captcha_user",
-      displayName: "验证码用户",
       password: "secure-password-123"
     }).expect(400);
     const wrong = await solveCaptcha(runtime.app);
     await request(runtime.app).post("/api/auth/register").send({
       username: "captcha_user",
-      displayName: "验证码用户",
       password: "secure-password-123",
+      passwordConfirmation: "secure-password-123",
       captchaId: wrong.captchaId,
       captchaAnswer: "XXXX"
     }).expect(400);
-    const user = await register(runtime, "captcha_user", "验证码用户");
+    const user = await register(runtime, "captcha_user");
     await user.agent.post("/api/auth/login").send({
       username: "captcha_user",
       password: "secure-password-123",
       captchaId: "missing",
       captchaAnswer: "ABCD"
     }).expect(400);
+  });
+
+  it("注册必须二次确认且两次密码相同", async () => {
+    const captcha = await solveCaptcha(runtime.app);
+    const response = await request(runtime.app).post("/api/auth/register").send({
+      username: "password_confirm_user",
+      password: "secure-password-123",
+      passwordConfirmation: "different-password-456",
+      ...captcha
+    }).expect(400);
+    expect(response.body.error.details).toContainEqual(expect.objectContaining({
+      path: "passwordConfirmation",
+      message: "两次输入的密码不一致"
+    }));
   });
 });

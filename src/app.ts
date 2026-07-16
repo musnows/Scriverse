@@ -39,10 +39,13 @@ const usernameSchema = z.string().trim().min(3).max(40).regex(/^[\p{L}\p{N}_.-]+
 const passwordSchema = z.string().min(10).max(200);
 const registrationSchema = z.object({
   username: usernameSchema,
-  displayName: z.string().trim().min(1).max(80),
   password: passwordSchema,
+  passwordConfirmation: passwordSchema,
   ...captchaFields
-}).strict();
+}).strict().refine((input) => input.password === input.passwordConfirmation, {
+  path: ["passwordConfirmation"],
+  message: "两次输入的密码不一致"
+});
 const loginSchema = z.object({
   username: z.string().trim().min(1).max(100),
   password: z.string().max(200),
@@ -348,7 +351,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     const input = parse(registrationSchema, request.body);
     captcha.consume(input.captchaId, input.captchaAnswer);
-    const result = auth.register({ username: input.username, displayName: input.displayName, password: input.password });
+    const result = auth.register({ username: input.username, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken }, 201);
