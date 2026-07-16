@@ -10,11 +10,17 @@
   面向长篇小说创作的本地 AI 工作台
 </p>
 
-[中文](README.md) | [English](README.en.md)
+<p align="center">
+  <a href="README.md">中文</a> | <a href="README.en.md">English</a>
+</p>
 
-叙界是一个面向长篇小说的本地 AI 创作工作台。它把正文、分卷、角色、组织、世界设定、时间线、人物关系、大纲伏笔和 AI 辅助集中在同一个项目中，适合管理大体量、设定密集的小说工程。
+<p align="center">
+  叙界是一个面向长篇小说的本地 AI 创作工作台。它把正文、分卷、角色、组织、世界设定、时间线、人物关系、大纲伏笔和 AI 辅助集中在同一个项目中，适合管理大体量、设定密集的小说工程。
+</p>
 
-在线演示：[https://scriverse.top/](https://scriverse.top/)
+<p align="center">
+  在线演示：<a href="https://scriverse.top/">https://scriverse.top/</a>
+</p>
 
 ## 主要能力
 
