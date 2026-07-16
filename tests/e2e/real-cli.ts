@@ -80,6 +80,24 @@ function textFile(name: string, value: string): string {
   return path;
 }
 
+async function e2eFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Connection", "close");
+  const method = init.method ?? "GET";
+  for (let attempt = 0; attempt < (method === "GET" ? 2 : 1); attempt += 1) {
+    try {
+      return await fetch(url, { ...init, headers });
+    } catch (error) {
+      if (attempt === 0 && method === "GET") continue;
+      throw new Error(
+        `E2E request failed: ${method} ${url}; serverExit=${String(server?.exitCode)}; serverStderr=${serverStderr}`,
+        { cause: error }
+      );
+    }
+  }
+  throw new Error(`E2E request failed: ${method} ${url}`);
+}
+
 async function responseData(response: Response): Promise<unknown> {
   const text = await response.text();
   const payload = text ? JSON.parse(text) as { data?: unknown; error?: { code?: string; message?: string } } : {};
@@ -88,8 +106,8 @@ async function responseData(response: Response): Promise<unknown> {
 }
 
 async function register(username: string): Promise<SessionCredentials> {
-  const captcha = await responseData(await fetch(`${baseUrl}/api/auth/captcha`)) as { captchaId: string; answer: string };
-  const response = await fetch(`${baseUrl}/api/auth/register`, {
+  const captcha = await responseData(await e2eFetch(`${baseUrl}/api/auth/captcha`)) as { captchaId: string; answer: string };
+  const response = await e2eFetch(`${baseUrl}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -112,7 +130,7 @@ async function sessionRequest(
   method: "GET" | "POST" | "PATCH" = "GET",
   body?: Record<string, unknown>
 ): Promise<unknown> {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await e2eFetch(`${baseUrl}${path}`, {
     method,
     headers: {
       Cookie: credentials.cookie,
@@ -200,7 +218,7 @@ async function stopServer(): Promise<void> {
 
 async function run(): Promise<void> {
   await startServer();
-  const health = await responseData(await fetch(`${baseUrl}/api/health`)) as { status: string };
+  const health = await responseData(await e2eFetch(`${baseUrl}/api/health`)) as { status: string };
   assert.equal(health.status, "ok");
 
   const help = cli(["--help"]);
@@ -441,15 +459,15 @@ async function run(): Promise<void> {
   }
   checked("history-restore", "chapter, character and eight generic versioned resources restored through CLI with actor attribution intact");
 
-  const foreignWorkResponse = await fetch(`${baseUrl}/api/works/${String(writerWork.id)}`, {
+  const foreignWorkResponse = await e2eFetch(`${baseUrl}/api/works/${String(writerWork.id)}`, {
     headers: { Authorization: `Bearer ${adminKey}` }
   });
   assert.equal(foreignWorkResponse.status, 403);
-  const platformResponse = await fetch(`${baseUrl}/api/platform/ai/providers`, {
+  const platformResponse = await e2eFetch(`${baseUrl}/api/platform/ai/providers`, {
     headers: { Authorization: `Bearer ${adminKey}` }
   });
   assert.equal(platformResponse.status, 403);
-  const deleteResponse = await fetch(`${baseUrl}/api/chapters/${chapterId}`, {
+  const deleteResponse = await e2eFetch(`${baseUrl}/api/chapters/${chapterId}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${adminKey}` }
   });
