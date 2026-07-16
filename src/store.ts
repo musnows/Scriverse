@@ -968,6 +968,7 @@ export class Store {
       chapterType: optionalString(row, "chapter_type"),
       source: requiredString(row, "source"),
       sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
       createdAt: requiredString(row, "created_at"),
       actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
     };
@@ -984,13 +985,14 @@ export class Store {
     chapterType: string | null;
     source: string;
     sourceRef: string | null;
+    changeNote: string;
     timestamp?: string;
   }): void {
     this.db.run(
       `INSERT INTO chapter_versions (
          id, work_id, chapter_id, version_no, title, content, volume_id, sort_order, chapter_type,
-         source, source_ref, created_at, created_by_user_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         source, source_ref, change_note, created_at, created_by_user_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id("chapterVersion"),
       input.workId,
       input.chapterId,
@@ -1002,6 +1004,7 @@ export class Store {
       input.chapterType,
       input.source,
       input.sourceRef,
+      input.changeNote.trim(),
       input.timestamp ?? now(),
       currentRequestActor()?.userId ?? null
     );
@@ -1065,7 +1068,8 @@ export class Store {
     chapterId: string,
     input: { title?: string; content?: string; excludedFromAnalysis?: boolean; chapterType?: ChapterType },
     source = "manual",
-    sourceRef: string | null = null
+    sourceRef: string | null = null,
+    changeNote = ""
   ): Record<string, unknown> {
     const current = this.getChapter(chapterId);
     const nextTitle = input.title ?? String(current.title);
@@ -1104,12 +1108,13 @@ export class Store {
           chapterType: nextChapterType,
           source,
           sourceRef,
+          changeNote: changeNote || "更新章节正文",
           timestamp
         });
       }
       if (hasTextChange || hasTypeChange) this.invalidateChapter(String(current.workId), chapterId, versionNo);
       this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, String(current.workId));
-      this.audit(String(current.workId), "chapter.saved", "chapter", chapterId, { versionNo, source, chapterType: nextChapterType });
+      this.audit(String(current.workId), "chapter.saved", "chapter", chapterId, { versionNo, source, chapterType: nextChapterType, changeNote });
     });
     return this.getChapter(chapterId);
   }
@@ -1125,7 +1130,8 @@ export class Store {
       chapterId,
       { title: requiredString(version, "title"), content: requiredString(version, "content") },
       "restore",
-      requiredString(version, "id")
+      requiredString(version, "id"),
+      `恢复至 v${versionNo}`
     );
   }
 
@@ -1173,6 +1179,7 @@ export class Store {
         chapterType,
         source: "restore",
         sourceRef: requiredString(version, "id"),
+        changeNote: `恢复至 v${numberValue(version, "version_no")}`,
         timestamp
       });
       this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
@@ -1224,6 +1231,7 @@ export class Store {
         chapterType: String(chapter.chapterType),
         source: "delete",
         sourceRef: null,
+        changeNote: "删除章节",
         timestamp
       });
       this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
@@ -1269,6 +1277,7 @@ export class Store {
       chapterType,
       source,
       sourceRef,
+      changeNote: source === "import" ? "导入章节" : "建立章节",
       timestamp
     });
     return chapterId;

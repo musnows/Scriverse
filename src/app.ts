@@ -56,6 +56,7 @@ const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), 
 const memberSchema = z.object({ userId: identifier }).strict();
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
+const changeNoteSchema = z.string().trim().max(500).optional();
 
 function validateImportedText(text: string): string {
   if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
@@ -514,9 +515,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional() }), request.body);
-    const { source, ...chapterInput } = input;
-    data(response, store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual"));
+    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema }).strict(), request.body);
+    const { source, changeNote, ...chapterInput } = input;
+    data(response, store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual", null, changeNote));
   });
   app.delete("/api/chapters/:chapterId", (request, response) => {
     store.deleteChapter(request.params.chapterId);
@@ -536,7 +537,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/outlines", (request, response) => data(response, store.listChapterOutlines(request.params.workId)));
   app.get("/api/chapters/:chapterId/outline", (request, response) => data(response, store.getChapterOutline(request.params.chapterId)));
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
-    data(response, store.upsertChapterOutline(request.params.chapterId, parse(chapterOutlineSchema, request.body)));
+    const { changeNote, ...input } = parse(chapterOutlineSchema.extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.upsertChapterOutline(request.params.chapterId, input, "manual", null, changeNote));
   });
   app.delete("/api/chapters/:chapterId/outline", (request, response) => {
     store.deleteChapterOutline(request.params.chapterId);
@@ -555,7 +557,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/foreshadows/:foreshadowId", (request, response) => data(response, store.getForeshadow(request.params.foreshadowId)));
   app.patch("/api/foreshadows/:foreshadowId", (request, response) => {
-    data(response, store.updateForeshadow(request.params.foreshadowId, parse(foreshadowSchema.partial(), request.body)));
+    const { changeNote, ...input } = parse(foreshadowSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateForeshadow(request.params.foreshadowId, input, "manual", null, changeNote));
   });
   app.delete("/api/foreshadows/:foreshadowId", (request, response) => {
     store.deleteForeshadow(request.params.foreshadowId);
@@ -575,7 +578,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/settings", (request, response) => data(response, store.listSettings(request.params.workId)));
   app.post("/api/works/:workId/settings", (request, response) => data(response, store.createSetting(request.params.workId, parse(settingSchema, request.body)), 201));
   app.get("/api/settings/:settingId", (request, response) => data(response, store.getSetting(request.params.settingId)));
-  app.patch("/api/settings/:settingId", (request, response) => data(response, store.updateSetting(request.params.settingId, parse(settingSchema.partial(), request.body))));
+  app.patch("/api/settings/:settingId", (request, response) => {
+    const { changeNote, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateSetting(request.params.settingId, input, "manual", null, changeNote));
+  });
   app.delete("/api/settings/:settingId", (request, response) => {
     store.deleteSetting(request.params.settingId);
     noContent(response);
@@ -604,7 +610,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/races/:raceId", (request, response) => data(response, store.getRace(request.params.raceId)));
   app.patch("/api/races/:raceId", (request, response) => {
-    data(response, store.updateRace(request.params.raceId, parse(raceSchema.partial(), request.body)));
+    const { changeNote, ...input } = parse(raceSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateRace(request.params.raceId, input, "manual", null, changeNote));
   });
   app.delete("/api/races/:raceId", (request, response) => {
     store.deleteRace(request.params.raceId);
@@ -617,7 +624,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/organizations/:organizationId", (request, response) => data(response, store.getOrganization(request.params.organizationId)));
   app.patch("/api/organizations/:organizationId", (request, response) => {
-    data(response, store.updateOrganization(request.params.organizationId, parse(organizationSchema.partial(), request.body)));
+    const { changeNote, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateOrganization(request.params.organizationId, input, "manual", null, changeNote));
   });
   app.delete("/api/organizations/:organizationId", (request, response) => {
     store.deleteOrganization(request.params.organizationId);
@@ -627,7 +635,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.listTimelineTracks(request.params.workId)));
   app.post("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.createTimelineTrack(request.params.workId, parse(timelineTrackSchema, request.body)), 201));
   app.get("/api/timeline-tracks/:trackId", (request, response) => data(response, store.getTimelineTrack(request.params.trackId)));
-  app.patch("/api/timeline-tracks/:trackId", (request, response) => data(response, store.updateTimelineTrack(request.params.trackId, parse(timelineTrackSchema.partial(), request.body))));
+  app.patch("/api/timeline-tracks/:trackId", (request, response) => {
+    const { changeNote, ...input } = parse(timelineTrackSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateTimelineTrack(request.params.trackId, input, "manual", null, changeNote));
+  });
   app.delete("/api/timeline-tracks/:trackId", (request, response) => {
     store.deleteTimelineTrack(request.params.trackId);
     noContent(response);
@@ -646,7 +657,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.mergeTimelineEvents(request.params.workId, input.eventIds, input), 201);
   });
   app.get("/api/timeline/:eventId", (request, response) => data(response, store.getTimelineEvent(request.params.eventId)));
-  app.patch("/api/timeline/:eventId", (request, response) => data(response, store.updateTimelineEvent(request.params.eventId, parse(timelineSchema.partial(), request.body))));
+  app.patch("/api/timeline/:eventId", (request, response) => {
+    const { changeNote, ...input } = parse(timelineSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateTimelineEvent(request.params.eventId, input, "manual", null, changeNote));
+  });
   app.post("/api/timeline/:eventId/split", (request, response) => {
     const input = parse(z.object({
       parts: z.array(z.object({
@@ -670,7 +684,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/relationships", (request, response) => data(response, store.createRelationship(request.params.workId, parse(relationshipSchema, request.body)), 201));
   app.get("/api/relationships/:relationshipId", (request, response) => data(response, store.getRelationship(request.params.relationshipId)));
-  app.patch("/api/relationships/:relationshipId", (request, response) => data(response, store.updateRelationship(request.params.relationshipId, parse(relationshipSchema.partial(), request.body))));
+  app.patch("/api/relationships/:relationshipId", (request, response) => {
+    const { changeNote, ...input } = parse(relationshipSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
+    data(response, store.updateRelationship(request.params.relationshipId, input, "manual", null, changeNote));
+  });
   app.delete("/api/relationships/:relationshipId", (request, response) => {
     store.deleteRelationship(request.params.relationshipId);
     noContent(response);

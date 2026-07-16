@@ -175,12 +175,24 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(201);
     await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`)
       .set("X-Scriverse-API-Key", firstKey)
-      .send({ content: "API Key 修改后的正文。" })
+      .send({ content: "API Key 修改后的正文。", changeNote: "CLI 调整开场正文" })
       .expect(200);
     const versions = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/versions`)
       .set("Authorization", `Bearer ${firstKey}`)
       .expect(200);
-    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, actor: "api_admin" });
+    expect(versions.body.data[0]).toMatchObject({ versionNo: 2, actor: "api_admin", changeNote: "CLI 调整开场正文" });
+    const setting = await request(runtime.app).post(`/api/works/${adminWorkId}/settings`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .send({ title: "潮汐航线", category: "交通", content: "初始设定。" })
+      .expect(201);
+    await request(runtime.app).patch(`/api/settings/${setting.body.data.id}`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .send({ content: "补充后的航线设定。", changeNote: "CLI 补充航线限制" })
+      .expect(200);
+    const settingVersions = await request(runtime.app).get(`/api/entity-versions/setting/${setting.body.data.id}`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .expect(200);
+    expect(settingVersions.body.data[0]).toMatchObject({ versionNo: 2, actor: "api_admin", changeNote: "CLI 补充航线限制" });
 
     await request(runtime.app).get("/api/users").set("Authorization", `Bearer ${firstKey}`).expect(403);
     await request(runtime.app).get("/api/platform/ai/providers").set("Authorization", `Bearer ${firstKey}`).expect(403);

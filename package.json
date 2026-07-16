@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "scriverse": "dist/cli.js"
+  },
   "engines": {
     "node": ">=22.5.0"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "cli": "tsx src/cli.ts",
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",

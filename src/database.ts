@@ -121,6 +121,7 @@ export class Database {
         chapter_type TEXT,
         source TEXT NOT NULL DEFAULT 'manual',
         source_ref TEXT,
+        change_note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         created_by_user_id TEXT,
         UNIQUE(chapter_id, version_no)
@@ -1064,6 +1065,15 @@ export class Database {
         )`);
         this.run("CREATE INDEX IF NOT EXISTS idx_user_api_keys_hash ON user_api_keys(key_hash)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (21, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(22)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(chapter_versions)").map((row) => String(row.name)));
+        if (!columns.has("change_note")) {
+          this.run("ALTER TABLE chapter_versions ADD COLUMN change_note TEXT NOT NULL DEFAULT ''");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (22, ?)", new Date().toISOString());
       });
     }
   }
