@@ -78,8 +78,13 @@ function Brand() {
 function RelationshipGraph() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ id: string; pointerId: number; lastX: number; lastY: number } | null>(null);
   const [selected, setSelected] = useState("lin");
   const [showLabels, setShowLabels] = useState(true);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>(() =>
+    Object.fromEntries(storyNodes.map((node) => [node.id, { x: node.x, y: node.y }])),
+  );
 
   const connectedEdges = useMemo(
     () => storyEdges.filter((edge) => edge.from === selected || edge.to === selected),
@@ -103,8 +108,8 @@ function RelationshipGraph() {
       context.scale(ratio, ratio);
       context.clearRect(0, 0, width, height);
       for (const edge of storyEdges) {
-        const from = storyNodes.find((node) => node.id === edge.from);
-        const to = storyNodes.find((node) => node.id === edge.to);
+        const from = positions[edge.from];
+        const to = positions[edge.to];
         if (!from || !to) continue;
         const active = edge.from === selected || edge.to === selected;
         context.beginPath();
@@ -119,7 +124,52 @@ function RelationshipGraph() {
     const observer = new ResizeObserver(draw);
     observer.observe(host);
     return () => observer.disconnect();
-  }, [selected]);
+  }, [positions, selected]);
+
+  const moveNode = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    const host = hostRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !host) return;
+    event.preventDefault();
+    const bounds = host.getBoundingClientRect();
+    const deltaX = (event.clientX - drag.lastX) / Math.max(1, bounds.width) * 100;
+    const deltaY = (event.clientY - drag.lastY) / Math.max(1, bounds.height) * 100;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    setPositions((current) => {
+      const next = { ...current };
+      const active = current[drag.id];
+      next[drag.id] = {
+        x: Math.min(94, Math.max(6, active.x + deltaX)),
+        y: Math.min(91, Math.max(9, active.y + deltaY)),
+      };
+      const neighborIds = new Set<string>();
+      for (const edge of storyEdges) {
+        if (edge.from === drag.id) neighborIds.add(edge.to);
+        if (edge.to === drag.id) neighborIds.add(edge.from);
+      }
+      for (const neighborId of neighborIds) {
+        const neighbor = current[neighborId];
+        next[neighborId] = {
+          x: Math.min(94, Math.max(6, neighbor.x + deltaX * 0.12)),
+          y: Math.min(91, Math.max(9, neighbor.y + deltaY * 0.12)),
+        };
+      }
+      return next;
+    });
+  };
+
+  const finishNodeDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    dragRef.current = null;
+    setDragging(null);
+  };
+
+  const resetPositions = () => {
+    setPositions(Object.fromEntries(storyNodes.map((node) => [node.id, { x: node.x, y: node.y }])));
+    setSelected("lin");
+  };
 
   const selectedNode = storyNodes.find((node) => node.id === selected) ?? storyNodes[0];
 
@@ -132,31 +182,47 @@ function RelationshipGraph() {
             <span key={kind}><i style={{ background: relationColors[kind] }} />{kind}</span>
           ))}
         </div>
-        <button className="dark-button" type="button" onClick={() => setShowLabels((value) => !value)} aria-pressed={showLabels}>
-          {showLabels ? "隐藏标签" : "显示标签"}
-        </button>
+        <div className="graph-actions">
+          <button className="dark-button" type="button" onClick={resetPositions}>重置布局</button>
+          <button className="dark-button" type="button" onClick={() => setShowLabels((value) => !value)} aria-pressed={showLabels}>
+            {showLabels ? "隐藏标签" : "显示标签"}
+          </button>
+        </div>
       </div>
       <div className="relationship-stage" ref={hostRef}>
         <canvas ref={canvasRef} aria-hidden="true" />
         <div className="graph-focus"><span>选中角色</span><strong>{selectedNode.name}</strong><small>{selectedNode.group}</small></div>
         {storyNodes.map((node) => {
+          const position = positions[node.id];
           const related = connectedEdges.some((edge) => edge.from === node.id || edge.to === node.id);
           const dimmed = node.id !== selected && !related;
           return (
             <button
-              className={`relation-node${node.id === selected ? " is-selected" : ""}${dimmed ? " is-dimmed" : ""}`}
+              className={`relation-node${node.id === selected ? " is-selected" : ""}${dimmed ? " is-dimmed" : ""}${dragging === node.id ? " is-dragging" : ""}`}
               key={node.id}
               type="button"
               onClick={() => setSelected(node.id)}
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.currentTarget.setPointerCapture(event.pointerId);
+                dragRef.current = { id: node.id, pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
+                setSelected(node.id);
+                setDragging(node.id);
+              }}
+              onPointerMove={moveNode}
+              onPointerUp={finishNodeDrag}
+              onPointerCancel={finishNodeDrag}
               aria-label={`查看角色 ${node.name}`}
-              style={{ left: `${node.x}%`, top: `${node.y}%`, "--node-size": `${node.size}px`, "--node-color": node.color } as React.CSSProperties}
+              aria-grabbed={dragging === node.id}
+              data-node-id={node.id}
+              style={{ left: `${position.x}%`, top: `${position.y}%`, "--node-size": `${node.size}px`, "--node-color": node.color } as React.CSSProperties}
             >
               <i />
               {showLabels && <span>{node.name}</span>}
             </button>
           );
         })}
-        <p className="graph-help">点击角色聚焦关系 · 每条结论均可回到原文证据</p>
+        <p className="graph-help">拖动角色重排网络 · 点击聚焦关系 · 每条结论均可回到原文证据</p>
       </div>
       <div className="evidence-panel" aria-live="polite">
         <span className="evidence-index">{String(connectedEdges.length).padStart(2, "0")}</span>
@@ -174,11 +240,15 @@ function GalaxyGraph() {
   const labelsRef = useRef(true);
   const starsRef = useRef(true);
   const pausedRef = useRef(false);
+  const yawRef = useRef(0);
+  const pitchRef = useRef(0);
+  const cameraDragRef = useRef<{ pointerId: number; startX: number; startY: number; lastX: number; lastY: number; moved: boolean } | null>(null);
   const hitAreasRef = useRef<Array<{ id: string; x: number; y: number; radius: number }>>([]);
   const [selected, setSelected] = useState("lin");
   const [labels, setLabels] = useState(true);
   const [stars, setStars] = useState(true);
   const [paused, setPaused] = useState(false);
+  const [cameraDragging, setCameraDragging] = useState(false);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { labelsRef.current = labels; }, [labels]);
@@ -196,7 +266,6 @@ function GalaxyGraph() {
       alpha: 0.2 + (index % 5) * 0.13,
     }));
     let frame = 0;
-    let angle = 0;
     const draw = () => {
       const width = host.clientWidth;
       const height = host.clientHeight;
@@ -224,19 +293,20 @@ function GalaxyGraph() {
           context.fill();
         }
       }
-      if (!pausedRef.current) angle += 0.0014;
+      if (!pausedRef.current && !cameraDragRef.current) yawRef.current += 0.0014;
       const centerX = width * 0.5;
       const centerY = height * 0.49;
       const scaleX = Math.min(width * 0.37, 410);
       const scaleY = Math.min(height * 0.31, 190);
       const projected = storyNodes.map((node, index) => {
-        const originalAngle = Math.atan2(node.y - 50, node.x - 50) + angle;
+        const originalAngle = Math.atan2(node.y - 50, node.x - 50) + yawRef.current;
         const radius = 0.25 + Math.hypot(node.x - 50, node.y - 50) / 78;
-        const depth = Math.sin(originalAngle);
+        const layer = (index - (storyNodes.length - 1) / 2) / storyNodes.length;
+        const depth = Math.sin(originalAngle) * Math.cos(pitchRef.current) + layer * Math.sin(pitchRef.current);
         return {
           ...node,
           x: centerX + Math.cos(originalAngle) * scaleX * radius,
-          y: centerY + Math.sin(originalAngle) * scaleY * radius,
+          y: centerY + (Math.sin(originalAngle) * Math.cos(pitchRef.current) * radius + layer * Math.sin(pitchRef.current) * 1.7) * scaleY,
           depth,
           radius: node.size * (0.58 + (depth + 1) * 0.18),
           order: index,
@@ -290,12 +360,36 @@ function GalaxyGraph() {
   const selectedNode = storyNodes.find((node) => node.id === selected) ?? storyNodes[0];
   const related = storyEdges.filter((edge) => edge.from === selected || edge.to === selected);
 
-  const pickNode = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - bounds.left;
-    const y = event.clientY - bounds.top;
+  const pickNode = (canvas: HTMLCanvasElement, clientX: number, clientY: number) => {
+    const bounds = canvas.getBoundingClientRect();
+    const x = clientX - bounds.left;
+    const y = clientY - bounds.top;
     const hit = hitAreasRef.current.find((node) => Math.hypot(node.x - x, node.y - y) <= node.radius);
     if (hit) setSelected(hit.id);
+  };
+
+  const moveCamera = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = cameraDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - drag.lastX;
+    const deltaY = event.clientY - drag.lastY;
+    if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 4) drag.moved = true;
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
+    yawRef.current += deltaX * 0.008;
+    pitchRef.current = Math.min(0.72, Math.max(-0.72, pitchRef.current - deltaY * 0.006));
+    event.currentTarget.dataset.cameraYaw = yawRef.current.toFixed(3);
+    event.currentTarget.dataset.cameraPitch = pitchRef.current.toFixed(3);
+  };
+
+  const finishCameraDrag = (event: React.PointerEvent<HTMLCanvasElement>, cancelled = false) => {
+    const drag = cameraDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.moved && !cancelled) pickNode(event.currentTarget, event.clientX, event.clientY);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    cameraDragRef.current = null;
+    setCameraDragging(false);
   };
 
   const cycleNode = (direction: number) => {
@@ -307,19 +401,30 @@ function GalaxyGraph() {
     <div className="galaxy-demo" ref={hostRef}>
       <canvas
         ref={canvasRef}
-        onPointerDown={pickNode}
+        className={cameraDragging ? "is-dragging" : ""}
+        data-camera-yaw="0"
+        data-camera-pitch="0"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.currentTarget.setPointerCapture(event.pointerId);
+          cameraDragRef.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, lastX: event.clientX, lastY: event.clientY, moved: false };
+          setCameraDragging(true);
+        }}
+        onPointerMove={moveCamera}
+        onPointerUp={(event) => finishCameraDrag(event)}
+        onPointerCancel={(event) => finishCameraDrag(event, true)}
         onKeyDown={(event) => {
           if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); cycleNode(1); }
           if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); cycleNode(-1); }
         }}
         tabIndex={0}
-        aria-label="可交互人物关系银河图，使用方向键切换角色"
+        aria-label="可交互人物关系银河图，拖拽旋转视角，使用方向键切换角色"
       />
       <aside className="galaxy-card" aria-live="polite">
         <span>人物档案</span>
         <strong>{selectedNode.name}</strong>
         <small>{selectedNode.group}</small>
-        <p>{related.length} 条关系与当前人物相连。点击星体或使用方向键，查看关系焦点如何随角色切换。</p>
+        <p>{related.length} 条关系与当前人物相连。拖拽旋转视角，点击星体或使用方向键切换关系焦点。</p>
         <div className="galaxy-related">
           {related.slice(0, 3).map((edge) => <span key={`${edge.from}-${edge.to}`}><i style={{ background: relationColors[edge.kind] }} />{edge.label}</span>)}
         </div>
