@@ -26,16 +26,16 @@ describe("ImageCaptchaService", () => {
     expect(() => captcha.consume(challenge.captchaId, challenge.answer ?? "")).toThrow(/已失效/u);
   });
 
-  it("渲染结果包含全部字符且转义特殊内容", () => {
+  it("渲染为无答案文本节点的扭曲点阵字形", () => {
     const svg = renderCaptchaSvg("A2B3", Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]));
-    expect(svg).toContain(">A<");
-    expect(svg).toContain(">2<");
-    expect(svg).toContain(">B<");
-    expect(svg).toContain(">3<");
-    const escaped = renderCaptchaSvg("<&>\"", Buffer.alloc(8));
-    expect(escaped).toContain(">&lt;<");
-    expect(escaped).toContain(">&amp;<");
-    expect(escaped).toContain(">&gt;<");
-    expect(escaped).toContain(">&quot;<");
+    expect(svg).toContain('filter id="glyph-roughen"');
+    expect(svg).toContain('feDisplacementMap');
+    expect(svg.match(/<path /gu)?.length).toBeGreaterThan(12);
+    expect(svg).not.toContain(">A<");
+    expect(svg).not.toContain(">2<");
+    expect(svg).not.toContain(">B<");
+    expect(svg).not.toContain(">3<");
+    const untrusted = renderCaptchaSvg("<&>\"", Buffer.alloc(8));
+    expect(untrusted).not.toContain("<&>\"");
   });
 });
