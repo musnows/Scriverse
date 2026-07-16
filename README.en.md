@@ -1,8 +1,26 @@
-# Scriverse
+<p align="center">
+  <a href="https://scriverse.top/">
+    <img src="./showcase/public/favicon.svg" alt="Scriverse" width="96">
+  </a>
+</p>
 
-[Chinese](README.md) | [English](README.en.md)
+<h1 align="center">Scriverse</h1>
 
-Scriverse is a local AI-assisted writing workspace for long-form fiction. It keeps manuscript text, volumes, characters, organizations, worldbuilding, timelines, relationship graphs, outlines, foreshadowing, and AI assistance in one project. It is designed for large, continuity-heavy novel projects.
+<p align="center">
+  A local AI-assisted writing workspace for long-form fiction
+</p>
+
+<p align="center">
+  <a href="README.md">中文</a> | <a href="README.en.md">English</a>
+</p>
+
+<p align="center">
+  Scriverse is a local AI-assisted writing workspace for long-form fiction. It keeps manuscript text, volumes, characters, organizations, worldbuilding, timelines, relationship graphs, outlines, foreshadowing, and AI assistance in one project. It is designed for large, continuity-heavy novel projects.
+</p>
+
+<p align="center">
+  Live demo: <a href="https://scriverse.top/">https://scriverse.top/</a>
+</p>
 
 ## Features
 
