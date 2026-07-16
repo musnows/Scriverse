@@ -20,7 +20,7 @@
 
 <p align="center">
   <a href="https://scriverse.top/">
-    <img src="./assets/readme/scriverse-overview.png" alt="叙界 Scriverse：让宏大的故事，有迹可循" width="100%">
+    <img src="./showcase/public/scriverse-overview.png" alt="叙界 Scriverse：让宏大的故事，有迹可循" width="100%">
   </a>
 </p>
 
