@@ -76,10 +76,65 @@ function analysisTaskStatusLabel(status) {
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
+const onboardingStoragePrefix = "scriverse-onboarding-v1";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
 let memberDialogWork = null;
+let onboardingStep = 0;
+let onboardingAutoScheduled = false;
+
+function onboardingStorageKey() {
+  return `${onboardingStoragePrefix}:${state.user?.userId ?? "anonymous"}`;
+}
+
+function hasCompletedOnboarding() {
+  try { return localStorage.getItem(onboardingStorageKey()) === "completed"; }
+  catch { return false; }
+}
+
+function persistOnboardingCompletion() {
+  try { localStorage.setItem(onboardingStorageKey(), "completed"); }
+  catch { /* 浏览器禁用存储时仅在当前页面关闭导览 */ }
+}
+
+function renderOnboardingStep(step, focusTitle = false) {
+  const sections = [...document.querySelectorAll("[data-onboarding-step]")];
+  const lastStep = Math.max(0, sections.length - 1);
+  onboardingStep = Math.max(0, Math.min(lastStep, Number(step) || 0));
+  sections.forEach((section, index) => { section.hidden = index !== onboardingStep; });
+  document.querySelectorAll("[data-onboarding-go]").forEach((button) => {
+    if (Number(button.dataset.onboardingGo) === onboardingStep) button.setAttribute("aria-current", "step");
+    else button.removeAttribute("aria-current");
+  });
+  document.querySelectorAll(".onboarding-dots i").forEach((dot, index) => dot.classList.toggle("active", index === onboardingStep));
+  $("#onboarding-progress").textContent = `第 ${onboardingStep + 1} 步，共 ${sections.length} 步`;
+  $("#onboarding-previous").disabled = onboardingStep === 0;
+  $("#onboarding-next").textContent = onboardingStep === lastStep ? "开始创作" : "下一步";
+  if (focusTitle) sections[onboardingStep]?.querySelector("h3")?.focus();
+}
+
+function openOnboarding(force = false) {
+  const dialog = $("#onboarding-dialog");
+  if (!force && hasCompletedOnboarding()) return;
+  renderOnboardingStep(0);
+  if (!dialog.open) dialog.showModal();
+  window.requestAnimationFrame(() => dialog.querySelector("[data-onboarding-step]:not([hidden]) h3")?.focus());
+}
+
+function completeOnboarding() {
+  persistOnboardingCompletion();
+  if ($("#onboarding-dialog").open) $("#onboarding-dialog").close();
+}
+
+function scheduleFirstUseOnboarding() {
+  if (onboardingAutoScheduled || hasCompletedOnboarding()) return;
+  onboardingAutoScheduled = true;
+  window.requestAnimationFrame(() => {
+    onboardingAutoScheduled = false;
+    if (state.user && !document.body.classList.contains("auth-pending")) openOnboarding();
+  });
+}
 
 function settingsRouteContext() {
   const context = settingsReturnContext ?? {};
@@ -987,6 +1042,7 @@ function applyAuthenticatedUser(session) {
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.body.classList.remove("auth-pending");
+  scheduleFirstUseOnboarding();
 }
 
 async function initializeAuthentication() {
@@ -3218,6 +3274,37 @@ $("#settings-button").addEventListener("click", showSettingsHub);
 $("#account-button").addEventListener("click", () => {
   const expanded = $("#account-menu").classList.toggle("hidden") === false;
   $("#account-button").setAttribute("aria-expanded", String(expanded));
+});
+$("#onboarding-menu-button").addEventListener("click", () => {
+  $("#account-menu").classList.add("hidden");
+  $("#account-button").setAttribute("aria-expanded", "false");
+  openOnboarding(true);
+});
+$("#onboarding-skip").addEventListener("click", completeOnboarding);
+$("#onboarding-previous").addEventListener("click", () => renderOnboardingStep(onboardingStep - 1, true));
+$("#onboarding-next").addEventListener("click", () => {
+  const lastStep = document.querySelectorAll("[data-onboarding-step]").length - 1;
+  if (onboardingStep >= lastStep) completeOnboarding();
+  else renderOnboardingStep(onboardingStep + 1, true);
+});
+document.querySelectorAll("[data-onboarding-go]").forEach((button) => {
+  button.addEventListener("click", () => renderOnboardingStep(Number(button.dataset.onboardingGo), true));
+});
+$("#onboarding-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  completeOnboarding();
+});
+$("#onboarding-dialog").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    completeOnboarding();
+    return;
+  }
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const direction = event.key === "ArrowRight" ? 1 : -1;
+  const lastStep = document.querySelectorAll("[data-onboarding-step]").length - 1;
+  renderOnboardingStep(Math.max(0, Math.min(lastStep, onboardingStep + direction)), true);
 });
 $("#account-settings-button").addEventListener("click", () => {
   $("#account-menu").classList.add("hidden");

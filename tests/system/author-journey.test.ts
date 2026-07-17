@@ -140,6 +140,27 @@ describe("作者完整创作流程", () => {
     expect(theme.text).toContain('THEME_STORAGE_KEY = "scriverse-color-theme-v1"');
   });
 
+  it("首次登录展示可重开的完整功能导览", async () => {
+    const page = await request(runtime.app).get("/").expect(200);
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    const styles = await request(runtime.app).get("/styles.css").expect(200);
+    expect(page.text).toContain('id="onboarding-dialog"');
+    expect(page.text).toContain('data-testid="first-use-onboarding"');
+    expect(page.text).toContain('id="onboarding-menu-button"');
+    expect(page.text.match(/data-onboarding-step=/gu)).toHaveLength(5);
+    expect(page.text.match(/data-onboarding-go=/gu)).toHaveLength(5);
+    expect(page.text).toContain("AI 结果默认只是建议，不会直接覆盖正文");
+    expect(page.text).toContain("作品级权限");
+    expect(application.text).toContain('const onboardingStoragePrefix = "scriverse-onboarding-v1"');
+    expect(application.text).toContain("function scheduleFirstUseOnboarding()");
+    expect(application.text).toContain('localStorage.setItem(onboardingStorageKey(), "completed")');
+    expect(application.text).toContain('addEventListener("cancel"');
+    expect(application.text).toContain('event.key === "Escape"');
+    expect(styles.text).toContain(".onboarding-dialog {");
+    expect(styles.text).toContain(".onboarding-step[hidden] { display: none; }");
+    expect(styles.text).toContain("@media (max-width: 800px)");
+  });
+
   it("复杂人物使用分区编辑器并提供版本历史与回滚入口", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
@@ -172,8 +193,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260717-markdown-table-scrollbar');
-    expect(page.text).toContain('/styles.css?v=20260717-markdown-table-scrollbar');
+    expect(page.text).toContain('/app.js?v=20260717-first-use-onboarding');
+    expect(page.text).toContain('/styles.css?v=20260717-first-use-onboarding');
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
