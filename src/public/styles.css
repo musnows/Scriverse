@@ -669,13 +669,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .welcome-grid span { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 .hidden { display: none !important; }
-.editor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
+.editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
 .editor-toolbar { display: grid; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
 #chapter-path { grid-area: path; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-title { grid-area: title; display: block; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; font-size: 27px; padding: 0; }
 .chapter-title:focus { box-shadow: none; border-bottom: 1px solid var(--accent); }
 .editor-actions { grid-area: actions; display: flex; align-items: center; gap: 10px; }
 .chapter-stats { color: var(--muted); font-size: 11px; }
+@container editor-workspace (max-width: 720px) {
+  .editor-toolbar { grid-template-areas: "path" "title" "actions"; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-inline: 6%; }
+  .chapter-title { min-height: 36px; }
+  .editor-actions { justify-content: flex-end; flex-wrap: wrap; }
+  .chapter-stats { display: none; }
+}
 .editor-body { display: flex; min-height: 0; flex-direction: column; }
 .chapter-editor-frame { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); flex: 1 1 auto; width: 100%; min-height: 0; margin: 0; overflow: hidden; }
 .chapter-line-numbers { position: relative; z-index: 2; grid-column: 1; grid-row: 1; min-height: 0; overflow: visible; border-right: 1px solid var(--line); background: linear-gradient(to right, transparent, rgba(143,132,116,.04)); color: var(--muted); font-family: var(--font-latin), monospace; font-size: clamp(11px, calc(var(--editor-font-size) * .72), 14px); line-height: 1.2; user-select: none; }

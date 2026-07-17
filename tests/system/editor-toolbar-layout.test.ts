@@ -30,6 +30,10 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>');
     expect(styles.text).toContain('@container (max-width: 120px)');
     expect(styles.text).toContain('@container (max-width: 88px)');
+    expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');
+    expect(styles.text).toContain('.editor-toolbar { grid-template-areas: "path" "title" "actions";');
+    expect(styles.text).toContain('.chapter-title { min-height: 36px; }');
+    expect(styles.text).toContain('.chapter-stats { display: none; }');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
     expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
   });

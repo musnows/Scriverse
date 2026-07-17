@@ -79,7 +79,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="ai-panel-resize"');
     expect(page.text).toContain('<div class="panel-heading">');
     expect(page.text).toContain('<div class="ai-heading">');
-    expect(styles.text).toContain(".editor-view { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }");
+    expect(styles.text).toContain(".editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }");
+    expect(styles.text).toContain("@container editor-workspace (max-width: 720px)");
+    expect(styles.text).toContain(".chapter-stats { display: none; }");
     expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers()");
@@ -199,7 +201,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/app.js?v=20260718-user-avatar');
-    expect(page.text).toContain('/styles.css?v=20260718-adaptive-import-label');
+    expect(page.text).toContain('/styles.css?v=20260718-prioritize-chapter-title');
     expect(page.text).toContain('id="avatar-file"');
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
