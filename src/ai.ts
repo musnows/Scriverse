@@ -193,20 +193,27 @@ function safeJsonObject(value: string): Record<string, unknown> {
   return json<Record<string, unknown>>(value, {});
 }
 
-function extractJson<T>(content: string, accepts?: (value: unknown) => boolean): T {
+export function extractJson<T>(content: string, accepts?: (value: unknown) => boolean): T {
   const trimmed = content.trim();
   const candidates = [trimmed];
+  const taggedCandidates = [...trimmed.matchAll(/<json>\s*([\s\S]*?)\s*<\/json>/giu)]
+    .map((match) => match[1]?.trim())
+    .filter((candidate): candidate is string => Boolean(candidate));
+  candidates.push(...taggedCandidates.reverse());
   for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/giu)) {
     if (match[1]) candidates.push(match[1].trim());
   }
-  const maximumBalancedCandidates = 20;
-  for (let start = 0; start < trimmed.length && candidates.length < maximumBalancedCandidates; start += 1) {
+  const maximumScanSteps = Math.max(100_000, trimmed.length * 20);
+  let scanSteps = 0;
+  balancedCandidates: for (let start = 0; start < trimmed.length; start += 1) {
     const first = trimmed[start];
     if (first !== "{" && first !== "[") continue;
     const stack = [first];
     let inString = false;
     let escaped = false;
     for (let index = start + 1; index < trimmed.length; index += 1) {
+      scanSteps += 1;
+      if (scanSteps > maximumScanSteps) break balancedCandidates;
       const character = trimmed[index];
       if (inString) {
         if (escaped) escaped = false;
@@ -225,6 +232,7 @@ function extractJson<T>(content: string, accepts?: (value: unknown) => boolean):
         stack.pop();
         if (stack.length === 0) {
           candidates.push(trimmed.slice(start, index + 1));
+          start = index;
           break;
         }
       }
@@ -997,13 +1005,13 @@ export class AiManager {
         modelId: stringValue(call, "model_id"),
         scope,
         instruction: [
-          "检查下面的续写候选是否与提供的上下文冲突。只输出 JSON 数组，没有冲突时输出 []。",
+          "检查下面的续写候选是否与提供的上下文冲突。将最终 JSON 数组放在唯一一对 <json> 和 </json> 标签中，没有冲突时标签内容为 []。",
           "每项字段必须为：type（character/location/time/world/outline/foreshadow）、severity（low/medium/high）、title、description、candidateQuote、sourceRefs（数组）、suggestion。",
           "不得把文风偏好当成事实冲突，不得使用 Markdown 代码块。",
           "续写候选：",
           content
         ].join("\n\n"),
-        extraSystemPrompt: "你是续写一致性守卫。必须逐项对照人物状态、地点、时间、世界观硬约束、章节大纲和未回收伏笔，输出严格 JSON。"
+        extraSystemPrompt: "你是续写一致性守卫。必须逐项对照人物状态、地点、时间、世界观硬约束、章节大纲和未回收伏笔。最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
       });
       const issues = parseGuardIssues(generated.content);
       return this.store.createContinuationGuard({
@@ -1693,10 +1701,10 @@ export class AiManager {
       workId,
       taskType: "chapter-analysis",
       signal: this.taskSignal(taskId),
-      instruction: "分析本章并只输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。不得使用 Markdown 代码块。",
+      instruction: "分析本章并将最终 JSON 对象放在唯一一对 <json> 和 </json> 标签中，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。不得使用 Markdown 代码块。",
       scope,
       ...(modelId ? { modelId } : {}),
-      extraSystemPrompt: "本任务要求严格输出可解析的 JSON。"
+      extraSystemPrompt: "本任务要求严格输出可解析的 JSON，最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
     });
     const data = extractJson<{
       summary?: string;
@@ -1731,10 +1739,10 @@ export class AiManager {
       workId,
       taskType: "timeline-analysis",
       signal: this.taskSignal(taskId),
-      instruction: "抽取大事件候选并只输出 JSON 数组。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。不得使用 Markdown 代码块。",
+      instruction: "抽取大事件候选并将最终 JSON 数组放在唯一一对 <json> 和 </json> 标签中。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。不得使用 Markdown 代码块。",
       scope,
       ...(modelId ? { modelId } : {}),
-      extraSystemPrompt: "本任务要求严格输出可解析的 JSON。仅生成候选，不得声称已确认。"
+      extraSystemPrompt: "本任务要求严格输出可解析的 JSON，最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。仅生成候选，不得声称已确认。"
     });
     const events = extractJson<Array<Record<string, unknown>>>(generated.content);
     if (!Array.isArray(events)) throw new AppError(502, "AI_INVALID_JSON", "时间轴分析结果必须是数组");
@@ -1768,7 +1776,7 @@ export class AiManager {
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
       instruction: [
-        "分析正文中已经出现的世界观，只输出一个 JSON 对象，不得使用 Markdown 代码块。",
+        "分析正文中已经出现的世界观，将最终 JSON 对象放在唯一一对 <json> 和 </json> 标签中，不得使用 Markdown 代码块。",
         "顶层字段：summary、dimensions、conflicts、uncertainties。",
         "dimensions 是数组，每项字段：category、title、conclusion、confidence（0 到 1 的数字）、evidence。",
         "category 只能是：宇宙与自然、地理与环境、社会与制度、历史与文明、科技与能力、资源与经济、宗教与文化、规则与限制、其他。",
@@ -1779,7 +1787,7 @@ export class AiManager {
       scope,
       ...(modelId ? { modelId } : {}),
       parameters: { temperature: 0.1 },
-      extraSystemPrompt: "你是可审计的小说世界观分析器。所有结论必须能追溯到给定正文；证据不足时放入 uncertainties。"
+      extraSystemPrompt: "你是可审计的小说世界观分析器。所有结论必须能追溯到给定正文；证据不足时放入 uncertainties。最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
     });
     const parsed = extractJson<unknown>(generated.content, (value) => {
       if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -1864,14 +1872,14 @@ export class AiManager {
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.1 },
         instruction: [
-          "从本批正文抽取可复用、会影响后续创作的世界设定候选，只输出 JSON 数组，不得使用 Markdown 代码块。",
+          "从本批正文抽取可复用、会影响后续创作的世界设定候选，将最终 JSON 数组放在唯一一对 <json> 和 </json> 标签中，不得使用 Markdown 代码块。",
           "每项字段：title、category、content、tags、confidence、evidence。",
           "category 只能是：世界规则、历史与年代、地点与地图、组织与阵营、物种与族群、科技与物品、术语与称谓、创作约束。",
           "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是原文连续短引文且不超过 120 字。",
           "只抽取原文明示、跨场景可复用的事实或约束；不要把一次性动作、剧情摘要、人物关系、推测、梦境或未证实传闻当作确定设定。",
           "同一设定在本批只输出一次。证据不足或 confidence 低于 0.6 时不要输出。"
         ].join("\n"),
-        extraSystemPrompt: "你是严格的小说设定抽取器。不得补写、常识推断或伪造引文；候选最终由作者确认。"
+        extraSystemPrompt: "你是严格的小说设定抽取器。不得补写、常识推断或伪造引文；候选最终由作者确认。最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
       });
       const extracted = extractJson<unknown>(generated.content);
       if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "设定抽取结果必须是数组");
@@ -2006,10 +2014,10 @@ export class AiManager {
       workId,
       taskType: "consistency-check",
       signal: this.taskSignal(taskId),
-      instruction: "检查设定、人物状态、关系和时间是否冲突，只输出 JSON 数组。每项字段：itemType、severity（low/medium/high）、title、description、entityRefs、evidence、suggestion。没有问题时输出 []。不得使用 Markdown 代码块。",
+      instruction: "检查设定、人物状态、关系和时间是否冲突，将最终 JSON 数组放在唯一一对 <json> 和 </json> 标签中。每项字段：itemType、severity（low/medium/high）、title、description、entityRefs、evidence、suggestion。没有问题时标签内容为 []。不得使用 Markdown 代码块。",
       scope,
       ...(modelId ? { modelId } : {}),
-      extraSystemPrompt: "本任务要求严格输出可解析的 JSON。"
+      extraSystemPrompt: "本任务要求严格输出可解析的 JSON，最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
     });
     const issues = extractJson<Array<Record<string, unknown>>>(generated.content);
     if (!Array.isArray(issues)) throw new AppError(502, "AI_INVALID_JSON", "一致性检查结果必须是数组");
@@ -2048,7 +2056,7 @@ export class AiManager {
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.2 },
         instruction: [
-          "抽取本批原文中有名字且对跨章节剧情有意义的人物或具有人格的生物。只输出 JSON 数组。",
+          "抽取本批原文中有名字且对跨章节剧情有意义的人物或具有人格的生物。将最终 JSON 数组放在唯一一对 <json> 和 </json> 标签中。",
           "每项字段：canonicalName、aliases（仅无歧义昵称或拼写变体）、species（仅原文明确说明时填写）、identity、firstEvidence（chapterId、chapterTitle、quote）。",
           "规则：合并明显拼写变体；不能把怪兽之王、怪兽女王、君王、女王、吾王、博士、舰长、上尉、司令、族长、老师、父亲、母亲、哥哥、姐姐等称号作为全局别名；不能把单字母简称作为别名；梦境或作品内虚构角色需在 identity 标明；不得创造人物；quote 必须是原文连续引文且不超过 80 字。",
           "没有合格人物时输出 []，不得使用 Markdown 代码块。"
@@ -2057,7 +2065,8 @@ export class AiManager {
           "你是严格的人物规范化抽取器。相似名字不能凭空合并。",
           "必须区分：真酱与真姬；魔斯拉与魔蛇；基多拉、银月基多拉、奥尔森与真姬；伊比拉与达哥拉；安吉拉斯与安胡卢克；陈伊琳、陈玲、陈欣、陈芳、陈雅丽与陈妍菲。",
           "明确拼写变体应合并：安吉拉斯/安基拉斯/安加拉斯，伊莉丝/伊莉斯，伊莎贝拉/伊萨贝拉，卡玛佐兹/卡玛左滋/卡玛卓兹/卡玛佐治。",
-          "奥卡编号、月柔、加隆、雅典娜和小塞是不同 AI 实例，不能仅因共享奥卡或 AI 称谓而合并。"
+          "奥卡编号、月柔、加隆、雅典娜和小塞是不同 AI 实例，不能仅因共享奥卡或 AI 称谓而合并。",
+          "最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
         ].join("\n")
       });
       const extracted = extractJson<unknown>(generated.content);
@@ -2238,10 +2247,10 @@ export class AiManager {
           "20. 前任向继任者让位属于前任与继任，不是继任者统御前任；方向必须由原文中的权力交接和实际服从行为共同决定。",
           "21. 关键词只能描述双方互动，不得混入任何一方单独的基因改造、意识变化、物种背景或未参与本关系的事件，也不得把不同时间阶段压成互相矛盾的同一组关键词。",
           "22. 集合身份、分身或内部意识不能当作额外人物扩散关系。若银月基多拉等聚合角色已代表内部意识与外部对象的整体关系，不得再把同一任务协作复制成每个内部意识与该对象的多条边；别名更不能彼此建边。",
-          "23. 只输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。",
+          "23. 将最终 JSON 数组放在唯一一对 <json> 和 </json> 标签中。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。",
           "24. 共同执行一次任务、同属一个组织、在同一集体场景中被感谢或落泪、替第三人转发消息，都不能单独证明同事、朋友或盟友。此类关系必须有原文明示身份，或至少两个不同章节的持续互动证据。"
         ].join("\n"),
-        extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。"
+        extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。"
       });
       const extracted = extractJson<unknown>(generated.content);
       if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "人物关系分析结果必须是数组");

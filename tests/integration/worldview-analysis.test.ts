@@ -66,7 +66,7 @@ describe("世界观分析任务", () => {
           }
         ]
       });
-      return new Response(JSON.stringify({ choices: [{ message: { content: `<think>{"status":"planning"}</think>\n分析完成：\n\`\`\`json\n${analysis}\n\`\`\`` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: `<think><json>{"status":"planning"}</json></think>\n分析完成：\n<json>${analysis}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
     runtime = createTestRuntime(fetchMock);
     const work = await request(runtime.app).post("/api/works").send({ title: "北港纪事" }).expect(201);
