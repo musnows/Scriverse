@@ -53,6 +53,7 @@ const analysisTaskTypeLabels = new Map([
   ...MODEL_PURPOSE_OPTIONS,
   ["character-extraction", "全书角色抽取"],
   ["character-summary", "全书角色抽取"],
+  ["worldview-analysis", "世界观分析"],
   ["structure", "结构分析"],
   ["report-update", "报告更新"]
 ]);
@@ -3114,7 +3115,7 @@ function openReviewDialog() {
 
 function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
-  openDialog("新建分析任务", field("taskType", "任务类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴抽取"], ["relationship-analysis", "全书人物关系分析"], ["consistency-check", "一致性校对"], ["book-analysis", "全书分析"]]) + field("scopeType", "范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  openDialog("新建分析任务", field("taskType", "任务类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["consistency-check", "一致性校对"], ["book-analysis", "全书分析"]]) + field("scopeType", "范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
     const scope = form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();

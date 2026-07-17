@@ -712,7 +712,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/tasks", (request, response) => data(response, store.listTasks(request.params.workId)));
   app.post("/api/works/:workId/tasks", (request, response) => {
-    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
+    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "worldview-analysis", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
     data(response, store.createTask(request.params.workId, input), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {

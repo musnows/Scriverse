@@ -198,11 +198,12 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260717-contextual-onboarding');
+    expect(page.text).toContain('/app.js?v=20260717-worldview-analysis');
     expect(page.text).toContain('/styles.css?v=20260717-contextual-onboarding');
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
+    expect(application.text).toContain('["worldview-analysis", "世界观分析"]');
     expect(application.text).toContain('review: "已完成"');
     expect(application.text).not.toContain('review: "待审核"');
     expect(application.text).toContain('"分析已完成"');

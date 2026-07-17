@@ -1117,6 +1117,8 @@ export class AiManager {
         result = await this.runTimelineAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "relationship-analysis") {
         result = await this.runRelationshipAnalysis(workId, scope, modelId, taskId);
+      } else if (taskType === "worldview-analysis") {
+        result = await this.runWorldviewAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "consistency-check") {
         result = await this.runConsistencyCheck(workId, scope, modelId, taskId);
       } else {
@@ -1716,6 +1718,83 @@ export class AiManager {
       eventIds.push(String(created.id));
     }
     return { eventIds, candidateCount: eventIds.length, callId: generated.callId };
+  }
+
+  private async runWorldviewAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
+    const chapters = this.getScopeChapters(workId, scope);
+    if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "世界观分析范围内没有章节");
+    const generated = await this.generate({
+      workId,
+      taskType: "book-analysis",
+      signal: this.taskSignal(taskId),
+      instruction: [
+        "分析正文中已经出现的世界观，只输出一个 JSON 对象，不得使用 Markdown 代码块。",
+        "顶层字段：summary、dimensions、conflicts、uncertainties。",
+        "dimensions 是数组，每项字段：category、title、conclusion、confidence、evidence。",
+        "category 只能是：宇宙与自然、地理与环境、社会与制度、历史与文明、科技与能力、资源与经济、宗教与文化、规则与限制、其他。",
+        "conflicts 是数组，每项字段：title、description、evidence。uncertainties 是数组，每项字段：question、reason、evidence。",
+        "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是原文连续短引文且不超过 120 字。",
+        "只总结原文明示或可由多处证据直接支持的结论，区分事实、传闻、角色认知和未知项，不得补写正文中不存在的设定。"
+      ].join("\n"),
+      scope,
+      ...(modelId ? { modelId } : {}),
+      parameters: { temperature: 0.1 },
+      extraSystemPrompt: "你是可审计的小说世界观分析器。所有结论必须能追溯到给定正文；证据不足时放入 uncertainties。"
+    });
+    const parsed = extractJson<unknown>(generated.content);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new AppError(502, "AI_INVALID_WORLDVIEW", "世界观分析结果必须是对象");
+    }
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callId: generated.callId };
+    const data = parsed as Record<string, unknown>;
+    const categories = new Set(["宇宙与自然", "地理与环境", "社会与制度", "历史与文明", "科技与能力", "资源与经济", "宗教与文化", "规则与限制", "其他"]);
+    let omittedDimensionCount = 0;
+    const dimensions = (Array.isArray(data.dimensions) ? data.dimensions : []).flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        omittedDimensionCount += 1;
+        return [];
+      }
+      const item = value as Record<string, unknown>;
+      const title = typeof item.title === "string" ? item.title.trim() : "";
+      const conclusion = typeof item.conclusion === "string" ? item.conclusion.trim() : "";
+      const evidence = this.validateAnalysisEvidence(chapters, item.evidence);
+      if (!title || !conclusion || evidence.length === 0) {
+        omittedDimensionCount += 1;
+        return [];
+      }
+      return [{
+        category: typeof item.category === "string" && categories.has(item.category) ? item.category : "其他",
+        title,
+        conclusion,
+        confidence: typeof item.confidence === "number" ? clamp(item.confidence, 0, 1) : 0.5,
+        evidence
+      }];
+    });
+    const sanitizeFinding = (value: unknown, titleField: "title" | "question"): Record<string, unknown>[] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const item = value as Record<string, unknown>;
+      const title = typeof item[titleField] === "string" ? item[titleField].trim() : "";
+      if (!title) return [];
+      return [{
+        [titleField]: title,
+        [titleField === "title" ? "description" : "reason"]: typeof item[titleField === "title" ? "description" : "reason"] === "string"
+          ? String(item[titleField === "title" ? "description" : "reason"]).trim()
+          : "",
+        evidence: this.validateAnalysisEvidence(chapters, item.evidence)
+      }];
+    };
+    const conflicts = (Array.isArray(data.conflicts) ? data.conflicts : []).flatMap((item) => sanitizeFinding(item, "title"));
+    const uncertainties = (Array.isArray(data.uncertainties) ? data.uncertainties : []).flatMap((item) => sanitizeFinding(item, "question"));
+    return {
+      summary: typeof data.summary === "string" ? data.summary.trim() : "",
+      dimensions,
+      conflicts,
+      uncertainties,
+      dimensionCount: dimensions.length,
+      omittedDimensionCount,
+      coveredChapterCount: chapters.length,
+      callId: generated.callId
+    };
   }
 
   private async runConsistencyCheck(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
@@ -2359,6 +2438,19 @@ export class AiManager {
     }
     return volumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])
       .filter((chapter) => this.isAutomaticAnalysisChapter(chapter));
+  }
+
+  private validateAnalysisEvidence(chapters: Record<string, unknown>[], value: unknown): Record<string, unknown>[] {
+    const chaptersById = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
+    return (Array.isArray(value) ? value : []).flatMap((candidate) => {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+      const evidence = candidate as Record<string, unknown>;
+      const chapterId = typeof evidence.chapterId === "string" ? evidence.chapterId : "";
+      const quote = typeof evidence.quote === "string" ? evidence.quote.trim().slice(0, 120) : "";
+      const chapter = chaptersById.get(chapterId);
+      if (!chapter || !this.quoteExists(String(chapter.content), quote)) return [];
+      return [{ chapterId, chapterTitle: String(chapter.title), quote }];
+    });
   }
 
   private isAutomaticAnalysisChapter(chapter: Record<string, unknown>): boolean {
