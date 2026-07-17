@@ -66,7 +66,7 @@ describe("世界观分析任务", () => {
           }
         ]
       });
-      return new Response(JSON.stringify({ choices: [{ message: { content: `<think>先核对证据再输出。</think>\n分析完成：\n\`\`\`json\n${analysis}\n\`\`\`` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: `<think>{"status":"planning"}</think>\n分析完成：\n\`\`\`json\n${analysis}\n\`\`\`` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
     runtime = createTestRuntime(fetchMock);
     const work = await request(runtime.app).post("/api/works").send({ title: "北港纪事" }).expect(201);
@@ -101,5 +101,32 @@ describe("世界观分析任务", () => {
     expect(completed.body.data.result.conflicts[0].evidence[0].chapterTitle).toBe("第一章 潮汐");
     expect(completed.body.data.result.uncertainties).toHaveLength(1);
     expect(completed.body.data.result.uncertainties[0]).toMatchObject({ question: "备用能源是什么？" });
+  });
+
+  it("拒绝没有任何分析内容的成功结果", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ summary: "", dimensions: [], conflicts: [], uncertainties: [] }) } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    runtime = createTestRuntime(fetchMock);
+    const work = await request(runtime.app).post("/api/works").send({ title: "空分析测试" }).expect(201);
+    const workId = work.body.data.id as string;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "城墙以潮汐能源维持运转。"
+    }).expect(201);
+    const modelId = await configureModel(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "worldview-analysis",
+      scope: { type: "chapter", chapterId: chapter.body.data.id }
+    }).expect(201);
+
+    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(502);
+
+    expect(runtime.store.getTask(task.body.data.id)).toMatchObject({
+      status: "partial",
+      failures: [{ message: "AI 返回的世界观分析为空" }]
+    });
   });
 });

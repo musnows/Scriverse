@@ -193,7 +193,7 @@ function safeJsonObject(value: string): Record<string, unknown> {
   return json<Record<string, unknown>>(value, {});
 }
 
-function extractJson<T>(content: string): T {
+function extractJson<T>(content: string, accepts?: (value: unknown) => boolean): T {
   const trimmed = content.trim();
   const candidates = [trimmed];
   for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/giu)) {
@@ -232,7 +232,8 @@ function extractJson<T>(content: string): T {
   }
   for (const candidate of [...new Set(candidates)]) {
     try {
-      return JSON.parse(candidate) as T;
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!accepts || accepts(parsed)) return parsed as T;
     } catch {
       // 继续尝试模型响应中的下一个结构化片段
     }
@@ -1780,7 +1781,11 @@ export class AiManager {
       parameters: { temperature: 0.1 },
       extraSystemPrompt: "你是可审计的小说世界观分析器。所有结论必须能追溯到给定正文；证据不足时放入 uncertainties。"
     });
-    const parsed = extractJson<unknown>(generated.content);
+    const parsed = extractJson<unknown>(generated.content, (value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const candidate = value as Record<string, unknown>;
+      return ["summary", "dimensions", "conflicts", "uncertainties"].some((key) => key in candidate);
+    });
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new AppError(502, "AI_INVALID_WORLDVIEW", "世界观分析结果必须是对象");
     }
@@ -1827,8 +1832,12 @@ export class AiManager {
     };
     const conflicts = (Array.isArray(data.conflicts) ? data.conflicts : []).flatMap((item) => sanitizeFinding(item, "title"));
     const uncertainties = (Array.isArray(data.uncertainties) ? data.uncertainties : []).flatMap((item) => sanitizeFinding(item, "question"));
+    const summary = typeof data.summary === "string" ? data.summary.trim() : "";
+    if (!summary && dimensions.length === 0 && conflicts.length === 0 && uncertainties.length === 0) {
+      throw new AppError(502, "AI_EMPTY_WORLDVIEW", "AI 返回的世界观分析为空");
+    }
     return {
-      summary: typeof data.summary === "string" ? data.summary.trim() : "",
+      summary,
       dimensions,
       conflicts,
       uncertainties,
