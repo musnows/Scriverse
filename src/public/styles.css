@@ -993,6 +993,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body blockquote { margin: 9px 0; padding: 6px 9px; border-left: 3px solid currentColor; background: rgba(255,255,255,.35); opacity: .82; }
 .message-body pre { max-width: 100%; overflow-x: auto; margin: 9px 0; padding: 9px 10px; border-radius: 4px; background: #292724; color: #f6f1e7; font: 10px/1.55 var(--font-latin), monospace; white-space: pre; }
 .message-body code { padding: 1px 4px; border-radius: 3px; background: rgba(49,42,32,.1); font-family: var(--font-latin), monospace; font-size: .9em; }.message-body pre code { padding: 0; background: transparent; color: inherit; }
+.message-body .markdown-table-scroll { max-width: 100%; overflow-x: auto; margin: 9px 0; border: 1px solid var(--line); border-radius: 4px; overscroll-behavior-inline: contain; scrollbar-color: var(--muted) var(--surface-soft); scrollbar-gutter: stable; scrollbar-width: thin; }
+.message-body .markdown-table-scroll::-webkit-scrollbar { height: 8px; }.message-body .markdown-table-scroll::-webkit-scrollbar-track { background: var(--surface-soft); }.message-body .markdown-table-scroll::-webkit-scrollbar-thumb { border-radius: 4px; background: var(--muted); }
+.message-body .markdown-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.message-body .markdown-table-scroll table { width: max-content; min-width: 100%; border-collapse: collapse; }
+.message-body .markdown-table-scroll th, .message-body .markdown-table-scroll td { padding: 7px 9px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow-wrap: normal; white-space: nowrap; }
+.message-body .markdown-table-scroll th:last-child, .message-body .markdown-table-scroll td:last-child { border-right: 0; }
+.message-body .markdown-table-scroll tbody tr:last-child td { border-bottom: 0; }
+.message-body .markdown-table-scroll th { background: var(--surface-soft); font-weight: 600; }
+.message-body .markdown-table-scroll .markdown-align-left { text-align: left; }.message-body .markdown-table-scroll .markdown-align-center { text-align: center; }.message-body .markdown-table-scroll .markdown-align-right { text-align: right; }
 .message-body a { color: var(--accent-dark); text-decoration: underline; text-underline-offset: 2px; }.user-message .message-body a { color: inherit; }
 .message-body hr { margin: 12px 0; border: 0; border-top: 1px solid currentColor; opacity: .22; }
 .message-meta { margin-top: 8px; color: var(--muted); font-size: 9px; }

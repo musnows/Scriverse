@@ -39,6 +39,55 @@ function renderInlineMarkdown(value) {
   return html;
 }
 
+function splitMarkdownTableRow(value) {
+  const source = String(value ?? "").trim();
+  if (!source.includes("|")) return null;
+  const cells = [];
+  let cell = "";
+  let inCode = false;
+  let separators = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\" && source[index + 1] === "|") {
+      cell += "|";
+      index += 1;
+      continue;
+    }
+    if (character === "`") inCode = !inCode;
+    if (character === "|" && !inCode) {
+      cells.push(cell.trim());
+      cell = "";
+      separators += 1;
+      continue;
+    }
+    cell += character;
+  }
+  cells.push(cell.trim());
+  if (!separators) return null;
+  if (source.startsWith("|")) cells.shift();
+  if (source.endsWith("|") && cells.at(-1) === "") cells.pop();
+  return cells;
+}
+
+function tableAlignments(cells) {
+  if (!cells?.length || !cells.every((cell) => /^:?-{3,}:?$/u.test(cell))) return null;
+  return cells.map((cell) => {
+    if (cell.startsWith(":") && cell.endsWith(":")) return "center";
+    if (cell.endsWith(":")) return "right";
+    return "left";
+  });
+}
+
+function renderMarkdownTable(headers, alignments, rows) {
+  const renderCell = (tag, value, alignment) => `<${tag} class="markdown-align-${alignment}">${renderInlineMarkdown(value)}</${tag}>`;
+  const header = headers.map((cell, index) => renderCell("th", cell, alignments[index])).join("");
+  const body = rows.map((row) => {
+    const cells = headers.map((_header, index) => renderCell("td", row[index] ?? "", alignments[index])).join("");
+    return `<tr>${cells}</tr>`;
+  }).join("");
+  return `<div class="markdown-table-scroll" role="region" aria-label="Markdown 表格" tabindex="0"><table><thead><tr>${header}</tr></thead>${body ? `<tbody>${body}</tbody>` : ""}</table></div>`;
+}
+
 export function renderMarkdown(value) {
   const lines = String(value ?? "").replace(/\r\n?/gu, "\n").split("\n");
   const output = [];
@@ -74,7 +123,8 @@ export function renderMarkdown(value) {
     flushQuote();
   };
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     if (codeFence) {
       if (/^\s*```/u.test(line)) {
         output.push(`<pre><code${codeFence.language ? ` class="language-${codeFence.language}"` : ""}>${escapeHtml(codeFence.lines.join("\n"))}</code></pre>`);
@@ -113,6 +163,22 @@ export function renderMarkdown(value) {
     if (/^\s*(---+|___+|\*\*\*+)\s*$/u.test(line)) {
       flushBlocks();
       output.push("<hr>");
+      continue;
+    }
+    const tableHeaders = splitMarkdownTableRow(line);
+    const alignments = tableAlignments(splitMarkdownTableRow(lines[lineIndex + 1]));
+    if (tableHeaders && alignments && tableHeaders.length === alignments.length) {
+      flushBlocks();
+      const rows = [];
+      lineIndex += 2;
+      while (lineIndex < lines.length && lines[lineIndex].trim()) {
+        const row = splitMarkdownTableRow(lines[lineIndex]);
+        if (!row) break;
+        rows.push(row);
+        lineIndex += 1;
+      }
+      lineIndex -= 1;
+      output.push(renderMarkdownTable(tableHeaders, alignments, rows));
       continue;
     }
     const listItem = line.match(/^(\s*)([-+*]|\d+\.)\s+(.+)$/u);

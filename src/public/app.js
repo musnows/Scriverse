@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260714-no-edge-focus-ring";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260716-contiguous-quotes";
+import { renderMarkdown } from "/markdown.js?v=20260717-markdown-table";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";

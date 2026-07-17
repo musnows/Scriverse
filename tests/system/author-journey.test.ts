@@ -172,8 +172,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260717-api-key');
-    expect(page.text).toContain('/styles.css?v=20260717-api-key');
+    expect(page.text).toContain('/app.js?v=20260717-markdown-table');
+    expect(page.text).toContain('/styles.css?v=20260717-markdown-table');
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
@@ -197,6 +197,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('source: automatic ? "auto" : "manual"');
     expect(markdown.text).toContain("export function renderMarkdown");
     expect(markdown.text).toContain("safeLinkTarget");
+    expect(markdown.text).toContain("renderMarkdownTable");
+    expect(application.text).toContain('/markdown.js?v=20260717-markdown-table');
+    expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(styles.text).toContain("scrollbar-gutter: stable");
+    expect(styles.text).toContain("white-space: nowrap");
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
     expect(manifest.body.short_name).toBe("叙界");
     expect(page.text).toContain('data-testid="book-shelf"');
