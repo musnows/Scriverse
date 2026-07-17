@@ -1061,6 +1061,22 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body a { color: var(--accent-dark); text-decoration: underline; text-underline-offset: 2px; }.user-message .message-body a { color: inherit; }
 .message-body hr { margin: 12px 0; border: 0; border-top: 1px solid currentColor; opacity: .22; }
 .message-meta { margin-top: 8px; color: var(--muted); font-size: 9px; }
+.ai-process-details { margin: 0 0 10px; overflow: hidden; border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--surface-soft) 82%, transparent); }
+.ai-process-details > summary { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px 10px; color: var(--muted); cursor: pointer; font-size: 10px; list-style: none; }
+.ai-process-details > summary::-webkit-details-marker { display: none; }
+.ai-process-details > summary::before { content: ""; width: 6px; height: 6px; flex: 0 0 auto; border: 1px solid currentColor; border-radius: 50%; }
+.is-streaming .ai-process-details[open] > summary::before { background: var(--accent); animation: ai-process-pulse 1.2s ease-in-out infinite; }
+.ai-process-details > summary > span { flex: 1 1 auto; color: var(--ink); font-weight: 600; }
+.ai-process-details > summary > small { flex: 0 0 auto; font: 9px/1.4 var(--font-latin), monospace; }
+.ai-process-details[open] > summary { border-bottom: 1px solid var(--line); }
+.ai-process-list { display: grid; gap: 7px; padding: 9px; }
+.ai-process-step { display: grid; min-width: 0; gap: 5px; }
+.ai-process-step > small { color: var(--muted); font: 8px/1.4 var(--font-latin), monospace; }
+.ai-process-step-body { max-height: 220px; overflow: auto; padding: 8px 9px; border-left: 2px solid color-mix(in srgb, var(--accent) 46%, var(--line)); background: var(--paper-deep); color: var(--muted); font-size: 10px; }
+.ai-process-intermediate-step .ai-process-step-body { border-left-color: var(--muted); }
+.ai-process-tool-step { padding-top: 1px; }
+@keyframes ai-process-pulse { 0%, 100% { opacity: .45; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .is-streaming .ai-process-details[open] > summary::before { animation: none; } }
 .ai-tool-call-list { display: grid; gap: 5px; margin-top: 10px; }
 .ai-tool-call-summary { display: flex; align-items: center; justify-content: space-between; width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft); color: var(--muted); font: 9px/1.4 var(--font-latin), monospace; text-align: left; }
 .ai-tool-call-summary::after { content: "查看详情"; flex: 0 0 auto; margin-left: 8px; color: var(--accent-dark); }

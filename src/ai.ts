@@ -63,7 +63,8 @@ type GenerateInput = {
   extraSystemPrompt?: string;
   signal?: AbortSignal;
   maxAttempts?: number;
-  onToolCall?: (call: AgentToolCallResult) => void;
+  onToolCall?: (call: AgentToolCallResult, round: number) => void;
+  onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   conversationId?: string;
   excludeConversationMessageId?: string;
   disableTools?: boolean;
@@ -77,6 +78,7 @@ type GenerateResult = {
   model: Record<string, unknown>;
   context: string;
   toolCalls: AgentToolCallResult[];
+  processSteps: AiProcessStep[];
 };
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
@@ -85,7 +87,7 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 const AGENT_TOOL_IDS = ["story_index", "read_chapters", "query_story_knowledge"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
-type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
+type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
 
 export type AgentToolCallResult = {
   id: string;
@@ -94,6 +96,20 @@ export type AgentToolCallResult = {
   arguments: Record<string, unknown> | null;
   status: "completed" | "failed";
   result: Record<string, unknown>;
+};
+
+export type AiProcessStep = {
+  id: string;
+  type: "thinking" | "intermediate";
+  round: number;
+  content: string;
+  createdAt: string;
+} | {
+  id: string;
+  type: "tool";
+  round: number;
+  toolCall: AgentToolCallResult;
+  createdAt: string;
 };
 
 const MAX_AGENT_TOOL_ROUNDS = 6;
@@ -954,7 +970,7 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async createStreamingChat(
@@ -981,7 +997,7 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {
@@ -1527,6 +1543,7 @@ export class AiManager {
           message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
         }>;
       };
+      type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
@@ -1575,8 +1592,25 @@ export class AiManager {
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
+      const processSteps: AiProcessStep[] = [];
+      const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
+        const reasoning = currentChoice?.message?.reasoning_content;
+        if (reasoning?.trim()) {
+          const step: AiProcessStep = { id: id("process"), type: "thinking", round, content: reasoning, createdAt: now() };
+          processSteps.push(step);
+          input.onProcessStep?.(step);
+        }
+        const intermediate = currentChoice?.message?.content;
+        if (includeIntermediate && intermediate?.trim()) {
+          const step: AiProcessStep = { id: id("process"), type: "intermediate", round, content: intermediate, createdAt: now() };
+          processSteps.push(step);
+          input.onProcessStep?.(step);
+        }
+      };
       let toolRound = 0;
       while (choice?.message?.tool_calls?.length) {
+        const round = toolRound + 1;
+        recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
         if (executedToolCalls.length + toolCalls.length > MAX_AGENT_TOOL_CALLS) {
           throw new Error(`AI requested more than ${MAX_AGENT_TOOL_CALLS} tool calls in one response cycle.`);
@@ -1588,11 +1622,17 @@ export class AiManager {
             arguments: typeof toolCall.function.arguments === "string" ? toolCall.function.arguments : JSON.stringify(toolCall.function.arguments ?? {})
           }
         }));
-        completionMessages.push({ role: "assistant", content: choice.message.content ?? null, tool_calls: normalizedToolCalls });
+        completionMessages.push({
+          role: "assistant",
+          content: choice.message.content ?? null,
+          reasoning_content: choice.message.reasoning_content ?? null,
+          tool_calls: normalizedToolCalls
+        });
         for (const toolCall of toolCalls) {
           const execution = this.executeAgentTool(input.workId, toolCall);
           executedToolCalls.push(execution);
-          input.onToolCall?.(execution);
+          processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
+          input.onToolCall?.(execution, round);
           completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(execution.result) });
         }
         toolRound += 1;
@@ -1603,6 +1643,7 @@ export class AiManager {
           throw new Error(`AI returned tool calls after tool_choice was set to none at the ${MAX_AGENT_TOOL_ROUNDS}-round safety limit.`);
         }
       }
+      recordChoiceProcess(choice, toolRound + 1, false);
       const content = choice?.message?.content;
       if (!content?.trim()) {
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
@@ -1617,7 +1658,7 @@ export class AiManager {
         now(),
         callId
       );
-      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls };
+      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1653,9 +1694,11 @@ export class AiManager {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: { content: string; outputTokens: number } | null = null;
+      let streamedResult: { content: string; reasoning: string; outputTokens: number } | null = null;
       let lastFailure: unknown = null;
       let emitted = false;
+      const thinkingStepId = id("process");
+      const thinkingCreatedAt = now();
       for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
         try {
           const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
@@ -1672,10 +1715,17 @@ export class AiManager {
                 signal: controller.signal
               });
               if (!response.ok) return { ok: false as const, status: response.status, body: await response.text() };
-              const streamed = await this.readCompletionStream(response, (delta) => {
-                emitted = true;
-                onDelta(delta);
-              });
+              const streamed = await this.readCompletionStream(
+                response,
+                (delta) => {
+                  emitted = true;
+                  onDelta(delta);
+                },
+                (delta) => {
+                  emitted = true;
+                  input.onProcessStep?.({ id: thinkingStepId, type: "thinking", round: 1, content: delta, createdAt: thinkingCreatedAt, append: true });
+                }
+              );
               return { ok: true as const, status: response.status, result: streamed };
             } finally {
               clearTimeout(timeout);
@@ -1695,14 +1745,17 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, outputTokens } = streamedResult;
+      const { content, reasoning, outputTokens } = streamedResult;
+      const processSteps: AiProcessStep[] = reasoning.trim()
+        ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
+        : [];
       this.store.db.run(
         "UPDATE ai_calls SET status = 'completed', output_chars = ?, completed_at = ? WHERE id = ?",
         content.length,
         now(),
         callId
       );
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [] };
+      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1710,12 +1763,17 @@ export class AiManager {
     }
   }
 
-  private async readCompletionStream(response: Response, onDelta: (delta: string) => void): Promise<{ content: string; outputTokens: number }> {
+  private async readCompletionStream(
+    response: Response,
+    onDelta: (delta: string) => void,
+    onThinkingDelta: (delta: string) => void
+  ): Promise<{ content: string; reasoning: string; outputTokens: number }> {
     if (!response.body) throw new Error("Chat Completions 流式响应缺少正文");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
+    let reasoning = "";
     let finishReason = "unknown";
     let usage: unknown = null;
     const consumeEvent = (eventText: string): void => {
@@ -1728,12 +1786,17 @@ export class AiManager {
       const payload = JSON.parse(data) as {
         error?: { message?: string };
         usage?: { completion_tokens?: number; output_tokens?: number };
-        choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null } }>;
+        choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null } }>;
       };
       if (payload.error) throw new Error(payload.error.message || "上游流式响应返回错误");
       if (payload.usage) usage = payload.usage;
       const choice = payload.choices?.[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const thinkingDelta = choice?.delta?.reasoning_content;
+      if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
+        reasoning += thinkingDelta;
+        onThinkingDelta(thinkingDelta);
+      }
       const delta = choice?.delta?.content;
       if (typeof delta === "string" && delta.length > 0) {
         content += delta;
@@ -1750,7 +1813,7 @@ export class AiManager {
     }
     if (buffer.trim()) consumeEvent(buffer);
     if (!content.trim()) throw new Error(`Chat Completions 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    return { content, outputTokens: resolveOutputTokens(usage, content) };
+    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content) };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {

@@ -25,9 +25,14 @@ function sendCompletion(response: ServerResponse, message: JsonObject): void {
   response.end(JSON.stringify({ choices: [{ message }], usage: { completion_tokens: 32 } }));
 }
 
-function sendToolCalls(response: ServerResponse, calls: Array<{ id: string; name: string; arguments: unknown }>): void {
+function sendToolCalls(
+  response: ServerResponse,
+  calls: Array<{ id: string; name: string; arguments: unknown }>,
+  process: { content?: string | null; reasoningContent?: string } = {}
+): void {
   sendCompletion(response, {
-    content: null,
+    content: process.content ?? null,
+    ...(process.reasoningContent ? { reasoning_content: process.reasoningContent } : {}),
     tool_calls: calls.map((call) => ({
       id: call.id,
       type: "function",
@@ -65,6 +70,17 @@ const mockAi = createServer(async (request, response) => {
       return;
     }
     sendCompletion(response, { content: "模型已处理三个工具结果：目录、章节正文和跃迁设定均已确认。" });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器思考步骤测试")) {
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, [
+        { id: "browser-thinking-index", name: "story_index", arguments: { offset: 0, limit: 1 } }
+      ], { content: "我先读取作品目录。", reasoningContent: "需要先确认作品结构和章节范围。" });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    sendCompletion(response, { content: "最终结果：目录已经确认。", reasoning_content: "工具结果已经足够形成最终答案。" });
     return;
   }
   if (latestUserMessage.includes("浏览器滚动测试")) {

@@ -161,7 +161,7 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
-  metadata?: { modelDisplayName?: string; outputTokens?: number; toolCalls?: unknown[] };
+  metadata?: { modelDisplayName?: string; outputTokens?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
 export type AiConversationContext = {

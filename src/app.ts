@@ -251,6 +251,30 @@ const aiToolCallResultSchema = z.object({
   result: z.record(z.string(), z.unknown())
 }).strict();
 
+const aiProcessStepSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("thinking"),
+    round: z.number().int().min(1).max(20),
+    content: z.string().max(500_000),
+    createdAt: z.string().datetime({ offset: true })
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("intermediate"),
+    round: z.number().int().min(1).max(20),
+    content: z.string().max(500_000),
+    createdAt: z.string().datetime({ offset: true })
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("tool"),
+    round: z.number().int().min(1).max(20),
+    toolCall: aiToolCallResultSchema,
+    createdAt: z.string().datetime({ offset: true })
+  }).strict()
+]);
+
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
   autoRunEnabled: z.boolean().optional(),
@@ -762,7 +786,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       metadata: z.object({
         modelDisplayName: z.string().max(200).optional(),
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
-        toolCalls: z.array(aiToolCallResultSchema).max(12).optional()
+        toolCalls: z.array(aiToolCallResultSchema).max(12).optional(),
+        processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()
     }), request.body);
     data(response, store.addAiConversationMessage(request.params.conversationId, input), 201);
@@ -905,7 +930,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         instruction: instructionWithCitations(input.instruction, citations),
         scope: input.scope as ContextScope,
         signal: controller.signal,
-        onToolCall: (toolCall) => sendEvent("tool_call", toolCall),
+        onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
+        onProcessStep: (step) => sendEvent("process_step", step),
         conversationId: input.conversationId,
         excludeConversationMessageId: input.currentMessageId,
         ...(input.modelId ? { modelId: input.modelId } : {}),
@@ -918,7 +944,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         model: suggestion.model,
         outputTokens: suggestion.outputTokens,
         chapterVersion: suggestion.chapterVersion,
-        toolCalls: suggestion.toolCalls
+        toolCalls: suggestion.toolCalls,
+        processSteps: suggestion.processSteps
       });
     } catch (error) {
       if (!controller.signal.aborted) {

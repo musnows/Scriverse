@@ -764,26 +764,73 @@ function openAiToolCallDetail(toolCall) {
   $("#ai-tool-call-dialog").showModal();
 }
 
-function renderAiToolCalls(message, toolCalls) {
-  message.querySelector(".ai-tool-call-list")?.remove();
-  if (!Array.isArray(toolCalls) || !toolCalls.length) return;
-  const host = document.createElement("div");
-  host.className = "ai-tool-call-list";
-  host.setAttribute("aria-label", "AI 工具调用记录");
-  for (const toolCall of toolCalls) {
-    const name = String(toolCall?.name ?? "unknown");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `ai-tool-call-summary${toolCall?.status === "failed" ? " is-failed" : ""}`;
-    button.setAttribute("aria-haspopup", "dialog");
-    button.textContent = toolCall?.status === "failed" ? `调用 ${name} 工具失败` : `调用了 ${name} 工具`;
-    button.title = AI_TOOL_DISPLAY_NAMES[name] ?? name;
-    button.addEventListener("click", () => openAiToolCallDetail(toolCall));
-    host.append(button);
+function createAiToolCallButton(toolCall) {
+  const name = String(toolCall?.name ?? "unknown");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `ai-tool-call-summary${toolCall?.status === "failed" ? " is-failed" : ""}`;
+  button.setAttribute("aria-haspopup", "dialog");
+  button.textContent = toolCall?.status === "failed" ? `调用 ${name} 工具失败` : `调用了 ${name} 工具`;
+  button.title = AI_TOOL_DISPLAY_NAMES[name] ?? name;
+  button.addEventListener("click", () => openAiToolCallDetail(toolCall));
+  return button;
+}
+
+function aiToolProcessStep(toolCall, round = 1) {
+  const normalizedToolCall = { ...toolCall };
+  delete normalizedToolCall.round;
+  return {
+    id: `tool-${String(toolCall?.id ?? "unknown")}`,
+    type: "tool",
+    round: Number(round) || 1,
+    toolCall: normalizedToolCall,
+    createdAt: toolCall?.calledAt ?? new Date().toISOString()
+  };
+}
+
+function renderAiProcessSteps(message, steps, completed) {
+  message.querySelector(".ai-process-details")?.remove();
+  if (!Array.isArray(steps) || !steps.length) return;
+  const details = document.createElement("details");
+  details.className = "ai-process-details";
+  details.open = !completed;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
+  const status = document.createElement("small");
+  status.textContent = `${steps.length} 个步骤`;
+  summary.append(title, status);
+  const list = document.createElement("div");
+  list.className = "ai-process-list";
+  for (const step of steps) {
+    if (step?.type === "tool" && step.toolCall) {
+      const tool = document.createElement("section");
+      tool.className = "ai-process-step ai-process-tool-step";
+      const label = document.createElement("small");
+      label.textContent = `第 ${Number(step.round) || 1} 轮 · 工具调用`;
+      tool.append(label, createAiToolCallButton(step.toolCall));
+      list.append(tool);
+      continue;
+    }
+    if (!step?.content || !["thinking", "intermediate"].includes(step.type)) continue;
+    const section = document.createElement("section");
+    section.className = `ai-process-step ai-process-${step.type}-step`;
+    const label = document.createElement("small");
+    label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
+    const body = document.createElement("div");
+    body.className = "message-body ai-process-step-body";
+    body.innerHTML = renderMarkdown(step.content);
+    section.append(label, body);
+    list.append(section);
   }
+  details.append(summary, list);
   const body = message.querySelector(".message-body");
-  if (body) body.after(host);
-  else message.append(host);
+  if (body) body.before(details);
+  else message.append(details);
+}
+
+function renderAiToolCalls(message, toolCalls, completed = false) {
+  renderAiProcessSteps(message, (Array.isArray(toolCalls) ? toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall)), completed);
 }
 
 function setAiHistoryVisible(visible) {
@@ -3282,6 +3329,8 @@ async function streamChat(body) {
   let streamedText = "";
   let generatedMetadata = {};
   let toolCalls = [];
+  let processSteps = [];
+  let finalAnswerStarted = false;
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -3306,21 +3355,39 @@ async function streamChat(body) {
       if (!dataLines.length) return;
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "delta") {
+        const firstFinalDelta = streamedText.length === 0;
         streamedText += payload.delta ?? "";
+        if (streamedText.length > 0) finalAnswerStarted = true;
         content.innerHTML = renderMarkdown(streamedText);
+        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true);
         meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
         scrollAiFeedToBottom();
+      } else if (eventName === "process_step") {
+        const step = { ...payload };
+        const append = step.append === true;
+        delete step.append;
+        const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
+        if (existing && typeof step.content === "string") existing.content += step.content;
+        else processSteps.push(step);
+        renderAiProcessSteps(message, processSteps, finalAnswerStarted);
+        meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
+        scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
-        toolCalls.push(payload);
-        renderAiToolCalls(message, toolCalls);
+        const toolCall = { ...payload };
+        const round = toolCall.round;
+        delete toolCall.round;
+        toolCalls.push(toolCall);
+        processSteps.push(aiToolProcessStep(toolCall, round));
+        renderAiProcessSteps(message, processSteps, finalAnswerStarted);
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
         message.classList.remove("is-streaming");
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
-        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls };
-        renderAiToolCalls(message, toolCalls);
+        processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
+        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls, processSteps };
+        renderAiProcessSteps(message, processSteps, true);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
@@ -3363,7 +3430,12 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     }
     message.append(references);
   }
-  if (role === "assistant") renderAiToolCalls(message, metadata?.toolCalls);
+  if (role === "assistant") {
+    const processSteps = Array.isArray(metadata?.processSteps) && metadata.processSteps.length
+      ? metadata.processSteps
+      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
+    renderAiProcessSteps(message, processSteps, true);
+  }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
     const modelDisplayName = metadata?.modelDisplayName || selectedModel?.displayName || "模型";
