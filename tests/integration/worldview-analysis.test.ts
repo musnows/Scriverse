@@ -53,7 +53,18 @@ describe("世界观分析任务", () => {
           description: "潮落期间的供能来源尚不明确。",
           evidence: [{ chapterId, chapterTitle: "第一章", quote: "退潮后能源会中断两个小时。" }]
         }],
-        uncertainties: [{ question: "备用能源是什么？", reason: "正文没有说明。", evidence: [] }]
+        uncertainties: [
+          {
+            question: "备用能源是什么？",
+            reason: "正文没有说明。",
+            evidence: [{ chapterId: "第一章", chapterTitle: "潮汐", quote: "退潮后能源会中断两个小时。" }]
+          },
+          {
+            question: "异乡制度是什么？",
+            reason: "证据来自范围外章节。",
+            evidence: [{ chapterId: "第二章", chapterTitle: "异乡", quote: "退潮后能源会中断两个小时。" }]
+          }
+        ]
       });
       return new Response(JSON.stringify({ choices: [{ message: { content: `<think>先核对证据再输出。</think>\n分析完成：\n\`\`\`json\n${analysis}\n\`\`\`` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
@@ -88,6 +99,7 @@ describe("世界观分析任务", () => {
       evidence: [{ chapterId, chapterTitle: "第一章 潮汐", quote: "北港依靠潮汐能源维持灯塔与航道。" }]
     });
     expect(completed.body.data.result.conflicts[0].evidence[0].chapterTitle).toBe("第一章 潮汐");
+    expect(completed.body.data.result.uncertainties).toHaveLength(1);
     expect(completed.body.data.result.uncertainties[0]).toMatchObject({ question: "备用能源是什么？" });
   });
 });

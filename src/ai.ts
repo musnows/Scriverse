@@ -1769,7 +1769,7 @@ export class AiManager {
       instruction: [
         "分析正文中已经出现的世界观，只输出一个 JSON 对象，不得使用 Markdown 代码块。",
         "顶层字段：summary、dimensions、conflicts、uncertainties。",
-        "dimensions 是数组，每项字段：category、title、conclusion、confidence、evidence。",
+        "dimensions 是数组，每项字段：category、title、conclusion、confidence（0 到 1 的数字）、evidence。",
         "category 只能是：宇宙与自然、地理与环境、社会与制度、历史与文明、科技与能力、资源与经济、宗教与文化、规则与限制、其他。",
         "conflicts 是数组，每项字段：title、description、evidence。uncertainties 是数组，每项字段：question、reason、evidence。",
         "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是原文连续短引文且不超过 120 字。",
@@ -1805,7 +1805,9 @@ export class AiManager {
         category: typeof item.category === "string" && categories.has(item.category) ? item.category : "其他",
         title,
         conclusion,
-        confidence: typeof item.confidence === "number" ? clamp(item.confidence, 0, 1) : 0.5,
+        confidence: typeof item.confidence === "number"
+          ? clamp(item.confidence, 0, 1)
+          : ({ high: 0.9, medium: 0.7, low: 0.5 })[String(item.confidence).toLocaleLowerCase()] ?? 0.5,
         evidence
       }];
     });
@@ -1813,13 +1815,14 @@ export class AiManager {
       if (!value || typeof value !== "object" || Array.isArray(value)) return [];
       const item = value as Record<string, unknown>;
       const title = typeof item[titleField] === "string" ? item[titleField].trim() : "";
-      if (!title) return [];
+      const evidence = this.validateAnalysisEvidence(chapters, item.evidence);
+      if (!title || evidence.length === 0) return [];
       return [{
         [titleField]: title,
         [titleField === "title" ? "description" : "reason"]: typeof item[titleField === "title" ? "description" : "reason"] === "string"
           ? String(item[titleField === "title" ? "description" : "reason"]).trim()
           : "",
-        evidence: this.validateAnalysisEvidence(chapters, item.evidence)
+        evidence
       }];
     };
     const conflicts = (Array.isArray(data.conflicts) ? data.conflicts : []).flatMap((item) => sanitizeFinding(item, "title"));
@@ -2639,9 +2642,20 @@ export class AiManager {
       const evidence = candidate as Record<string, unknown>;
       const chapterId = typeof evidence.chapterId === "string" ? evidence.chapterId : "";
       const quote = typeof evidence.quote === "string" ? evidence.quote.trim().slice(0, 120) : "";
-      const chapter = chaptersById.get(chapterId);
+      let chapter = chaptersById.get(chapterId);
+      if (!chapter) {
+        const normalizeTitle = (input: unknown): string => String(input ?? "").normalize("NFKC").replace(/[\s·:：—_\-]/gu, "").toLocaleLowerCase("zh-CN");
+        const idReference = normalizeTitle(chapterId);
+        const titleReference = normalizeTitle(evidence.chapterTitle);
+        const matches = chapters.filter((item) => {
+          const actualTitle = normalizeTitle(item.title);
+          return (idReference.length >= 2 && actualTitle.includes(idReference))
+            || (titleReference.length >= 2 && actualTitle.includes(titleReference));
+        });
+        if (matches.length === 1) chapter = matches[0];
+      }
       if (!chapter || !this.quoteExists(String(chapter.content), quote)) return [];
-      return [{ chapterId, chapterTitle: String(chapter.title), quote }];
+      return [{ chapterId: String(chapter.id), chapterTitle: String(chapter.title), quote }];
     });
   }
 
