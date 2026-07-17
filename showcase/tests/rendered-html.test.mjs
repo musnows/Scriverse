@@ -38,6 +38,17 @@ test("关系节点的交互锚点与可见圆点保持重合", async () => {
   assert.match(dotRule, /height:\s*100%/);
 });
 
+test("图谱交互锚点允许触摸纵向滚动", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const stageRule = css.match(/\.relationship-stage \{([^}]+)\}/)?.[1] ?? "";
+  const nodeRule = css.match(/\.relation-node \{([^}]+)\}/)?.[1] ?? "";
+  const galaxyCanvasRule = css.match(/\.galaxy-demo canvas \{([^}]+)\}/)?.[1] ?? "";
+
+  assert.match(stageRule, /touch-action:\s*pan-y/);
+  assert.match(nodeRule, /touch-action:\s*pan-y/);
+  assert.match(galaxyCanvasRule, /touch-action:\s*pan-y/);
+});
+
 test("银河图关闭名称后不再显示选中或关联角色名称", () => {
   assert.equal(shouldRenderGalaxyLabel(true), true);
   assert.equal(shouldRenderGalaxyLabel(false), false);
