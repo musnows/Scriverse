@@ -6,3 +6,5 @@ coverage/
 .env
 .DS_Store
 .ai-docs/
+.tmp
+*.zip
