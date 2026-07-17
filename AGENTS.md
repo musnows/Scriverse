@@ -112,7 +112,15 @@ tests/
 - 本项目不是 Python 项目；如确需运行 Python，必须使用 `uv run python`，安装依赖使用 `uv add`，禁止直接使用 `python`、`python3` 或 `pip`。
 - 修改既有 Python 文件时不得改变历史代码缩进，不得删除历史注释。
 
-## 3. Git Commit 规范
+## 3. Git 协作与 Commit 规范
+
+### 分支与 PR
+
+- `main` 是稳定发布分支，不用于日常开发。
+- `develop` 是日常开发和功能集成分支；开始新任务前应切换到最新的 `develop`。
+- 功能、修复和文档变更应从 `develop` 派生分支，所有协作者的 PR 必须以 `develop` 为目标分支。
+- 只有项目维护者发起的版本发布合并可以从 `develop` 进入 `main`，不得绕过 `develop` 直接提交功能或修复。
+- 更完整的协作流程见 `CONTRIBUTING.md`。
 
 ### 强制原则
 
