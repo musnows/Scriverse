@@ -20,6 +20,9 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('eventName === "tool_call"');
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("renderAiToolCalls(message, metadata?.toolCalls)");
+    expect(application).toContain("function scrollAiFeedToBottom()");
+    expect(application).toContain("window.requestAnimationFrame(() =>");
+    expect(application.match(/scrollAiFeedToBottom\(\);/gu)?.length).toBeGreaterThanOrEqual(7);
     expect(application).toContain('return "历史记录未保存"');
     expect(application).toContain('new Intl.DateTimeFormat("zh-CN"');
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");

@@ -720,6 +720,18 @@ const AI_TOOL_DESCRIPTIONS = {
   query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。"
 };
 
+let aiFeedScrollFrame = null;
+
+function scrollAiFeedToBottom() {
+  const feed = $("#ai-feed");
+  feed.scrollTop = feed.scrollHeight;
+  if (aiFeedScrollFrame !== null) window.cancelAnimationFrame(aiFeedScrollFrame);
+  aiFeedScrollFrame = window.requestAnimationFrame(() => {
+    feed.scrollTop = feed.scrollHeight;
+    aiFeedScrollFrame = null;
+  });
+}
+
 function formatAiToolCallTime(value) {
   if (!value) return "历史记录未保存";
   const date = new Date(value);
@@ -3261,6 +3273,7 @@ async function streamChat(body) {
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
   attachMessageHeading(message, "助手 · 正在生成");
   $("#ai-feed").append(message);
+  scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
   let streamedText = "";
@@ -3293,11 +3306,12 @@ async function streamChat(body) {
         streamedText += payload.delta ?? "";
         content.innerHTML = renderMarkdown(streamedText);
         meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
-        $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+        scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
         toolCalls.push(payload);
         renderAiToolCalls(message, toolCalls);
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
+        scrollAiFeedToBottom();
       } else if (eventName === "complete") {
         message.classList.remove("is-streaming");
         message.querySelector(".message-heading > span").textContent = "助手";
@@ -3306,6 +3320,7 @@ async function streamChat(body) {
         renderAiToolCalls(message, toolCalls);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
         attachAssistantCopyAction(message, streamedText);
+        scrollAiFeedToBottom();
       } else if (eventName === "error") {
         streamError = new Error(payload.message ?? "AI 流式调用失败");
       }
@@ -3325,6 +3340,7 @@ async function streamChat(body) {
     message.classList.remove("is-streaming");
     message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
     meta.textContent = "生成中断";
+    scrollAiFeedToBottom();
     throw error;
   }
 }
@@ -3357,7 +3373,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   }
   attachMessageIdentity(message, messageId);
   $("#ai-feed").append(message);
-  $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+  scrollAiFeedToBottom();
 }
 
 function appendSuggestion(suggestion, createdAt = null, messageId = null) {
@@ -3391,7 +3407,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
     });
   }
   $("#ai-feed").append(message);
-  $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+  scrollAiFeedToBottom();
   return message;
 }
 

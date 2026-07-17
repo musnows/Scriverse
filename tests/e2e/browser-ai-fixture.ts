@@ -67,6 +67,19 @@ const mockAi = createServer(async (request, response) => {
     sendCompletion(response, { content: "模型已处理三个工具结果：目录、章节正文和跃迁设定均已确认。" });
     return;
   }
+  if (latestUserMessage.includes("浏览器滚动测试")) {
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, Array.from({ length: 8 }, (_, index) => ({
+        id: `browser-scroll-${index}`,
+        name: "story_index",
+        arguments: { offset: index, limit: 1 }
+      })));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    sendCompletion(response, { content: `滚动测试完成。${"模型输出后应保持对话底部可见。".repeat(20)}` });
+    return;
+  }
   if (latestUserMessage.includes("这是什么项目")) {
     const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
     if (!systemPrompt.includes("预加载上下文为空或不足时，必须先调用工具主动查询")) {
