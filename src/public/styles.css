@@ -819,6 +819,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-map-toolbar small { color: var(--muted); font-size: 9px; }
 .relationship-map-toolbar .relationship-map-actions { display: flex; gap: 7px; margin-left: auto; }
 .relationship-map-actions button { white-space: nowrap; }
+.relationship-galaxy-button { display: inline-flex; align-items: center; gap: 6px; }
+.relationship-galaxy-icon { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
 .relationship-map-legend { display: flex; flex-wrap: wrap; gap: 10px; }
 .relationship-map-legend span { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 9px; }
 .relationship-map-legend i, .galaxy-legend i, .galaxy-detail li i { width: 8px; height: 8px; border-radius: 50%; background: #9aa5b5; }

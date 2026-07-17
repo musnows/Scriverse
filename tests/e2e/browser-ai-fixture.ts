@@ -212,6 +212,15 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     locked: true,
     status: "confirmed"
   });
+  const navigator = runtime.store.createCharacter(workId, { name: "林舟" });
+  const observer = runtime.store.createCharacter(workId, { name: "沈星" });
+  runtime.store.createRelationship(workId, {
+    fromCharacterId: String(navigator.id),
+    toCharacterId: String(observer.id),
+    category: "social",
+    subtype: "远航搭档",
+    confirmationStatus: "confirmed"
+  });
   const provider = runtime.ai.createProvider({
     name: "浏览器 E2E 模型",
     baseUrl: `http://127.0.0.1:${mockAddress.port}/v1`,

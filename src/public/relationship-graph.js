@@ -616,8 +616,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   reset.dataset.testid = "relationship-network-reset";
   const fullscreen = document.createElement("button");
   fullscreen.type = "button";
-  fullscreen.className = "ghost-button";
-  fullscreen.textContent = "银河图";
+  fullscreen.className = "ghost-button relationship-galaxy-button";
+  fullscreen.innerHTML = '<svg class="relationship-galaxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11.5" cy="12" r="4.2"/><ellipse cx="11.5" cy="12" rx="9" ry="3.2" transform="rotate(-18 11.5 12)"/><path d="M19 2.8v3.4M17.3 4.5h3.4"/></svg><span>银河图</span>';
   fullscreen.setAttribute("aria-label", "全屏银河图");
   fullscreen.dataset.testid = "relationship-galaxy-open";
   fullscreen.addEventListener("click", () => options.onOpenGalaxy?.());
