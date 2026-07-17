@@ -77,6 +77,45 @@ function analysisTaskStatusLabel(status) {
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+const maximumAvatarFileSize = 5 * 1024 * 1024;
+
+function userAvatarInitial(user) {
+  return Array.from(String(user?.displayName || user?.username || "作"))[0] ?? "作";
+}
+
+function userAvatarHtml(user, extraClass = "") {
+  const image = user?.avatarUrl
+    ? `<img src="${esc(user.avatarUrl)}" alt="" loading="lazy" decoding="async" data-user-avatar-image>`
+    : "";
+  return `<span class="user-avatar ${esc(extraClass)}" aria-hidden="true"><span class="user-avatar-fallback">${esc(userAvatarInitial(user))}</span>${image}</span>`;
+}
+
+function bindUserAvatarFallbacks(root) {
+  root.querySelectorAll("[data-user-avatar-image]").forEach((image) => {
+    image.addEventListener("error", () => image.remove(), { once: true });
+  });
+}
+
+function renderUserAvatar(element, user) {
+  element.replaceChildren();
+  const fallback = document.createElement("span");
+  fallback.className = "user-avatar-fallback";
+  fallback.textContent = userAvatarInitial(user);
+  element.append(fallback);
+  if (!user?.avatarUrl) return;
+  const image = document.createElement("img");
+  image.alt = "";
+  image.decoding = "async";
+  image.src = user.avatarUrl;
+  image.addEventListener("error", () => image.remove(), { once: true });
+  element.append(image);
+}
+
+function renderProfileAvatar() {
+  renderUserAvatar($("#profile-avatar-preview"), state.user);
+  $("#avatar-upload-button").textContent = state.user?.avatarUrl ? "更换头像" : "上传头像";
+  $("#avatar-remove-button").classList.toggle("hidden", !state.user?.avatarUrl);
+}
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
 const onboardingStoragePrefix = "scriverse-onboarding-v2";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
@@ -1262,7 +1301,7 @@ function applyAuthenticatedUser(session) {
   state.user = session.user;
   state.csrfToken = session.csrfToken;
   $("#account-name").textContent = session.user.displayName;
-  $("#account-avatar").textContent = Array.from(session.user.displayName)[0] ?? "作";
+  renderUserAvatar($("#account-avatar"), session.user);
   $("#account-menu-name").textContent = `${session.user.displayName} · @${session.user.username}`;
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
@@ -1511,10 +1550,11 @@ function renderSettingsHub() {
 function renderUsers(users) {
   const currentUserId = state.user?.userId;
   $("#users-list").innerHTML = users.map((user) => `<article class="access-row" data-user-row="${esc(user.userId)}">
-    <div><strong>${esc(user.displayName)} · @${esc(user.username)}</strong><small>${user.userId === currentUserId ? "当前账户 · " : ""}${user.status === "active" ? "账户可用" : "账户已停用"}</small></div>
+    <div class="access-person">${userAvatarHtml(user, "access-avatar")}<div class="access-person-copy"><strong>${esc(user.displayName)} · @${esc(user.username)}</strong><small>${user.userId === currentUserId ? "当前账户 · " : ""}${user.status === "active" ? "账户可用" : "账户已停用"}</small></div></div>
     <select data-user-role="${esc(user.userId)}" aria-label="${esc(user.displayName)}的角色" ${user.userId === currentUserId ? "disabled" : ""}><option value="user" ${user.role === "user" ? "selected" : ""}>普通用户</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>系统管理员</option></select>
     <button type="button" data-user-status="${esc(user.userId)}" ${user.userId === currentUserId ? "disabled" : ""}>${user.status === "active" ? "停用" : "启用"}</button>
   </article>`).join("");
+  bindUserAvatarFallbacks($("#users-list"));
   $("#users-list").querySelectorAll("[data-user-role]").forEach((select) => select.addEventListener("change", async () => {
     try {
       const updated = await api(`/api/users/${encodeURIComponent(select.dataset.userRole)}`, { method: "PATCH", body: { role: select.value } });
@@ -1552,10 +1592,11 @@ function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div>
+    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
     <span>${member.role === "owner" ? "所有者" : "可编辑"}</span>
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
+  bindUserAvatarFallbacks($("#members-list"));
   $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
     if (!work) return;
     try {
@@ -3563,6 +3604,7 @@ $("#account-settings-button").addEventListener("click", () => {
   $("#account-menu").classList.add("hidden");
   $("#account-button").setAttribute("aria-expanded", "false");
   $("#profile-display-name").value = state.user?.displayName ?? "";
+  renderProfileAvatar();
   $("#password-form").reset();
   $("#api-key-result").classList.add("hidden");
   $("#api-key-value").value = "";
@@ -3577,6 +3619,48 @@ $("#account-settings-button").addEventListener("click", () => {
   });
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
+$("#avatar-upload-button").addEventListener("click", () => $("#avatar-file").click());
+$("#avatar-file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > maximumAvatarFileSize) {
+    toast("头像文件不能超过 5 MB", "error");
+    event.target.value = "";
+    return;
+  }
+  const body = new FormData();
+  body.append("file", file);
+  $("#avatar-upload-button").disabled = true;
+  $("#avatar-remove-button").disabled = true;
+  try {
+    const updated = await api("/api/auth/avatar", { method: "PUT", body });
+    applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
+    renderProfileAvatar();
+    toast("头像已更新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    $("#avatar-upload-button").disabled = false;
+    $("#avatar-remove-button").disabled = false;
+    event.target.value = "";
+  }
+});
+$("#avatar-remove-button").addEventListener("click", async () => {
+  if (!state.user?.avatarUrl || !window.confirm("确定移除当前头像吗？")) return;
+  $("#avatar-upload-button").disabled = true;
+  $("#avatar-remove-button").disabled = true;
+  try {
+    const updated = await api("/api/auth/avatar", { method: "DELETE" });
+    applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
+    renderProfileAvatar();
+    toast("头像已移除");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    $("#avatar-upload-button").disabled = false;
+    $("#avatar-remove-button").disabled = false;
+  }
+});
 $("#profile-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);

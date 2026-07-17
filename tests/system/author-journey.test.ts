@@ -198,8 +198,16 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-ai-process');
-    expect(page.text).toContain('/styles.css?v=20260718-ai-process');
+    expect(page.text).toContain('/app.js?v=20260718-user-avatar');
+    expect(page.text).toContain('/styles.css?v=20260718-user-avatar');
+    expect(page.text).toContain('id="avatar-file"');
+    expect(page.text).toContain('id="profile-avatar-preview"');
+    expect(page.text).toContain('id="avatar-upload-button"');
+    expect(page.text).toContain('id="avatar-remove-button"');
+    expect(application.text).toContain('api("/api/auth/avatar", { method: "PUT", body })');
+    expect(application.text).toContain('api("/api/auth/avatar", { method: "DELETE" })');
+    expect(application.text).toContain("function renderUserAvatar(element, user)");
+    expect(styles.text).toContain(".profile-avatar-preview");
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');

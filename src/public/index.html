@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260718-ai-process">
+    <link rel="stylesheet" href="/styles.css?v=20260718-user-avatar">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -65,7 +65,7 @@
         <div id="work-meta" class="work-meta">尚未选择作品</div>
         <div class="top-actions">
           <span id="save-state" class="save-state">就绪</span>
-          <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar">作</span><span id="account-name">账户</span></button>
+          <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar" class="user-avatar account-avatar" aria-hidden="true"><span class="user-avatar-fallback">作</span></span><span id="account-name">账户</span></button>
           <div id="account-menu" class="account-menu hidden" role="menu">
             <strong id="account-menu-name">账户</strong><small id="account-menu-role">普通用户</small>
             <button id="onboarding-menu-button" type="button" role="menuitem">功能导览</button>
@@ -274,6 +274,7 @@
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
+    <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
 
     <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-dialog-title" aria-describedby="onboarding-dialog-description" data-testid="first-use-onboarding">
       <div id="onboarding-spotlight" class="onboarding-spotlight" aria-hidden="true"></div>
@@ -431,6 +432,11 @@
       <div class="account-settings-body">
         <section class="account-settings-section" aria-labelledby="profile-settings-title">
           <header class="account-settings-section-header"><h3 id="profile-settings-title">个人资料</h3><p>用于作品协作和历史记录中的作者标识。</p></header>
+          <div class="avatar-settings">
+            <div id="profile-avatar-preview" class="user-avatar profile-avatar-preview" role="img" aria-label="当前头像"><span class="user-avatar-fallback">作</span></div>
+            <div class="avatar-settings-copy"><strong>头像图片</strong><small>支持 PNG、JPEG、WebP，文件不超过 5 MB，尺寸不超过 4096 × 4096 像素。</small></div>
+            <div class="avatar-settings-actions"><button id="avatar-upload-button" class="ghost-button" type="button">上传头像</button><button id="avatar-remove-button" class="ghost-button hidden" type="button">移除头像</button></div>
+          </div>
           <form id="profile-form" class="account-settings-form"><label>显示名称<input id="profile-display-name" name="displayName" maxlength="80" required></label><button class="primary-button" type="submit">保存名称</button></form>
         </section>
         <section class="account-settings-section" aria-labelledby="password-settings-title">
@@ -520,6 +526,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260718-ai-process"></script>
+    <script type="module" src="/app.js?v=20260718-user-avatar"></script>
   </body>
 </html>
