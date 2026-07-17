@@ -1119,6 +1119,8 @@ export class AiManager {
         result = await this.runRelationshipAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "worldview-analysis") {
         result = await this.runWorldviewAnalysis(workId, scope, modelId, taskId);
+      } else if (taskType === "setting-extraction") {
+        result = await this.runSettingExtraction(workId, scope, modelId, taskId);
       } else if (taskType === "consistency-check") {
         result = await this.runConsistencyCheck(workId, scope, modelId, taskId);
       } else {
@@ -1794,6 +1796,159 @@ export class AiManager {
       omittedDimensionCount,
       coveredChapterCount: chapters.length,
       callId: generated.callId
+    };
+  }
+
+  private async runSettingExtraction(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
+    const chapters = this.getScopeChapters(workId, scope);
+    if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "设定抽取范围内没有章节");
+    const chunks = this.buildChapterChunks(chapters, 10_000);
+    const concurrency = this.configuredConcurrency(workId, "book-analysis", modelId);
+    const chunkResults = await this.processChunks(chunks, concurrency, async (chunk) => {
+      if (taskId && this.store.getTask(taskId).status !== "running") return { candidates: [], callId: null };
+      const generated = await this.generate({
+        workId,
+        taskType: "book-analysis",
+        signal: this.taskSignal(taskId),
+        maxAttempts: 2,
+        scope: { type: "selection", selection: chunk.text },
+        ...(modelId ? { modelId } : {}),
+        parameters: { temperature: 0.1 },
+        instruction: [
+          "从本批正文抽取可复用、会影响后续创作的世界设定候选，只输出 JSON 数组，不得使用 Markdown 代码块。",
+          "每项字段：title、category、content、tags、confidence、evidence。",
+          "category 只能是：世界规则、历史与年代、地点与地图、组织与阵营、物种与族群、科技与物品、术语与称谓、创作约束。",
+          "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是原文连续短引文且不超过 120 字。",
+          "只抽取原文明示、跨场景可复用的事实或约束；不要把一次性动作、剧情摘要、人物关系、推测、梦境或未证实传闻当作确定设定。",
+          "同一设定在本批只输出一次。证据不足或 confidence 低于 0.6 时不要输出。"
+        ].join("\n"),
+        extraSystemPrompt: "你是严格的小说设定抽取器。不得补写、常识推断或伪造引文；候选最终由作者确认。"
+      });
+      const extracted = extractJson<unknown>(generated.content);
+      if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "设定抽取结果必须是数组");
+      return {
+        candidates: extracted.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)),
+        callId: generated.callId
+      };
+    }, (completed) => {
+      if (taskId && this.store.getTask(taskId).status === "running") {
+        this.store.updateTask(taskId, { status: "running", progress: Math.min(92, 5 + Math.round(completed / chunks.length * 87)) });
+      }
+    });
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds: chunkResults.map((item) => item.callId).filter(Boolean) };
+    const categories = new Set(["世界规则", "历史与年代", "地点与地图", "组织与阵营", "物种与族群", "科技与物品", "术语与称谓", "创作约束"]);
+    const rawCandidates = chunkResults.flatMap((item) => item.candidates);
+    const callIds = chunkResults.map((item) => item.callId).filter((item): item is string => typeof item === "string");
+    const skipped: Array<{ title: string; reason: string }> = [];
+    const merged = new Map<string, {
+      title: string;
+      category: string;
+      content: string;
+      tags: string[];
+      confidence: number;
+      evidence: Record<string, unknown>[];
+    }>();
+    for (const raw of rawCandidates) {
+      const title = typeof raw.title === "string" ? raw.title.normalize("NFKC").trim().slice(0, 200) : "";
+      const category = typeof raw.category === "string" ? raw.category.trim() : "";
+      const content = typeof raw.content === "string" ? raw.content.trim().slice(0, 200_000) : "";
+      const confidence = typeof raw.confidence === "number" ? clamp(raw.confidence, 0, 1) : 0;
+      const evidence = this.validateAnalysisEvidence(chapters, raw.evidence);
+      if (!title || !content || !categories.has(category) || confidence < 0.6 || evidence.length === 0) {
+        skipped.push({ title: title || "未命名候选", reason: "字段、分类、置信度或原文证据无效" });
+        continue;
+      }
+      const tags = [...new Set((Array.isArray(raw.tags) ? raw.tags : [])
+        .filter((tag): tag is string => typeof tag === "string")
+        .map((tag) => tag.normalize("NFKC").trim().slice(0, 100))
+        .filter(Boolean))].slice(0, 30);
+      const key = `${this.normalizeReference(category)}|${this.normalizeReference(title)}`;
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, { title, category, content, tags, confidence, evidence });
+        continue;
+      }
+      const seenEvidence = new Set(existing.evidence.map((item) => `${String(item.chapterId)}|${String(item.quote)}`));
+      for (const item of evidence) {
+        const evidenceKey = `${String(item.chapterId)}|${String(item.quote)}`;
+        if (!seenEvidence.has(evidenceKey)) existing.evidence.push(item);
+      }
+      if (content.length > existing.content.length) existing.content = content;
+      existing.tags = [...new Set([...existing.tags, ...tags])].slice(0, 30);
+      existing.confidence = Math.max(existing.confidence, confidence);
+    }
+
+    const existingSettings = this.store.listSettings(workId);
+    const settingIds: string[] = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+    this.store.db.transaction(() => {
+      for (const candidate of merged.values()) {
+        const duplicateIndex = existingSettings.findIndex((setting) => this.normalizeReference(String(setting.category)) === this.normalizeReference(candidate.category)
+          && this.normalizeReference(String(setting.title)) === this.normalizeReference(candidate.title));
+        const chapterIds = [...new Set(candidate.evidence.map((item) => String(item.chapterId)))];
+        if (duplicateIndex >= 0) {
+          const duplicate = existingSettings[duplicateIndex] as Record<string, unknown>;
+          if (duplicate.status !== "pending" || duplicate.locked === true) {
+            skipped.push({ title: candidate.title, reason: "同名作者设定已存在，未覆盖" });
+            continue;
+          }
+          const mergedEvidence = [...(Array.isArray(duplicate.evidence) ? duplicate.evidence as Record<string, unknown>[] : [])];
+          const seenEvidence = new Set(mergedEvidence.map((item) => `${String(item.chapterId)}|${String(item.quote)}`));
+          for (const item of candidate.evidence) {
+            const evidenceKey = `${String(item.chapterId)}|${String(item.quote)}`;
+            if (!seenEvidence.has(evidenceKey)) mergedEvidence.push(item);
+          }
+          const previousScope = duplicate.scope && typeof duplicate.scope === "object" && !Array.isArray(duplicate.scope)
+            ? duplicate.scope as Record<string, unknown>
+            : {};
+          const previousChapterIds = Array.isArray(previousScope.chapterIds) ? previousScope.chapterIds.map(String) : [];
+          const updated = this.store.updateSetting(String(duplicate.id), {
+            content: candidate.content.length > String(duplicate.content).length ? candidate.content : String(duplicate.content),
+            tags: [...new Set([...(Array.isArray(duplicate.tags) ? duplicate.tags.map(String) : []), ...candidate.tags])].slice(0, 30),
+            evidence: mergedEvidence,
+            scope: { ...previousScope, chapterIds: [...new Set([...previousChapterIds, ...chapterIds])] },
+            authorNote: `AI 设定候选，最高置信度 ${Math.round(candidate.confidence * 100)}%，需由作者确认。`
+          }, "analysis", taskId ?? callIds[0] ?? null, "AI 合并设定证据");
+          existingSettings[duplicateIndex] = updated;
+          settingIds.push(String(updated.id));
+          updatedCount += 1;
+          continue;
+        }
+        const created = this.store.createSetting(workId, {
+          title: candidate.title,
+          category: candidate.category,
+          content: candidate.content,
+          tags: candidate.tags,
+          status: "pending",
+          locked: false,
+          evidence: candidate.evidence,
+          scope: { chapterIds },
+          authorNote: `AI 设定候选，置信度 ${Math.round(candidate.confidence * 100)}%，需由作者确认。`
+        }, "analysis", taskId ?? callIds[0] ?? null);
+        existingSettings.push(created);
+        settingIds.push(String(created.id));
+        createdCount += 1;
+      }
+    });
+    this.store.audit(workId, "setting.analysis.completed", "work", workId, {
+      batchCount: chunks.length,
+      coveredChapterCount: chapters.length,
+      rawCandidateCount: rawCandidates.length,
+      savedCount: settingIds.length,
+      skippedCount: skipped.length,
+      scopeType: scope.type
+    });
+    return {
+      settingIds,
+      candidateCount: settingIds.length,
+      rawCandidateCount: rawCandidates.length,
+      createdCount,
+      updatedCount,
+      skipped,
+      batchCount: chunks.length,
+      coveredChapterCount: chapters.length,
+      callIds
     };
   }
 

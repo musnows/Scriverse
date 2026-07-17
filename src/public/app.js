@@ -54,6 +54,7 @@ const analysisTaskTypeLabels = new Map([
   ["character-extraction", "全书角色抽取"],
   ["character-summary", "全书角色抽取"],
   ["worldview-analysis", "世界观分析"],
+  ["setting-extraction", "设定抽取"],
   ["structure", "结构分析"],
   ["report-update", "报告更新"]
 ]);
@@ -1951,8 +1952,13 @@ async function renderSettings() {
   $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
     <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
     <h3>${esc(item.title)}</h3><p>${esc(item.content)}</p>
-    <div class="card-actions"><button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div></article>`).join("")}</div>`
+    <div class="card-actions">${item.status === "pending" ? `<button data-setting-status="confirmed" data-setting-id="${esc(item.id)}">确认候选</button><button data-setting-status="deprecated" data-setting-id="${esc(item.id)}">弃用</button>` : ""}<button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div></article>`).join("")}</div>`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
+  $("#module-content").querySelectorAll("[data-setting-status]").forEach((button) => button.addEventListener("click", async () => {
+    await api(`/api/settings/${button.dataset.settingId}`, { method: "PATCH", body: { status: button.dataset.settingStatus, changeNote: button.dataset.settingStatus === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
+    await renderSettings();
+    await loadAiReferences();
+  }));
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingDialog(records.find((item) => item.id === button.dataset.editSetting))));
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
@@ -3115,7 +3121,7 @@ function openReviewDialog() {
 
 function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
-  openDialog("新建分析任务", field("taskType", "任务类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["consistency-check", "一致性校对"], ["book-analysis", "全书分析"]]) + field("scopeType", "范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  openDialog("新建分析任务", field("taskType", "任务类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书分析"]]) + field("scopeType", "范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
     const scope = form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
