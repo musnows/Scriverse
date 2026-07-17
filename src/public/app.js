@@ -144,6 +144,7 @@ const workspaceOnboardingSteps = [
   { selector: "#versions-button", eyebrow: "版本安全", title: "查看章节版本", description: "每次保存都会生成可恢复版本，误改内容时可以随时回溯。", placement: "bottom" },
   { selector: "[data-module=\"characters\"]", eyebrow: "作品知识", title: "维护角色与世界资料", description: "角色、种族、组织、设定和时间线共同构成 AI 可引用的作品知识。", placement: "right" },
   { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲与伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
+  { selector: "[data-module=\"tasks\"]", eyebrow: "AI 分析中心", title: "从这里理解整部小说", description: "运行人物、关系、世界观、设定、事件和一致性分析，并查看每次分析的结果与进度。", placement: "right" },
   { selector: "#top-search-button", eyebrow: "全文检索", title: "搜索整部作品", description: "一次检索正文、角色、设定、种族与组织，快速定位创作依据。", placement: "bottom" },
   { selector: ".quick-actions button[data-task=\"continue\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
   { selector: "#ai-send", eyebrow: "AI 对话", title: "发送你的创作要求", description: "选择上下文范围与模型后发送任务。AI 结果默认只是建议，不会直接覆盖正文。", placement: "left" },
@@ -1967,7 +1968,7 @@ const moduleMeta = {
   outlines: ["创作规划", "大纲与伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
-  tasks: ["增量分析", "分析任务", "正文变化后只重算受影响的章节与知识对象。", "新建任务"],
+  tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
 };
 
@@ -2289,7 +2290,7 @@ async function renderTasks() {
       </div>
       <p class="task-auto-run-meta">当前待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个</p>
     </section>
-    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>任务</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
+    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
       <td>${esc(analysisTaskTypeLabel(item.taskType))}<br><small>${esc(item.taskType)}</small></td>
       <td>${esc(item.scopeSummary || item.scope?.type || "book")}</td>
@@ -2300,7 +2301,7 @@ async function renderTasks() {
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
-    </tr>`).join("")}</tbody></table>` : emptyModule("还没有分析任务", "保存正文时会自动创建受影响章节的待分析任务，也可手动创建全书任务。")}`;
+    </tr>`).join("")}</tbody></table>` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
 
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
@@ -2405,7 +2406,7 @@ function openTaskDetailDialog(task) {
       <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
     </div>`,
     async () => undefined,
-    "分析任务",
+    "AI 分析详情",
     { submitLabel: "关闭", wide: true });
 }
 
@@ -3257,7 +3258,7 @@ function openReviewDialog() {
 
 function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
-  openDialog("新建分析任务", field("taskType", "任务类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书分析"]]) + field("scopeType", "范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  openDialog("开始 AI 分析", field("taskType", "分析类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴与事件抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书综合分析"]]) + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
     const scope = form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
@@ -3553,7 +3554,7 @@ async function showChapterInsight() {
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
   panel.classList.remove("hidden");
   if (!insight) {
-    panel.innerHTML = "<strong>尚无章节概览</strong>请在“分析任务”中运行章节理解，完成后可在此查看结果。";
+    panel.innerHTML = "<strong>尚无章节概览</strong>请在“AI 分析”中运行章节理解，完成后可在此查看结果。";
     return;
   }
   const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
