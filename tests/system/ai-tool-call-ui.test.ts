@@ -12,12 +12,18 @@ describe("AI 工具调用记录界面", () => {
     ]);
 
     expect(page).toContain('id="ai-tool-call-dialog"');
+    expect(page).toContain('id="ai-tool-call-name"');
+    expect(page).toContain('id="ai-tool-call-time"');
+    expect(page).toContain('id="ai-tool-call-description"');
     expect(page).toContain('id="ai-tool-call-arguments"');
     expect(page).toContain('id="ai-tool-call-result"');
     expect(application).toContain('eventName === "tool_call"');
     expect(application).toContain('`调用了 ${name} 工具`');
     expect(application).toContain("renderAiToolCalls(message, metadata?.toolCalls)");
+    expect(application).toContain('return "历史记录未保存"');
+    expect(application).toContain('new Intl.DateTimeFormat("zh-CN"');
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");
     expect(styles).toContain(".ai-tool-call-detail { display: grid; grid-template-columns: minmax(0, 1fr);");
+    expect(styles).toContain(".ai-tool-call-info { display: grid;");
   });
 });

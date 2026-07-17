@@ -89,6 +89,7 @@ type CompletionMessage = AiMessage | { role: "assistant"; content: string | null
 export type AgentToolCallResult = {
   id: string;
   name: string;
+  calledAt: string;
   arguments: Record<string, unknown> | null;
   status: "completed" | "failed";
   result: Record<string, unknown>;
@@ -1330,6 +1331,7 @@ export class AiManager {
 
   private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
     const name = toolCall.function.name;
+    const calledAt = now();
     let rawArguments: unknown = toolCall.function.arguments;
     if (typeof rawArguments === "string") {
       try {
@@ -1338,6 +1340,7 @@ export class AiManager {
         return {
           id: toolCall.id,
           name,
+          calledAt,
           arguments: null,
           status: "failed",
           result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID_JSON", message: `Invalid arguments for ${name}: expected a JSON object.` } }
@@ -1355,6 +1358,7 @@ export class AiManager {
       return {
         id: toolCall.id,
         name,
+        calledAt,
         arguments: suppliedArguments,
         status: "failed",
         result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE", message: `Tool '${name}' is not available for this request.` } }
@@ -1366,6 +1370,7 @@ export class AiManager {
       return {
         id: toolCall.id,
         name,
+        calledAt,
         arguments: suppliedArguments,
         status: "failed",
         result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID", message: `Invalid arguments for ${name}: ${details}` } }
@@ -1379,7 +1384,7 @@ export class AiManager {
       const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
         id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
       })));
-      return { id: toolCall.id, name, arguments: { offset, limit }, status: "completed", result: { ok: true, data: { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null } } };
+      return { id: toolCall.id, name, calledAt, arguments: { offset, limit }, status: "completed", result: { ok: true, data: { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null } } };
     }
     if (name === "read_chapters") {
       const { chapterIds, include } = args as z.infer<typeof readChaptersArguments>;
@@ -1397,7 +1402,7 @@ export class AiManager {
           return { chapterId, error: { code: "CHAPTER_NOT_FOUND", message: "The requested chapter was not found." } };
         }
       });
-      return { id: toolCall.id, name, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
+      return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
     }
     if (name === "query_story_knowledge") {
       const { query, categories: categoryList } = args as z.infer<typeof queryStoryKnowledgeArguments>;
@@ -1410,7 +1415,7 @@ export class AiManager {
         ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
         ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
       ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
-      return { id: toolCall.id, name, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
+      return { id: toolCall.id, name, calledAt, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
   }

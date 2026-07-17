@@ -714,11 +714,39 @@ const AI_TOOL_DISPLAY_NAMES = {
   query_story_knowledge: "查询作品知识"
 };
 
+const AI_TOOL_DESCRIPTIONS = {
+  story_index: "分页读取当前作品的卷章目录和章节概要。",
+  read_chapters: "读取指定章节的概要、正文或两者。",
+  query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。"
+};
+
+function formatAiToolCallTime(value) {
+  if (!value) return "历史记录未保存";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间记录无效";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
 function openAiToolCallDetail(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
   const status = toolCall?.status === "failed" ? "调用失败" : "调用成功";
+  const calledAt = String(toolCall?.calledAt ?? "");
   $("#ai-tool-call-status").textContent = status;
   $("#ai-tool-call-title").textContent = `${AI_TOOL_DISPLAY_NAMES[name] ?? name} · ${name}`;
+  $("#ai-tool-call-name").textContent = name;
+  $("#ai-tool-call-description").textContent = AI_TOOL_DESCRIPTIONS[name] ?? "未登记此工具函数的用途说明。";
+  const time = $("#ai-tool-call-time");
+  time.textContent = formatAiToolCallTime(calledAt);
+  if (calledAt && !Number.isNaN(new Date(calledAt).getTime())) time.dateTime = new Date(calledAt).toISOString();
+  else time.removeAttribute("datetime");
   $("#ai-tool-call-arguments").textContent = JSON.stringify(toolCall?.arguments ?? {}, null, 2);
   $("#ai-tool-call-result").textContent = JSON.stringify(toolCall?.result ?? {}, null, 2);
   $("#ai-tool-call-dialog").showModal();

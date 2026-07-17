@@ -238,7 +238,7 @@ describe("AI 供应商、模型与建议 API", () => {
 
     expect(response.body.data.content).toBe("已根据章节目录回答。");
     expect(response.body.data.toolCalls).toEqual([
-      expect.objectContaining({ id: "tool-call-1", name: "story_index", status: "completed", arguments: { offset: 0, limit: 1 } })
+      expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { offset: 0, limit: 1 } })
     ]);
     expect(completionCount).toBe(2);
   });
@@ -490,12 +490,13 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: tool_call");
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
+    expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
     expect(streamed.text).toContain('"result":{"ok":true');
     expect(streamed.text).toContain('event: complete');
     expect(streamed.text).toContain('"toolCalls":[{"id":"stream-tool"');
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    const toolCalls = [{ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
+    const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
     await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
       role: "assistant",
       content: "已读取目录。",

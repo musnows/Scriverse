@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260717-contextual-onboarding">
+    <link rel="stylesheet" href="/styles.css?v=20260717-tool-call-time">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -473,6 +473,11 @@
         <button id="ai-tool-call-close" class="dialog-close" aria-label="关闭工具调用详情" type="button">×</button>
       </div>
       <div class="ai-tool-call-detail">
+        <dl class="ai-tool-call-info">
+          <div><dt>函数名称</dt><dd><code id="ai-tool-call-name"></code></dd></div>
+          <div><dt>调用时间</dt><dd><time id="ai-tool-call-time"></time></dd></div>
+          <div class="ai-tool-call-description"><dt>函数信息</dt><dd id="ai-tool-call-description"></dd></div>
+        </dl>
         <section><h3>参数</h3><pre id="ai-tool-call-arguments"></pre></section>
         <section><h3>返回值</h3><pre id="ai-tool-call-result"></pre></section>
       </div>
@@ -515,6 +520,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260717-setting-extraction"></script>
+    <script type="module" src="/app.js?v=20260717-tool-call-time"></script>
   </body>
 </html>

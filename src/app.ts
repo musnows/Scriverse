@@ -244,6 +244,7 @@ const aiPromptSchema = z.object({
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
+  calledAt: z.string().datetime({ offset: true }).optional(),
   arguments: z.record(z.string(), z.unknown()).nullable(),
   status: z.enum(["completed", "failed"]),
   result: z.record(z.string(), z.unknown())
