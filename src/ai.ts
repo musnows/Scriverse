@@ -4,7 +4,7 @@ import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
-import { Store } from "./store.js";
+import { Store, type AiConversationContext } from "./store.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
 import { z } from "zod";
 
@@ -164,19 +164,103 @@ export function estimateAiTokens(value: string): number {
   return Math.max(1, Math.ceil(wideCharacters * 1.1 + narrowCharacters / 4));
 }
 
-function truncateBookSummary(value: string, maximumTokens: number): string {
+function contextSearchTerms(value: string): string[] {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+  const terms = new Set<string>();
+  for (const word of normalized.match(/[a-z0-9][a-z0-9_-]{1,}/gu) ?? []) terms.add(word);
+  for (const segment of normalized.match(/[\p{Script=Han}]{2,}/gu) ?? []) {
+    const maximumSize = Math.min(4, segment.length);
+    for (let size = 2; size <= maximumSize; size += 1) {
+      for (let index = 0; index <= segment.length - size; index += 1) terms.add(segment.slice(index, index + size));
+    }
+  }
+  return [...terms].slice(0, 160);
+}
+
+function contextRelevance(query: string, value: string): number {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+  return contextSearchTerms(query).reduce((score, term) => score + (normalized.includes(term) ? Math.min(6, term.length) : 0), 0);
+}
+
+function sliceToTokenBudget(value: string, maximumTokens: number, fromEnd = false): string {
   if (estimateAiTokens(value) <= maximumTokens) return value;
-  const notice = "[全书章节概要超过配额，已裁剪较早概要]";
-  const prefix = estimateAiTokens(notice) < maximumTokens ? `${notice}\n` : "";
-  const remainingTokens = Math.max(1, maximumTokens - estimateAiTokens(prefix));
   let start = 0;
   let end = value.length;
   while (start < end) {
-    const middle = Math.floor((start + end) / 2);
-    if (estimateAiTokens(value.slice(middle)) > remainingTokens) start = middle + 1;
-    else end = middle;
+    const middle = Math.floor((start + end + 1) / 2);
+    const candidate = fromEnd ? value.slice(value.length - middle) : value.slice(0, middle);
+    if (estimateAiTokens(candidate) <= maximumTokens) start = middle;
+    else end = middle - 1;
   }
-  return `${prefix}${value.slice(start)}`;
+  return fromEnd ? value.slice(value.length - start) : value.slice(0, start);
+}
+
+function truncateContextText(value: string, maximumTokens: number, notice = "[内容已按上下文预算压缩]"): string {
+  if (maximumTokens <= 0) return "";
+  if (estimateAiTokens(value) <= maximumTokens) return value;
+  const noticeTokens = estimateAiTokens(notice) + 2;
+  if (noticeTokens >= maximumTokens) return sliceToTokenBudget(value, maximumTokens);
+  const contentBudget = maximumTokens - noticeTokens;
+  const headBudget = Math.max(1, Math.ceil(contentBudget * 0.55));
+  const tailBudget = Math.max(1, contentBudget - headBudget);
+  return `${sliceToTokenBudget(value, headBudget)}\n${notice}\n${sliceToTokenBudget(value, tailBudget, true)}`;
+}
+
+type ContextSection = {
+  id: string;
+  text: string;
+  kind: "required" | "summary" | "detail";
+  order: number;
+  relevance: number;
+};
+
+export type ContextBuildPlan = {
+  context: string;
+  tokenCount: number;
+  includedBlockIds: string[];
+  omittedBlockIds: string[];
+  degradedBlockIds: string[];
+};
+
+const CONVERSATION_MEMORY_FIELDS = ["authorGoals", "confirmedDecisions", "storyFacts", "constraints", "unresolvedQuestions", "importantReferences"] as const;
+type ConversationMemoryField = (typeof CONVERSATION_MEMORY_FIELDS)[number];
+type ConversationMemoryItem = { text: string; sourceMessageIds: string[] };
+type ConversationMemory = Record<ConversationMemoryField, ConversationMemoryItem[]>;
+
+function normalizeConversationMemory(value: unknown): ConversationMemory {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return Object.fromEntries(CONVERSATION_MEMORY_FIELDS.map((field) => {
+    const items = (Array.isArray(source[field]) ? source[field] : []).flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const record = item as Record<string, unknown>;
+      const text = typeof record.text === "string" ? record.text.trim().slice(0, 2_000) : "";
+      if (!text) return [];
+      const sourceMessageIds = [...new Set((Array.isArray(record.sourceMessageIds) ? record.sourceMessageIds : [])
+        .filter((messageId): messageId is string => typeof messageId === "string" && messageId.length <= 300))].slice(0, 20);
+      return [{ text, sourceMessageIds }];
+    }).slice(0, 100);
+    return [field, items];
+  })) as ConversationMemory;
+}
+
+function renderConversationMemory(value: string): string {
+  try {
+    const memory = normalizeConversationMemory(JSON.parse(value) as unknown);
+    const labels: Record<ConversationMemoryField, string> = {
+      authorGoals: "作者目标",
+      confirmedDecisions: "已确认决定",
+      storyFacts: "对话中确认的事实",
+      constraints: "限制与约束",
+      unresolvedQuestions: "未解决问题",
+      importantReferences: "重要引用"
+    };
+    const sections = CONVERSATION_MEMORY_FIELDS.flatMap((field) => memory[field].length
+      ? [`${labels[field]}：\n${memory[field].map((item) => `- ${item.text}${item.sourceMessageIds.length ? ` [来源：${item.sourceMessageIds.join("、")}]` : ""}`).join("\n")}`]
+      : []);
+    return sections.join("\n\n") || value;
+  } catch {
+    return value;
+  }
 }
 
 export function resolveOutputTokens(usage: unknown, content: string): number {
@@ -367,7 +451,11 @@ function selectRelationshipConstraints(store: Store, workId: string, characterId
 export class ContextBuilder {
   constructor(private readonly store: Store) {}
 
-  build(workId: string, scope: ContextScope, maximumChars = 60_000, bookSummaryMaximumTokens?: number): string {
+  build(workId: string, scope: ContextScope, maximumTokens = 60_000, bookSummaryMaximumTokens?: number, query = ""): string {
+    return this.buildPlan(workId, scope, maximumTokens, bookSummaryMaximumTokens, query).context;
+  }
+
+  buildPlan(workId: string, scope: ContextScope, maximumTokens = 60_000, bookSummaryMaximumTokens?: number, query = ""): ContextBuildPlan {
     const work = this.store.getWork(workId);
     const includeAutomaticContext = scope.type !== "none";
     const constraints: string[] = includeAutomaticContext
@@ -445,27 +533,30 @@ export class ContextBuilder {
       const volume = (tree.volumes as Record<string, unknown>[]).find((item) => item.id === scope.volumeId);
       if (!volume) throw notFound("卷");
       const chapters = volume.chapters as Record<string, unknown>[];
-      contentSections.push(
-        `当前卷：${String(volume.title)}\n${chapters
-          .map((chapter) => `\n[${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`)
-          .join("\n")}`
-      );
+      contentSections.push(`当前卷：${String(volume.title)}`);
+      for (const chapter of chapters) {
+        contentSections.push(`[${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`);
+      }
     } else if (scope.type === "book") {
       const tree = this.store.getWorkTree(workId);
       const volumes = tree.volumes as Record<string, unknown>[];
-      contentSections.push(
-        `全书正文：\n${volumes
-          .map((volume) => {
-            const chapters = volume.chapters as Record<string, unknown>[];
-            return `\n# ${String(volume.title)}\n${chapters
-              .map((chapter) => `\n## ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}\n${String(chapter.content)}`)
-              .join("\n")}`;
-          })
-          .join("\n")}`
-      );
+      contentSections.push("全书正文（按问题相关度选取原文，完整结构见章节概要）：");
+      for (const volume of volumes) {
+        for (const chapter of volume.chapters as Record<string, unknown>[]) {
+          contentSections.push(`[# ${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`);
+        }
+      }
     }
 
-    if (scope.includeBookSummary) this.appendBookSummary(contentSections, workId, bookSummaryMaximumTokens);
+    if (scope.includeBookSummary || scope.type === "book" || scope.type === "volume") {
+      this.appendBookSummary(
+        contentSections,
+        workId,
+        bookSummaryMaximumTokens ?? Math.max(160, Math.floor(maximumTokens * 0.35)),
+        query,
+        scope.type === "volume" ? scope.volumeId : undefined
+      );
+    }
 
     if (scope.characterIds?.length) {
       const characters = scope.characterIds.map((characterId) => this.store.getCharacter(characterId));
@@ -509,18 +600,77 @@ export class ContextBuilder {
     if (scope.type !== "none" && scope.chapterId) this.appendChapterKnowledge(constraints, workId, scope.chapterId);
 
     const hardContext = constraints.join("\n\n");
-    const bodyContext = contentSections.join("\n\n");
-    const full = [hardContext, bodyContext].filter(Boolean).join("\n\n");
-    if (full.length <= maximumChars) return full;
-    if (hardContext.length > maximumChars - 200) {
+    const hardTokens = hardContext ? estimateAiTokens(hardContext) : 0;
+    if (hardTokens > maximumTokens - 32) {
       throw new AppError(413, "CONSTRAINT_CONTEXT_TOO_LARGE", "锁定设定、相关人物和创作约束超过上下文上限，请精简后重试", {
-        maximumChars,
-        constraintChars: hardContext.length
+        maximumTokens,
+        constraintTokens: hardTokens
       });
     }
-    const notice = "[上下文过长，已裁剪较早正文；锁定约束、人物状态、大纲与伏笔保持完整]";
-    const remaining = Math.max(0, maximumChars - hardContext.length - notice.length - 4);
-    return `${hardContext}\n\n${notice}\n${bodyContext.slice(-remaining)}`;
+    const sections: ContextSection[] = contentSections.map((text, order) => {
+      const required = /^(?:当前选中文本|当前章节|所在章节|作者主动引用的章节)/u.test(text);
+      const summary = /章节概要（/u.test(text);
+      return {
+        id: `context-${order}`,
+        text,
+        kind: required ? "required" : summary ? "summary" : "detail",
+        order,
+        relevance: contextRelevance(query, text)
+      };
+    });
+    const selected: string[] = hardContext ? [hardContext] : [];
+    const planningNotice = "[上下文规划：低相关原文区块将不直接载入，优先保留跨卷概要和相关正文；需要精确证据时请调用章节读取工具。]";
+    const requiresPlanning = estimateAiTokens([hardContext, ...contentSections].filter(Boolean).join("\n\n")) > maximumTokens;
+    const includedBlockIds: string[] = [];
+    const omittedBlockIds: string[] = [];
+    const degradedBlockIds: string[] = [];
+    const currentTokens = (): number => estimateAiTokens(selected.filter(Boolean).join("\n\n"));
+    const remainingTokens = (): number => Math.max(0, maximumTokens - currentTokens());
+    const addSection = (section: ContextSection, budget = remainingTokens()): boolean => {
+      const available = Math.min(remainingTokens(), Math.max(0, budget));
+      if (available <= 2) {
+        omittedBlockIds.push(section.id);
+        return false;
+      }
+      const fullTokens = estimateAiTokens(section.text);
+      const text = fullTokens <= available
+        ? section.text
+        : truncateContextText(section.text, available, "[本区块已降级，保留开头与结尾；可调用工具读取完整章节]");
+      if (!text) {
+        omittedBlockIds.push(section.id);
+        return false;
+      }
+      selected.push(text);
+      includedBlockIds.push(section.id);
+      if (fullTokens > available) degradedBlockIds.push(section.id);
+      return true;
+    };
+
+    for (const section of sections.filter((item) => item.kind === "required")) addSection(section);
+    if (requiresPlanning && remainingTokens() >= 8) {
+      selected.push(truncateContextText(planningNotice, Math.min(estimateAiTokens(planningNotice), remainingTokens())));
+    }
+    const summaries = sections.filter((item) => item.kind === "summary");
+    for (let index = 0; index < summaries.length; index += 1) {
+      const share = Math.floor(remainingTokens() / Math.max(1, summaries.length - index));
+      addSection(summaries[index]!, share);
+    }
+    const details = sections.filter((item) => item.kind === "detail")
+      .sort((left, right) => right.relevance - left.relevance || right.order - left.order);
+    for (const section of details) {
+      const fullTokens = estimateAiTokens(section.text);
+      if (fullTokens <= remainingTokens()) addSection(section);
+      else if (section.relevance > 0 && remainingTokens() >= 80) addSection(section);
+      else omittedBlockIds.push(section.id);
+    }
+    const context = selected.filter(Boolean).join("\n\n");
+    return {
+      context,
+      tokenCount: estimateAiTokens(context),
+      includedBlockIds,
+      omittedBlockIds,
+      degradedBlockIds
+    };
   }
 
   private appendChapter(sections: string[], workId: string, chapterId: string, includeContent: boolean): void {
@@ -533,23 +683,29 @@ export class ContextBuilder {
     );
   }
 
-  private appendBookSummary(sections: string[], workId: string, maximumTokens?: number): void {
+  private appendBookSummary(sections: string[], workId: string, maximumTokens: number, query: string, volumeId?: string): void {
+    const tree = this.store.getWorkTree(workId);
+    const volumes = (tree.volumes as Record<string, unknown>[]).filter((volume) => !volumeId || volume.id === volumeId);
     const insights = this.store.listCurrentChapterInsights(workId);
-    if (insights.length === 0) {
-      sections.push("全书章节概要：当前没有可用的章节概要。请先运行章节理解任务。");
-      return;
-    }
-    let currentVolume = "";
-    const lines = ["全书章节概要（基于各章节当前版本的 AI 概要，不含正文）："];
-    for (const insight of insights) {
-      if (insight.volumeTitle !== currentVolume) {
-        currentVolume = String(insight.volumeTitle);
-        lines.push(`\n# ${currentVolume}`);
+    const summaryByChapterId = new Map(insights.map((item) => [String(item.chapterId), String(item.summary)]));
+    if (!volumes.length) return;
+    const perVolumeBudget = Math.max(24, Math.floor(maximumTokens / volumes.length));
+    for (const volume of volumes) {
+      const chapters = volume.chapters as Record<string, unknown>[];
+      const ranked = chapters.map((chapter, order) => {
+        const summary = summaryByChapterId.get(String(chapter.id)) ?? "";
+        const line = `- ${String(chapter.title)}：${summary || "尚无章节概要"}`;
+        return { line, order, relevance: contextRelevance(query, `${String(chapter.title)}\n${summary}`) };
+      }).sort((left, right) => right.relevance - left.relevance || left.order - right.order);
+      const header = `全书章节概要（分卷覆盖，不含正文）：\n# ${String(volume.title)}`;
+      const chosen = [header];
+      for (const item of ranked) {
+        const candidate = [...chosen, item.line].join("\n");
+        if (estimateAiTokens(candidate) <= perVolumeBudget) chosen.push(item.line);
       }
-      lines.push(`- ${String(insight.chapterTitle)}：${String(insight.summary) || "暂无梗概"}`);
+      if (chosen.length === 1 && ranked[0]) chosen.push(ranked[0].line);
+      sections.push(truncateContextText(chosen.join("\n"), perVolumeBudget, "[本卷其余章节概要已按预算折叠]"));
     }
-    const summary = lines.join("\n");
-    sections.push(maximumTokens === undefined ? summary : truncateBookSummary(summary, maximumTokens));
   }
 
   private appendPreviousChapterTail(sections: string[], workId: string, chapterId: string): void {
@@ -1222,27 +1378,68 @@ export class AiManager {
     return task;
   }
 
+  private contextBudget(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "conversationId" | "excludeConversationMessageId">, model: ModelRow): Record<string, unknown> {
+    const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+    const preset = safeJsonObject(stringValue(model, "preset_json"));
+    const configuredOutputTokens = typeof preset.max_tokens === "number" ? preset.max_tokens : DEFAULT_MAX_TOKENS;
+    const outputReserveTokens = Math.max(512, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - 512));
+    const availableInputTokens = Math.max(256, contextWindow - outputReserveTokens - 512);
+    const conversation = input.conversationId
+      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+      : null;
+    const renderedMemory = conversation?.summary ? renderConversationMemory(conversation.summary) : "";
+    const conversationTokens = conversation
+      ? estimateAiTokens(renderedMemory) + conversation.messages.reduce((total, message) => total + estimateAiTokens(message.content), 0)
+      : 0;
+    const conversationBudgetTokens = Math.max(256, Math.floor(availableInputTokens * 0.32));
+    const instructionTokens = estimateAiTokens(input.instruction);
+    const workContextBudgetTokens = Math.max(256, availableInputTokens
+      - Math.min(conversationTokens, conversationBudgetTokens)
+      - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
+      - Math.min(1_024, Math.floor(availableInputTokens * 0.12)));
+    return {
+      contextWindow,
+      outputReserveTokens,
+      availableInputTokens,
+      conversation,
+      conversationTokens,
+      conversationBudgetTokens,
+      conversationUsagePercent: Math.round(conversationTokens / conversationBudgetTokens * 100),
+      workContextBudgetTokens
+    };
+  }
+
   getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId">): Record<string, unknown> {
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input.workId, input.scope, model);
+    const budget = this.contextBudget(input, model);
+    const contextPlan = this.buildContextPlan(input, model, budget);
+    const context = contextPlan.context;
     const messages = this.buildMessages(input, context);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
-    const conversation = input.conversationId
-      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
-      : null;
+    const conversation = budget.conversation as AiConversationContext | null;
+    const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
+    const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
     return {
       modelId: stringValue(model, "id"),
       contextWindow,
       inputTokens,
+      contextTokens: contextPlan.tokenCount,
+      conversationTokens: Number(budget.conversationTokens),
+      conversationBudgetTokens: Number(budget.conversationBudgetTokens),
+      conversationUsagePercent,
+      outputReserveTokens: Number(budget.outputReserveTokens),
       remainingTokens,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
       compactThreshold: threshold,
-      compactRecommended: inputTokens / contextWindow * 100 >= threshold,
+      compactRecommended: compactableMessageCount > 0 && conversationUsagePercent >= threshold,
       contextWarningPending: conversation?.warningPending ?? false,
-      compactedMessageCount: conversation?.compactedMessageCount ?? 0
+      compactedMessageCount: conversation?.compactedMessageCount ?? 0,
+      includedContextBlocks: contextPlan.includedBlockIds.length,
+      omittedContextBlocks: contextPlan.omittedBlockIds.length,
+      degradedContextBlocks: contextPlan.degradedBlockIds.length
     };
   }
 
@@ -1264,9 +1461,20 @@ export class AiManager {
 
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
-    const targetMessageCount = conversation.totalMessageCount <= 2
-      ? conversation.totalMessageCount
-      : Math.max(conversation.compactedMessageCount, conversation.totalMessageCount - 2);
+    const { model } = this.resolveModel(input.workId, "chat", input.modelId);
+    const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model);
+    const recentTokenBudget = Math.max(128, Math.floor(Number(budget.conversationBudgetTokens) * 0.75));
+    let retainedMessageCount = 0;
+    let retainedTokens = 0;
+    for (let index = conversation.messages.length - 1; index >= 0 && retainedMessageCount < 8; index -= 1) {
+      const message = conversation.messages[index];
+      if (!message) continue;
+      const messageTokens = estimateAiTokens(message.content);
+      if (retainedMessageCount >= 2 && retainedTokens + messageTokens > recentTokenBudget) break;
+      retainedMessageCount += 1;
+      retainedTokens += messageTokens;
+    }
+    const targetMessageCount = conversation.compactedMessageCount + Math.max(0, conversation.messages.length - retainedMessageCount);
     const numberToCompact = targetMessageCount - conversation.compactedMessageCount;
     if (numberToCompact <= 0) {
       this.store.setAiConversationContextWarning(input.conversationId, false);
@@ -1278,25 +1486,37 @@ export class AiManager {
       };
     }
     const transcript = conversation.messages.slice(0, numberToCompact)
-      .map((message) => `${message.role === "user" ? "作者" : "助手"}：${message.content}`)
+      .map((message) => `[${message.id}] ${message.role === "user" ? "作者" : "助手"}：${message.content}`)
       .join("\n\n");
-    const source = [conversation.summary ? `已有摘要：\n${conversation.summary}` : "", `待压缩对话：\n${transcript}`].filter(Boolean).join("\n\n");
-    const generated = await this.generate({
+    const source = [conversation.summary ? `已有结构化长期记忆：\n${conversation.summary}` : "", `待压缩对话：\n${transcript}`].filter(Boolean).join("\n\n");
+    const generated = await this.generateTaggedJson({
       workId: input.workId,
       taskType: "chat",
-      instruction: `将下面的历史对话压缩为可供后续创作对话继续使用的中文上下文摘要。保留作者目标、明确事实、决定、限制、未解决问题和重要引用；删除寒暄、重复表达和已经被后文取代的信息。只输出摘要正文。\n\n${source}`,
+      instruction: [
+        "将下面的历史对话整理为可供后续创作对话继续使用的结构化中文长期记忆。",
+        "输出 JSON 对象，字段必须为 authorGoals、confirmedDecisions、storyFacts、constraints、unresolvedQuestions、importantReferences。",
+        "每个字段都是数组，每项包含 text 和 sourceMessageIds；sourceMessageIds 只能引用输入中方括号内的消息 ID。",
+        "保留作者目标、明确事实、决定、限制、未解决问题和重要引用；删除寒暄、重复表达及已被后文取代的信息。",
+        "合并已有长期记忆时不得丢失仍然有效的项目，无法确定是否失效时继续保留。",
+        source
+      ].join("\n\n"),
       scope: { type: "entities" },
       modelId: input.modelId,
       parameters: { temperature: 0.2 },
-      extraSystemPrompt: "你正在执行对话上下文压缩。不得调用工具，不得回答原问题，只能生成忠实、紧凑且可继续使用的摘要。",
+      extraSystemPrompt: "你正在执行对话长期记忆整理。不得调用工具，不得回答原问题，只能生成忠实、紧凑且可追溯的结构化记忆。",
       disableTools: true
     });
-    this.store.saveAiConversationCompaction(input.conversationId, generated.content, targetMessageCount);
+    const memory = normalizeConversationMemory(extractJson<unknown>(generated.content));
+    const memoryItemCount = CONVERSATION_MEMORY_FIELDS.reduce((total, field) => total + memory[field].length, 0);
+    if (memoryItemCount === 0) throw new AppError(502, "AI_EMPTY_MEMORY", "AI 返回的对话长期记忆为空");
+    const serializedMemory = JSON.stringify(memory);
+    this.store.saveAiConversationCompaction(input.conversationId, serializedMemory, targetMessageCount);
     return {
       conversationId: input.conversationId,
       compactedMessageCount: targetMessageCount,
       retainedMessageCount: conversation.totalMessageCount - targetMessageCount,
-      summaryTokens: estimateAiTokens(generated.content),
+      summaryTokens: estimateAiTokens(renderConversationMemory(serializedMemory)),
+      memoryItemCount,
       changed: true
     };
   }
@@ -1337,21 +1557,34 @@ export class AiManager {
     const conversationMessages: AiMessage[] = conversation?.messages.map((message) => ({ role: message.role, content: message.content })) ?? [];
     return [
       { role: "system", content: systemPrompt },
-      ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的压缩摘要：\n${conversation.summary}` }] : []),
+      ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的结构化长期记忆：\n${renderConversationMemory(conversation.summary)}` }] : []),
       { role: "user", content: `本次创作上下文如下：\n\n${renderedContext}` },
       ...conversationMessages,
       { role: "user", content: `作者当前指令：\n${input.instruction}` }
     ];
   }
 
-  private buildContext(workId: string, scope: ContextScope, model: ModelRow): string {
+  private buildContextPlan(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId">,
+    model: ModelRow,
+    existingBudget?: Record<string, unknown>
+  ): ContextBuildPlan {
+    const budget = existingBudget ?? this.contextBudget(input, model);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const settings = this.store.getWorkAiSettings(workId);
+    const settings = this.store.getWorkAiSettings(input.workId);
     const percentage = Math.min(90, Math.max(1, Number(settings.bookSummaryContextPercent) || 50));
-    const bookSummaryMaximumTokens = scope.includeBookSummary
-      ? Math.max(1, Math.floor(contextWindow * percentage / 100))
+    const workContextBudgetTokens = Number(budget.workContextBudgetTokens) || 256;
+    const bookSummaryMaximumTokens = input.scope.includeBookSummary || input.scope.type === "book" || input.scope.type === "volume"
+      ? Math.max(32, Math.min(Math.floor(contextWindow * percentage / 100), Math.floor(workContextBudgetTokens * 0.45)))
       : undefined;
-    return this.contextBuilder.build(workId, scope, 60_000, bookSummaryMaximumTokens);
+    return this.contextBuilder.buildPlan(input.workId, input.scope, workContextBudgetTokens, bookSummaryMaximumTokens, input.instruction);
+  }
+
+  private buildContext(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId">,
+    model: ModelRow
+  ): string {
+    return this.buildContextPlan(input, model).context;
   }
 
   private enabledAgentToolIds(workId: string, taskType: TaskType): AgentToolId[] {
@@ -1506,7 +1739,7 @@ export class AiManager {
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input.workId, input.scope, model);
+    const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType);
@@ -1668,7 +1901,7 @@ export class AiManager {
 
   private async generateStream(input: GenerateInput, onDelta: (delta: string) => void): Promise<GenerateResult> {
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input.workId, input.scope, model);
+    const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(model, messages, {

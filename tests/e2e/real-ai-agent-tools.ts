@@ -157,19 +157,19 @@ const mockAi = createServer(async (incoming, outgoing) => {
       completion(outgoing, { content: "已先定位章节，再根据正文确认林舟启动了跃迁。" });
       return;
     }
-    if (joined.includes("将下面的历史对话压缩")) {
+    if (joined.includes("结构化中文长期记忆")) {
       assert.equal(body.tools, undefined);
       compactRequestVerified = true;
-      completion(outgoing, { content: "作者要求遵守跃迁冷却规则；最近仍在确认燃料状态。" });
+      completion(outgoing, { content: '<json>{"authorGoals":[],"confirmedDecisions":[],"storyFacts":[{"text":"最近仍在确认燃料状态","sourceMessageIds":[]}],"constraints":[{"text":"必须遵守跃迁冷却规则","sourceMessageIds":[]}],"unresolvedQuestions":[],"importantReferences":[]}</json>' });
       return;
     }
     if (joined.includes("E2E_AFTER_COMPACT")) {
-      assert.match(joined, /较早对话的压缩摘要/u);
+      assert.match(joined, /较早对话的结构化长期记忆/u);
       assert.match(joined, /遵守跃迁冷却规则/u);
       assert.doesNotMatch(joined, /旧作者要求/u);
       assert.equal(joined.match(/E2E_AFTER_COMPACT/gu)?.length, 1);
       compactFollowupVerified = true;
-      completion(outgoing, { content: "已基于压缩摘要和最近对话继续回答。" });
+      completion(outgoing, { content: "已基于长期记忆和最近对话继续回答。" });
       return;
     }
     completion(outgoing, { content: "E2E 默认响应。" });
@@ -340,7 +340,7 @@ try {
     body: JSON.stringify({ instruction: "E2E_AFTER_COMPACT", scope: { type: "chapter", chapterId: chapterIds[0] }, modelId, conversationId, currentMessageId: current.id })
   });
   assert.equal(followup.status, 200);
-  assert.match(await followup.text(), /已基于压缩摘要和最近对话继续回答/u);
+  assert.match(await followup.text(), /已基于长期记忆和最近对话继续回答/u);
   assert.equal(compactFollowupVerified, true);
   checked("context-compact", "threshold 90 is accepted, 91 is rejected, the first overage warns, and the ignored warning triggers compaction before the next prompt");
 

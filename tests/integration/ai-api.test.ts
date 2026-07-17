@@ -183,7 +183,8 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
 
-    expect(sentContext).toContain("已裁剪较早概要");
+    expect(sentContext).toContain("本卷其余章节概要已按预算折叠");
+    expect(sentContext).toContain("较早概要");
     expect(sentContext).toContain("保留最新概要");
     expect(estimateAiTokens(sentContext)).toBeLessThan(450);
   });
