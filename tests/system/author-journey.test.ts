@@ -198,7 +198,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-ai-auto-scroll');
+    expect(page.text).toContain('/app.js?v=20260718-ai-prompt-clear');
     expect(page.text).toContain('/styles.css?v=20260717-tool-call-time');
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");

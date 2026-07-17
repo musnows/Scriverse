@@ -892,6 +892,14 @@ function setAiPromptText(value) {
   renderAiReferences();
 }
 
+function clearAiPromptComposer() {
+  state.aiCitations = [];
+  state.aiReferences = [];
+  setAiPromptText("");
+  renderAiCitations();
+  hideAiMentionMenu();
+}
+
 function aiPromptTextBeforeCursor() {
   const prompt = $("#ai-prompt");
   const selection = window.getSelection();
@@ -3222,6 +3230,7 @@ async function sendAi() {
   state.aiPromptSent = true;
   renderAiQuickActions();
   appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+  clearAiPromptComposer();
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
   try {
@@ -3249,12 +3258,6 @@ async function sendAi() {
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
-    setAiPromptText("");
-    state.aiCitations = [];
-    state.aiReferences = [];
-    renderAiCitations();
-    renderAiReferences();
-    scheduleAiContextUsage();
   } catch (error) {
     const failureMessage = `调用失败：${error.message}`;
     let persistedFailureMessage = null;
