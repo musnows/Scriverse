@@ -578,11 +578,12 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
       role: "assistant",
       content: "已读取目录。",
-      metadata: { modelDisplayName: "小说模型", outputTokens: 8, toolCalls, processSteps }
+      metadata: { modelDisplayName: "小说模型", outputTokens: 8, processDurationMs: 1450, toolCalls, processSteps }
     }).expect(201);
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.messages[0].metadata.toolCalls).toEqual(toolCalls);
     expect(reloaded.body.data.messages[0].metadata.processSteps).toEqual(processSteps);
+    expect(reloaded.body.data.messages[0].metadata.processDurationMs).toBe(1450);
   });
 
   it("完整读取响应正文前不释放供应商并发槽", async () => {

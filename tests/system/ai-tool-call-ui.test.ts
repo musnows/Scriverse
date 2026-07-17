@@ -20,9 +20,13 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('eventName === "tool_call"');
     expect(application).toContain('eventName === "process_step"');
     expect(application).toContain('`调用了 ${name} 工具`');
-    expect(application).toContain("function renderAiProcessSteps(message, steps, completed)");
+    expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null)");
+    expect(application).toContain("function formatAiProcessDuration(value)");
+    expect(application).toContain("function resolveAiProcessDuration(metadata, steps, completedAt)");
+    expect(application).toContain('` · 耗时 ${duration}`');
+    expect(application).toContain("toolCalls, processSteps, processDurationMs");
     expect(application).toContain("details.open = !completed");
-    expect(application).toContain("if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true)");
+    expect(application).toContain("if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime())");
     expect(application).toContain('title.textContent = completed ? "思考与执行过程" : "正在思考与执行"');
     expect(application).toContain("function scrollAiFeedToBottom()");
     expect(application).toContain("window.requestAnimationFrame(() =>");

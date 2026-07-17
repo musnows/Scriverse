@@ -829,6 +829,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       metadata: z.object({
         modelDisplayName: z.string().max(200).optional(),
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
+        processDurationMs: z.number().int().min(0).max(86_400_000).optional(),
         toolCalls: z.array(aiToolCallResultSchema).max(12).optional(),
         processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()

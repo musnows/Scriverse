@@ -828,7 +828,32 @@ function aiToolProcessStep(toolCall, round = 1) {
   };
 }
 
-function renderAiProcessSteps(message, steps, completed) {
+function formatAiProcessDuration(value) {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "";
+  const totalSeconds = durationMs / 1000;
+  if (totalSeconds < 60) return `${Math.max(0.1, totalSeconds).toFixed(1)} 秒`;
+  const roundedSeconds = Math.round(totalSeconds);
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分 ${seconds} 秒`;
+  return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
+}
+
+function resolveAiProcessDuration(metadata, steps, completedAt) {
+  const storedDuration = Number(metadata?.processDurationMs);
+  if (Number.isFinite(storedDuration) && storedDuration >= 0) return storedDuration;
+  const completedTime = new Date(completedAt ?? "").getTime();
+  if (!Number.isFinite(completedTime)) return null;
+  const startedTimes = steps
+    .map((step) => new Date(step?.createdAt ?? "").getTime())
+    .filter((value) => Number.isFinite(value));
+  if (!startedTimes.length) return null;
+  return Math.max(0, completedTime - Math.min(...startedTimes));
+}
+
+function renderAiProcessSteps(message, steps, completed, durationMs = null) {
   message.querySelector(".ai-process-details")?.remove();
   if (!Array.isArray(steps) || !steps.length) return;
   const details = document.createElement("details");
@@ -838,7 +863,8 @@ function renderAiProcessSteps(message, steps, completed) {
   const title = document.createElement("span");
   title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
   const status = document.createElement("small");
-  status.textContent = `${steps.length} 个步骤`;
+  const duration = durationMs === null || durationMs === undefined ? "" : formatAiProcessDuration(durationMs);
+  status.textContent = `${steps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
   summary.append(title, status);
   const list = document.createElement("div");
   list.className = "ai-process-list";
@@ -3373,6 +3399,8 @@ async function streamChat(body) {
   let toolCalls = [];
   let processSteps = [];
   let finalAnswerStarted = false;
+  const processStartedAt = Date.now();
+  const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -3401,7 +3429,7 @@ async function streamChat(body) {
         streamedText += payload.delta ?? "";
         if (streamedText.length > 0) finalAnswerStarted = true;
         content.innerHTML = renderMarkdown(streamedText);
-        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true);
+        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
         meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
         scrollAiFeedToBottom();
       } else if (eventName === "process_step") {
@@ -3411,7 +3439,7 @@ async function streamChat(body) {
         const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted);
+        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
@@ -3420,7 +3448,7 @@ async function streamChat(body) {
         delete toolCall.round;
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted);
+        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "complete") {
@@ -3428,8 +3456,9 @@ async function streamChat(body) {
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
-        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls, processSteps };
-        renderAiProcessSteps(message, processSteps, true);
+        const processDurationMs = elapsedProcessTime();
+        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls, processSteps, processDurationMs };
+        renderAiProcessSteps(message, processSteps, true, processDurationMs);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
@@ -3451,6 +3480,7 @@ async function streamChat(body) {
   } catch (error) {
     message.classList.remove("is-streaming");
     message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
+    renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
     meta.textContent = "生成中断";
     scrollAiFeedToBottom();
     throw error;
@@ -3476,7 +3506,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     const processSteps = Array.isArray(metadata?.processSteps) && metadata.processSteps.length
       ? metadata.processSteps
       : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
-    renderAiProcessSteps(message, processSteps, true);
+    renderAiProcessSteps(message, processSteps, true, resolveAiProcessDuration(metadata, processSteps, createdAt));
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
