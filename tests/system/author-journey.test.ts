@@ -199,7 +199,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/app.js?v=20260718-user-avatar');
-    expect(page.text).toContain('/styles.css?v=20260718-user-avatar');
+    expect(page.text).toContain('/styles.css?v=20260718-adaptive-import-label');
     expect(page.text).toContain('id="avatar-file"');
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');

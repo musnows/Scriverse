@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260718-user-avatar">
+    <link rel="stylesheet" href="/styles.css?v=20260718-adaptive-import-label">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -89,8 +89,10 @@
         <div id="left-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整作品侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="left-actions">
           <div class="left-primary-actions">
-            <label class="file-button">
-              导入 TXT / DOCX
+            <label class="file-button" aria-label="导入 TXT / DOCX">
+              <span class="import-file-label import-file-label-full" aria-hidden="true">导入 TXT / DOCX</span>
+              <span class="import-file-label import-file-label-compact" aria-hidden="true">导入TXT/DOCX</span>
+              <span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>
               <input id="import-file" type="file" accept=".txt,.docx">
             </label>
             <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>

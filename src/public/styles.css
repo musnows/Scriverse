@@ -616,6 +616,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .left-primary-actions .file-button { flex: 1 1 auto; width: auto; min-width: 0; }
 .left-primary-actions #left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }
 .file-button, .secondary-button { display: grid; place-items: center; min-height: 30px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: transparent; }
+.file-button { container-type: inline-size; overflow: hidden; white-space: nowrap; }
+.import-file-label-compact, .import-file-label-short { display: none; }
+@container (max-width: 120px) {
+  .import-file-label-full { display: none; }
+  .import-file-label-compact { display: inline; }
+}
+@container (max-width: 88px) {
+  .import-file-label-compact { display: none; }
+  .import-file-label-short { display: inline; }
+}
 .file-button input { display: none; }
 .module-nav { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 8px 0 14px; border-bottom: 1px solid var(--line); }
 .module-nav button { border: 0; background: transparent; text-align: left; padding: 7px 9px; color: var(--muted); font-size: 12px; border-radius: 3px; }
