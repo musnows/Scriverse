@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260717-first-use-onboarding">
+    <link rel="stylesheet" href="/styles.css?v=20260717-contextual-onboarding">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -275,112 +275,23 @@
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
 
-    <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-dialog-title" aria-describedby="onboarding-progress" data-testid="first-use-onboarding">
-      <div class="onboarding-shell">
-        <header class="onboarding-header">
-          <div class="onboarding-brand"><span class="brand-mark">叙</span><div><strong>叙界</strong><small>长篇创作，从这里展开</small></div></div>
-          <h2 id="onboarding-dialog-title" class="sr-only">叙界功能导览</h2>
-          <div class="onboarding-header-actions">
-            <span id="onboarding-progress" aria-live="polite">第 1 步，共 5 步</span>
-            <button id="onboarding-skip" class="onboarding-skip" type="button">跳过导览</button>
-          </div>
+    <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-dialog-title" aria-describedby="onboarding-dialog-description" data-testid="first-use-onboarding">
+      <div id="onboarding-spotlight" class="onboarding-spotlight" aria-hidden="true"></div>
+      <section id="onboarding-popover" class="onboarding-popover" data-placement="bottom">
+        <header class="onboarding-popover-header">
+          <span id="onboarding-progress" aria-live="polite">第 1 步</span>
+          <button id="onboarding-skip" class="onboarding-skip" type="button">跳过导览</button>
         </header>
-
-        <div class="onboarding-layout">
-          <nav class="onboarding-nav" aria-label="功能导览步骤">
-            <span class="eyebrow">五分钟认识工作台</span>
-            <ol>
-              <li><button type="button" data-onboarding-go="0" aria-current="step"><span>01</span><strong>创作全景</strong><small>认识叙界</small></button></li>
-              <li><button type="button" data-onboarding-go="1"><span>02</span><strong>正文创作</strong><small>从作品到章节</small></button></li>
-              <li><button type="button" data-onboarding-go="2"><span>03</span><strong>世界知识</strong><small>让设定彼此连接</small></button></li>
-              <li><button type="button" data-onboarding-go="3"><span>04</span><strong>AI 助手</strong><small>基于作品协作</small></button></li>
-              <li><button type="button" data-onboarding-go="4"><span>05</span><strong>协作与安全</strong><small>放心写，随时回溯</small></button></li>
-            </ol>
-          </nav>
-
-          <main class="onboarding-content">
-            <section class="onboarding-step" data-onboarding-step="0" aria-labelledby="onboarding-step-title-0">
-              <div class="onboarding-copy">
-                <span class="eyebrow">欢迎来到叙界</span>
-                <h3 id="onboarding-step-title-0" tabindex="-1">一张工作台，承接整部长篇</h3>
-                <p>叙界把正文、人物、设定、剧情线和 AI 对话放进同一部作品里。你负责做创作决定，系统负责整理上下文、保存依据。</p>
-                <div class="onboarding-callout"><strong>核心原则</strong><span>作品是唯一边界。所有章节、知识、协作权限和 AI 上下文都跟随当前作品。</span></div>
-              </div>
-              <div class="onboarding-map" aria-label="叙界功能全景">
-                <div class="onboarding-map-core"><span>你的作品</span><strong>故事世界</strong><small>一处管理，处处关联</small></div>
-                <div class="onboarding-map-item is-editor"><span>稿</span><div><strong>正文创作</strong><small>分卷 · 章节 · 版本</small></div></div>
-                <div class="onboarding-map-item is-knowledge"><span>设</span><div><strong>作品知识</strong><small>角色 · 设定 · 时间线</small></div></div>
-                <div class="onboarding-map-item is-ai"><span>AI</span><div><strong>创作助手</strong><small>续写 · 分析 · 校对</small></div></div>
-                <div class="onboarding-map-item is-team"><span>协</span><div><strong>协作管理</strong><small>权限 · 审计 · 回滚</small></div></div>
-              </div>
-            </section>
-
-            <section class="onboarding-step" data-onboarding-step="1" aria-labelledby="onboarding-step-title-1" hidden>
-              <div class="onboarding-copy">
-                <span class="eyebrow">正文创作</span>
-                <h3 id="onboarding-step-title-1" tabindex="-1">从书架进入作品，把故事写成清晰结构</h3>
-                <p>每部作品都拥有独立目录。你可以从空白开始，也可以导入 TXT 或 DOCX，让已有稿件快速变成可编辑章节。</p>
-              </div>
-              <div class="onboarding-feature-grid">
-                <article><span>01</span><div><strong>组织长篇</strong><p>用分卷与章节梳理正文，折叠目录保持写作区专注。</p></div></article>
-                <article><span>02</span><div><strong>自动保存与版本</strong><p>正文修改自动保存，每个版本都可查看并恢复。</p></div></article>
-                <article><span>03</span><div><strong>搜索与导出</strong><p>跨正文和知识库全文检索，完成后安全导出 Markdown。</p></div></article>
-                <article><span>04</span><div><strong>章节上下文</strong><p>查看字数、章节概览，并按行引用原文给创作助手。</p></div></article>
-              </div>
-            </section>
-
-            <section class="onboarding-step" data-onboarding-step="2" aria-labelledby="onboarding-step-title-2" hidden>
-              <div class="onboarding-copy">
-                <span class="eyebrow">世界知识</span>
-                <h3 id="onboarding-step-title-2" tabindex="-1">不只记设定，还要看见它们如何影响故事</h3>
-                <p>把零散资料沉淀为作品知识。角色状态、组织归属、事件顺序和伏笔进度可以互相印证，也能成为 AI 的可靠依据。</p>
-              </div>
-              <div class="onboarding-feature-grid">
-                <article><span>角</span><div><strong>角色、种族与组织</strong><p>维护人物档案、当前状态、阵营归属与锁定事实。</p></div></article>
-                <article><span>世</span><div><strong>设定库</strong><p>记录世界规则、地点和物件，区分候选信息与确认事实。</p></div></article>
-                <article><span>时</span><div><strong>时间线与关系图</strong><p>用看板梳理事件，用关系图观察人物网络与证据。</p></div></article>
-                <article><span>纲</span><div><strong>大纲与伏笔</strong><p>跟踪剧情计划、伏笔埋设与回收，避免长线遗漏。</p></div></article>
-              </div>
-            </section>
-
-            <section class="onboarding-step" data-onboarding-step="3" aria-labelledby="onboarding-step-title-3" hidden>
-              <div class="onboarding-copy">
-                <span class="eyebrow">AI 创作助手</span>
-                <h3 id="onboarding-step-title-3" tabindex="-1">让 AI 阅读你的作品，再给出有依据的建议</h3>
-                <p>创作助手位于工作台右侧。它可以读取当前章节和你指定的引用，进行续写、总结、冲突检查与剧情方向分析。</p>
-                <div class="onboarding-callout"><strong>你始终拥有决定权</strong><span>AI 结果默认只是建议，不会直接覆盖正文；采纳后才会写入并生成新版本。</span></div>
-              </div>
-              <div class="onboarding-ai-preview" aria-label="创作助手工作流程">
-                <div><span>1</span><strong>选择范围</strong><small>章节、全书或指定原文</small></div>
-                <i aria-hidden="true"></i>
-                <div><span>2</span><strong>提出任务</strong><small>续写、分析或检查冲突</small></div>
-                <i aria-hidden="true"></i>
-                <div><span>3</span><strong>审阅建议</strong><small>采纳、拒绝或继续追问</small></div>
-              </div>
-            </section>
-
-            <section class="onboarding-step" data-onboarding-step="4" aria-labelledby="onboarding-step-title-4" hidden>
-              <div class="onboarding-copy">
-                <span class="eyebrow">协作与安全</span>
-                <h3 id="onboarding-step-title-4" tabindex="-1">准备好了，你的创作过程也已被妥善保护</h3>
-                <p>邀请注册用户共同编辑作品，并为不同作品分别管理访问权限。关键修改会关联操作者、审计记录和可恢复版本。</p>
-              </div>
-              <div class="onboarding-finish-grid">
-                <article><span>权</span><div><strong>作品级权限</strong><p>协作者只访问被邀请的作品。</p></div></article>
-                <article><span>版</span><div><strong>版本可回溯</strong><p>正文和知识实体保留修改历史。</p></div></article>
-                <article><span>审</span><div><strong>操作有归属</strong><p>关键写入关联当前账户与审计记录。</p></div></article>
-              </div>
-              <p class="onboarding-finish-note">从书架创建第一部作品，或打开已有作品继续创作。之后可在账户菜单的“功能导览”中再次查看本页。</p>
-            </section>
-          </main>
+        <div class="onboarding-popover-body">
+          <span id="onboarding-eyebrow" class="eyebrow">快速导览</span>
+          <h2 id="onboarding-dialog-title" tabindex="-1">认识叙界</h2>
+          <p id="onboarding-dialog-description">跟随箭头认识工作台里的常用入口。</p>
         </div>
-
-        <footer class="onboarding-footer">
+        <footer class="onboarding-popover-footer">
           <button id="onboarding-previous" class="ghost-button" type="button" disabled>上一步</button>
-          <div class="onboarding-dots" aria-hidden="true"><i class="active"></i><i></i><i></i><i></i><i></i></div>
           <button id="onboarding-next" class="primary-button" type="button">下一步</button>
         </footer>
-      </div>
+      </section>
     </dialog>
 
     <dialog id="form-dialog" class="dialog">
@@ -604,6 +515,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260717-first-use-onboarding"></script>
+    <script type="module" src="/app.js?v=20260717-contextual-onboarding"></script>
   </body>
 </html>

@@ -76,13 +76,39 @@ function analysisTaskStatusLabel(status) {
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
-const onboardingStoragePrefix = "scriverse-onboarding-v1";
+const onboardingStoragePrefix = "scriverse-onboarding-v2";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
 let memberDialogWork = null;
 let onboardingStep = 0;
 let onboardingAutoScheduled = false;
+let onboardingPositionFrame = null;
+let onboardingSteps = [];
+
+const shelfOnboardingSteps = [
+  { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
+  { selector: "#shelf-new-work", eyebrow: "开始创作", title: "创建一部新作品", description: "从空白作品开始搭建分卷、章节和世界设定。", placement: "bottom" },
+  { selector: "#book-add-card", eyebrow: "导入或新建", title: "从书架添加作品", description: "这个卡片同样可以创建作品，也支持在进入工作台后导入 TXT 或 DOCX 稿件。", placement: "right" },
+  { selector: "[data-open-work]", eyebrow: "继续写作", title: "打开已有作品", description: "每部作品都有独立的正文、知识库、AI 上下文与协作权限。", placement: "right" },
+  { selector: "#theme-toggle", eyebrow: "显示偏好", title: "切换白天或黑夜模式", description: "主题和字体设置只保存在当前设备，不会影响其他协作者。", placement: "bottom" },
+  { selector: "#settings-button", eyebrow: "工作台设置", title: "集中管理创作环境", description: "进入设置后可以管理 AI、显示偏好、作品协作与导出。", placement: "bottom" },
+  { selector: "#account-button", eyebrow: "账户", title: "管理个人账户", description: "这里可以修改账户资料、退出登录，并随时重新打开功能导览。", placement: "bottom" }
+];
+
+const workspaceOnboardingSteps = [
+  { selector: "#home-button", eyebrow: "作品入口", title: "随时返回书架", description: "点击叙界标志返回书架，切换作品或创建新的故事世界。", placement: "bottom" },
+  { selector: ".file-button", eyebrow: "稿件导入", title: "导入 TXT 或 DOCX", description: "已有稿件可以直接导入，系统会解析分卷与章节结构。", placement: "right" },
+  { selector: "#new-chapter-button", eyebrow: "正文结构", title: "新建章节", description: "使用分卷和章节组织长篇正文，章节会自动保存并保留版本。", placement: "right" },
+  { selector: "#versions-button", eyebrow: "版本安全", title: "查看章节版本", description: "每次保存都会生成可恢复版本，误改内容时可以随时回溯。", placement: "bottom" },
+  { selector: "[data-module=\"characters\"]", eyebrow: "作品知识", title: "维护角色与世界资料", description: "角色、种族、组织、设定和时间线共同构成 AI 可引用的作品知识。", placement: "right" },
+  { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲与伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
+  { selector: "#top-search-button", eyebrow: "全文检索", title: "搜索整部作品", description: "一次检索正文、角色、设定、种族与组织，快速定位创作依据。", placement: "bottom" },
+  { selector: ".quick-actions button[data-task=\"continue\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
+  { selector: "#ai-send", eyebrow: "AI 对话", title: "发送你的创作要求", description: "选择上下文范围与模型后发送任务。AI 结果默认只是建议，不会直接覆盖正文。", placement: "left" },
+  { selector: "#settings-button", eyebrow: "工作台设置", title: "管理 AI、协作与导出", description: "供应商、显示偏好、作品成员和 Markdown 导出都集中在这里。", placement: "bottom" },
+  { selector: "#account-button", eyebrow: "账户", title: "管理账户并重看导览", description: "账户菜单保存个人设置入口，也可以随时重新打开这套功能导览。", placement: "bottom" }
+];
 
 function onboardingStorageKey() {
   return `${onboardingStoragePrefix}:${state.user?.userId ?? "anonymous"}`;
@@ -98,32 +124,134 @@ function persistOnboardingCompletion() {
   catch { /* 浏览器禁用存储时仅在当前页面关闭导览 */ }
 }
 
-function renderOnboardingStep(step, focusTitle = false) {
-  const sections = [...document.querySelectorAll("[data-onboarding-step]")];
-  const lastStep = Math.max(0, sections.length - 1);
-  onboardingStep = Math.max(0, Math.min(lastStep, Number(step) || 0));
-  sections.forEach((section, index) => { section.hidden = index !== onboardingStep; });
-  document.querySelectorAll("[data-onboarding-go]").forEach((button) => {
-    if (Number(button.dataset.onboardingGo) === onboardingStep) button.setAttribute("aria-current", "step");
-    else button.removeAttribute("aria-current");
+function isOnboardingTargetVisible(target) {
+  if (!target) return false;
+  const style = window.getComputedStyle(target);
+  const rect = target.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0
+    && rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0
+    && rect.left < window.innerWidth && rect.top < window.innerHeight;
+}
+
+function currentOnboardingSteps() {
+  const candidates = $("#app").classList.contains("shelf-mode") ? shelfOnboardingSteps : workspaceOnboardingSteps;
+  return candidates.filter((step) => isOnboardingTargetVisible(document.querySelector(step.selector)));
+}
+
+function onboardingPlacementCoordinates(placement, targetRect, popoverRect, gap) {
+  if (placement === "right") return { left: targetRect.right + gap, top: targetRect.top + (targetRect.height - popoverRect.height) / 2 };
+  if (placement === "left") return { left: targetRect.left - popoverRect.width - gap, top: targetRect.top + (targetRect.height - popoverRect.height) / 2 };
+  if (placement === "top") return { left: targetRect.left + (targetRect.width - popoverRect.width) / 2, top: targetRect.top - popoverRect.height - gap };
+  return { left: targetRect.left + (targetRect.width - popoverRect.width) / 2, top: targetRect.bottom + gap };
+}
+
+function onboardingPlacementFits(placement, targetRect, popoverRect, gap, margin) {
+  if (placement === "right") return targetRect.right + gap + popoverRect.width <= window.innerWidth - margin;
+  if (placement === "left") return targetRect.left - gap - popoverRect.width >= margin;
+  if (placement === "top") return targetRect.top - gap - popoverRect.height >= margin;
+  return targetRect.bottom + gap + popoverRect.height <= window.innerHeight - margin;
+}
+
+function positionOnboardingElements() {
+  onboardingPositionFrame = null;
+  const dialog = $("#onboarding-dialog");
+  const step = onboardingSteps[onboardingStep];
+  if (!dialog.open || !step) return;
+  const target = document.querySelector(step.selector);
+  if (!isOnboardingTargetVisible(target)) return;
+  const padding = 7;
+  const targetBox = target.getBoundingClientRect();
+  const targetRect = {
+    left: Math.max(0, targetBox.left - padding),
+    top: Math.max(0, targetBox.top - padding),
+    right: Math.min(window.innerWidth, targetBox.right + padding),
+    bottom: Math.min(window.innerHeight, targetBox.bottom + padding)
+  };
+  targetRect.width = targetRect.right - targetRect.left;
+  targetRect.height = targetRect.bottom - targetRect.top;
+  const spotlight = $("#onboarding-spotlight");
+  spotlight.style.left = `${targetRect.left}px`;
+  spotlight.style.top = `${targetRect.top}px`;
+  spotlight.style.width = `${targetRect.width}px`;
+  spotlight.style.height = `${targetRect.height}px`;
+
+  const popover = $("#onboarding-popover");
+  popover.style.visibility = "hidden";
+  popover.style.left = "0px";
+  popover.style.top = "0px";
+  const popoverRect = popover.getBoundingClientRect();
+  const gap = 18;
+  const margin = 14;
+  const placements = [step.placement, "right", "left", "bottom", "top"].filter((placement, index, values) => values.indexOf(placement) === index);
+  const placement = placements.find((candidate) => onboardingPlacementFits(candidate, targetRect, popoverRect, gap, margin)) ?? step.placement;
+  const coordinates = onboardingPlacementCoordinates(placement, targetRect, popoverRect, gap);
+  const left = Math.max(margin, Math.min(window.innerWidth - popoverRect.width - margin, coordinates.left));
+  const top = Math.max(margin, Math.min(window.innerHeight - popoverRect.height - margin, coordinates.top));
+  const arrowOffset = placement === "left" || placement === "right"
+    ? targetRect.top + targetRect.height / 2 - top
+    : targetRect.left + targetRect.width / 2 - left;
+  const maximumArrowOffset = (placement === "left" || placement === "right" ? popoverRect.height : popoverRect.width) - 26;
+  popover.dataset.placement = placement;
+  popover.style.setProperty("--onboarding-arrow-offset", `${Math.max(26, Math.min(maximumArrowOffset, arrowOffset))}px`);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.visibility = "visible";
+}
+
+function scheduleOnboardingPosition() {
+  if (!$("#onboarding-dialog").open) return;
+  if (onboardingPositionFrame !== null) return;
+  onboardingPositionFrame = window.requestAnimationFrame(positionOnboardingElements);
+}
+
+function refreshOnboardingForViewport() {
+  const dialog = $("#onboarding-dialog");
+  if (!dialog.open) return;
+  if (onboardingPositionFrame !== null) window.cancelAnimationFrame(onboardingPositionFrame);
+  onboardingPositionFrame = window.requestAnimationFrame(() => {
+    onboardingPositionFrame = null;
+    const currentSelector = onboardingSteps[onboardingStep]?.selector;
+    const refreshedSteps = currentOnboardingSteps();
+    if (!refreshedSteps.length) return;
+    onboardingSteps = refreshedSteps;
+    const preservedStep = onboardingSteps.findIndex((step) => step.selector === currentSelector);
+    renderOnboardingStep(preservedStep >= 0 ? preservedStep : 0);
   });
-  document.querySelectorAll(".onboarding-dots i").forEach((dot, index) => dot.classList.toggle("active", index === onboardingStep));
-  $("#onboarding-progress").textContent = `第 ${onboardingStep + 1} 步，共 ${sections.length} 步`;
+}
+
+function renderOnboardingStep(step, focusTitle = false) {
+  const lastStep = Math.max(0, onboardingSteps.length - 1);
+  onboardingStep = Math.max(0, Math.min(lastStep, Number(step) || 0));
+  const current = onboardingSteps[onboardingStep];
+  if (!current) return;
+  $("#onboarding-progress").textContent = `第 ${onboardingStep + 1} 步，共 ${onboardingSteps.length} 步`;
+  $("#onboarding-eyebrow").textContent = current.eyebrow;
+  $("#onboarding-dialog-title").textContent = current.title;
+  $("#onboarding-dialog-description").textContent = current.description;
   $("#onboarding-previous").disabled = onboardingStep === 0;
-  $("#onboarding-next").textContent = onboardingStep === lastStep ? "开始创作" : "下一步";
-  if (focusTitle) sections[onboardingStep]?.querySelector("h3")?.focus();
+  $("#onboarding-next").textContent = onboardingStep === lastStep ? "完成导览" : "下一步";
+  $("#onboarding-dialog").dataset.step = String(onboardingStep + 1);
+  $("#onboarding-dialog").dataset.target = current.selector;
+  document.querySelector(current.selector)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  scheduleOnboardingPosition();
+  if (focusTitle) $("#onboarding-dialog-title").focus();
 }
 
 function openOnboarding(force = false) {
   const dialog = $("#onboarding-dialog");
   if (!force && hasCompletedOnboarding()) return;
-  renderOnboardingStep(0);
+  onboardingSteps = currentOnboardingSteps();
+  if (!onboardingSteps.length) return;
+  onboardingStep = 0;
   if (!dialog.open) dialog.showModal();
-  window.requestAnimationFrame(() => dialog.querySelector("[data-onboarding-step]:not([hidden]) h3")?.focus());
+  renderOnboardingStep(0);
+  window.requestAnimationFrame(() => $("#onboarding-dialog-title").focus());
 }
 
 function completeOnboarding() {
   persistOnboardingCompletion();
+  if (onboardingPositionFrame !== null) window.cancelAnimationFrame(onboardingPositionFrame);
+  onboardingPositionFrame = null;
   if ($("#onboarding-dialog").open) $("#onboarding-dialog").close();
 }
 
@@ -1042,7 +1170,6 @@ function applyAuthenticatedUser(session) {
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.body.classList.remove("auth-pending");
-  scheduleFirstUseOnboarding();
 }
 
 async function initializeAuthentication() {
@@ -1238,6 +1365,7 @@ async function initializePage() {
   } finally {
     restoringPageRoute = false;
     replacePageRoute(currentPageRoute());
+    scheduleFirstUseOnboarding();
   }
 }
 
@@ -3283,12 +3411,9 @@ $("#onboarding-menu-button").addEventListener("click", () => {
 $("#onboarding-skip").addEventListener("click", completeOnboarding);
 $("#onboarding-previous").addEventListener("click", () => renderOnboardingStep(onboardingStep - 1, true));
 $("#onboarding-next").addEventListener("click", () => {
-  const lastStep = document.querySelectorAll("[data-onboarding-step]").length - 1;
+  const lastStep = onboardingSteps.length - 1;
   if (onboardingStep >= lastStep) completeOnboarding();
   else renderOnboardingStep(onboardingStep + 1, true);
-});
-document.querySelectorAll("[data-onboarding-go]").forEach((button) => {
-  button.addEventListener("click", () => renderOnboardingStep(Number(button.dataset.onboardingGo), true));
 });
 $("#onboarding-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
@@ -3303,9 +3428,11 @@ $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
   event.preventDefault();
   const direction = event.key === "ArrowRight" ? 1 : -1;
-  const lastStep = document.querySelectorAll("[data-onboarding-step]").length - 1;
+  const lastStep = onboardingSteps.length - 1;
   renderOnboardingStep(Math.max(0, Math.min(lastStep, onboardingStep + direction)), true);
 });
+window.addEventListener("resize", refreshOnboardingForViewport);
+document.addEventListener("scroll", scheduleOnboardingPosition, true);
 $("#account-settings-button").addEventListener("click", () => {
   $("#account-menu").classList.add("hidden");
   $("#account-button").setAttribute("aria-expanded", "false");
