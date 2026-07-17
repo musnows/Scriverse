@@ -8,7 +8,7 @@ import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload 
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260713-persisted-output-tokens";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260713-hover-usage";
+import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -2510,7 +2510,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "query_story_knowledge"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时，概要最多使用所选模型上下文窗口的此比例；超过时会保留较新的章节概要。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文压缩</h2><p>达到阈值时先提醒；如果继续发送而未处理，系统会自动压缩较早对话。阈值最高为 90%。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文压缩提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存压缩阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话长期记忆</h2><p>对话历史使用独立预算；达到阈值时先提醒，继续发送会把较早消息整理成带来源的结构化长期记忆，并尽量保留最近八条原文。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">整理提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话长期记忆整理提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存整理阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -2542,7 +2542,7 @@ async function renderBookAiSettings() {
     button.disabled = true;
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { contextCompactThreshold: Number($("#context-compact-threshold").value) } });
-      toast("对话上下文压缩阈值已保存");
+      toast("对话长期记忆整理阈值已保存");
       scheduleAiContextUsage();
     } catch (error) {
       toast(error.message, "error");
@@ -2631,10 +2631,10 @@ function setAiContextMeter(usage) {
 }
 
 function showAiContextWarning(usage = null) {
-  const percent = Math.max(0, Math.min(100, Number(usage?.usagePercent) || 0));
+  const percent = Math.max(0, Math.round(Number(usage?.conversationUsagePercent) || 0));
   const threshold = Math.max(50, Math.min(90, Number(usage?.compactThreshold) || 85));
-  $("#ai-context-warning-title").textContent = percent ? `对话上下文已使用 ${percent}%` : "对话上下文接近上限";
-  $("#ai-context-warning-message").textContent = `已达到 ${threshold}% 的压缩提醒阈值。现在可压缩上下文或新开对话；若继续发送，系统会先自动压缩。`;
+  $("#ai-context-warning-title").textContent = percent ? `对话历史已使用 ${percent}% 的独立预算` : "对话历史接近整理阈值";
+  $("#ai-context-warning-message").textContent = `已达到 ${threshold}% 的长期记忆整理阈值。现在可整理较早对话或新开对话；若继续发送，系统会先生成带来源的结构化长期记忆。作品正文超限不会触发此操作。`;
   $("#ai-context-warning").classList.remove("hidden");
 }
 
@@ -2654,7 +2654,7 @@ async function prepareAiConversationContext({ instruction, scope, modelId, citat
     return false;
   }
   hideAiContextWarning();
-  if (prepared.action === "compacted") toast("已自动压缩较早对话并继续发送");
+  if (prepared.action === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
   return true;
 }
 
@@ -4087,7 +4087,7 @@ $("#ai-context-compact").addEventListener("click", async () => {
       body: { modelId, scope: requestScope.scope }
     });
     hideAiContextWarning();
-    toast(result.changed ? `已压缩 ${result.compactedMessageCount} 条较早消息` : "当前没有需要压缩的较早消息");
+    toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
     await refreshAiContextUsage();
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");

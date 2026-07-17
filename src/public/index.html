@@ -228,8 +228,8 @@
         <div class="prompt-box">
           <div id="ai-citations" class="ai-citations hidden" aria-label="已添加的正文引用"></div>
           <section id="ai-context-warning" class="ai-context-warning hidden" role="status" aria-live="polite">
-            <div><strong id="ai-context-warning-title">对话上下文接近上限</strong><p id="ai-context-warning-message">建议压缩上下文或新开对话。</p></div>
-            <div><button id="ai-context-compact" type="button">压缩上下文</button><button id="ai-context-new-conversation" type="button">新开对话</button><button id="ai-context-dismiss" type="button">稍后处理</button></div>
+            <div><strong id="ai-context-warning-title">对话历史接近整理阈值</strong><p id="ai-context-warning-message">建议整理为长期记忆或新开对话。</p></div>
+            <div><button id="ai-context-compact" type="button">整理长期记忆</button><button id="ai-context-new-conversation" type="button">新开对话</button><button id="ai-context-dismiss" type="button">稍后处理</button></div>
           </section>
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
@@ -528,6 +528,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260718-ai-process-duration"></script>
+    <script type="module" src="/app.js?v=20260718-layered-context"></script>
   </body>
 </html>
