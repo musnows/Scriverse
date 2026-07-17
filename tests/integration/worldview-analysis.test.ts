@@ -28,8 +28,10 @@ describe("世界观分析任务", () => {
   it("生成带可核验证据的结构化报告并过滤伪造引文", async () => {
     let chapterId = "";
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
       expect(body.messages.some((message) => message.content.includes("世界观"))).toBe(true);
+      expect(body.messages.find((message) => message.role === "system")?.content).toContain("最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中");
+      expect(body.messages.at(-1)?.content).toContain("标签外不要输出任何内容，也不要使用 Markdown 代码块");
       const analysis = JSON.stringify({
         summary: "北港以潮汐能源维持城市运转。",
         dimensions: [
