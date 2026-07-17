@@ -7,6 +7,17 @@ import { runWithRequestActor, type RequestActor } from "./request-context.js";
 export type AuthUser = RequestActor & {
   status: "active" | "disabled";
   createdAt: string;
+  avatarUrl: string | null;
+};
+
+export type UserAvatar = {
+  mimeType: string;
+  content: Buffer;
+  byteLength: number;
+  sha256: string;
+  width: number;
+  height: number;
+  updatedAt: string;
 };
 
 export type AuthSession = {
@@ -81,13 +92,19 @@ function apiKeyCredential(request: Request): string | null {
 }
 
 function mapUser(row: Row): AuthUser {
+  const avatarSha256 = row.avatar_sha256 === null || row.avatar_sha256 === undefined
+    ? null
+    : String(row.avatar_sha256);
   return {
     userId: String(row.id),
     username: String(row.username),
     displayName: String(row.display_name),
     role: String(row.role) === "admin" ? "admin" : "user",
     status: String(row.status) === "disabled" ? "disabled" : "active",
-    createdAt: String(row.created_at)
+    createdAt: String(row.created_at),
+    avatarUrl: avatarSha256
+      ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(avatarSha256)}`
+      : null
   };
 }
 
@@ -325,7 +342,7 @@ export class UserAuthService {
     return this.database.all("SELECT * FROM users ORDER BY created_at, username").map(mapUser);
   }
 
-  directory(query: string): Pick<AuthUser, "userId" | "username" | "displayName">[] {
+  directory(query: string): Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">[] {
     const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
     const pattern = `%${escapedQuery}%`;
     return this.database.all(
@@ -335,7 +352,7 @@ export class UserAuthService {
       pattern
     ).map((row) => {
       const user = mapUser(row);
-      return { userId: user.userId, username: user.username, displayName: user.displayName };
+      return { userId: user.userId, username: user.username, displayName: user.displayName, avatarUrl: user.avatarUrl };
     });
   }
 
@@ -360,6 +377,55 @@ export class UserAuthService {
     return this.getUser(userId);
   }
 
+  setAvatar(userId: string, input: { mimeType: "image/png" | "image/jpeg" | "image/webp"; content: Buffer; width: number; height: number }): AuthUser {
+    this.getUser(userId);
+    const timestamp = new Date().toISOString();
+    const digest = createHash("sha256").update(input.content).digest("hex");
+    this.database.transaction(() => {
+      this.database.run(
+        `INSERT INTO user_avatars (user_id, mime_type, content, byte_length, sha256, width, height, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET mime_type = excluded.mime_type, content = excluded.content,
+         byte_length = excluded.byte_length, sha256 = excluded.sha256, width = excluded.width,
+         height = excluded.height, updated_at = excluded.updated_at`,
+        userId,
+        input.mimeType,
+        input.content,
+        input.content.byteLength,
+        digest,
+        input.width,
+        input.height,
+        timestamp
+      );
+      this.database.run("UPDATE users SET avatar_updated_at = ?, avatar_sha256 = ?, updated_at = ? WHERE id = ?", timestamp, digest, timestamp, userId);
+    });
+    return this.getUser(userId);
+  }
+
+  getAvatar(userId: string): UserAvatar {
+    this.getUser(userId);
+    const row = this.database.get("SELECT * FROM user_avatars WHERE user_id = ?", userId);
+    if (!row) throw notFound("用户头像");
+    return {
+      mimeType: String(row.mime_type),
+      content: Buffer.from(row.content as Uint8Array),
+      byteLength: Number(row.byte_length),
+      sha256: String(row.sha256),
+      width: Number(row.width),
+      height: Number(row.height),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  deleteAvatar(userId: string): AuthUser {
+    this.getUser(userId);
+    this.database.transaction(() => {
+      this.database.run("DELETE FROM user_avatars WHERE user_id = ?", userId);
+      this.database.run("UPDATE users SET avatar_updated_at = NULL, avatar_sha256 = NULL, updated_at = ? WHERE id = ?", new Date().toISOString(), userId);
+    });
+    return this.getUser(userId);
+  }
+
   changePassword(userId: string, sessionId: string, currentPassword: string, newPassword: string): void {
     const row = this.database.get("SELECT * FROM users WHERE id = ?", userId);
     if (!row) throw notFound("用户");
@@ -375,13 +441,16 @@ export class UserAuthService {
 
   listMembers(workId: string): Record<string, unknown>[] {
     return this.database.all(
-      `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status
+      `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
        FROM work_memberships membership JOIN users user ON user.id = membership.user_id
        WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 ELSE 1 END, user.username`,
       workId
     ).map((row) => ({
       userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
-      role: String(row.role), status: String(row.status), createdAt: String(row.created_at)
+      role: String(row.role), status: String(row.status), createdAt: String(row.created_at),
+      avatarUrl: row.avatar_sha256
+        ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
+        : null
     }));
   }
 

@@ -8,6 +8,11 @@ type SessionCredentials = {
   user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
 };
 
+const onePixelPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+  "base64"
+);
+
 async function solveCaptcha(app: Runtime["app"]): Promise<{ captchaId: string; captchaAnswer: string }> {
   const response = await request(app).get("/api/auth/captcha").expect(200);
   expect(response.body.data.captchaId).toBeTruthy();
@@ -125,6 +130,62 @@ describe("用户、作品权限与操作者追踪 API", () => {
       password: "new-secure-password-456",
       ...loginCaptcha
     }).expect(200);
+  });
+
+  it("用户可安全上传、读取、替换和移除自己的头像", async () => {
+    const user = await register(runtime, "avatar_user");
+    const viewer = await register(runtime, "avatar_viewer");
+    expect(user.user).toMatchObject({ avatarUrl: null });
+
+    await request(runtime.app).put("/api/auth/avatar").attach("file", onePixelPng, "avatar.png").expect(401);
+    await user.agent.put("/api/auth/avatar").attach("file", onePixelPng, "avatar.png").expect(403);
+    const invalid = await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", Buffer.from("not an image"), "avatar.png")
+      .expect(415);
+    expect(invalid.body.error.code).toBe("INVALID_AVATAR");
+
+    const uploaded = await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", onePixelPng, "avatar.png")
+      .expect(200);
+    expect(uploaded.body.data.avatarUrl).toMatch(new RegExp(`^/api/user-avatars/${user.user.userId}\\?v=`, "u"));
+    const avatarUrl = String(uploaded.body.data.avatarUrl);
+    const avatar = await viewer.agent.get(avatarUrl).expect(200);
+    expect(avatar.headers["content-type"]).toBe("image/png");
+    expect(avatar.headers["content-length"]).toBe(String(onePixelPng.byteLength));
+    expect(avatar.headers.etag).toMatch(/^"[a-f0-9]{64}"$/u);
+    expect(avatar.headers["cache-control"]).toBe("private, max-age=31536000, immutable");
+    expect(Buffer.from(avatar.body)).toEqual(onePixelPng);
+    expect(runtime.database.get("SELECT mime_type, width, height FROM user_avatars WHERE user_id = ?", user.user.userId)).toEqual({
+      mime_type: "image/png",
+      width: 1,
+      height: 1
+    });
+
+    const session = await user.agent.get("/api/auth/session").expect(200);
+    expect(session.body.data.user.avatarUrl).toBe(avatarUrl);
+    const directory = await viewer.agent.get("/api/users/directory?q=avatar_user").expect(200);
+    expect(directory.body.data[0]).toMatchObject({ userId: user.user.userId, avatarUrl });
+    expect(runtime.database.get("SELECT action FROM audit_logs WHERE entity_id = ? AND action = 'user.avatar-updated'", user.user.userId)).toEqual({
+      action: "user.avatar-updated"
+    });
+
+    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1, 0);
+    await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", oversized, "too-large.png")
+      .expect(400);
+    expect(runtime.database.get("SELECT byte_length FROM user_avatars WHERE user_id = ?", user.user.userId)?.byte_length).toBe(onePixelPng.byteLength);
+
+    const removed = await user.agent.delete("/api/auth/avatar").set("X-CSRF-Token", user.csrfToken).expect(200);
+    expect(removed.body.data.avatarUrl).toBeNull();
+    await viewer.agent.get(avatarUrl).expect(404);
+    expect(runtime.database.get("SELECT * FROM user_avatars WHERE user_id = ?", user.user.userId)).toBeUndefined();
+    expect(runtime.database.get("SELECT action FROM audit_logs WHERE entity_id = ? AND action = 'user.avatar-deleted'", user.user.userId)).toEqual({
+      action: "user.avatar-deleted"
+    });
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
   it("用户可重置 API Key，且密钥仅访问所属用户的作品数据和 CLI 白名单", async () => {

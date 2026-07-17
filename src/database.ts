@@ -1086,6 +1086,37 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (23, ?)", new Date().toISOString());
       });
     }
+    if (!applied.has(24)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(users)").map((row) => String(row.name)));
+        if (!columns.has("avatar_updated_at")) {
+          this.run("ALTER TABLE users ADD COLUMN avatar_updated_at TEXT");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS user_avatars (
+          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg', 'image/webp')),
+          content BLOB NOT NULL,
+          byte_length INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (24, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(25)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(users)").map((row) => String(row.name)));
+        if (!columns.has("avatar_sha256")) {
+          this.run("ALTER TABLE users ADD COLUMN avatar_sha256 TEXT");
+        }
+        this.run(`UPDATE users SET avatar_sha256 = (
+          SELECT avatar.sha256 FROM user_avatars avatar WHERE avatar.user_id = users.id
+        ) WHERE avatar_updated_at IS NOT NULL AND avatar_sha256 IS NULL`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {

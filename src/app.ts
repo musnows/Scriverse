@@ -14,6 +14,7 @@ import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText } from "./import-security.js";
+import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
   clearSessionCookie,
@@ -348,6 +349,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
+  const avatarUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
+  });
 
   app.disable("x-powered-by");
   if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
@@ -410,6 +415,36 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.audit(null, "user.profile-updated", "user", updated.userId);
     data(response, updated);
   });
+  app.put("/api/auth/avatar", avatarUpload.single("file"), (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 头像");
+    try {
+      const metadata = readRasterImageMetadata(request.file.buffer);
+      const updated = database.transaction(() => {
+        const user = auth.setAvatar(request.authUser!.userId, { ...metadata, content: request.file!.buffer });
+        store.audit(null, "user.avatar-updated", "user", user.userId, {
+          mimeType: metadata.mimeType,
+          byteLength: request.file!.buffer.byteLength,
+          width: metadata.width,
+          height: metadata.height
+        });
+        return user;
+      });
+      data(response, updated);
+    } catch (error) {
+      if (error instanceof InvalidRasterImageError) throw new AppError(415, "INVALID_AVATAR", error.message);
+      throw error;
+    }
+  });
+  app.delete("/api/auth/avatar", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const updated = database.transaction(() => {
+      const user = auth.deleteAvatar(request.authUser!.userId);
+      store.audit(null, "user.avatar-deleted", "user", user.userId);
+      return user;
+    });
+    data(response, updated);
+  });
   app.patch("/api/auth/password", (request, response) => {
     if (!request.authUser || !request.authSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(passwordChangeSchema, request.body);
@@ -435,6 +470,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/users", (_request, response) => data(response, auth.listUsers()));
   app.get("/api/users/directory", (request, response) => data(response, auth.directory(String(request.query.q ?? ""))));
+  app.get("/api/user-avatars/:userId", (request, response) => {
+    const avatar = auth.getAvatar(request.params.userId);
+    response.setHeader("Content-Type", avatar.mimeType);
+    response.setHeader("Content-Length", String(avatar.byteLength));
+    response.setHeader("ETag", `\"${avatar.sha256}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.send(avatar.content);
+  });
   app.patch("/api/users/:userId", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
