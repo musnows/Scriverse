@@ -67,6 +67,22 @@ const mockAi = createServer(async (request, response) => {
     sendCompletion(response, { content: "模型已处理三个工具结果：目录、章节正文和跃迁设定均已确认。" });
     return;
   }
+  if (latestUserMessage.includes("这是什么项目")) {
+    const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
+    if (!systemPrompt.includes("预加载上下文为空或不足时，必须先调用工具主动查询")) {
+      sendCompletion(response, { content: "当前没有上下文，无法判断项目内容。" });
+      return;
+    }
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, [{ id: "browser-project-index", name: "story_index", arguments: {} }]);
+      return;
+    }
+    const result = JSON.parse(toolMessages[0]?.content ?? "{}") as JsonObject;
+    const data = result.data as JsonObject;
+    const work = data.work as JsonObject;
+    sendCompletion(response, { content: `这是《${String(work.title)}》，作者是 ${String(work.author)}，当前共有 ${String(work.chapterCount)} 章。` });
+    return;
+  }
   if (latestUserMessage.includes("浏览器工具失败测试")) {
     if (toolMessages.length === 0) {
       sendToolCalls(response, [

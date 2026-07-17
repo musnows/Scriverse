@@ -115,7 +115,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "story_index",
-      description: "按分页列出作品卷章目录和当前章节概要。先用它定位章节 ID；不会返回正文。",
+      description: "读取当前作品的基本信息，并按分页列出卷章目录和章节概要。回答作品简介、整体结构或定位章节时优先使用；不会返回正文。",
       parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false }
     }
   },
@@ -1282,31 +1282,44 @@ export class AiManager {
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
+  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
+    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType);
+    const toolGuidance = enabledToolIds.length > 0
+      ? [
+          `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
+          "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge。",
+          "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
+        ].join("\n")
+      : "";
     const systemPrompt = [
       "你是小说作者的创作协作助手。作者锁定的事实是不可违反的硬约束。",
       "只根据提供的正文和设定回答；不确定时明确说明，不得把推测当成事实。",
       "引用事实时注明章节或设定名称。不要声称已经修改正文。",
+      toolGuidance,
       platformPrompt ? `平台全局追加系统提示词：\n${platformPrompt}` : "",
       workPrompt ? `本书追加系统提示词：\n${workPrompt}` : "",
       input.extraSystemPrompt ?? ""
     ].filter(Boolean).join("\n\n");
+    const renderedContext = context.trim() || (enabledToolIds.length > 0
+      ? "[本轮未预加载作品上下文。若问题涉及当前作品，请先使用已启用的作品查询工具主动获取信息。]"
+      : "[本轮未提供作品上下文。]");
     const conversation = input.conversationId
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
       : null;
     if (!conversation) {
       return [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
+        { role: "user", content: `上下文如下：\n\n${renderedContext}\n\n作者指令：\n${input.instruction}` }
       ];
     }
     const conversationMessages: AiMessage[] = conversation?.messages.map((message) => ({ role: message.role, content: message.content })) ?? [];
     return [
       { role: "system", content: systemPrompt },
       ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的压缩摘要：\n${conversation.summary}` }] : []),
-      { role: "user", content: `本次创作上下文如下：\n\n${context}` },
+      { role: "user", content: `本次创作上下文如下：\n\n${renderedContext}` },
       ...conversationMessages,
       { role: "user", content: `作者当前指令：\n${input.instruction}` }
     ];
@@ -1322,11 +1335,15 @@ export class AiManager {
     return this.contextBuilder.build(workId, scope, 60_000, bookSummaryMaximumTokens);
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
+  private enabledAgentToolIds(workId: string, taskType: TaskType): AgentToolId[] {
     if (taskType !== "chat") return [];
     const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
-    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+  }
+
+  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
@@ -1379,12 +1396,38 @@ export class AiManager {
     const args = parsed.data;
     if (name === "story_index") {
       const { offset, limit } = args as z.infer<typeof storyIndexArguments>;
+      const work = this.store.getWork(workId);
       const tree = this.store.getWorkTree(workId);
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
       const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
         id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
       })));
-      return { id: toolCall.id, name, calledAt, arguments: { offset, limit }, status: "completed", result: { ok: true, data: { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null } } };
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { offset, limit },
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            work: {
+              id: work.id,
+              title: work.title,
+              author: work.author,
+              description: work.description,
+              language: work.language,
+              tags: work.tags,
+              chapterCount: work.chapterCount,
+              wordCount: work.wordCount
+            },
+            totalChapters: chapters.length,
+            offset,
+            chapters: chapters.slice(offset, offset + limit),
+            nextOffset: offset + limit < chapters.length ? offset + limit : null
+          }
+        }
+      };
     }
     if (name === "read_chapters") {
       const { chapterIds, include } = args as z.infer<typeof readChaptersArguments>;

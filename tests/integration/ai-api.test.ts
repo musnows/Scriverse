@@ -212,6 +212,39 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(sentPrompt).not.toContain("跃迁后必须冷却十二小时");
   });
 
+  it("无上下文作品问题会收到主动工具指引并通过目录读取作品信息", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }>; tools?: Array<{ function?: { name?: string } }> };
+      if (completionCount === 1) {
+        expect(body.messages[0]?.content).toContain("预加载上下文为空或不足时，必须先调用工具主动查询");
+        expect(body.messages[0]?.content).toContain("整体介绍、作品基本信息、目录或章节定位优先调用 story_index");
+        expect(body.messages[1]?.content).toContain("本轮未预加载作品上下文");
+        expect(body.tools?.map((tool) => tool.function?.name)).toContain("story_index");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "project-index", type: "function", function: { name: "story_index", arguments: "{}" } }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      expect(toolMessage?.content).toContain('"title":"AI 测试作品"');
+      expect(toolMessage?.content).toContain('"chapterCount":1');
+      return new Response(JSON.stringify({ choices: [{ message: { content: "这是《AI 测试作品》，当前包含一章。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "这是一个什么项目？",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("这是《AI 测试作品》，当前包含一章。");
+    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "story_index", status: "completed" })]);
+    expect(completionCount).toBe(2);
+  });
+
   it("聊天默认暴露聚合查询工具并把结果回传给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
