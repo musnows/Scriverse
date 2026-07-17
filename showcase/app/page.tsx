@@ -67,12 +67,32 @@ const capabilities = [
   ["12", "搜索与导出", "全文检索正文与知识库，安全导出 JSON、TXT 和 Markdown。"],
 ];
 
+const sectionIds = new Set(["top", "workspace", "abilities", "relationships", "galaxy"]);
+
+function scrollToSection(id: string, behavior: ScrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth") {
+  document.getElementById(id)?.scrollIntoView({ behavior, block: "start" });
+}
+
+function ScrollLink({ children, className, targetId, ariaLabel }: { children: React.ReactNode; className?: string; targetId: string; ariaLabel?: string }) {
+  return (
+    <button
+      aria-label={ariaLabel}
+      className={`${className ?? ""} scroll-link`.trim()}
+      data-scroll-target={targetId}
+      onClick={() => scrollToSection(targetId)}
+      type="button"
+    >
+      {children}
+    </button>
+  );
+}
+
 function Brand() {
   return (
-    <a className="brand" href="#top" aria-label="叙界首页">
+    <ScrollLink className="brand" targetId="top" ariaLabel="叙界首页">
       <span className="brand-mark">叙</span>
       <span><strong>叙界</strong><small>SCRIVERSE</small></span>
-    </a>
+    </ScrollLink>
   );
 }
 
@@ -468,11 +488,24 @@ function WorkspaceMockup() {
 }
 
 export default function Home() {
+  useEffect(() => {
+    const clearHashNavigation = () => {
+      const targetId = window.location.hash.slice(1);
+      if (!targetId) return;
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      if (sectionIds.has(targetId)) requestAnimationFrame(() => scrollToSection(targetId, "auto"));
+    };
+
+    clearHashNavigation();
+    window.addEventListener("hashchange", clearHashNavigation);
+    return () => window.removeEventListener("hashchange", clearHashNavigation);
+  }, []);
+
   return (
     <main id="top">
       <header className="site-header">
         <Brand />
-        <nav aria-label="主导航"><a href="#workspace">工作台</a><a href="#abilities">能力</a><a href="#relationships">关系图</a><a href="#galaxy">银河图</a></nav>
+        <nav aria-label="主导航"><ScrollLink targetId="workspace">工作台</ScrollLink><ScrollLink targetId="abilities">能力</ScrollLink><ScrollLink targetId="relationships">关系图</ScrollLink><ScrollLink targetId="galaxy">银河图</ScrollLink></nav>
         <a className="header-cta" href="https://github.com/musnows/Scriverse" target="_blank" rel="noreferrer">查看源代码 <span>↗</span></a>
       </header>
 
@@ -481,7 +514,7 @@ export default function Home() {
           <span className="eyebrow">LOCAL-FIRST AI WRITING STUDIO</span>
           <h1>让宏大的故事，<br />始终<span>有迹可循。</span></h1>
           <p>叙界是为长篇小说而生的本地 AI 创作工作台。正文、世界观、人物关系、时间线与每一次灵感，都在同一个叙事系统里彼此关联。</p>
-          <div className="hero-actions"><a className="primary-link" href="#workspace">进入叙界世界</a><a className="text-link" href="#relationships">探索人物图谱 <span>↓</span></a></div>
+          <div className="hero-actions"><ScrollLink className="primary-link" targetId="workspace">进入叙界世界</ScrollLink><ScrollLink className="text-link" targetId="relationships">探索人物图谱 <span>↓</span></ScrollLink></div>
         </div>
         <div className="hero-orbit" aria-hidden="true">
           <div className="orbit-ring ring-one" /><div className="orbit-ring ring-two" /><div className="orbit-ring ring-three" />
