@@ -195,12 +195,49 @@ function safeJsonObject(value: string): Record<string, unknown> {
 
 function extractJson<T>(content: string): T {
   const trimmed = content.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/u)?.[1];
-  try {
-    return JSON.parse(fenced ?? trimmed) as T;
-  } catch {
-    throw new AppError(502, "AI_INVALID_JSON", "AI 返回的分析结果不是有效 JSON", { output: trimmed.slice(0, 500) });
+  const candidates = [trimmed];
+  for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/giu)) {
+    if (match[1]) candidates.push(match[1].trim());
   }
+  const maximumBalancedCandidates = 20;
+  for (let start = 0; start < trimmed.length && candidates.length < maximumBalancedCandidates; start += 1) {
+    const first = trimmed[start];
+    if (first !== "{" && first !== "[") continue;
+    const stack = [first];
+    let inString = false;
+    let escaped = false;
+    for (let index = start + 1; index < trimmed.length; index += 1) {
+      const character = trimmed[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === "{" || character === "[") stack.push(character);
+      else if (character === "}" || character === "]") {
+        const expected = character === "}" ? "{" : "[";
+        if (stack.at(-1) !== expected) break;
+        stack.pop();
+        if (stack.length === 0) {
+          candidates.push(trimmed.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+  }
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      // 继续尝试模型响应中的下一个结构化片段
+    }
+  }
+  throw new AppError(502, "AI_INVALID_JSON", "AI 返回的分析结果不是有效 JSON", { output: trimmed.slice(0, 500) });
 }
 
 const guardIssueTypes = new Set(["character", "location", "time", "world", "outline", "foreshadow"]);

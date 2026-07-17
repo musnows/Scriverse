@@ -30,7 +30,7 @@ describe("世界观分析任务", () => {
     const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
       expect(body.messages.some((message) => message.content.includes("世界观"))).toBe(true);
-      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      const analysis = JSON.stringify({
         summary: "北港以潮汐能源维持城市运转。",
         dimensions: [
           {
@@ -54,7 +54,8 @@ describe("世界观分析任务", () => {
           evidence: [{ chapterId, chapterTitle: "第一章", quote: "退潮后能源会中断两个小时。" }]
         }],
         uncertainties: [{ question: "备用能源是什么？", reason: "正文没有说明。", evidence: [] }]
-      }) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      });
+      return new Response(JSON.stringify({ choices: [{ message: { content: `<think>先核对证据再输出。</think>\n分析完成：\n\`\`\`json\n${analysis}\n\`\`\`` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
     runtime = createTestRuntime(fetchMock);
     const work = await request(runtime.app).post("/api/works").send({ title: "北港纪事" }).expect(201);
