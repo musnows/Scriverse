@@ -233,6 +233,7 @@ const modelSchema = z.object({
   contextWindow: z.number().int().min(1_024).max(2_000_000).optional(),
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
+  thinkingEnabled: z.boolean().optional(),
   enabled: z.boolean().optional(),
   note: z.string().max(10_000).optional()
 });

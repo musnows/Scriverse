@@ -29,6 +29,7 @@ export function modelFormValues(model = null) {
     contextWindow: model?.contextWindow ?? 128000,
     temperature: model?.preset?.temperature ?? 0.7,
     maxTokens: model?.preset?.max_tokens ?? 32000,
+    thinkingEnabled: model?.thinkingEnabled ?? true,
     enabled: model?.enabled ?? true
   };
 }
@@ -44,6 +45,7 @@ export function modelPayload(values, existingPreset = {}) {
       temperature: Number(values.temperature),
       max_tokens: Number(values.maxTokens)
     },
+    thinkingEnabled: Boolean(values.thinkingEnabled),
     enabled: Boolean(values.enabled)
   };
 }

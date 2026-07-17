@@ -27,6 +27,7 @@ type ModelInput = {
   contextWindow?: number;
   outputNote?: string;
   preset?: Record<string, unknown>;
+  thinkingEnabled?: boolean;
   enabled?: boolean;
   note?: string;
 };
@@ -834,7 +835,7 @@ export class AiManager {
     const timestamp = now();
     this.store.db.run(
       `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
-       preset_json, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       preset_json, thinking_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       modelId,
       providerId,
       input.displayName,
@@ -844,6 +845,7 @@ export class AiManager {
       input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       input.outputNote ?? "",
       JSON.stringify(normalizeModelPreset(input.preset ?? {})),
+      (input.thinkingEnabled ?? true) ? 1 : 0,
       (input.enabled ?? true) ? 1 : 0,
       input.note ?? "",
       timestamp,
@@ -879,7 +881,7 @@ export class AiManager {
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")));
     this.store.db.run(
       `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
-       preset_json = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
+       preset_json = ?, thinking_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.displayName ?? stringValue(row, "display_name"),
       input.modelId ?? stringValue(row, "model_id"),
       JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
@@ -887,6 +889,7 @@ export class AiManager {
       input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
       input.outputNote ?? stringValue(row, "output_note"),
       JSON.stringify(preset),
+      (input.thinkingEnabled ?? boolValue(row, "thinking_enabled")) ? 1 : 0,
       (input.enabled ?? boolValue(row, "enabled")) ? 1 : 0,
       input.note ?? stringValue(row, "note"),
       now(),
@@ -1492,11 +1495,10 @@ export class AiManager {
     const messages = this.buildMessages(input, context);
     const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType);
     const completionMessages: CompletionMessage[] = [...messages];
-    const parameters = this.constrainParametersForContext(
-      model,
-      messages,
-      this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS })
-    );
+    const parameters = this.constrainParametersForContext(model, messages, {
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
+      thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" }
+    });
     const callId = id("call");
     const timestamp = now();
     this.store.db.run(
@@ -1628,11 +1630,10 @@ export class AiManager {
     const context = this.buildContext(input.workId, input.scope, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
-    const parameters = this.constrainParametersForContext(
-      model,
-      messages,
-      this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS })
-    );
+    const parameters = this.constrainParametersForContext(model, messages, {
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
+      thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" }
+    });
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -3316,6 +3317,7 @@ export class AiManager {
       contextWindow: numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW,
       outputNote: stringValue(row, "output_note"),
       preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json"))),
+      thinkingEnabled: boolValue(row, "thinking_enabled"),
       enabled: boolValue(row, "enabled"),
       note: stringValue(row, "note"),
       createdAt: stringValue(row, "created_at"),

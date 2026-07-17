@@ -4,7 +4,7 @@ import { renderMarkdown } from "/markdown.js?v=20260717-markdown-table-scrollbar
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
-import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260713-model-purpose-picker";
+import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260718-thinking-toggle";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260713-persisted-output-tokens";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
@@ -2325,7 +2325,7 @@ function renderProviderCards(providers, models) {
   return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
     <article class="record-card provider-card"><small>平台级 · ${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
     <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit} · max_tokens：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token · max_tokens ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
+    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · Thinking ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token · max_tokens ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI Chat Completions 兼容地址和密钥，测试成功后再添加模型。");
 }
@@ -3188,8 +3188,8 @@ function openProviderDialog(item) {
 
 function openModelDialog(providerId, item = null) {
   const values = modelFormValues(item);
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow) + field("temperature", "默认温度", "number", values.temperature) + field("maxTokens", "默认 max_tokens", "number", values.maxTokens) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow) + field("temperature", "默认温度", "number", values.temperature) + field("maxTokens", "默认 max_tokens", "number", values.maxTokens) + field("thinkingEnabled", "开启 Thinking（供应商需支持 thinking 参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();

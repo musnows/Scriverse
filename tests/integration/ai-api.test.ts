@@ -10,17 +10,20 @@ describe("AI 供应商、模型与建议 API", () => {
   let chapterId: string;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
+  let expectedThinkingType: "enabled" | "disabled";
 
   beforeEach(async () => {
     expectedMaxTokens = 32_000;
+    expectedThinkingType = "enabled";
     fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number };
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string } };
       expect(body.messages[1]?.content).toContain("跃迁后必须冷却十二小时");
       expect(body.max_tokens).toBe(expectedMaxTokens);
+      expect(body.thinking).toEqual({ type: expectedThinkingType });
       if (body.messages[1]?.content.includes("检查下面的续写候选")) {
         return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -59,6 +62,7 @@ describe("AI 供应商、模型与建议 API", () => {
       preset: { temperature: 0.4, unsupported: "ignored" }
     }).expect(201);
     expect(model.body.data.preset).toMatchObject({ temperature: 0.4, max_tokens: 32_000, unsupported: "ignored" });
+    expect(model.body.data.thinkingEnabled).toBe(true);
     return { providerId, modelId: model.body.data.id };
   }
 
@@ -79,6 +83,27 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(409);
+  });
+
+  it("模型默认开启 thinking 并可按模型关闭", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证默认思考参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expectedThinkingType = "disabled";
+    const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
+    expect(updated.body.data.thinkingEnabled).toBe(false);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证关闭思考参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
   });
 
   it("平台供应商可被多本书复用，并在内置提示词后追加平台和书籍提示词", async () => {

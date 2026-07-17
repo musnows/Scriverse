@@ -314,6 +314,7 @@ export class Database {
         context_window INTEGER NOT NULL DEFAULT 128000 CHECK(context_window BETWEEN 1024 AND 2000000),
         output_note TEXT NOT NULL DEFAULT '',
         preset_json TEXT NOT NULL DEFAULT '{}',
+        thinking_enabled INTEGER NOT NULL DEFAULT 1,
         enabled INTEGER NOT NULL DEFAULT 1,
         note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
@@ -1074,6 +1075,15 @@ export class Database {
           this.run("ALTER TABLE chapter_versions ADD COLUMN change_note TEXT NOT NULL DEFAULT ''");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (22, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(23)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+        if (!columns.has("thinking_enabled")) {
+          this.run("ALTER TABLE models ADD COLUMN thinking_enabled INTEGER NOT NULL DEFAULT 1");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (23, ?)", new Date().toISOString());
       });
     }
   }

@@ -198,7 +198,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-ai-prompt-clear');
+    expect(page.text).toContain('/app.js?v=20260718-model-thinking');
     expect(page.text).toContain('/styles.css?v=20260717-tool-call-time');
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
@@ -317,7 +317,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow)');
+    expect(application.text).toContain('field("thinkingEnabled", "开启 Thinking（供应商需支持 thinking 参数）", "checkbox", values.thinkingEnabled)');
     expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
+    expect(modelConfig.text).toContain("thinkingEnabled: model?.thinkingEnabled ?? true");
     expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
     expect(application.text).toContain('async function renderPlatformAiConfig()');
     expect(application.text).toContain('async function renderBookAiSettings()');
