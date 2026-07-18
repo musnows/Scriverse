@@ -206,7 +206,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-visible-whitespace');
+    expect(page.text).toContain('/app.js?v=20260718-task-queue-copy');
     expect(page.text).toContain('/styles.css?v=20260718-visible-whitespace');
     expect(application.text).toContain('/relationship-graph.js?v=20260718-galaxy-icon');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
@@ -268,6 +268,12 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("${esc(model.displayName)} · ${esc(model.modelId)}");
     expect(application.text).toContain("function openTaskDetailDialog(task)");
     expect(application.text).toContain('id="task-auto-run-enabled"');
+    expect(application.text).toContain("自动执行待分析任务");
+    expect(application.text).toContain("不会自动创建人物关系、世界观或其他分析");
+    expect(application.text).toContain("同时运行上限");
+    expect(application.text).toContain("每轮任务上限");
+    expect(application.text).toContain("开始下一轮");
+    expect(application.text).not.toContain("消化 pending 任务");
     expect(application.text).toContain("/tasks/auto-run");
     expect(styles.text).toContain(".task-auto-run-panel");
     expect(application.text).toContain("memberDialogWork ?? state.work");

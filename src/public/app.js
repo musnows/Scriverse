@@ -2352,17 +2352,18 @@ async function renderTasks() {
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
-        <strong id="task-auto-run-title">自动运行</strong>
-        <small>开启后按并发上限消化 pending 任务；每一轮最多自动认领「单次上限」个，跑完需再点「再跑一批」。</small>
+        <strong id="task-auto-run-title">自动执行待分析任务</strong>
+        <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+        <small>每轮最多启动「每轮任务上限」个，同时运行数量不超过「同时运行上限」；剩余任务需点击“开始下一轮”。</small>
       </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>启用自动运行</span></label>
-        <label>并发上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>单次上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>自动执行待分析任务</span></label>
+        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
+        <label>每轮任务上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
         <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>再跑一批</button>
+        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
       </div>
-      <p class="task-auto-run-meta">当前待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个</p>
+      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
     </section>
     ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
@@ -2390,8 +2391,8 @@ async function renderTasks() {
         }
       });
       toast(updated.autoRunEnabled
-        ? `自动运行已开启：并发 ${updated.autoRunConcurrency}，本轮最多 ${updated.autoRunBatchLimit} 个`
-        : "自动运行已关闭");
+        ? `自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个，每轮最多 ${updated.autoRunBatchLimit} 个`
+        : "自动执行已关闭");
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -2403,7 +2404,7 @@ async function renderTasks() {
     button.disabled = true;
     try {
       const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
-      toast(`已开始新一轮自动运行，待执行 ${result.pendingCount} 个`);
+      toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
