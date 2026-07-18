@@ -15,6 +15,7 @@ import { buildCharacterDetails, buildCharacterSections, buildCharacterState, cha
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
+import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-spaces";
 
 const state = {
   user: null,
@@ -423,6 +424,7 @@ function setupPanelResize(handle, side) {
 let chapterLineNumberFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
+let chapterWhitespaceVisible = true;
 let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let lastSavedChapterSnapshot = null;
@@ -445,9 +447,54 @@ function setModuleNavExpanded(expanded) {
 function syncChapterLineNumberScroll() {
   const input = $("#chapter-content");
   const inner = $("#chapter-line-numbers-inner");
+  const whitespace = $("#chapter-whitespace-inner");
   if (!input || !inner) return;
   inner.style.transform = `translateY(${-input.scrollTop}px)`;
   inner.dataset.scrollTop = String(input.scrollTop);
+  if (whitespace) {
+    whitespace.style.transform = `translate(${-input.scrollLeft}px, ${-input.scrollTop}px)`;
+    whitespace.dataset.scrollTop = String(input.scrollTop);
+  }
+}
+
+function renderChapterWhitespaceMarkers(input, style) {
+  const overlay = $("#chapter-whitespace-overlay");
+  const inner = $("#chapter-whitespace-inner");
+  const button = $("#toggle-whitespace-button");
+  if (!overlay || !inner || !button) return;
+  overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
+  button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
+  button.textContent = chapterWhitespaceVisible ? "隐藏空格" : "显示空格";
+  if (!chapterWhitespaceVisible) {
+    inner.replaceChildren();
+    return;
+  }
+  Object.assign(inner.style, {
+    width: `${input.clientWidth}px`,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    tabSize: style.tabSize,
+    padding: style.padding,
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak
+  });
+  const fragment = document.createDocumentFragment();
+  for (const token of tokenizeVisibleSpaces(input.value.replace(/\r\n?/gu, "\n"))) {
+    if (token.type === "text") {
+      fragment.append(document.createTextNode(token.text));
+      continue;
+    }
+    const marker = document.createElement("span");
+    marker.className = `chapter-space-marker ${token.type}`;
+    marker.textContent = token.text;
+    marker.dataset.spaceType = token.type;
+    fragment.append(marker);
+  }
+  inner.replaceChildren(fragment);
 }
 
 function renderChapterLineNumbers() {
@@ -505,6 +552,7 @@ function renderChapterLineNumbers() {
   inner.style.height = `${measureRect.height}px`;
   inner.dataset.lineCount = String(lines.length);
   measure.replaceChildren();
+  renderChapterWhitespaceMarkers(input, style);
   syncChapterLineNumberScroll();
 }
 
@@ -3900,6 +3948,10 @@ $("#chapter-content").addEventListener("input", (event) => {
 });
 $("#chapter-content").addEventListener("select", scheduleAiContextUsage);
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
+$("#toggle-whitespace-button").addEventListener("click", () => {
+  chapterWhitespaceVisible = !chapterWhitespaceVisible;
+  scheduleChapterLineNumbers();
+});
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;

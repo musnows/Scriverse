@@ -693,6 +693,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-line-number.is-line-selected::after { content: ""; position: absolute; top: 0; left: 100%; width: 100vw; height: 100%; background: rgba(139,61,44,.085); box-shadow: inset 3px 0 rgba(139,61,44,.28); pointer-events: none; }
 .chapter-content { position: relative; z-index: 1; grid-column: 2; grid-row: 1; resize: none; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 32px 36px 72px; border: 0; background: transparent; border-radius: 0; font-size: var(--editor-font-size); line-height: var(--editor-line-height); letter-spacing: .01em; overflow-wrap: break-word; }
 .chapter-content:focus { box-shadow: none; }
+.chapter-whitespace-overlay { position: relative; z-index: 2; grid-column: 2; grid-row: 1; width: 100%; height: 100%; overflow: hidden; opacity: 0; pointer-events: none; }
+.chapter-whitespace-overlay.is-visible { opacity: 1; }
+#chapter-whitespace-inner { box-sizing: border-box; min-height: 100%; color: transparent; white-space: pre-wrap; will-change: transform; }
+.chapter-space-marker { position: relative; color: transparent; }
+.chapter-space-marker::after { content: "·"; position: absolute; inset: 0; color: color-mix(in srgb, var(--muted) 62%, transparent); font-family: var(--font-latin), monospace; text-align: center; }
+.chapter-space-marker.ideographic-space::after { content: "□"; color: color-mix(in srgb, var(--accent) 58%, transparent); font-size: .62em; line-height: 1.7; }
 .chapter-line-measure { position: absolute; z-index: -1; top: 0; left: 38px; visibility: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; }
 .chapter-line-measure > div { display: block; }
 .chapter-insight { margin: 14px 7% 0; padding: 13px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 11px; line-height: 1.5; }

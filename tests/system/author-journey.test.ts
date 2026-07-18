@@ -73,6 +73,8 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
     expect(page.text).toContain('id="chapter-line-numbers"');
+    expect(page.text).toContain('id="toggle-whitespace-button"');
+    expect(page.text).toContain('id="chapter-whitespace-overlay"');
     expect(page.text).toContain('id="new-volume-button"');
     expect(application.text).toContain("选择第 ${index + 1} 行");
     expect(page.text).toContain('id="left-panel-resize"');
@@ -86,6 +88,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
     expect(application.text).toContain("function renderChapterLineNumbers()");
     expect(application.text).toContain("syncChapterLineNumberScroll");
+    expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
+    expect(application.text).toContain('/whitespace-visualization.js?v=20260718-visible-spaces');
     expect(application.text).toContain("function setupPanelResize(handle, side)");
     expect(application.text).toContain("function ensureAiPanelExpanded()");
     expect(styles.text).toContain(".app-shell.left-panel-collapsed");
@@ -98,6 +102,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
     expect(styles.text).toContain(".chapter-line-number.is-line-selected::after");
+    expect(styles.text).toContain(".chapter-space-marker::after");
     expect(styles.text).toContain("width: 100vw; height: 100%");
     expect(styles.text).toContain("grid-template-columns: 38px minmax(0, 1fr)");
     expect(styles.text).toContain("width: 100%; min-height: 0; margin: 0;");
@@ -200,8 +205,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-galaxy-icon');
-    expect(page.text).toContain('/styles.css?v=20260718-galaxy-icon');
+    expect(page.text).toContain('/app.js?v=20260718-visible-spaces');
+    expect(page.text).toContain('/styles.css?v=20260718-visible-spaces');
     expect(application.text).toContain('/relationship-graph.js?v=20260718-galaxy-icon');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
