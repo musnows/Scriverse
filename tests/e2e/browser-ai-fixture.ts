@@ -182,7 +182,7 @@ const fixture = runWithRequestActor(registered.session.user, () => {
   const chapter = runtime.store.createChapter(workId, {
     volumeId: String(volume.id),
     title: "第一章 跃迁",
-    content: `月蚀密钥藏在旧港钟楼。林舟启动了跃迁，飞船随后进入十二小时冷却。\n空格测试：半角 空格，全角　空格。\n${"早期航行记录。".repeat(300)}`
+    content: `月蚀密钥藏在旧港钟楼。林舟启动了跃迁，飞船随后进入十二小时冷却。\n空格测试：半角 空格，全角　空格，Tab\t缩进。\n${"早期航行记录。".repeat(300)}`
   });
   chapterId = String(chapter.id);
   const lateVolume = runtime.store.createVolume(workId, { title: "第二卷" });

@@ -699,6 +699,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-space-marker { position: relative; color: transparent; }
 .chapter-space-marker::after { content: "·"; position: absolute; inset: 0; color: color-mix(in srgb, var(--muted) 62%, transparent); font-family: var(--font-latin), monospace; text-align: center; }
 .chapter-space-marker.ideographic-space::after { content: "□"; color: color-mix(in srgb, var(--accent) 58%, transparent); font-size: .62em; line-height: 1.7; }
+.chapter-space-marker.tab::after { content: "→"; color: color-mix(in srgb, var(--muted) 72%, transparent); font-size: .72em; line-height: 1.65; text-align: left; }
 .chapter-line-measure { position: absolute; z-index: -1; top: 0; left: 38px; visibility: hidden; white-space: pre-wrap; overflow-wrap: break-word; pointer-events: none; }
 .chapter-line-measure > div { display: block; }
 .chapter-insight { margin: 14px 7% 0; padding: 13px 16px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 11px; line-height: 1.5; }

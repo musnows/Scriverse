@@ -7,9 +7,10 @@ export function tokenizeVisibleSpaces(value) {
     text = "";
   };
   for (const character of String(value ?? "")) {
-    if (character === " " || character === "\u3000") {
+    if (character === " " || character === "\u3000" || character === "\t") {
       flushText();
-      tokens.push({ type: character === " " ? "space" : "ideographic-space", text: character });
+      const type = character === " " ? "space" : character === "\u3000" ? "ideographic-space" : "tab";
+      tokens.push({ type, text: character });
     } else {
       text += character;
     }

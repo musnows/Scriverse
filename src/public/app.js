@@ -15,7 +15,7 @@ import { buildCharacterDetails, buildCharacterSections, buildCharacterState, cha
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
-import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-spaces";
+import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 
 const state = {
   user: null,
@@ -464,7 +464,7 @@ function renderChapterWhitespaceMarkers(input, style) {
   if (!overlay || !inner || !button) return;
   overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
   button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
-  button.textContent = chapterWhitespaceVisible ? "隐藏空格" : "显示空格";
+  button.textContent = chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符";
   if (!chapterWhitespaceVisible) {
     inner.replaceChildren();
     return;
