@@ -1,8 +1,18 @@
 import { AppError } from "./errors.js";
 
+const strictUtf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
 export type ImportContentThreat = {
   code: "ACTIVE_HTML_TAG" | "EVENT_HANDLER" | "SCRIPT_URI" | "EMBEDDED_DOCUMENT" | "ACTIVE_CSS";
 };
+
+export function decodeUtf8ImportedText(value: Uint8Array): string {
+  try {
+    return strictUtf8Decoder.decode(value);
+  } catch {
+    throw new AppError(415, "INVALID_TEXT_ENCODING", "TXT 文件必须使用 UTF-8 编码，请转换为 UTF-8 后重新上传");
+  }
+}
 
 function decodeEntitiesForInspection(value: string): string {
   const decodeCodePoint = (digits: string, radix: number): string => {

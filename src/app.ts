@@ -14,7 +14,7 @@ import { Store, versionedEntityTypes } from "./store.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
-import { assertSafeImportedPlainText } from "./import-security.js";
+import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
@@ -508,7 +508,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (extension !== ".txt" && extension !== ".docx") throw new AppError(415, "UNSUPPORTED_FILE", "仅支持 TXT 和 DOCX 导入");
     const text = validateImportedText(extension === ".docx"
       ? await extractDocxText(request.file.buffer)
-      : request.file.buffer.toString("utf8"));
+      : decodeUtf8ImportedText(request.file.buffer));
     const parsedNovel = applyImportFileHints(parseNovelText(text), originalFileName);
     const inferredTitle = originalFileName.replace(/\.(txt|docx)$/iu, "").trim() || "未命名作品";
     const input = parse(workSchema, {
@@ -573,7 +573,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     const text = validateImportedText(extension === ".docx"
       ? await extractDocxText(request.file.buffer)
-      : request.file.buffer.toString("utf8"));
+      : decodeUtf8ImportedText(request.file.buffer));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
     data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed), 201);
   });
