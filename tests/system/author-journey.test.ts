@@ -206,9 +206,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-toast-position');
+    expect(page.text).toContain('/app.js?v=20260719-group-relation-list');
     expect(page.text).toContain('/styles.css?v=20260718-toast-position');
-    expect(application.text).toContain('/relationship-graph.js?v=20260718-galaxy-icon');
+    expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
@@ -368,6 +368,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-testid="continuation-guard"');
     expect(graph.text).toContain("export function buildRelationshipGraph");
     expect(graph.text).toContain("export function formatRelationshipLabel");
+    expect(graph.text).toContain("export function groupRelationshipDetailsByCharacterName");
     expect(graph.text).toContain("export function layoutRelationshipNetwork");
     expect(graph.text).toContain('viewport.dataset.testid = "relationship-network"');
     expect(graph.text).toContain('viewport.dataset.interaction = "dragging"');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -20,6 +20,23 @@ describe("人物关系图数据与布局", () => {
       keywords: ["王权效忠", "兄弟情谊", "长期并肩", "舍命相救", "相互调侃", "互相关怀"]
     })).toBe("君臣 · 王权效忠 · 兄弟情谊 · 长期并肩 · 舍命相救 · 相互调侃 · 互相关怀");
     expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
+  });
+
+  it("银河图角色详情按关联角色名称合并多条关系", () => {
+    const graph = buildRelationshipGraph([
+      { id: "olsen", name: "奥尔森" },
+      { id: "ghidorah", name: "基多拉" },
+      { id: "hall", name: "哈尔" }
+    ], [
+      { id: "family", fromCharacterId: "olsen", toCharacterId: "ghidorah", category: "family", subtype: "叔侄", confirmationStatus: "confirmed" },
+      { id: "conflict", fromCharacterId: "olsen", toCharacterId: "ghidorah", category: "conflict", subtype: "挑战与放逐", confirmationStatus: "confirmed" },
+      { id: "social", fromCharacterId: "olsen", toCharacterId: "hall", category: "social", subtype: "君臣", confirmationStatus: "confirmed" }
+    ]);
+
+    const groups = groupRelationshipDetailsByCharacterName(graph, "olsen");
+
+    expect(groups.map((group: { name: string }) => group.name)).toEqual(["基多拉", "哈尔"]);
+    expect(groups[0].edges.map((edge: { id: string }) => edge.id)).toEqual(["family", "conflict"]);
   });
 
   it("按组织、种族、身份解析 Obsidian 节点分组并映射低饱和配色", () => {

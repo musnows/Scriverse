@@ -37,6 +37,20 @@ export function formatRelationshipLabel(edge, separator = " · ") {
   return [subtype, ...keywords].filter(Boolean).join(separator) || "关系";
 }
 
+export function groupRelationshipDetailsByCharacterName(graph, nodeId) {
+  const groups = new Map();
+  for (const edge of graph.edges) {
+    if (edge.source !== nodeId && edge.target !== nodeId) continue;
+    const other = graph.nodeById.get(edge.source === nodeId ? edge.target : edge.source);
+    const name = String(other?.name ?? "未知角色").normalize("NFKC").trim() || "未知角色";
+    const key = name.toLocaleLowerCase("zh-CN");
+    const existing = groups.get(key);
+    if (existing) existing.edges.push(edge);
+    else groups.set(key, { name, edges: [edge] });
+  }
+  return [...groups.values()];
+}
+
 export function getRelationshipEdgeSelection(graph, edgeId) {
   const edge = graph.edges.find((item) => item.id === edgeId);
   if (!edge) return null;
@@ -1730,7 +1744,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const renderDetail = (node) => {
-    const relations = graph.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+    const relationGroups = groupRelationshipDetailsByCharacterName(graph, node.id);
     detail.classList.remove("hidden");
     detail.replaceChildren();
     const heading = document.createElement("strong");
@@ -1752,12 +1766,15 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       detail.append(identity);
     }
     const list = document.createElement("ul");
-    for (const edge of relations.slice(0, 12)) {
-      const other = graph.nodeById.get(edge.source === node.id ? edge.target : edge.source);
+    for (const group of relationGroups.slice(0, 12)) {
       const item = document.createElement("li");
-      const category = document.createElement("i");
-      category.className = edge.category;
-      item.append(category, document.createTextNode(`${other?.name ?? "未知角色"} · ${formatRelationshipLabel(edge)}`));
+      const categories = group.edges.map((edge) => {
+        const category = document.createElement("i");
+        category.className = edge.category;
+        return category;
+      });
+      const labels = [...new Set(group.edges.map((edge) => formatRelationshipLabel(edge)))];
+      item.append(...categories, document.createTextNode(`${group.name} · ${labels.join("；")}`));
       list.append(item);
     }
     detail.append(list);
