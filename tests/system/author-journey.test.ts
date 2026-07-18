@@ -206,8 +206,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260718-task-queue-copy');
-    expect(page.text).toContain('/styles.css?v=20260718-visible-whitespace');
+    expect(page.text).toContain('/app.js?v=20260718-toast-position');
+    expect(page.text).toContain('/styles.css?v=20260718-toast-position');
     expect(application.text).toContain('/relationship-graph.js?v=20260718-galaxy-icon');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
@@ -234,6 +234,13 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("--toast-bg:");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
     expect(styles.text).toContain("background: var(--toast-bg)");
+    expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
+    expect(page.text).toContain('id="platform-ui-settings-dialog"');
+    expect(page.text).toContain('data-position="bottom-right"');
+    expect(application.text).toContain('api("/api/ui-settings")');
+    expect(application.text).toContain('api("/api/platform/ui-settings"');
+    expect(styles.text).toContain('.toast-region[data-position="top-right"]');
+    expect(styles.text).toContain('.toast-region[data-position="bottom-right"]');
     expect(styles.text).not.toContain(".task-table .task-id");
     expect(application.text).not.toContain("<th>ID</th><th>任务</th>");
     expect(page.text).toContain('id="top-search-button"');

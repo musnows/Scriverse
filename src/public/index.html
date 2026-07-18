@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260718-visible-whitespace">
+    <link rel="stylesheet" href="/styles.css?v=20260718-toast-position">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -147,6 +147,7 @@
           <div class="settings-hub-grid">
             <button id="platform-ai-button" class="settings-hub-card hidden" type="button" data-settings-action="ai"><span class="settings-card-mark">AI</span><strong>AI 管理</strong><small>供应商、模型、上下文与全局提示词</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
+            <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面通知</strong><small>设置所有用户的 Toast 提示位置</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
@@ -262,7 +263,7 @@
       </aside>
     </div>
 
-    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <div id="toast-region" class="toast-region" data-position="bottom-right" aria-live="polite"></div>
     <div id="chapter-type-menu" class="chapter-type-menu hidden" role="menu" aria-label="设置章节类型" data-testid="chapter-type-menu">
       <strong>标记章节</strong>
       <div>
@@ -431,6 +432,17 @@
       </div>
     </dialog>
 
+    <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面通知</h2></div><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <form id="platform-ui-settings-form">
+        <div class="dialog-fields">
+          <label>Toast 提示位置<select id="toast-position" name="toastPosition" aria-label="Toast 提示位置"><option value="bottom-right">右下角（默认）</option><option value="top-right">右上角</option></select></label>
+          <small>该设置对所有用户生效，保存后的提示会立即显示在新位置。</small>
+        </div>
+        <div class="dialog-actions"><button class="ghost-button" id="platform-ui-settings-cancel" type="button">取消</button><button class="primary-button" id="platform-ui-settings-save" type="submit">保存设置</button></div>
+      </form>
+    </dialog>
+
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="account-settings-body">
@@ -530,6 +542,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260718-task-queue-copy"></script>
+    <script type="module" src="/app.js?v=20260718-toast-position"></script>
   </body>
 </html>

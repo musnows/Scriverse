@@ -335,6 +335,12 @@ export class Database {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS platform_ui_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+        updated_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS work_ai_settings (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
         system_prompt TEXT NOT NULL DEFAULT '',
@@ -1115,6 +1121,21 @@ export class Database {
           SELECT avatar.sha256 FROM user_avatars avatar WHERE avatar.user_id = users.id
         ) WHERE avatar_updated_at IS NOT NULL AND avatar_sha256 IS NULL`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(26)) {
+      this.transaction(() => {
+        const timestamp = new Date().toISOString();
+        this.run(`CREATE TABLE IF NOT EXISTS platform_ui_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(
+          "INSERT INTO platform_ui_settings (id, toast_position, updated_at) VALUES (1, 'bottom-right', ?) ON CONFLICT(id) DO NOTHING",
+          timestamp
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (26, ?)", timestamp);
       });
     }
   }

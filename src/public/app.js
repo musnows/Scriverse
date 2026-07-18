@@ -1383,6 +1383,19 @@ function applyAuthenticatedUser(session) {
   document.body.classList.remove("auth-pending");
 }
 
+function applyPlatformUiSettings(settings) {
+  const position = settings?.toastPosition === "top-right" ? "top-right" : "bottom-right";
+  $("#toast-region").dataset.position = position;
+}
+
+async function loadPlatformUiSettings() {
+  try {
+    applyPlatformUiSettings(await api("/api/ui-settings"));
+  } catch {
+    applyPlatformUiSettings({ toastPosition: "bottom-right" });
+  }
+}
+
 async function initializeAuthentication() {
   const response = await fetch("/api/auth/session", { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error("无法读取登录状态");
@@ -1392,6 +1405,7 @@ async function initializeAuthentication() {
     return false;
   }
   applyAuthenticatedUser(session);
+  await loadPlatformUiSettings();
   return true;
 }
 
@@ -1613,6 +1627,7 @@ function renderSettingsHub() {
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !hasWork;
   $("#export-button").disabled = !hasWork;
@@ -1661,6 +1676,20 @@ async function openUsersDialog() {
   $("#users-dialog").showModal();
   try { renderUsers(await api("/api/users")); }
   catch (error) { $("#users-dialog").close(); toast(error.message, "error"); }
+}
+
+async function openPlatformUiSettingsDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  try {
+    const settings = await api("/api/platform/ui-settings");
+    $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
+    $("#platform-ui-settings-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function renderMembers(members) {
@@ -3876,8 +3905,29 @@ $("#register-form").addEventListener("submit", async (event) => {
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#user-management-button").addEventListener("click", openUsersDialog);
+$("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
+$("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-ui-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#platform-ui-settings-save");
+  button.disabled = true;
+  try {
+    const settings = await api("/api/platform/ui-settings", {
+      method: "PATCH",
+      body: { toastPosition: $("#toast-position").value }
+    });
+    applyPlatformUiSettings(settings);
+    $("#platform-ui-settings-dialog").close();
+    toast("界面通知设置已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
 $("#members-dialog").addEventListener("close", () => { memberDialogWork = null; });
 $("#member-invite-form").addEventListener("submit", async (event) => {

@@ -243,6 +243,10 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
+const platformUiSettingsSchema = z.object({
+  toastPosition: z.enum(["bottom-right", "top-right"])
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -799,6 +803,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/platform/ai/models", (_request, response) => data(response, ai.listPlatformModels()));
   app.get("/api/platform/ai/settings", (_request, response) => data(response, store.getPlatformAiSettings()));
   app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
+  app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
+  app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
+  app.patch("/api/platform/ui-settings", (request, response) => {
+    data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.patch("/api/works/:workId/ai-settings", (request, response) => {

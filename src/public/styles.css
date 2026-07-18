@@ -1185,8 +1185,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-citation-card.is-expanded pre { display: block; }
 .message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
 
-.toast-region { position: fixed; right: 24px; top: 78px; z-index: 30; display: grid; gap: 8px; }
-.toast { max-width: 360px; background: var(--toast-bg); color: var(--toast-fg); padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: appear .18s ease; }
+.toast-region { position: fixed; right: 24px; bottom: 24px; z-index: 30; display: grid; max-width: calc(100vw - 48px); gap: 8px; }
+.toast-region[data-position="top-right"] { top: 78px; bottom: auto; }
+.toast-region[data-position="bottom-right"] { top: auto; bottom: 24px; }
+.toast { max-width: 360px; background: var(--toast-bg); color: var(--toast-fg); padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: toast-appear-top .18s ease; }
+.toast-region[data-position="bottom-right"] .toast { animation-name: toast-appear-bottom; }
 .toast.error { background: var(--toast-error-bg); color: var(--toast-error-fg); }
 .chapter-type-menu { position: fixed; z-index: 80; width: 176px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .chapter-type-menu strong { display: block; overflow: hidden; margin: 0 2px 8px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -1196,7 +1199,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .line-citation-menu { position: fixed; z-index: 82; display: grid; min-width: 230px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .line-citation-menu strong { padding: 5px 7px 8px; color: var(--muted); font-size: 9px; }
 .line-citation-menu button { border: 0; border-radius: 4px; padding: 8px; background: transparent; text-align: left; font-size: 11px; }.line-citation-menu button:hover { background: var(--paper-deep); color: var(--accent-dark); }
-@keyframes appear { from { opacity: 0; transform: translateY(-7px); } }
+@keyframes toast-appear-top { from { opacity: 0; transform: translateY(-7px); } }
+@keyframes toast-appear-bottom { from { opacity: 0; transform: translateY(7px); } }
 
 .dialog { width: min(570px, 92vw); max-height: 88vh; border: 1px solid var(--line); border-radius: 5px; padding: 0; background: var(--panel); box-shadow: var(--shadow); }
 .wide-dialog { width: min(800px, 92vw); }
