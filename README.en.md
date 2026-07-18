@@ -182,7 +182,7 @@ Expected response:
 {
   "data": {
     "status": "ok",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "protocol": "openai-chat-completions"
   }
 }

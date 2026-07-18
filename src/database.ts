@@ -314,6 +314,7 @@ export class Database {
         context_window INTEGER NOT NULL DEFAULT 128000 CHECK(context_window BETWEEN 1024 AND 2000000),
         output_note TEXT NOT NULL DEFAULT '',
         preset_json TEXT NOT NULL DEFAULT '{}',
+        thinking_enabled INTEGER NOT NULL DEFAULT 1,
         enabled INTEGER NOT NULL DEFAULT 1,
         note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
@@ -331,6 +332,12 @@ export class Database {
       CREATE TABLE IF NOT EXISTS platform_ai_settings (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         system_prompt TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS platform_ui_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
         updated_at TEXT NOT NULL
       );
 
@@ -1074,6 +1081,61 @@ export class Database {
           this.run("ALTER TABLE chapter_versions ADD COLUMN change_note TEXT NOT NULL DEFAULT ''");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (22, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(23)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+        if (!columns.has("thinking_enabled")) {
+          this.run("ALTER TABLE models ADD COLUMN thinking_enabled INTEGER NOT NULL DEFAULT 1");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (23, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(24)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(users)").map((row) => String(row.name)));
+        if (!columns.has("avatar_updated_at")) {
+          this.run("ALTER TABLE users ADD COLUMN avatar_updated_at TEXT");
+        }
+        this.run(`CREATE TABLE IF NOT EXISTS user_avatars (
+          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg', 'image/webp')),
+          content BLOB NOT NULL,
+          byte_length INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (24, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(25)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(users)").map((row) => String(row.name)));
+        if (!columns.has("avatar_sha256")) {
+          this.run("ALTER TABLE users ADD COLUMN avatar_sha256 TEXT");
+        }
+        this.run(`UPDATE users SET avatar_sha256 = (
+          SELECT avatar.sha256 FROM user_avatars avatar WHERE avatar.user_id = users.id
+        ) WHERE avatar_updated_at IS NOT NULL AND avatar_sha256 IS NULL`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (25, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(26)) {
+      this.transaction(() => {
+        const timestamp = new Date().toISOString();
+        this.run(`CREATE TABLE IF NOT EXISTS platform_ui_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(
+          "INSERT INTO platform_ui_settings (id, toast_position, updated_at) VALUES (1, 'bottom-right', ?) ON CONFLICT(id) DO NOTHING",
+          timestamp
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (26, ?)", timestamp);
       });
     }
   }

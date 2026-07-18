@@ -25,9 +25,14 @@ function sendCompletion(response: ServerResponse, message: JsonObject): void {
   response.end(JSON.stringify({ choices: [{ message }], usage: { completion_tokens: 32 } }));
 }
 
-function sendToolCalls(response: ServerResponse, calls: Array<{ id: string; name: string; arguments: unknown }>): void {
+function sendToolCalls(
+  response: ServerResponse,
+  calls: Array<{ id: string; name: string; arguments: unknown }>,
+  process: { content?: string | null; reasoningContent?: string } = {}
+): void {
   sendCompletion(response, {
-    content: null,
+    content: process.content ?? null,
+    ...(process.reasoningContent ? { reasoning_content: process.reasoningContent } : {}),
     tool_calls: calls.map((call) => ({
       id: call.id,
       type: "function",
@@ -51,8 +56,9 @@ const mockAi = createServer(async (request, response) => {
   const latestUserMessage = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
   const joined = messages.map((message) => message.content ?? "").join("\n");
   const toolMessages = messages.filter((message) => message.role === "tool");
-  if (joined.includes("将下面的历史对话压缩")) {
-    sendCompletion(response, { content: "作者要求遵守跃迁冷却规则；最近正在确认燃料状态。" });
+  if (joined.includes("结构化中文长期记忆")) {
+    const sourceMessageIds = [...joined.matchAll(/^\[([^\]]+)\]/gmu)].map((match) => match[1]).filter(Boolean).slice(0, 2);
+    sendCompletion(response, { content: `<json>{"authorGoals":[],"confirmedDecisions":[],"storyFacts":[{"text":"最近正在确认燃料状态","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"constraints":[{"text":"必须遵守跃迁冷却规则","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"unresolvedQuestions":[],"importantReferences":[]}</json>` });
     return;
   }
   if (latestUserMessage.includes("浏览器工具测试")) {
@@ -65,6 +71,57 @@ const mockAi = createServer(async (request, response) => {
       return;
     }
     sendCompletion(response, { content: "模型已处理三个工具结果：目录、章节正文和跃迁设定均已确认。" });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器思考步骤测试")) {
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, [
+        { id: "browser-thinking-index", name: "story_index", arguments: { offset: 0, limit: 1 } }
+      ], { content: "我先读取作品目录。", reasoningContent: "需要先确认作品结构和章节范围。" });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    sendCompletion(response, { content: "最终结果：目录已经确认。", reasoning_content: "工具结果已经足够形成最终答案。" });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器分层上下文测试")) {
+    const hasEarlyEvidence = joined.includes("月蚀密钥藏在旧港钟楼");
+    const hasVolumeCoverage = joined.includes("# 第一卷") && joined.includes("# 第二卷");
+    const hasPlannerNotice = joined.includes("上下文规划");
+    sendCompletion(response, {
+      content: hasEarlyEvidence && hasVolumeCoverage && hasPlannerNotice
+        ? "分层上下文验证通过：保留了跨卷概要，并召回了第一卷的月蚀密钥原文。"
+        : "分层上下文验证失败：缺少早期证据、跨卷概要或规划标记。"
+    });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器滚动测试")) {
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, Array.from({ length: 8 }, (_, index) => ({
+        id: `browser-scroll-${index}`,
+        name: "story_index",
+        arguments: { offset: index, limit: 1 }
+      })));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    sendCompletion(response, { content: `滚动测试完成。${"模型输出后应保持对话底部可见。".repeat(20)}` });
+    return;
+  }
+  if (latestUserMessage.includes("这是什么项目")) {
+    const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
+    if (!systemPrompt.includes("预加载上下文为空或不足时，必须先调用工具主动查询")) {
+      sendCompletion(response, { content: "当前没有上下文，无法判断项目内容。" });
+      return;
+    }
+    if (toolMessages.length === 0) {
+      sendToolCalls(response, [{ id: "browser-project-index", name: "story_index", arguments: {} }]);
+      return;
+    }
+    const result = JSON.parse(toolMessages[0]?.content ?? "{}") as JsonObject;
+    const data = result.data as JsonObject;
+    const work = data.work as JsonObject;
+    sendCompletion(response, { content: `这是《${String(work.title)}》，作者是 ${String(work.author)}，当前共有 ${String(work.chapterCount)} 章。` });
     return;
   }
   if (latestUserMessage.includes("浏览器工具失败测试")) {
@@ -94,7 +151,14 @@ const mockAi = createServer(async (request, response) => {
     return;
   }
   if (latestUserMessage.includes("浏览器压缩后测试")) {
-    sendCompletion(response, { content: "已基于压缩摘要和最近对话继续回答，跃迁冷却规则仍然保留。" });
+    const hasStructuredMemory = joined.includes("较早对话的结构化长期记忆")
+      && joined.includes("必须遵守跃迁冷却规则")
+      && joined.includes("来源：");
+    sendCompletion(response, {
+      content: hasStructuredMemory
+        ? "长期记忆验证通过：结构化记忆保留了跃迁冷却规则及来源消息。"
+        : "长期记忆验证失败：模型没有收到结构化记忆或来源消息。"
+    });
     return;
   }
   sendCompletion(response, { content: "浏览器 E2E 默认响应。" });
@@ -118,15 +182,44 @@ const fixture = runWithRequestActor(registered.session.user, () => {
   const chapter = runtime.store.createChapter(workId, {
     volumeId: String(volume.id),
     title: "第一章 跃迁",
-    content: "林舟启动了跃迁，飞船随后进入十二小时冷却。"
+    content: `月蚀密钥藏在旧港钟楼。林舟启动了跃迁，飞船随后进入十二小时冷却。\n空格测试：半角 空格，全角　空格，Tab\t缩进。\n${"早期航行记录。".repeat(300)}`
   });
   chapterId = String(chapter.id);
+  const lateVolume = runtime.store.createVolume(workId, { title: "第二卷" });
+  const lateChapter = runtime.store.createChapter(workId, {
+    volumeId: String(lateVolume.id),
+    title: "第二章 北境追击",
+    content: `舰队在北境追击敌人。${"后期战斗记录。".repeat(1_200)}`
+  });
+  for (const [insightId, targetChapter, summary] of [
+    ["browser-insight-early", chapter, "林舟在第一卷发现月蚀密钥并启动跃迁。"],
+    ["browser-insight-late", lateChapter, "舰队在第二卷进入北境追击阶段。"]
+  ] as const) {
+    runtime.database.run(
+      `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+       settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', 'review', ?)`,
+      insightId,
+      String(targetChapter.id),
+      Number(targetChapter.versionNo),
+      summary,
+      "2026-07-18T00:00:00.000Z"
+    );
+  }
   runtime.store.createSetting(workId, {
     title: "跃迁冷却",
     category: "世界规则",
     content: "跃迁后必须冷却十二小时。",
     locked: true,
     status: "confirmed"
+  });
+  const navigator = runtime.store.createCharacter(workId, { name: "林舟" });
+  const observer = runtime.store.createCharacter(workId, { name: "沈星" });
+  runtime.store.createRelationship(workId, {
+    fromCharacterId: String(navigator.id),
+    toCharacterId: String(observer.id),
+    category: "social",
+    subtype: "远航搭档",
+    confirmationStatus: "confirmed"
   });
   const provider = runtime.ai.createProvider({
     name: "浏览器 E2E 模型",

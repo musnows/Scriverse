@@ -17,9 +17,17 @@ describe("AI 对话上下文压缩", () => {
       }
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }>; tools?: unknown[] };
       const joined = body.messages.map((message) => message.content).join("\n");
-      if (joined.includes("将下面的历史对话压缩")) {
+      if (joined.includes("结构化中文长期记忆")) {
         expect(body.tools).toBeUndefined();
-        return new Response(JSON.stringify({ choices: [{ message: { content: "作者要求保持冷却规则；助手确认飞船仍在北港附近。" } }] }), { status: 200 });
+        const sourceIds = [...joined.matchAll(/\[(message_[^\]]+)\]/gu)].map((match) => match[1]).filter(Boolean);
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify({
+          authorGoals: [{ text: "继续确认飞船状态", sourceMessageIds: sourceIds.slice(0, 1) }],
+          confirmedDecisions: [],
+          storyFacts: [{ text: "飞船仍在北港附近", sourceMessageIds: sourceIds }],
+          constraints: [{ text: "必须遵守跃迁冷却规则", sourceMessageIds: sourceIds.slice(0, 1) }],
+          unresolvedQuestions: [],
+          importantReferences: []
+        })}</json>` } }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ choices: [{ message: { content: "已结合压缩摘要和最近对话回答。" } }] }), { status: 200 });
     });
@@ -87,12 +95,53 @@ describe("AI 对话上下文压缩", () => {
     }).expect(200);
     expect(streamed.text).toContain("已结合压缩摘要和最近对话回答。");
     const modelContext = actualMessages.map((message) => message.content).join("\n");
-    expect(modelContext).toContain("较早对话的压缩摘要");
-    expect(modelContext).toContain("保持冷却规则");
+    expect(modelContext).toContain("较早对话的结构化长期记忆");
+    expect(modelContext).toContain("必须遵守跃迁冷却规则");
     expect(modelContext).toContain(recentUser);
     expect(modelContext).toContain(recentAssistant);
     expect(modelContext).not.toContain("旧作者要求");
     expect(modelContext.match(/继续回答燃料问题。/gu)).toHaveLength(1);
+  });
+
+  it("手动整理较长对话时优先保留最近八条原始消息", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (let index = 0; index < 12; index += 1) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `第 ${index + 1} 条对话，记录跃迁计划。`
+      }).expect(201);
+    }
+
+    const compacted = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/compact`).send({
+      modelId,
+      scope: { type: "chapter", chapterId }
+    }).expect(200);
+
+    expect(compacted.body.data).toMatchObject({ compactedMessageCount: 4, retainedMessageCount: 8, changed: true });
+    expect(compacted.body.data.memoryItemCount).toBeGreaterThan(0);
+  });
+
+  it("正文区块过长时降级正文而不误触发对话压缩", async () => {
+    runtime.store.saveChapter(chapterId, { content: `当前章节开头。${"非常长的章节正文。".repeat(2_000)}当前章节结尾。` });
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [["user", "问题一"], ["assistant", "回答一"], ["user", "问题二"], ["assistant", "回答二"]] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+
+    const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({
+      modelId,
+      taskType: "chat",
+      scope: { type: "chapter", chapterId },
+      instruction: "概括当前章节。",
+      conversationId
+    }).expect(200);
+
+    expect(usage.body.data.compactRecommended).toBe(false);
+    expect(usage.body.data.degradedContextBlocks).toBeGreaterThan(0);
+    expect(usage.body.data.inputTokens).toBeLessThan(usage.body.data.contextWindow);
+    expect(usage.body.data).toMatchObject({ conversationTokens: expect.any(Number), conversationBudgetTokens: expect.any(Number) });
   });
 
   it("拒绝把其他作品的对话混入当前模型上下文", async () => {

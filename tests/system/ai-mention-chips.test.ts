@@ -30,6 +30,13 @@ describe("AI 输入框引用气泡", () => {
     expect(application.text).toContain("volumeTitle: volume.title");
     expect(application.text).toContain("没有匹配的角色、设定或章节");
     expect(application.text).toContain("range.insertNode(createAiReferenceChip(reference));");
+    expect(application.text).toContain("function clearAiPromptComposer()");
+    const sendAiSource = application.text.slice(
+      application.text.indexOf("async function sendAi()"),
+      application.text.indexOf("async function streamChat(body)")
+    );
+    expect(sendAiSource).toMatch(/appendMessage\("user"[\s\S]+?clearAiPromptComposer\(\);[\s\S]+?await streamChat/u);
+    expect(sendAiSource.match(/clearAiPromptComposer\(\);/gu)).toHaveLength(1);
     expect(styles.text).toContain(".ai-prompt-reference");
     expect(styles.text).not.toContain(".ai-reference-chip");
   });

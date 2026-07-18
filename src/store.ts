@@ -1,6 +1,6 @@
 import type { ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
-import { Database, type Row } from "./database.js";
+import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { currentRequestActor } from "./request-context.js";
 import { countWords, id, json, normalizeParagraphSpacing, now } from "./utils.js";
@@ -161,7 +161,7 @@ type AiConversationMessageInput = {
   role: "user" | "assistant";
   content: string;
   citations?: unknown[];
-  metadata?: { modelDisplayName?: string; outputTokens?: number; toolCalls?: unknown[] };
+  metadata?: { modelDisplayName?: string; outputTokens?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
 export type AiConversationContext = {
@@ -533,6 +533,30 @@ export class Store {
       timestamp
     );
     return this.getPlatformAiSettings();
+  }
+
+  getPlatformUiSettings(): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM platform_ui_settings WHERE id = 1");
+    return {
+      toastPosition: String(row?.toast_position) === "top-right" ? "top-right" : "bottom-right",
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  updatePlatformUiSettings(input: { toastPosition: "bottom-right" | "top-right" }): Record<string, unknown> {
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_ui_settings (id, toast_position, updated_at) VALUES (1, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET toast_position = excluded.toast_position, updated_at = excluded.updated_at`,
+        input.toastPosition,
+        timestamp
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.ui-settings.updated", "platform-ui-settings", "platform-ui-settings", {
+        toastPosition: input.toastPosition
+      });
+    });
+    return this.getPlatformUiSettings();
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;

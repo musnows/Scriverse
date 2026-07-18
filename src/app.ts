@@ -6,6 +6,7 @@ import { z, ZodError } from "zod";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
+import { assertSafeDocxArchive } from "./docx-security.js";
 import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
@@ -13,7 +14,8 @@ import { Store, versionedEntityTypes } from "./store.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
-import { assertSafeImportedPlainText } from "./import-security.js";
+import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
+import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
   clearSessionCookie,
@@ -62,6 +64,15 @@ function validateImportedText(text: string): string {
   if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
   assertSafeImportedPlainText(text);
   return text;
+}
+
+async function extractDocxText(buffer: Buffer): Promise<string> {
+  assertSafeDocxArchive(buffer);
+  try {
+    return (await mammoth.extractRawText({ buffer })).value;
+  } catch {
+    throw new AppError(415, "INVALID_DOCX_FILE", "文件内容不是有效的 DOCX 文档");
+  }
 }
 
 const workSchema = z.object({
@@ -233,6 +244,7 @@ const modelSchema = z.object({
   contextWindow: z.number().int().min(1_024).max(2_000_000).optional(),
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
+  thinkingEnabled: z.boolean().optional(),
   enabled: z.boolean().optional(),
   note: z.string().max(10_000).optional()
 });
@@ -241,13 +253,42 @@ const aiPromptSchema = z.object({
   systemPrompt: z.string().max(100_000).optional()
 });
 
+const platformUiSettingsSchema = z.object({
+  toastPosition: z.enum(["bottom-right", "top-right"])
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
+  calledAt: z.string().datetime({ offset: true }).optional(),
   arguments: z.record(z.string(), z.unknown()).nullable(),
   status: z.enum(["completed", "failed"]),
   result: z.record(z.string(), z.unknown())
 }).strict();
+
+const aiProcessStepSchema = z.discriminatedUnion("type", [
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("thinking"),
+    round: z.number().int().min(1).max(20),
+    content: z.string().max(500_000),
+    createdAt: z.string().datetime({ offset: true })
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("intermediate"),
+    round: z.number().int().min(1).max(20),
+    content: z.string().max(500_000),
+    createdAt: z.string().datetime({ offset: true })
+  }).strict(),
+  z.object({
+    id: z.string().min(1).max(300),
+    type: z.literal("tool"),
+    round: z.number().int().min(1).max(20),
+    toolCall: aiToolCallResultSchema,
+    createdAt: z.string().datetime({ offset: true })
+  }).strict()
+]);
 
 const workAiSettingsSchema = z.object({
   systemPrompt: z.string().max(100_000).optional(),
@@ -322,13 +363,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
+  const avatarUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
+  });
 
   app.disable("x-powered-by");
   if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: "0.1.0", protocol: "openai-chat-completions" });
+    data(response, { status: "ok", version: "0.2.0", protocol: "openai-chat-completions" });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
@@ -384,6 +429,36 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.audit(null, "user.profile-updated", "user", updated.userId);
     data(response, updated);
   });
+  app.put("/api/auth/avatar", avatarUpload.single("file"), (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 头像");
+    try {
+      const metadata = readRasterImageMetadata(request.file.buffer);
+      const updated = database.transaction(() => {
+        const user = auth.setAvatar(request.authUser!.userId, { ...metadata, content: request.file!.buffer });
+        store.audit(null, "user.avatar-updated", "user", user.userId, {
+          mimeType: metadata.mimeType,
+          byteLength: request.file!.buffer.byteLength,
+          width: metadata.width,
+          height: metadata.height
+        });
+        return user;
+      });
+      data(response, updated);
+    } catch (error) {
+      if (error instanceof InvalidRasterImageError) throw new AppError(415, "INVALID_AVATAR", error.message);
+      throw error;
+    }
+  });
+  app.delete("/api/auth/avatar", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const updated = database.transaction(() => {
+      const user = auth.deleteAvatar(request.authUser!.userId);
+      store.audit(null, "user.avatar-deleted", "user", user.userId);
+      return user;
+    });
+    data(response, updated);
+  });
   app.patch("/api/auth/password", (request, response) => {
     if (!request.authUser || !request.authSession) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(passwordChangeSchema, request.body);
@@ -409,6 +484,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/users", (_request, response) => data(response, auth.listUsers()));
   app.get("/api/users/directory", (request, response) => data(response, auth.directory(String(request.query.q ?? ""))));
+  app.get("/api/user-avatars/:userId", (request, response) => {
+    const avatar = auth.getAvatar(request.params.userId);
+    response.setHeader("Content-Type", avatar.mimeType);
+    response.setHeader("Content-Length", String(avatar.byteLength));
+    response.setHeader("ETag", `\"${avatar.sha256}\"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.send(avatar.content);
+  });
   app.patch("/api/users/:userId", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const updated = auth.updateUser(request.authUser, request.params.userId, parse(userUpdateSchema, request.body));
@@ -424,8 +507,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const extension = extname(originalFileName).toLocaleLowerCase();
     if (extension !== ".txt" && extension !== ".docx") throw new AppError(415, "UNSUPPORTED_FILE", "仅支持 TXT 和 DOCX 导入");
     const text = validateImportedText(extension === ".docx"
-      ? (await mammoth.extractRawText({ buffer: request.file.buffer })).value
-      : request.file.buffer.toString("utf8"));
+      ? await extractDocxText(request.file.buffer)
+      : decodeUtf8ImportedText(request.file.buffer));
     const parsedNovel = applyImportFileHints(parseNovelText(text), originalFileName);
     const inferredTitle = originalFileName.replace(/\.(txt|docx)$/iu, "").trim() || "未命名作品";
     const input = parse(workSchema, {
@@ -489,8 +572,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(415, "UNSUPPORTED_FILE", "MVP 仅支持 TXT 和 DOCX 导入");
     }
     const text = validateImportedText(extension === ".docx"
-      ? (await mammoth.extractRawText({ buffer: request.file.buffer })).value
-      : request.file.buffer.toString("utf8"));
+      ? await extractDocxText(request.file.buffer)
+      : decodeUtf8ImportedText(request.file.buffer));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
     data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed), 201);
   });
@@ -712,7 +795,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/tasks", (request, response) => data(response, store.listTasks(request.params.workId)));
   app.post("/api/works/:workId/tasks", (request, response) => {
-    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
+    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
     data(response, store.createTask(request.params.workId, input), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
@@ -730,6 +813,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/platform/ai/models", (_request, response) => data(response, ai.listPlatformModels()));
   app.get("/api/platform/ai/settings", (_request, response) => data(response, store.getPlatformAiSettings()));
   app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
+  app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
+  app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
+  app.patch("/api/platform/ui-settings", (request, response) => {
+    data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
@@ -760,7 +848,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       metadata: z.object({
         modelDisplayName: z.string().max(200).optional(),
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
-        toolCalls: z.array(aiToolCallResultSchema).max(12).optional()
+        processDurationMs: z.number().int().min(0).max(86_400_000).optional(),
+        toolCalls: z.array(aiToolCallResultSchema).max(12).optional(),
+        processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()
     }), request.body);
     data(response, store.addAiConversationMessage(request.params.conversationId, input), 201);
@@ -903,7 +993,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         instruction: instructionWithCitations(input.instruction, citations),
         scope: input.scope as ContextScope,
         signal: controller.signal,
-        onToolCall: (toolCall) => sendEvent("tool_call", toolCall),
+        onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
+        onProcessStep: (step) => sendEvent("process_step", step),
         conversationId: input.conversationId,
         excludeConversationMessageId: input.currentMessageId,
         ...(input.modelId ? { modelId: input.modelId } : {}),
@@ -916,7 +1007,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         model: suggestion.model,
         outputTokens: suggestion.outputTokens,
         chapterVersion: suggestion.chapterVersion,
-        toolCalls: suggestion.toolCalls
+        toolCalls: suggestion.toolCalls,
+        processSteps: suggestion.processSteps
       });
     } catch (error) {
       if (!controller.signal.aborted) {

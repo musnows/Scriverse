@@ -25,6 +25,15 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
     expect(styles.text).toContain('.file-button, .secondary-button { display: grid; place-items: center; min-height: 30px;');
+    expect(page.text).toContain('<span class="import-file-label import-file-label-full" aria-hidden="true">导入 TXT / DOCX</span>');
+    expect(page.text).toContain('<span class="import-file-label import-file-label-compact" aria-hidden="true">导入TXT/DOCX</span>');
+    expect(page.text).toContain('<span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>');
+    expect(styles.text).toContain('@container (max-width: 120px)');
+    expect(styles.text).toContain('@container (max-width: 88px)');
+    expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');
+    expect(styles.text).toContain('.editor-toolbar { grid-template-areas: "path" "title" "actions";');
+    expect(styles.text).toContain('.chapter-title { min-height: 36px; }');
+    expect(styles.text).toContain('.chapter-stats { display: none; }');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
     expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
   });

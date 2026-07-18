@@ -37,6 +37,20 @@ export function formatRelationshipLabel(edge, separator = " · ") {
   return [subtype, ...keywords].filter(Boolean).join(separator) || "关系";
 }
 
+export function groupRelationshipDetailsByCharacterName(graph, nodeId) {
+  const groups = new Map();
+  for (const edge of graph.edges) {
+    if (edge.source !== nodeId && edge.target !== nodeId) continue;
+    const other = graph.nodeById.get(edge.source === nodeId ? edge.target : edge.source);
+    const name = String(other?.name ?? "未知角色").normalize("NFKC").trim() || "未知角色";
+    const key = name.toLocaleLowerCase("zh-CN");
+    const existing = groups.get(key);
+    if (existing) existing.edges.push(edge);
+    else groups.set(key, { name, edges: [edge] });
+  }
+  return [...groups.values()];
+}
+
 export function getRelationshipEdgeSelection(graph, edgeId) {
   const edge = graph.edges.find((item) => item.id === edgeId);
   if (!edge) return null;
@@ -616,8 +630,8 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   reset.dataset.testid = "relationship-network-reset";
   const fullscreen = document.createElement("button");
   fullscreen.type = "button";
-  fullscreen.className = "ghost-button";
-  fullscreen.textContent = "银河图";
+  fullscreen.className = "ghost-button relationship-galaxy-button";
+  fullscreen.innerHTML = '<svg class="relationship-galaxy-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11.5" cy="12" r="4.2"/><ellipse cx="11.5" cy="12" rx="9" ry="3.2" transform="rotate(-18 11.5 12)"/><path d="M19 2.8v3.4M17.3 4.5h3.4"/></svg><span>银河图</span>';
   fullscreen.setAttribute("aria-label", "全屏银河图");
   fullscreen.dataset.testid = "relationship-galaxy-open";
   fullscreen.addEventListener("click", () => options.onOpenGalaxy?.());
@@ -1730,7 +1744,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const renderDetail = (node) => {
-    const relations = graph.edges.filter((edge) => edge.source === node.id || edge.target === node.id);
+    const relationGroups = groupRelationshipDetailsByCharacterName(graph, node.id);
     detail.classList.remove("hidden");
     detail.replaceChildren();
     const heading = document.createElement("strong");
@@ -1752,12 +1766,15 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       detail.append(identity);
     }
     const list = document.createElement("ul");
-    for (const edge of relations.slice(0, 12)) {
-      const other = graph.nodeById.get(edge.source === node.id ? edge.target : edge.source);
+    for (const group of relationGroups.slice(0, 12)) {
       const item = document.createElement("li");
-      const category = document.createElement("i");
-      category.className = edge.category;
-      item.append(category, document.createTextNode(`${other?.name ?? "未知角色"} · ${formatRelationshipLabel(edge)}`));
+      const categories = group.edges.map((edge) => {
+        const category = document.createElement("i");
+        category.className = edge.category;
+        return category;
+      });
+      const labels = [...new Set(group.edges.map((edge) => formatRelationshipLabel(edge)))];
+      item.append(...categories, document.createTextNode(`${group.name} · ${labels.join("；")}`));
       list.append(item);
     }
     detail.append(list);

@@ -25,6 +25,17 @@ test("服务端渲染叙界介绍页", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/);
 });
 
+test("页内导航不写入 URL 哈希锚点", async () => {
+  const response = await render();
+  const html = await response.text();
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.doesNotMatch(html, /href="#(?:top|workspace|abilities|relationships|galaxy)"/);
+  assert.match(html, /data-scroll-target="workspace"/);
+  assert.match(html, /data-scroll-target="relationships"/);
+  assert.doesNotMatch(css, /html\s*\{\s*scroll-behavior:\s*smooth/);
+});
+
 test("关系节点的交互锚点与可见圆点保持重合", async () => {
   const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   const nodeRule = css.match(/\.relation-node \{([^}]+)\}/)?.[1] ?? "";

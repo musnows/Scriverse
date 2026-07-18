@@ -10,17 +10,20 @@ describe("AI 供应商、模型与建议 API", () => {
   let chapterId: string;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
+  let expectedThinkingType: "enabled" | "disabled";
 
   beforeEach(async () => {
     expectedMaxTokens = 32_000;
+    expectedThinkingType = "enabled";
     fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number };
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string } };
       expect(body.messages[1]?.content).toContain("跃迁后必须冷却十二小时");
       expect(body.max_tokens).toBe(expectedMaxTokens);
+      expect(body.thinking).toEqual({ type: expectedThinkingType });
       if (body.messages[1]?.content.includes("检查下面的续写候选")) {
         return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -59,6 +62,7 @@ describe("AI 供应商、模型与建议 API", () => {
       preset: { temperature: 0.4, unsupported: "ignored" }
     }).expect(201);
     expect(model.body.data.preset).toMatchObject({ temperature: 0.4, max_tokens: 32_000, unsupported: "ignored" });
+    expect(model.body.data.thinkingEnabled).toBe(true);
     return { providerId, modelId: model.body.data.id };
   }
 
@@ -79,6 +83,27 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(409);
+  });
+
+  it("模型默认开启 thinking 并可按模型关闭", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证默认思考参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expectedThinkingType = "disabled";
+    const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
+    expect(updated.body.data.thinkingEnabled).toBe(false);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证关闭思考参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
   });
 
   it("平台供应商可被多本书复用，并在内置提示词后追加平台和书籍提示词", async () => {
@@ -158,7 +183,8 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
 
-    expect(sentContext).toContain("已裁剪较早概要");
+    expect(sentContext).toContain("本卷其余章节概要已按预算折叠");
+    expect(sentContext).toContain("较早概要");
     expect(sentContext).toContain("保留最新概要");
     expect(estimateAiTokens(sentContext)).toBeLessThan(450);
   });
@@ -212,6 +238,39 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(sentPrompt).not.toContain("跃迁后必须冷却十二小时");
   });
 
+  it("无上下文作品问题会收到主动工具指引并通过目录读取作品信息", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }>; tools?: Array<{ function?: { name?: string } }> };
+      if (completionCount === 1) {
+        expect(body.messages[0]?.content).toContain("预加载上下文为空或不足时，必须先调用工具主动查询");
+        expect(body.messages[0]?.content).toContain("整体介绍、作品基本信息、目录或章节定位优先调用 story_index");
+        expect(body.messages[1]?.content).toContain("本轮未预加载作品上下文");
+        expect(body.tools?.map((tool) => tool.function?.name)).toContain("story_index");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "project-index", type: "function", function: { name: "story_index", arguments: "{}" } }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      expect(toolMessage?.content).toContain('"title":"AI 测试作品"');
+      expect(toolMessage?.content).toContain('"chapterCount":1');
+      return new Response(JSON.stringify({ choices: [{ message: { content: "这是《AI 测试作品》，当前包含一章。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "这是一个什么项目？",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("这是《AI 测试作品》，当前包含一章。");
+    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "story_index", status: "completed" })]);
+    expect(completionCount).toBe(2);
+  });
+
   it("聊天默认暴露聚合查询工具并把结果回传给模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -238,7 +297,7 @@ describe("AI 供应商、模型与建议 API", () => {
 
     expect(response.body.data.content).toBe("已根据章节目录回答。");
     expect(response.body.data.toolCalls).toEqual([
-      expect.objectContaining({ id: "tool-call-1", name: "story_index", status: "completed", arguments: { offset: 0, limit: 1 } })
+      expect.objectContaining({ id: "tool-call-1", name: "story_index", calledAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u), status: "completed", arguments: { offset: 0, limit: 1 } })
     ]);
     expect(completionCount).toBe(2);
   });
@@ -434,13 +493,16 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; messages?: Array<{ content: string }> };
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; max_tokens?: number; messages?: Array<{ content: string }>; thinking?: { type?: string } };
       expect(body).toMatchObject({ stream: true, max_tokens: 32_000 });
+      expect(body.thinking).toEqual({ type: "enabled" });
       expect(body.messages?.[1]?.content).toContain("[第一章 L1-L2]");
       expect(body.messages?.[1]?.content).toContain("林舟启动了飞船。");
       return new Response(new ReadableStream<Uint8Array>({
         start(controller) {
           const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"先读取"}}]}\n\n'));
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"现有上下文。"}}]}\n\n'));
           controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"飞船"}}]}\n\n'));
           setTimeout(() => {
             controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"离港"},"finish_reason":"stop"}]}\n\n'));
@@ -459,8 +521,13 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"飞船"}');
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"离港"}');
+    expect(streamed.text).toContain('event: process_step\ndata: {"id":"process_');
+    expect(streamed.text).toContain('"type":"thinking","round":1,"content":"先读取"');
+    expect(streamed.text).toContain('"content":"现有上下文。"');
     expect(streamed.text.indexOf('"飞船"')).toBeLessThan(streamed.text.indexOf('"离港"'));
     expect(streamed.text).toContain("event: complete");
+    expect(streamed.text).toContain('"processSteps":[{"id":"process_');
+    expect(streamed.text).toContain('"content":"先读取现有上下文。"');
 
     const suggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
     expect(suggestions.body.data[0]).toMatchObject({ taskType: "chat", action: "note", content: "飞船离港" });
@@ -472,13 +539,15 @@ describe("AI 供应商、模型与建议 API", () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     let completionCount = 0;
-    fetchMock.mockImplementation(async (input) => {
+    fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       if (completionCount === 1) {
-        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "stream-tool", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
+        return new Response(JSON.stringify({ choices: [{ message: { content: "我先读取作品目录。", reasoning_content: "需要先确认作品结构。", tool_calls: [{ id: "stream-tool", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
       }
-      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取目录。" } }], usage: { completion_tokens: 8 } }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; reasoning_content?: string | null }> };
+      expect(body.messages.find((message) => message.role === "assistant")?.reasoning_content).toBe("需要先确认作品结构。");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取目录。", reasoning_content: "目录结果足以回答。" } }], usage: { completion_tokens: 8 } }), { status: 200 });
     });
 
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
@@ -488,21 +557,34 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
 
     expect(streamed.text).toContain("event: tool_call");
+    expect(streamed.text).toContain("event: process_step");
+    expect(streamed.text).toContain('"type":"thinking","round":1,"content":"需要先确认作品结构。"');
+    expect(streamed.text).toContain('"type":"intermediate","round":1,"content":"我先读取作品目录。"');
+    expect(streamed.text).toContain('"type":"thinking","round":2,"content":"目录结果足以回答。"');
+    expect(streamed.text.indexOf('"type":"thinking","round":1')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
+    expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
     expect(streamed.text).toContain('"result":{"ok":true');
     expect(streamed.text).toContain('event: complete');
     expect(streamed.text).toContain('"toolCalls":[{"id":"stream-tool"');
+    expect(streamed.text).toContain('"processSteps":[{"id":"process_');
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
-    const toolCalls = [{ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
+    const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];
+    const processSteps = [
+      { id: "process-thinking", type: "thinking", round: 1, content: "需要读取目录。", createdAt: "2026-07-17T12:34:55.000Z" },
+      { id: "process-tool", type: "tool", round: 1, toolCall: toolCalls[0], createdAt: "2026-07-17T12:34:56.000Z" }
+    ];
     await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
       role: "assistant",
       content: "已读取目录。",
-      metadata: { modelDisplayName: "小说模型", outputTokens: 8, toolCalls }
+      metadata: { modelDisplayName: "小说模型", outputTokens: 8, processDurationMs: 1450, toolCalls, processSteps }
     }).expect(201);
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.messages[0].metadata.toolCalls).toEqual(toolCalls);
+    expect(reloaded.body.data.messages[0].metadata.processSteps).toEqual(processSteps);
+    expect(reloaded.body.data.messages[0].metadata.processDurationMs).toBe(1450);
   });
 
   it("完整读取响应正文前不释放供应商并发槽", async () => {

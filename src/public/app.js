@@ -1,20 +1,21 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260714-no-edge-focus-ring";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260719-group-relation-list";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260716-contiguous-quotes";
+import { renderMarkdown } from "/markdown.js?v=20260717-markdown-table-scrollbar";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
-import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260713-model-purpose-picker";
+import { MODEL_PURPOSE_OPTIONS, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260718-thinking-toggle";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260713-persisted-output-tokens";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260713-hover-usage";
+import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
+import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 
 const state = {
   user: null,
@@ -53,6 +54,8 @@ const analysisTaskTypeLabels = new Map([
   ...MODEL_PURPOSE_OPTIONS,
   ["character-extraction", "全书角色抽取"],
   ["character-summary", "全书角色抽取"],
+  ["worldview-analysis", "世界观分析"],
+  ["setting-extraction", "设定抽取"],
   ["structure", "结构分析"],
   ["report-update", "报告更新"]
 ]);
@@ -75,11 +78,234 @@ function analysisTaskStatusLabel(status) {
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+const maximumAvatarFileSize = 5 * 1024 * 1024;
+
+function userAvatarInitial(user) {
+  return Array.from(String(user?.displayName || user?.username || "作"))[0] ?? "作";
+}
+
+function userAvatarHtml(user, extraClass = "") {
+  const image = user?.avatarUrl
+    ? `<img src="${esc(user.avatarUrl)}" alt="" loading="lazy" decoding="async" data-user-avatar-image>`
+    : "";
+  return `<span class="user-avatar ${esc(extraClass)}" aria-hidden="true"><span class="user-avatar-fallback">${esc(userAvatarInitial(user))}</span>${image}</span>`;
+}
+
+function bindUserAvatarFallbacks(root) {
+  root.querySelectorAll("[data-user-avatar-image]").forEach((image) => {
+    image.addEventListener("error", () => image.remove(), { once: true });
+  });
+}
+
+function renderUserAvatar(element, user) {
+  element.replaceChildren();
+  const fallback = document.createElement("span");
+  fallback.className = "user-avatar-fallback";
+  fallback.textContent = userAvatarInitial(user);
+  element.append(fallback);
+  if (!user?.avatarUrl) return;
+  const image = document.createElement("img");
+  image.alt = "";
+  image.decoding = "async";
+  image.src = user.avatarUrl;
+  image.addEventListener("error", () => image.remove(), { once: true });
+  element.append(image);
+}
+
+function renderProfileAvatar() {
+  renderUserAvatar($("#profile-avatar-preview"), state.user);
+  $("#avatar-upload-button").textContent = state.user?.avatarUrl ? "更换头像" : "上传头像";
+  $("#avatar-remove-button").classList.toggle("hidden", !state.user?.avatarUrl);
+}
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
+const onboardingStoragePrefix = "scriverse-onboarding-v2";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
 let memberDialogWork = null;
+let onboardingStep = 0;
+let onboardingAutoScheduled = false;
+let onboardingPositionFrame = null;
+let onboardingSteps = [];
+
+const shelfOnboardingSteps = [
+  { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
+  { selector: "#shelf-new-work", eyebrow: "开始创作", title: "创建一部新作品", description: "从空白作品开始搭建分卷、章节和世界设定。", placement: "bottom" },
+  { selector: "#book-add-card", eyebrow: "导入或新建", title: "从书架添加作品", description: "这个卡片同样可以创建作品，也支持在进入工作台后导入 TXT 或 DOCX 稿件。", placement: "right" },
+  { selector: "[data-open-work]", eyebrow: "继续写作", title: "打开已有作品", description: "每部作品都有独立的正文、知识库、AI 上下文与协作权限。", placement: "right" },
+  { selector: "#theme-toggle", eyebrow: "显示偏好", title: "切换白天或黑夜模式", description: "主题和字体设置只保存在当前设备，不会影响其他协作者。", placement: "bottom" },
+  { selector: "#settings-button", eyebrow: "工作台设置", title: "集中管理创作环境", description: "进入设置后可以管理 AI、显示偏好、作品协作与导出。", placement: "bottom" },
+  { selector: "#account-button", eyebrow: "账户", title: "管理个人账户", description: "这里可以修改账户资料、退出登录，并随时重新打开功能导览。", placement: "bottom" }
+];
+
+const workspaceOnboardingSteps = [
+  { selector: "#home-button", eyebrow: "作品入口", title: "随时返回书架", description: "点击叙界标志返回书架，切换作品或创建新的故事世界。", placement: "bottom" },
+  { selector: ".file-button", eyebrow: "稿件导入", title: "导入 TXT 或 DOCX", description: "已有稿件可以直接导入，系统会解析分卷与章节结构。", placement: "right" },
+  { selector: "#new-chapter-button", eyebrow: "正文结构", title: "新建章节", description: "使用分卷和章节组织长篇正文，章节会自动保存并保留版本。", placement: "right" },
+  { selector: "#versions-button", eyebrow: "版本安全", title: "查看章节版本", description: "每次保存都会生成可恢复版本，误改内容时可以随时回溯。", placement: "bottom" },
+  { selector: "[data-module=\"characters\"]", eyebrow: "作品知识", title: "维护角色与世界资料", description: "角色、种族、组织、设定和时间线共同构成 AI 可引用的作品知识。", placement: "right" },
+  { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲与伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
+  { selector: "[data-module=\"tasks\"]", eyebrow: "AI 分析中心", title: "从这里理解整部小说", description: "运行人物、关系、世界观、设定、事件和一致性分析，并查看每次分析的结果与进度。", placement: "right" },
+  { selector: "#top-search-button", eyebrow: "全文检索", title: "搜索整部作品", description: "一次检索正文、角色、设定、种族与组织，快速定位创作依据。", placement: "bottom" },
+  { selector: ".quick-actions button[data-task=\"continue\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
+  { selector: "#ai-send", eyebrow: "AI 对话", title: "发送你的创作要求", description: "选择上下文范围与模型后发送任务。AI 结果默认只是建议，不会直接覆盖正文。", placement: "left" },
+  { selector: "#settings-button", eyebrow: "工作台设置", title: "管理 AI、协作与导出", description: "供应商、显示偏好、作品成员和 Markdown 导出都集中在这里。", placement: "bottom" },
+  { selector: "#account-button", eyebrow: "账户", title: "管理账户并重看导览", description: "账户菜单保存个人设置入口，也可以随时重新打开这套功能导览。", placement: "bottom" }
+];
+
+function onboardingStorageKey() {
+  return `${onboardingStoragePrefix}:${state.user?.userId ?? "anonymous"}`;
+}
+
+function hasCompletedOnboarding() {
+  try { return localStorage.getItem(onboardingStorageKey()) === "completed"; }
+  catch { return false; }
+}
+
+function persistOnboardingCompletion() {
+  try { localStorage.setItem(onboardingStorageKey(), "completed"); }
+  catch { /* 浏览器禁用存储时仅在当前页面关闭导览 */ }
+}
+
+function isOnboardingTargetVisible(target) {
+  if (!target) return false;
+  const style = window.getComputedStyle(target);
+  const rect = target.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) !== 0
+    && rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0
+    && rect.left < window.innerWidth && rect.top < window.innerHeight;
+}
+
+function currentOnboardingSteps() {
+  const candidates = $("#app").classList.contains("shelf-mode") ? shelfOnboardingSteps : workspaceOnboardingSteps;
+  return candidates.filter((step) => isOnboardingTargetVisible(document.querySelector(step.selector)));
+}
+
+function onboardingPlacementCoordinates(placement, targetRect, popoverRect, gap) {
+  if (placement === "right") return { left: targetRect.right + gap, top: targetRect.top + (targetRect.height - popoverRect.height) / 2 };
+  if (placement === "left") return { left: targetRect.left - popoverRect.width - gap, top: targetRect.top + (targetRect.height - popoverRect.height) / 2 };
+  if (placement === "top") return { left: targetRect.left + (targetRect.width - popoverRect.width) / 2, top: targetRect.top - popoverRect.height - gap };
+  return { left: targetRect.left + (targetRect.width - popoverRect.width) / 2, top: targetRect.bottom + gap };
+}
+
+function onboardingPlacementFits(placement, targetRect, popoverRect, gap, margin) {
+  if (placement === "right") return targetRect.right + gap + popoverRect.width <= window.innerWidth - margin;
+  if (placement === "left") return targetRect.left - gap - popoverRect.width >= margin;
+  if (placement === "top") return targetRect.top - gap - popoverRect.height >= margin;
+  return targetRect.bottom + gap + popoverRect.height <= window.innerHeight - margin;
+}
+
+function positionOnboardingElements() {
+  onboardingPositionFrame = null;
+  const dialog = $("#onboarding-dialog");
+  const step = onboardingSteps[onboardingStep];
+  if (!dialog.open || !step) return;
+  const target = document.querySelector(step.selector);
+  if (!isOnboardingTargetVisible(target)) return;
+  const padding = 7;
+  const targetBox = target.getBoundingClientRect();
+  const targetRect = {
+    left: Math.max(0, targetBox.left - padding),
+    top: Math.max(0, targetBox.top - padding),
+    right: Math.min(window.innerWidth, targetBox.right + padding),
+    bottom: Math.min(window.innerHeight, targetBox.bottom + padding)
+  };
+  targetRect.width = targetRect.right - targetRect.left;
+  targetRect.height = targetRect.bottom - targetRect.top;
+  const spotlight = $("#onboarding-spotlight");
+  spotlight.style.left = `${targetRect.left}px`;
+  spotlight.style.top = `${targetRect.top}px`;
+  spotlight.style.width = `${targetRect.width}px`;
+  spotlight.style.height = `${targetRect.height}px`;
+
+  const popover = $("#onboarding-popover");
+  popover.style.visibility = "hidden";
+  popover.style.left = "0px";
+  popover.style.top = "0px";
+  const popoverRect = popover.getBoundingClientRect();
+  const gap = 18;
+  const margin = 14;
+  const placements = [step.placement, "right", "left", "bottom", "top"].filter((placement, index, values) => values.indexOf(placement) === index);
+  const placement = placements.find((candidate) => onboardingPlacementFits(candidate, targetRect, popoverRect, gap, margin)) ?? step.placement;
+  const coordinates = onboardingPlacementCoordinates(placement, targetRect, popoverRect, gap);
+  const left = Math.max(margin, Math.min(window.innerWidth - popoverRect.width - margin, coordinates.left));
+  const top = Math.max(margin, Math.min(window.innerHeight - popoverRect.height - margin, coordinates.top));
+  const arrowOffset = placement === "left" || placement === "right"
+    ? targetRect.top + targetRect.height / 2 - top
+    : targetRect.left + targetRect.width / 2 - left;
+  const maximumArrowOffset = (placement === "left" || placement === "right" ? popoverRect.height : popoverRect.width) - 26;
+  popover.dataset.placement = placement;
+  popover.style.setProperty("--onboarding-arrow-offset", `${Math.max(26, Math.min(maximumArrowOffset, arrowOffset))}px`);
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+  popover.style.visibility = "visible";
+}
+
+function scheduleOnboardingPosition() {
+  if (!$("#onboarding-dialog").open) return;
+  if (onboardingPositionFrame !== null) return;
+  onboardingPositionFrame = window.requestAnimationFrame(positionOnboardingElements);
+}
+
+function refreshOnboardingForViewport() {
+  const dialog = $("#onboarding-dialog");
+  if (!dialog.open) return;
+  if (onboardingPositionFrame !== null) window.cancelAnimationFrame(onboardingPositionFrame);
+  onboardingPositionFrame = window.requestAnimationFrame(() => {
+    onboardingPositionFrame = null;
+    const currentSelector = onboardingSteps[onboardingStep]?.selector;
+    const refreshedSteps = currentOnboardingSteps();
+    if (!refreshedSteps.length) return;
+    onboardingSteps = refreshedSteps;
+    const preservedStep = onboardingSteps.findIndex((step) => step.selector === currentSelector);
+    renderOnboardingStep(preservedStep >= 0 ? preservedStep : 0);
+  });
+}
+
+function renderOnboardingStep(step, focusTitle = false) {
+  const lastStep = Math.max(0, onboardingSteps.length - 1);
+  onboardingStep = Math.max(0, Math.min(lastStep, Number(step) || 0));
+  const current = onboardingSteps[onboardingStep];
+  if (!current) return;
+  $("#onboarding-progress").textContent = `第 ${onboardingStep + 1} 步，共 ${onboardingSteps.length} 步`;
+  $("#onboarding-eyebrow").textContent = current.eyebrow;
+  $("#onboarding-dialog-title").textContent = current.title;
+  $("#onboarding-dialog-description").textContent = current.description;
+  $("#onboarding-previous").disabled = onboardingStep === 0;
+  $("#onboarding-next").textContent = onboardingStep === lastStep ? "完成导览" : "下一步";
+  $("#onboarding-dialog").dataset.step = String(onboardingStep + 1);
+  $("#onboarding-dialog").dataset.target = current.selector;
+  document.querySelector(current.selector)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  scheduleOnboardingPosition();
+  if (focusTitle) $("#onboarding-dialog-title").focus();
+}
+
+function openOnboarding(force = false) {
+  const dialog = $("#onboarding-dialog");
+  if (!force && hasCompletedOnboarding()) return;
+  onboardingSteps = currentOnboardingSteps();
+  if (!onboardingSteps.length) return;
+  onboardingStep = 0;
+  if (!dialog.open) dialog.showModal();
+  renderOnboardingStep(0);
+  window.requestAnimationFrame(() => $("#onboarding-dialog-title").focus());
+}
+
+function completeOnboarding() {
+  persistOnboardingCompletion();
+  if (onboardingPositionFrame !== null) window.cancelAnimationFrame(onboardingPositionFrame);
+  onboardingPositionFrame = null;
+  if ($("#onboarding-dialog").open) $("#onboarding-dialog").close();
+}
+
+function scheduleFirstUseOnboarding() {
+  if (onboardingAutoScheduled || hasCompletedOnboarding()) return;
+  onboardingAutoScheduled = true;
+  window.requestAnimationFrame(() => {
+    onboardingAutoScheduled = false;
+    if (state.user && !document.body.classList.contains("auth-pending")) openOnboarding();
+  });
+}
 
 function settingsRouteContext() {
   const context = settingsReturnContext ?? {};
@@ -198,6 +424,7 @@ function setupPanelResize(handle, side) {
 let chapterLineNumberFrame = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
+let chapterWhitespaceVisible = true;
 let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let lastSavedChapterSnapshot = null;
@@ -220,9 +447,54 @@ function setModuleNavExpanded(expanded) {
 function syncChapterLineNumberScroll() {
   const input = $("#chapter-content");
   const inner = $("#chapter-line-numbers-inner");
+  const whitespace = $("#chapter-whitespace-inner");
   if (!input || !inner) return;
   inner.style.transform = `translateY(${-input.scrollTop}px)`;
   inner.dataset.scrollTop = String(input.scrollTop);
+  if (whitespace) {
+    whitespace.style.transform = `translate(${-input.scrollLeft}px, ${-input.scrollTop}px)`;
+    whitespace.dataset.scrollTop = String(input.scrollTop);
+  }
+}
+
+function renderChapterWhitespaceMarkers(input, style) {
+  const overlay = $("#chapter-whitespace-overlay");
+  const inner = $("#chapter-whitespace-inner");
+  const button = $("#toggle-whitespace-button");
+  if (!overlay || !inner || !button) return;
+  overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
+  button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
+  button.textContent = chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符";
+  if (!chapterWhitespaceVisible) {
+    inner.replaceChildren();
+    return;
+  }
+  Object.assign(inner.style, {
+    width: `${input.clientWidth}px`,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    tabSize: style.tabSize,
+    padding: style.padding,
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak
+  });
+  const fragment = document.createDocumentFragment();
+  for (const token of tokenizeVisibleSpaces(input.value.replace(/\r\n?/gu, "\n"))) {
+    if (token.type === "text") {
+      fragment.append(document.createTextNode(token.text));
+      continue;
+    }
+    const marker = document.createElement("span");
+    marker.className = `chapter-space-marker ${token.type}`;
+    marker.textContent = token.text;
+    marker.dataset.spaceType = token.type;
+    fragment.append(marker);
+  }
+  inner.replaceChildren(fragment);
 }
 
 function renderChapterLineNumbers() {
@@ -280,6 +552,7 @@ function renderChapterLineNumbers() {
   inner.style.height = `${measureRect.height}px`;
   inner.dataset.lineCount = String(lines.length);
   measure.replaceChildren();
+  renderChapterWhitespaceMarkers(input, style);
   syncChapterLineNumberScroll();
 }
 
@@ -529,36 +802,149 @@ const AI_TOOL_DISPLAY_NAMES = {
   query_story_knowledge: "查询作品知识"
 };
 
+const AI_TOOL_DESCRIPTIONS = {
+  story_index: "分页读取当前作品的卷章目录和章节概要。",
+  read_chapters: "读取指定章节的概要、正文或两者。",
+  query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。"
+};
+
+let aiFeedScrollFrame = null;
+
+function scrollAiFeedToBottom() {
+  const feed = $("#ai-feed");
+  feed.scrollTop = feed.scrollHeight;
+  if (aiFeedScrollFrame !== null) window.cancelAnimationFrame(aiFeedScrollFrame);
+  aiFeedScrollFrame = window.requestAnimationFrame(() => {
+    feed.scrollTop = feed.scrollHeight;
+    aiFeedScrollFrame = null;
+  });
+}
+
+function formatAiToolCallTime(value) {
+  if (!value) return "历史记录未保存";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间记录无效";
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
 function openAiToolCallDetail(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
   const status = toolCall?.status === "failed" ? "调用失败" : "调用成功";
+  const calledAt = String(toolCall?.calledAt ?? "");
   $("#ai-tool-call-status").textContent = status;
   $("#ai-tool-call-title").textContent = `${AI_TOOL_DISPLAY_NAMES[name] ?? name} · ${name}`;
+  $("#ai-tool-call-name").textContent = name;
+  $("#ai-tool-call-description").textContent = AI_TOOL_DESCRIPTIONS[name] ?? "未登记此工具函数的用途说明。";
+  const time = $("#ai-tool-call-time");
+  time.textContent = formatAiToolCallTime(calledAt);
+  if (calledAt && !Number.isNaN(new Date(calledAt).getTime())) time.dateTime = new Date(calledAt).toISOString();
+  else time.removeAttribute("datetime");
   $("#ai-tool-call-arguments").textContent = JSON.stringify(toolCall?.arguments ?? {}, null, 2);
   $("#ai-tool-call-result").textContent = JSON.stringify(toolCall?.result ?? {}, null, 2);
   $("#ai-tool-call-dialog").showModal();
 }
 
-function renderAiToolCalls(message, toolCalls) {
-  message.querySelector(".ai-tool-call-list")?.remove();
-  if (!Array.isArray(toolCalls) || !toolCalls.length) return;
-  const host = document.createElement("div");
-  host.className = "ai-tool-call-list";
-  host.setAttribute("aria-label", "AI 工具调用记录");
-  for (const toolCall of toolCalls) {
-    const name = String(toolCall?.name ?? "unknown");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `ai-tool-call-summary${toolCall?.status === "failed" ? " is-failed" : ""}`;
-    button.setAttribute("aria-haspopup", "dialog");
-    button.textContent = toolCall?.status === "failed" ? `调用 ${name} 工具失败` : `调用了 ${name} 工具`;
-    button.title = AI_TOOL_DISPLAY_NAMES[name] ?? name;
-    button.addEventListener("click", () => openAiToolCallDetail(toolCall));
-    host.append(button);
+function createAiToolCallButton(toolCall) {
+  const name = String(toolCall?.name ?? "unknown");
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `ai-tool-call-summary${toolCall?.status === "failed" ? " is-failed" : ""}`;
+  button.setAttribute("aria-haspopup", "dialog");
+  button.textContent = toolCall?.status === "failed" ? `调用 ${name} 工具失败` : `调用了 ${name} 工具`;
+  button.title = AI_TOOL_DISPLAY_NAMES[name] ?? name;
+  button.addEventListener("click", () => openAiToolCallDetail(toolCall));
+  return button;
+}
+
+function aiToolProcessStep(toolCall, round = 1) {
+  const normalizedToolCall = { ...toolCall };
+  delete normalizedToolCall.round;
+  return {
+    id: `tool-${String(toolCall?.id ?? "unknown")}`,
+    type: "tool",
+    round: Number(round) || 1,
+    toolCall: normalizedToolCall,
+    createdAt: toolCall?.calledAt ?? new Date().toISOString()
+  };
+}
+
+function formatAiProcessDuration(value) {
+  const durationMs = Number(value);
+  if (!Number.isFinite(durationMs) || durationMs < 0) return "";
+  const totalSeconds = durationMs / 1000;
+  if (totalSeconds < 60) return `${Math.max(0.1, totalSeconds).toFixed(1)} 秒`;
+  const roundedSeconds = Math.round(totalSeconds);
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const seconds = roundedSeconds % 60;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分 ${seconds} 秒`;
+  return `${minutes} 分 ${String(seconds).padStart(2, "0")} 秒`;
+}
+
+function resolveAiProcessDuration(metadata, steps, completedAt) {
+  const storedDuration = Number(metadata?.processDurationMs);
+  if (Number.isFinite(storedDuration) && storedDuration >= 0) return storedDuration;
+  const completedTime = new Date(completedAt ?? "").getTime();
+  if (!Number.isFinite(completedTime)) return null;
+  const startedTimes = steps
+    .map((step) => new Date(step?.createdAt ?? "").getTime())
+    .filter((value) => Number.isFinite(value));
+  if (!startedTimes.length) return null;
+  return Math.max(0, completedTime - Math.min(...startedTimes));
+}
+
+function renderAiProcessSteps(message, steps, completed, durationMs = null) {
+  message.querySelector(".ai-process-details")?.remove();
+  if (!Array.isArray(steps) || !steps.length) return;
+  const details = document.createElement("details");
+  details.className = "ai-process-details";
+  details.open = !completed;
+  const summary = document.createElement("summary");
+  const title = document.createElement("span");
+  title.textContent = completed ? "思考与执行过程" : "正在思考与执行";
+  const status = document.createElement("small");
+  const duration = durationMs === null || durationMs === undefined ? "" : formatAiProcessDuration(durationMs);
+  status.textContent = `${steps.length} 个步骤${duration ? ` · 耗时 ${duration}` : ""}`;
+  summary.append(title, status);
+  const list = document.createElement("div");
+  list.className = "ai-process-list";
+  for (const step of steps) {
+    if (step?.type === "tool" && step.toolCall) {
+      const tool = document.createElement("section");
+      tool.className = "ai-process-step ai-process-tool-step";
+      const label = document.createElement("small");
+      label.textContent = `第 ${Number(step.round) || 1} 轮 · 工具调用`;
+      tool.append(label, createAiToolCallButton(step.toolCall));
+      list.append(tool);
+      continue;
+    }
+    if (!step?.content || !["thinking", "intermediate"].includes(step.type)) continue;
+    const section = document.createElement("section");
+    section.className = `ai-process-step ai-process-${step.type}-step`;
+    const label = document.createElement("small");
+    label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
+    const body = document.createElement("div");
+    body.className = "message-body ai-process-step-body";
+    body.innerHTML = renderMarkdown(step.content);
+    section.append(label, body);
+    list.append(section);
   }
+  details.append(summary, list);
   const body = message.querySelector(".message-body");
-  if (body) body.after(host);
-  else message.append(host);
+  if (body) body.before(details);
+  else message.append(details);
+}
+
+function renderAiToolCalls(message, toolCalls, completed = false) {
+  renderAiProcessSteps(message, (Array.isArray(toolCalls) ? toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall)), completed);
 }
 
 function setAiHistoryVisible(visible) {
@@ -665,6 +1051,14 @@ function setAiPromptText(value) {
   prompt.replaceChildren();
   if (value) prompt.append(document.createTextNode(value));
   renderAiReferences();
+}
+
+function clearAiPromptComposer() {
+  state.aiCitations = [];
+  state.aiReferences = [];
+  setAiPromptText("");
+  renderAiCitations();
+  hideAiMentionMenu();
 }
 
 function aiPromptTextBeforeCursor() {
@@ -982,11 +1376,24 @@ function applyAuthenticatedUser(session) {
   state.user = session.user;
   state.csrfToken = session.csrfToken;
   $("#account-name").textContent = session.user.displayName;
-  $("#account-avatar").textContent = Array.from(session.user.displayName)[0] ?? "作";
+  renderUserAvatar($("#account-avatar"), session.user);
   $("#account-menu-name").textContent = `${session.user.displayName} · @${session.user.username}`;
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.body.classList.remove("auth-pending");
+}
+
+function applyPlatformUiSettings(settings) {
+  const position = settings?.toastPosition === "top-right" ? "top-right" : "bottom-right";
+  $("#toast-region").dataset.position = position;
+}
+
+async function loadPlatformUiSettings() {
+  try {
+    applyPlatformUiSettings(await api("/api/ui-settings"));
+  } catch {
+    applyPlatformUiSettings({ toastPosition: "bottom-right" });
+  }
 }
 
 async function initializeAuthentication() {
@@ -998,6 +1405,7 @@ async function initializeAuthentication() {
     return false;
   }
   applyAuthenticatedUser(session);
+  await loadPlatformUiSettings();
   return true;
 }
 
@@ -1182,6 +1590,7 @@ async function initializePage() {
   } finally {
     restoringPageRoute = false;
     replacePageRoute(currentPageRoute());
+    scheduleFirstUseOnboarding();
   }
 }
 
@@ -1218,6 +1627,7 @@ function renderSettingsHub() {
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#top-search-button").disabled = !hasWork;
   $("#export-button").disabled = !hasWork;
@@ -1230,10 +1640,11 @@ function renderSettingsHub() {
 function renderUsers(users) {
   const currentUserId = state.user?.userId;
   $("#users-list").innerHTML = users.map((user) => `<article class="access-row" data-user-row="${esc(user.userId)}">
-    <div><strong>${esc(user.displayName)} · @${esc(user.username)}</strong><small>${user.userId === currentUserId ? "当前账户 · " : ""}${user.status === "active" ? "账户可用" : "账户已停用"}</small></div>
+    <div class="access-person">${userAvatarHtml(user, "access-avatar")}<div class="access-person-copy"><strong>${esc(user.displayName)} · @${esc(user.username)}</strong><small>${user.userId === currentUserId ? "当前账户 · " : ""}${user.status === "active" ? "账户可用" : "账户已停用"}</small></div></div>
     <select data-user-role="${esc(user.userId)}" aria-label="${esc(user.displayName)}的角色" ${user.userId === currentUserId ? "disabled" : ""}><option value="user" ${user.role === "user" ? "selected" : ""}>普通用户</option><option value="admin" ${user.role === "admin" ? "selected" : ""}>系统管理员</option></select>
     <button type="button" data-user-status="${esc(user.userId)}" ${user.userId === currentUserId ? "disabled" : ""}>${user.status === "active" ? "停用" : "启用"}</button>
   </article>`).join("");
+  bindUserAvatarFallbacks($("#users-list"));
   $("#users-list").querySelectorAll("[data-user-role]").forEach((select) => select.addEventListener("change", async () => {
     try {
       const updated = await api(`/api/users/${encodeURIComponent(select.dataset.userRole)}`, { method: "PATCH", body: { role: select.value } });
@@ -1267,14 +1678,29 @@ async function openUsersDialog() {
   catch (error) { $("#users-dialog").close(); toast(error.message, "error"); }
 }
 
+async function openPlatformUiSettingsDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  try {
+    const settings = await api("/api/platform/ui-settings");
+    $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
+    $("#platform-ui-settings-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div>
+    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
     <span>${member.role === "owner" ? "所有者" : "可编辑"}</span>
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
+  bindUserAvatarFallbacks($("#members-list"));
   $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
     if (!work) return;
     try {
@@ -1645,7 +2071,7 @@ const moduleMeta = {
   outlines: ["创作规划", "大纲与伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
-  tasks: ["增量分析", "分析任务", "正文变化后只重算受影响的章节与知识对象。", "新建任务"],
+  tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
 };
 
@@ -1766,8 +2192,13 @@ async function renderSettings() {
   $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
     <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
     <h3>${esc(item.title)}</h3><p>${esc(item.content)}</p>
-    <div class="card-actions"><button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div></article>`).join("")}</div>`
+    <div class="card-actions">${item.status === "pending" ? `<button data-setting-status="confirmed" data-setting-id="${esc(item.id)}">确认候选</button><button data-setting-status="deprecated" data-setting-id="${esc(item.id)}">弃用</button>` : ""}<button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div></article>`).join("")}</div>`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
+  $("#module-content").querySelectorAll("[data-setting-status]").forEach((button) => button.addEventListener("click", async () => {
+    await api(`/api/settings/${button.dataset.settingId}`, { method: "PATCH", body: { status: button.dataset.settingStatus, changeNote: button.dataset.settingStatus === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
+    await renderSettings();
+    await loadAiReferences();
+  }));
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingDialog(records.find((item) => item.id === button.dataset.editSetting))));
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
@@ -1950,19 +2381,20 @@ async function renderTasks() {
   $("#module-content").innerHTML = `
     <section class="task-auto-run-panel" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
-        <strong id="task-auto-run-title">自动运行</strong>
-        <small>开启后按并发上限消化 pending 任务；每一轮最多自动认领「单次上限」个，跑完需再点「再跑一批」。</small>
+        <strong id="task-auto-run-title">自动执行待分析任务</strong>
+        <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+        <small>每轮最多启动「每轮任务上限」个，同时运行数量不超过「同时运行上限」；剩余任务需点击“开始下一轮”。</small>
       </div>
       <div class="task-auto-run-controls">
-        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>启用自动运行</span></label>
-        <label>并发上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
-        <label>单次上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
+        <label class="checkbox-field"><input id="task-auto-run-enabled" type="checkbox" ${settings.autoRunEnabled ? "checked" : ""}><span>自动执行待分析任务</span></label>
+        <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}"></label>
+        <label>每轮任务上限<input id="task-auto-run-batch-limit" type="number" min="1" max="200" value="${esc(String(settings.autoRunBatchLimit ?? 20))}"></label>
         <button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button>
-        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>再跑一批</button>
+        <button id="task-auto-run-continue" class="ghost-button" type="button" ${settings.autoRunEnabled ? "" : "disabled"}>开始下一轮</button>
       </div>
-      <p class="task-auto-run-meta">当前待执行 ${pendingCount} 个 · 运行中 ${runningCount} 个</p>
+      <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个</p>
     </section>
-    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>任务</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
+    ${tasks.length ? `<table class="table-list task-table"><thead><tr><th>分析类型</th><th>范围</th><th>状态</th><th>进度</th><th>操作</th></tr></thead><tbody>${tasks.map((item) => `
     <tr>
       <td>${esc(analysisTaskTypeLabel(item.taskType))}<br><small>${esc(item.taskType)}</small></td>
       <td>${esc(item.scopeSummary || item.scope?.type || "book")}</td>
@@ -1973,7 +2405,7 @@ async function renderTasks() {
         ${item.status === "pending" ? `<button class="ghost-button" type="button" data-run-task="${esc(item.id)}">运行</button>` : ""}
         ${item.status === "pending" || item.status === "running" ? `<button class="ghost-button" type="button" data-cancel-task="${esc(item.id)}">取消</button>` : ""}
       </td>
-    </tr>`).join("")}</tbody></table>` : emptyModule("还没有分析任务", "保存正文时会自动创建受影响章节的待分析任务，也可手动创建全书任务。")}`;
+    </tr>`).join("")}</tbody></table>` : emptyModule("还没有 AI 分析记录", "点击“开始 AI 分析”，可分析指定章节或整部作品。")}`;
 
   $("#task-auto-run-save")?.addEventListener("click", async () => {
     const button = $("#task-auto-run-save");
@@ -1988,8 +2420,8 @@ async function renderTasks() {
         }
       });
       toast(updated.autoRunEnabled
-        ? `自动运行已开启：并发 ${updated.autoRunConcurrency}，本轮最多 ${updated.autoRunBatchLimit} 个`
-        : "自动运行已关闭");
+        ? `自动执行已开启：同时最多 ${updated.autoRunConcurrency} 个，每轮最多 ${updated.autoRunBatchLimit} 个`
+        : "自动执行已关闭");
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -2001,7 +2433,7 @@ async function renderTasks() {
     button.disabled = true;
     try {
       const result = await api(`/api/works/${state.work.id}/tasks/auto-run`, { method: "POST", body: {} });
-      toast(`已开始新一轮自动运行，待执行 ${result.pendingCount} 个`);
+      toast(`已开始下一轮，队列中还有 ${result.pendingCount} 个待执行任务`);
       await renderTasks();
     } catch (error) {
       toast(error.message, "error");
@@ -2078,7 +2510,7 @@ function openTaskDetailDialog(task) {
       <p><small>创建于 ${esc(formatDateTime(task.createdAt))} · 更新于 ${esc(formatDateTime(task.updatedAt))}</small></p>
     </div>`,
     async () => undefined,
-    "分析任务",
+    "AI 分析详情",
     { submitLabel: "关闭", wide: true });
 }
 
@@ -2086,7 +2518,7 @@ function renderProviderCards(providers, models) {
   return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
     <article class="record-card provider-card"><small>平台级 · ${esc(provider.status)} · ${esc(provider.connectionStatus)}</small><h3>${esc(provider.name)}</h3>
     <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · RPM：${provider.rpmLimit} · max_tokens：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token · max_tokens ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
+    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · Thinking ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} Token · max_tokens ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI Chat Completions 兼容地址和密钥，测试成功后再添加模型。");
 }
@@ -2156,7 +2588,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "query_story_knowledge"]);
-  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时，概要最多使用所选模型上下文窗口的此比例；超过时会保留较新的章节概要。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文压缩</h2><p>达到阈值时先提醒；如果继续发送而未处理，系统会自动压缩较早对话。阈值最高为 90%。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文压缩提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存压缩阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话长期记忆</h2><p>对话历史使用独立预算；达到阈值时先提醒，继续发送会把较早消息整理成带来源的结构化长期记忆，并尽量保留最近八条原文。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">整理提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话长期记忆整理提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存整理阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -2188,7 +2620,7 @@ async function renderBookAiSettings() {
     button.disabled = true;
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { contextCompactThreshold: Number($("#context-compact-threshold").value) } });
-      toast("对话上下文压缩阈值已保存");
+      toast("对话长期记忆整理阈值已保存");
       scheduleAiContextUsage();
     } catch (error) {
       toast(error.message, "error");
@@ -2277,10 +2709,10 @@ function setAiContextMeter(usage) {
 }
 
 function showAiContextWarning(usage = null) {
-  const percent = Math.max(0, Math.min(100, Number(usage?.usagePercent) || 0));
+  const percent = Math.max(0, Math.round(Number(usage?.conversationUsagePercent) || 0));
   const threshold = Math.max(50, Math.min(90, Number(usage?.compactThreshold) || 85));
-  $("#ai-context-warning-title").textContent = percent ? `对话上下文已使用 ${percent}%` : "对话上下文接近上限";
-  $("#ai-context-warning-message").textContent = `已达到 ${threshold}% 的压缩提醒阈值。现在可压缩上下文或新开对话；若继续发送，系统会先自动压缩。`;
+  $("#ai-context-warning-title").textContent = percent ? `对话历史已使用 ${percent}% 的独立预算` : "对话历史接近整理阈值";
+  $("#ai-context-warning-message").textContent = `已达到 ${threshold}% 的长期记忆整理阈值。现在可整理较早对话或新开对话；若继续发送，系统会先生成带来源的结构化长期记忆。作品正文超限不会触发此操作。`;
   $("#ai-context-warning").classList.remove("hidden");
 }
 
@@ -2300,7 +2732,7 @@ async function prepareAiConversationContext({ instruction, scope, modelId, citat
     return false;
   }
   hideAiContextWarning();
-  if (prepared.action === "compacted") toast("已自动压缩较早对话并继续发送");
+  if (prepared.action === "compacted") toast("已自动整理较早对话为长期记忆并继续发送");
   return true;
 }
 
@@ -2930,7 +3362,7 @@ function openReviewDialog() {
 
 function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
-  openDialog("新建分析任务", field("taskType", "任务类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴抽取"], ["relationship-analysis", "全书人物关系分析"], ["consistency-check", "一致性校对"], ["book-analysis", "全书分析"]]) + field("scopeType", "范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  openDialog("开始 AI 分析", field("taskType", "分析类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴与事件抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书综合分析"]]) + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
     const scope = form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
@@ -2949,8 +3381,8 @@ function openProviderDialog(item) {
 
 function openModelDialog(providerId, item = null) {
   const values = modelFormValues(item);
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow) + field("temperature", "默认温度", "number", values.temperature) + field("maxTokens", "默认 max_tokens", "number", values.maxTokens) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow) + field("temperature", "默认温度", "number", values.temperature) + field("maxTokens", "默认 max_tokens", "number", values.maxTokens) + field("thinkingEnabled", "开启 Thinking（供应商需支持 thinking 参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled), async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -2991,6 +3423,7 @@ async function sendAi() {
   state.aiPromptSent = true;
   renderAiQuickActions();
   appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+  clearAiPromptComposer();
   $("#ai-send").disabled = true;
   $("#ai-send").textContent = "发送中";
   try {
@@ -3018,12 +3451,6 @@ async function sendAi() {
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
-    setAiPromptText("");
-    state.aiCitations = [];
-    state.aiReferences = [];
-    renderAiCitations();
-    renderAiReferences();
-    scheduleAiContextUsage();
   } catch (error) {
     const failureMessage = `调用失败：${error.message}`;
     let persistedFailureMessage = null;
@@ -3042,11 +3469,16 @@ async function streamChat(body) {
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite"></div><div class="message-meta">正在连接模型流……</div>';
   attachMessageHeading(message, "助手 · 正在生成");
   $("#ai-feed").append(message);
+  scrollAiFeedToBottom();
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
   let streamedText = "";
   let generatedMetadata = {};
   let toolCalls = [];
+  let processSteps = [];
+  let finalAnswerStarted = false;
+  const processStartedAt = Date.now();
+  const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -3071,22 +3503,43 @@ async function streamChat(body) {
       if (!dataLines.length) return;
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "delta") {
+        const firstFinalDelta = streamedText.length === 0;
         streamedText += payload.delta ?? "";
+        if (streamedText.length > 0) finalAnswerStarted = true;
         content.innerHTML = renderMarkdown(streamedText);
+        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
         meta.textContent = `已接收 ${Array.from(streamedText).length} 字`;
-        $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+        scrollAiFeedToBottom();
+      } else if (eventName === "process_step") {
+        const step = { ...payload };
+        const append = step.append === true;
+        delete step.append;
+        const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
+        if (existing && typeof step.content === "string") existing.content += step.content;
+        else processSteps.push(step);
+        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        meta.textContent = step.type === "thinking" ? `正在思考 · 第 ${Number(step.round) || 1} 轮` : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
+        scrollAiFeedToBottom();
       } else if (eventName === "tool_call") {
-        toolCalls.push(payload);
-        renderAiToolCalls(message, toolCalls);
+        const toolCall = { ...payload };
+        const round = toolCall.round;
+        delete toolCall.round;
+        toolCalls.push(toolCall);
+        processSteps.push(aiToolProcessStep(toolCall, round));
+        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
+        scrollAiFeedToBottom();
       } else if (eventName === "complete") {
         message.classList.remove("is-streaming");
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
-        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls };
-        renderAiToolCalls(message, toolCalls);
+        processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
+        const processDurationMs = elapsedProcessTime();
+        generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, toolCalls, processSteps, processDurationMs };
+        renderAiProcessSteps(message, processSteps, true, processDurationMs);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens);
         attachAssistantCopyAction(message, streamedText);
+        scrollAiFeedToBottom();
       } else if (eventName === "error") {
         streamError = new Error(payload.message ?? "AI 流式调用失败");
       }
@@ -3105,7 +3558,9 @@ async function streamChat(body) {
   } catch (error) {
     message.classList.remove("is-streaming");
     message.querySelector(".message-heading > span").textContent = "助手 · 生成中断";
+    renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
     meta.textContent = "生成中断";
+    scrollAiFeedToBottom();
     throw error;
   }
 }
@@ -3125,7 +3580,12 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     }
     message.append(references);
   }
-  if (role === "assistant") renderAiToolCalls(message, metadata?.toolCalls);
+  if (role === "assistant") {
+    const processSteps = Array.isArray(metadata?.processSteps) && metadata.processSteps.length
+      ? metadata.processSteps
+      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
+    renderAiProcessSteps(message, processSteps, true, resolveAiProcessDuration(metadata, processSteps, createdAt));
+  }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
     const modelDisplayName = metadata?.modelDisplayName || selectedModel?.displayName || "模型";
@@ -3138,7 +3598,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   }
   attachMessageIdentity(message, messageId);
   $("#ai-feed").append(message);
-  $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+  scrollAiFeedToBottom();
 }
 
 function appendSuggestion(suggestion, createdAt = null, messageId = null) {
@@ -3172,7 +3632,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
     });
   }
   $("#ai-feed").append(message);
-  $("#ai-feed").scrollTop = $("#ai-feed").scrollHeight;
+  scrollAiFeedToBottom();
   return message;
 }
 
@@ -3202,7 +3662,7 @@ async function showChapterInsight() {
   const insight = insights.find((item) => item.chapterVersion === state.chapter.versionNo) ?? insights[0];
   panel.classList.remove("hidden");
   if (!insight) {
-    panel.innerHTML = "<strong>尚无章节概览</strong>请在“分析任务”中运行章节理解，完成后可在此查看结果。";
+    panel.innerHTML = "<strong>尚无章节概览</strong>请在“AI 分析”中运行章节理解，完成后可在此查看结果。";
     return;
   }
   const eventNames = insight.events.map((event) => typeof event === "string" ? event : (event.name ?? event.description ?? "未命名事件"));
@@ -3219,10 +3679,41 @@ $("#account-button").addEventListener("click", () => {
   const expanded = $("#account-menu").classList.toggle("hidden") === false;
   $("#account-button").setAttribute("aria-expanded", String(expanded));
 });
+$("#onboarding-menu-button").addEventListener("click", () => {
+  $("#account-menu").classList.add("hidden");
+  $("#account-button").setAttribute("aria-expanded", "false");
+  openOnboarding(true);
+});
+$("#onboarding-skip").addEventListener("click", completeOnboarding);
+$("#onboarding-previous").addEventListener("click", () => renderOnboardingStep(onboardingStep - 1, true));
+$("#onboarding-next").addEventListener("click", () => {
+  const lastStep = onboardingSteps.length - 1;
+  if (onboardingStep >= lastStep) completeOnboarding();
+  else renderOnboardingStep(onboardingStep + 1, true);
+});
+$("#onboarding-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  completeOnboarding();
+});
+$("#onboarding-dialog").addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    completeOnboarding();
+    return;
+  }
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const direction = event.key === "ArrowRight" ? 1 : -1;
+  const lastStep = onboardingSteps.length - 1;
+  renderOnboardingStep(Math.max(0, Math.min(lastStep, onboardingStep + direction)), true);
+});
+window.addEventListener("resize", refreshOnboardingForViewport);
+document.addEventListener("scroll", scheduleOnboardingPosition, true);
 $("#account-settings-button").addEventListener("click", () => {
   $("#account-menu").classList.add("hidden");
   $("#account-button").setAttribute("aria-expanded", "false");
   $("#profile-display-name").value = state.user?.displayName ?? "";
+  renderProfileAvatar();
   $("#password-form").reset();
   $("#api-key-result").classList.add("hidden");
   $("#api-key-value").value = "";
@@ -3237,6 +3728,48 @@ $("#account-settings-button").addEventListener("click", () => {
   });
 });
 $("#account-dialog-close").addEventListener("click", () => $("#account-dialog").close());
+$("#avatar-upload-button").addEventListener("click", () => $("#avatar-file").click());
+$("#avatar-file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > maximumAvatarFileSize) {
+    toast("头像文件不能超过 5 MB", "error");
+    event.target.value = "";
+    return;
+  }
+  const body = new FormData();
+  body.append("file", file);
+  $("#avatar-upload-button").disabled = true;
+  $("#avatar-remove-button").disabled = true;
+  try {
+    const updated = await api("/api/auth/avatar", { method: "PUT", body });
+    applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
+    renderProfileAvatar();
+    toast("头像已更新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    $("#avatar-upload-button").disabled = false;
+    $("#avatar-remove-button").disabled = false;
+    event.target.value = "";
+  }
+});
+$("#avatar-remove-button").addEventListener("click", async () => {
+  if (!state.user?.avatarUrl || !window.confirm("确定移除当前头像吗？")) return;
+  $("#avatar-upload-button").disabled = true;
+  $("#avatar-remove-button").disabled = true;
+  try {
+    const updated = await api("/api/auth/avatar", { method: "DELETE" });
+    applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
+    renderProfileAvatar();
+    toast("头像已移除");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    $("#avatar-upload-button").disabled = false;
+    $("#avatar-remove-button").disabled = false;
+  }
+});
 $("#profile-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
@@ -3372,8 +3905,29 @@ $("#register-form").addEventListener("submit", async (event) => {
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#user-management-button").addEventListener("click", openUsersDialog);
+$("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#users-dialog-close").addEventListener("click", () => $("#users-dialog").close());
+$("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-ui-settings-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#platform-ui-settings-save");
+  button.disabled = true;
+  try {
+    const settings = await api("/api/platform/ui-settings", {
+      method: "PATCH",
+      body: { toastPosition: $("#toast-position").value }
+    });
+    applyPlatformUiSettings(settings);
+    $("#platform-ui-settings-dialog").close();
+    toast("界面通知设置已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
 $("#members-dialog").addEventListener("close", () => { memberDialogWork = null; });
 $("#member-invite-form").addEventListener("submit", async (event) => {
@@ -3445,6 +3999,10 @@ $("#chapter-content").addEventListener("input", (event) => {
 });
 $("#chapter-content").addEventListener("select", scheduleAiContextUsage);
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
+$("#toggle-whitespace-button").addEventListener("click", () => {
+  chapterWhitespaceVisible = !chapterWhitespaceVisible;
+  scheduleChapterLineNumbers();
+});
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;
@@ -3632,7 +4190,7 @@ $("#ai-context-compact").addEventListener("click", async () => {
       body: { modelId, scope: requestScope.scope }
     });
     hideAiContextWarning();
-    toast(result.changed ? `已压缩 ${result.compactedMessageCount} 条较早消息` : "当前没有需要压缩的较早消息");
+    toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
     await refreshAiContextUsage();
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");

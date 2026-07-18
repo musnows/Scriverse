@@ -146,7 +146,7 @@ describe("AI 上下文组装", () => {
     expect(context).not.toContain("不应作为全书概要引用的正文");
   });
 
-  it("按配额裁剪全书概要并保留较新的内容", async () => {
+  it("按配额降级单章概要时同时保留开头和结尾", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);
     const { work, chapter } = await seedChapter(runtime);
@@ -165,8 +165,56 @@ describe("AI 上下文组装", () => {
       includeBookSummary: true
     }, 60_000, 80);
 
-    expect(context).toContain("已裁剪较早概要");
+    expect(context).toContain("本卷其余章节概要已按预算折叠");
+    expect(context).toContain("早期概要");
     expect(context).toContain("保留最新概要");
     expect(estimateAiTokens(context)).toBeLessThan(160);
+  });
+
+  it("全书超限时保留跨卷概要并优先召回与问题相关的早期正文", () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "分层上下文", author: "测试作者" });
+    const earlyVolume = runtime.store.createVolume(String(work.id), { title: "第一卷 旧港" });
+    const earlyChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(earlyVolume.id),
+      title: "第一章 密钥",
+      content: `月蚀密钥藏在旧港钟楼。${"早期航行记录。".repeat(80)}`
+    });
+    const lateVolume = runtime.store.createVolume(String(work.id), { title: "第二卷 北境" });
+    const lateChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(lateVolume.id),
+      title: "第九章 追击",
+      content: `舰队在北境追击敌人。${"后期战斗记录。".repeat(80)}`
+    });
+    for (const [id, chapter, summary] of [
+      ["insight-early", earlyChapter, "林舟在旧港发现月蚀密钥。"],
+      ["insight-late", lateChapter, "舰队抵达北境并开始追击。"]
+    ] as const) {
+      runtime.store.db.run(
+        `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+         settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', 'review', ?)`,
+        id,
+        String(chapter.id),
+        Number(chapter.versionNo),
+        summary,
+        "2026-07-18T00:00:00.000Z"
+      );
+    }
+
+    const plan = new ContextBuilder(runtime.store).buildPlan(
+      String(work.id),
+      { type: "book" },
+      260,
+      100,
+      "月蚀密钥藏在哪里？"
+    );
+
+    expect(plan.context).toContain("# 第一卷 旧港");
+    expect(plan.context).toContain("# 第二卷 北境");
+    expect(plan.context).toContain("月蚀密钥藏在旧港钟楼");
+    expect(plan.context).toContain("上下文规划");
+    expect(plan.omittedBlockIds.length).toBeGreaterThan(0);
+    expect(plan.tokenCount).toBeLessThanOrEqual(260);
   });
 });

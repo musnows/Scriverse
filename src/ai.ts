@@ -4,7 +4,7 @@ import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
-import { Store } from "./store.js";
+import { Store, type AiConversationContext } from "./store.js";
 import { clamp, id, json, maskSecret, normalizeBaseUrl, now } from "./utils.js";
 import { z } from "zod";
 
@@ -27,6 +27,7 @@ type ModelInput = {
   contextWindow?: number;
   outputNote?: string;
   preset?: Record<string, unknown>;
+  thinkingEnabled?: boolean;
   enabled?: boolean;
   note?: string;
 };
@@ -62,7 +63,8 @@ type GenerateInput = {
   extraSystemPrompt?: string;
   signal?: AbortSignal;
   maxAttempts?: number;
-  onToolCall?: (call: AgentToolCallResult) => void;
+  onToolCall?: (call: AgentToolCallResult, round: number) => void;
+  onProcessStep?: (step: AiProcessStep & { append?: boolean }) => void;
   conversationId?: string;
   excludeConversationMessageId?: string;
   disableTools?: boolean;
@@ -76,6 +78,7 @@ type GenerateResult = {
   model: Record<string, unknown>;
   context: string;
   toolCalls: AgentToolCallResult[];
+  processSteps: AiProcessStep[];
 };
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
@@ -84,14 +87,29 @@ const DEFAULT_CONTEXT_WINDOW = 128_000;
 const AGENT_TOOL_IDS = ["story_index", "read_chapters", "query_story_knowledge"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
-type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
+type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
 
 export type AgentToolCallResult = {
   id: string;
   name: string;
+  calledAt: string;
   arguments: Record<string, unknown> | null;
   status: "completed" | "failed";
   result: Record<string, unknown>;
+};
+
+export type AiProcessStep = {
+  id: string;
+  type: "thinking" | "intermediate";
+  round: number;
+  content: string;
+  createdAt: string;
+} | {
+  id: string;
+  type: "tool";
+  round: number;
+  toolCall: AgentToolCallResult;
+  createdAt: string;
 };
 
 const MAX_AGENT_TOOL_ROUNDS = 6;
@@ -114,7 +132,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "story_index",
-      description: "按分页列出作品卷章目录和当前章节概要。先用它定位章节 ID；不会返回正文。",
+      description: "读取当前作品的基本信息，并按分页列出卷章目录和章节概要。回答作品简介、整体结构或定位章节时优先使用；不会返回正文。",
       parameters: { type: "object", properties: { offset: { type: "integer", minimum: 0 }, limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false }
     }
   },
@@ -146,19 +164,103 @@ export function estimateAiTokens(value: string): number {
   return Math.max(1, Math.ceil(wideCharacters * 1.1 + narrowCharacters / 4));
 }
 
-function truncateBookSummary(value: string, maximumTokens: number): string {
+function contextSearchTerms(value: string): string[] {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+  const terms = new Set<string>();
+  for (const word of normalized.match(/[a-z0-9][a-z0-9_-]{1,}/gu) ?? []) terms.add(word);
+  for (const segment of normalized.match(/[\p{Script=Han}]{2,}/gu) ?? []) {
+    const maximumSize = Math.min(4, segment.length);
+    for (let size = 2; size <= maximumSize; size += 1) {
+      for (let index = 0; index <= segment.length - size; index += 1) terms.add(segment.slice(index, index + size));
+    }
+  }
+  return [...terms].slice(0, 160);
+}
+
+function contextRelevance(query: string, value: string): number {
+  const normalized = value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+  return contextSearchTerms(query).reduce((score, term) => score + (normalized.includes(term) ? Math.min(6, term.length) : 0), 0);
+}
+
+function sliceToTokenBudget(value: string, maximumTokens: number, fromEnd = false): string {
   if (estimateAiTokens(value) <= maximumTokens) return value;
-  const notice = "[全书章节概要超过配额，已裁剪较早概要]";
-  const prefix = estimateAiTokens(notice) < maximumTokens ? `${notice}\n` : "";
-  const remainingTokens = Math.max(1, maximumTokens - estimateAiTokens(prefix));
   let start = 0;
   let end = value.length;
   while (start < end) {
-    const middle = Math.floor((start + end) / 2);
-    if (estimateAiTokens(value.slice(middle)) > remainingTokens) start = middle + 1;
-    else end = middle;
+    const middle = Math.floor((start + end + 1) / 2);
+    const candidate = fromEnd ? value.slice(value.length - middle) : value.slice(0, middle);
+    if (estimateAiTokens(candidate) <= maximumTokens) start = middle;
+    else end = middle - 1;
   }
-  return `${prefix}${value.slice(start)}`;
+  return fromEnd ? value.slice(value.length - start) : value.slice(0, start);
+}
+
+function truncateContextText(value: string, maximumTokens: number, notice = "[内容已按上下文预算压缩]"): string {
+  if (maximumTokens <= 0) return "";
+  if (estimateAiTokens(value) <= maximumTokens) return value;
+  const noticeTokens = estimateAiTokens(notice) + 2;
+  if (noticeTokens >= maximumTokens) return sliceToTokenBudget(value, maximumTokens);
+  const contentBudget = maximumTokens - noticeTokens;
+  const headBudget = Math.max(1, Math.ceil(contentBudget * 0.55));
+  const tailBudget = Math.max(1, contentBudget - headBudget);
+  return `${sliceToTokenBudget(value, headBudget)}\n${notice}\n${sliceToTokenBudget(value, tailBudget, true)}`;
+}
+
+type ContextSection = {
+  id: string;
+  text: string;
+  kind: "required" | "summary" | "detail";
+  order: number;
+  relevance: number;
+};
+
+export type ContextBuildPlan = {
+  context: string;
+  tokenCount: number;
+  includedBlockIds: string[];
+  omittedBlockIds: string[];
+  degradedBlockIds: string[];
+};
+
+const CONVERSATION_MEMORY_FIELDS = ["authorGoals", "confirmedDecisions", "storyFacts", "constraints", "unresolvedQuestions", "importantReferences"] as const;
+type ConversationMemoryField = (typeof CONVERSATION_MEMORY_FIELDS)[number];
+type ConversationMemoryItem = { text: string; sourceMessageIds: string[] };
+type ConversationMemory = Record<ConversationMemoryField, ConversationMemoryItem[]>;
+
+function normalizeConversationMemory(value: unknown): ConversationMemory {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  return Object.fromEntries(CONVERSATION_MEMORY_FIELDS.map((field) => {
+    const items = (Array.isArray(source[field]) ? source[field] : []).flatMap((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      const record = item as Record<string, unknown>;
+      const text = typeof record.text === "string" ? record.text.trim().slice(0, 2_000) : "";
+      if (!text) return [];
+      const sourceMessageIds = [...new Set((Array.isArray(record.sourceMessageIds) ? record.sourceMessageIds : [])
+        .filter((messageId): messageId is string => typeof messageId === "string" && messageId.length <= 300))].slice(0, 20);
+      return [{ text, sourceMessageIds }];
+    }).slice(0, 100);
+    return [field, items];
+  })) as ConversationMemory;
+}
+
+function renderConversationMemory(value: string): string {
+  try {
+    const memory = normalizeConversationMemory(JSON.parse(value) as unknown);
+    const labels: Record<ConversationMemoryField, string> = {
+      authorGoals: "作者目标",
+      confirmedDecisions: "已确认决定",
+      storyFacts: "对话中确认的事实",
+      constraints: "限制与约束",
+      unresolvedQuestions: "未解决问题",
+      importantReferences: "重要引用"
+    };
+    const sections = CONVERSATION_MEMORY_FIELDS.flatMap((field) => memory[field].length
+      ? [`${labels[field]}：\n${memory[field].map((item) => `- ${item.text}${item.sourceMessageIds.length ? ` [来源：${item.sourceMessageIds.join("、")}]` : ""}`).join("\n")}`]
+      : []);
+    return sections.join("\n\n") || value;
+  } catch {
+    return value;
+  }
 }
 
 export function resolveOutputTokens(usage: unknown, content: string): number {
@@ -193,14 +295,60 @@ function safeJsonObject(value: string): Record<string, unknown> {
   return json<Record<string, unknown>>(value, {});
 }
 
-function extractJson<T>(content: string): T {
+export function extractJson<T>(content: string, accepts?: (value: unknown) => boolean): T {
   const trimmed = content.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/u)?.[1];
-  try {
-    return JSON.parse(fenced ?? trimmed) as T;
-  } catch {
-    throw new AppError(502, "AI_INVALID_JSON", "AI 返回的分析结果不是有效 JSON", { output: trimmed.slice(0, 500) });
+  const candidates = [trimmed];
+  const taggedCandidates = [...trimmed.matchAll(/<json>\s*([\s\S]*?)\s*<\/json>/giu)]
+    .map((match) => match[1]?.trim())
+    .filter((candidate): candidate is string => Boolean(candidate));
+  candidates.push(...taggedCandidates.reverse());
+  for (const match of trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/giu)) {
+    if (match[1]) candidates.push(match[1].trim());
   }
+  const maximumScanSteps = Math.max(100_000, trimmed.length * 20);
+  let scanSteps = 0;
+  balancedCandidates: for (let start = 0; start < trimmed.length; start += 1) {
+    const first = trimmed[start];
+    if (first !== "{" && first !== "[") continue;
+    const stack = [first];
+    let inString = false;
+    let escaped = false;
+    for (let index = start + 1; index < trimmed.length; index += 1) {
+      scanSteps += 1;
+      if (scanSteps > maximumScanSteps) break balancedCandidates;
+      const character = trimmed[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === "{" || character === "[") stack.push(character);
+      else if (character === "}" || character === "]") {
+        const expected = character === "}" ? "{" : "[";
+        if (stack.at(-1) !== expected) break;
+        stack.pop();
+        if (stack.length === 0) {
+          candidates.push(trimmed.slice(start, index + 1));
+          start = index;
+          break;
+        }
+      }
+    }
+  }
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!accepts || accepts(parsed)) return parsed as T;
+    } catch {
+      // 继续尝试模型响应中的下一个结构化片段
+    }
+  }
+  throw new AppError(502, "AI_INVALID_JSON", "AI 返回的分析结果不是有效 JSON", { output: trimmed.slice(0, 500) });
 }
 
 const guardIssueTypes = new Set(["character", "location", "time", "world", "outline", "foreshadow"]);
@@ -303,7 +451,11 @@ function selectRelationshipConstraints(store: Store, workId: string, characterId
 export class ContextBuilder {
   constructor(private readonly store: Store) {}
 
-  build(workId: string, scope: ContextScope, maximumChars = 60_000, bookSummaryMaximumTokens?: number): string {
+  build(workId: string, scope: ContextScope, maximumTokens = 60_000, bookSummaryMaximumTokens?: number, query = ""): string {
+    return this.buildPlan(workId, scope, maximumTokens, bookSummaryMaximumTokens, query).context;
+  }
+
+  buildPlan(workId: string, scope: ContextScope, maximumTokens = 60_000, bookSummaryMaximumTokens?: number, query = ""): ContextBuildPlan {
     const work = this.store.getWork(workId);
     const includeAutomaticContext = scope.type !== "none";
     const constraints: string[] = includeAutomaticContext
@@ -381,27 +533,30 @@ export class ContextBuilder {
       const volume = (tree.volumes as Record<string, unknown>[]).find((item) => item.id === scope.volumeId);
       if (!volume) throw notFound("卷");
       const chapters = volume.chapters as Record<string, unknown>[];
-      contentSections.push(
-        `当前卷：${String(volume.title)}\n${chapters
-          .map((chapter) => `\n[${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`)
-          .join("\n")}`
-      );
+      contentSections.push(`当前卷：${String(volume.title)}`);
+      for (const chapter of chapters) {
+        contentSections.push(`[${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`);
+      }
     } else if (scope.type === "book") {
       const tree = this.store.getWorkTree(workId);
       const volumes = tree.volumes as Record<string, unknown>[];
-      contentSections.push(
-        `全书正文：\n${volumes
-          .map((volume) => {
-            const chapters = volume.chapters as Record<string, unknown>[];
-            return `\n# ${String(volume.title)}\n${chapters
-              .map((chapter) => `\n## ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}\n${String(chapter.content)}`)
-              .join("\n")}`;
-          })
-          .join("\n")}`
-      );
+      contentSections.push("全书正文（按问题相关度选取原文，完整结构见章节概要）：");
+      for (const volume of volumes) {
+        for (const chapter of volume.chapters as Record<string, unknown>[]) {
+          contentSections.push(`[# ${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`);
+        }
+      }
     }
 
-    if (scope.includeBookSummary) this.appendBookSummary(contentSections, workId, bookSummaryMaximumTokens);
+    if (scope.includeBookSummary || scope.type === "book" || scope.type === "volume") {
+      this.appendBookSummary(
+        contentSections,
+        workId,
+        bookSummaryMaximumTokens ?? Math.max(160, Math.floor(maximumTokens * 0.35)),
+        query,
+        scope.type === "volume" ? scope.volumeId : undefined
+      );
+    }
 
     if (scope.characterIds?.length) {
       const characters = scope.characterIds.map((characterId) => this.store.getCharacter(characterId));
@@ -445,18 +600,77 @@ export class ContextBuilder {
     if (scope.type !== "none" && scope.chapterId) this.appendChapterKnowledge(constraints, workId, scope.chapterId);
 
     const hardContext = constraints.join("\n\n");
-    const bodyContext = contentSections.join("\n\n");
-    const full = [hardContext, bodyContext].filter(Boolean).join("\n\n");
-    if (full.length <= maximumChars) return full;
-    if (hardContext.length > maximumChars - 200) {
+    const hardTokens = hardContext ? estimateAiTokens(hardContext) : 0;
+    if (hardTokens > maximumTokens - 32) {
       throw new AppError(413, "CONSTRAINT_CONTEXT_TOO_LARGE", "锁定设定、相关人物和创作约束超过上下文上限，请精简后重试", {
-        maximumChars,
-        constraintChars: hardContext.length
+        maximumTokens,
+        constraintTokens: hardTokens
       });
     }
-    const notice = "[上下文过长，已裁剪较早正文；锁定约束、人物状态、大纲与伏笔保持完整]";
-    const remaining = Math.max(0, maximumChars - hardContext.length - notice.length - 4);
-    return `${hardContext}\n\n${notice}\n${bodyContext.slice(-remaining)}`;
+    const sections: ContextSection[] = contentSections.map((text, order) => {
+      const required = /^(?:当前选中文本|当前章节|所在章节|作者主动引用的章节)/u.test(text);
+      const summary = /章节概要（/u.test(text);
+      return {
+        id: `context-${order}`,
+        text,
+        kind: required ? "required" : summary ? "summary" : "detail",
+        order,
+        relevance: contextRelevance(query, text)
+      };
+    });
+    const selected: string[] = hardContext ? [hardContext] : [];
+    const planningNotice = "[上下文规划：低相关原文区块将不直接载入，优先保留跨卷概要和相关正文；需要精确证据时请调用章节读取工具。]";
+    const requiresPlanning = estimateAiTokens([hardContext, ...contentSections].filter(Boolean).join("\n\n")) > maximumTokens;
+    const includedBlockIds: string[] = [];
+    const omittedBlockIds: string[] = [];
+    const degradedBlockIds: string[] = [];
+    const currentTokens = (): number => estimateAiTokens(selected.filter(Boolean).join("\n\n"));
+    const remainingTokens = (): number => Math.max(0, maximumTokens - currentTokens());
+    const addSection = (section: ContextSection, budget = remainingTokens()): boolean => {
+      const available = Math.min(remainingTokens(), Math.max(0, budget));
+      if (available <= 2) {
+        omittedBlockIds.push(section.id);
+        return false;
+      }
+      const fullTokens = estimateAiTokens(section.text);
+      const text = fullTokens <= available
+        ? section.text
+        : truncateContextText(section.text, available, "[本区块已降级，保留开头与结尾；可调用工具读取完整章节]");
+      if (!text) {
+        omittedBlockIds.push(section.id);
+        return false;
+      }
+      selected.push(text);
+      includedBlockIds.push(section.id);
+      if (fullTokens > available) degradedBlockIds.push(section.id);
+      return true;
+    };
+
+    for (const section of sections.filter((item) => item.kind === "required")) addSection(section);
+    if (requiresPlanning && remainingTokens() >= 8) {
+      selected.push(truncateContextText(planningNotice, Math.min(estimateAiTokens(planningNotice), remainingTokens())));
+    }
+    const summaries = sections.filter((item) => item.kind === "summary");
+    for (let index = 0; index < summaries.length; index += 1) {
+      const share = Math.floor(remainingTokens() / Math.max(1, summaries.length - index));
+      addSection(summaries[index]!, share);
+    }
+    const details = sections.filter((item) => item.kind === "detail")
+      .sort((left, right) => right.relevance - left.relevance || right.order - left.order);
+    for (const section of details) {
+      const fullTokens = estimateAiTokens(section.text);
+      if (fullTokens <= remainingTokens()) addSection(section);
+      else if (section.relevance > 0 && remainingTokens() >= 80) addSection(section);
+      else omittedBlockIds.push(section.id);
+    }
+    const context = selected.filter(Boolean).join("\n\n");
+    return {
+      context,
+      tokenCount: estimateAiTokens(context),
+      includedBlockIds,
+      omittedBlockIds,
+      degradedBlockIds
+    };
   }
 
   private appendChapter(sections: string[], workId: string, chapterId: string, includeContent: boolean): void {
@@ -469,23 +683,29 @@ export class ContextBuilder {
     );
   }
 
-  private appendBookSummary(sections: string[], workId: string, maximumTokens?: number): void {
+  private appendBookSummary(sections: string[], workId: string, maximumTokens: number, query: string, volumeId?: string): void {
+    const tree = this.store.getWorkTree(workId);
+    const volumes = (tree.volumes as Record<string, unknown>[]).filter((volume) => !volumeId || volume.id === volumeId);
     const insights = this.store.listCurrentChapterInsights(workId);
-    if (insights.length === 0) {
-      sections.push("全书章节概要：当前没有可用的章节概要。请先运行章节理解任务。");
-      return;
-    }
-    let currentVolume = "";
-    const lines = ["全书章节概要（基于各章节当前版本的 AI 概要，不含正文）："];
-    for (const insight of insights) {
-      if (insight.volumeTitle !== currentVolume) {
-        currentVolume = String(insight.volumeTitle);
-        lines.push(`\n# ${currentVolume}`);
+    const summaryByChapterId = new Map(insights.map((item) => [String(item.chapterId), String(item.summary)]));
+    if (!volumes.length) return;
+    const perVolumeBudget = Math.max(24, Math.floor(maximumTokens / volumes.length));
+    for (const volume of volumes) {
+      const chapters = volume.chapters as Record<string, unknown>[];
+      const ranked = chapters.map((chapter, order) => {
+        const summary = summaryByChapterId.get(String(chapter.id)) ?? "";
+        const line = `- ${String(chapter.title)}：${summary || "尚无章节概要"}`;
+        return { line, order, relevance: contextRelevance(query, `${String(chapter.title)}\n${summary}`) };
+      }).sort((left, right) => right.relevance - left.relevance || left.order - right.order);
+      const header = `全书章节概要（分卷覆盖，不含正文）：\n# ${String(volume.title)}`;
+      const chosen = [header];
+      for (const item of ranked) {
+        const candidate = [...chosen, item.line].join("\n");
+        if (estimateAiTokens(candidate) <= perVolumeBudget) chosen.push(item.line);
       }
-      lines.push(`- ${String(insight.chapterTitle)}：${String(insight.summary) || "暂无梗概"}`);
+      if (chosen.length === 1 && ranked[0]) chosen.push(ranked[0].line);
+      sections.push(truncateContextText(chosen.join("\n"), perVolumeBudget, "[本卷其余章节概要已按预算折叠]"));
     }
-    const summary = lines.join("\n");
-    sections.push(maximumTokens === undefined ? summary : truncateBookSummary(summary, maximumTokens));
   }
 
   private appendPreviousChapterTail(sections: string[], workId: string, chapterId: string): void {
@@ -787,7 +1007,7 @@ export class AiManager {
     const timestamp = now();
     this.store.db.run(
       `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
-       preset_json, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       preset_json, thinking_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       modelId,
       providerId,
       input.displayName,
@@ -797,6 +1017,7 @@ export class AiManager {
       input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       input.outputNote ?? "",
       JSON.stringify(normalizeModelPreset(input.preset ?? {})),
+      (input.thinkingEnabled ?? true) ? 1 : 0,
       (input.enabled ?? true) ? 1 : 0,
       input.note ?? "",
       timestamp,
@@ -832,7 +1053,7 @@ export class AiManager {
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")));
     this.store.db.run(
       `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
-       preset_json = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
+       preset_json = ?, thinking_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.displayName ?? stringValue(row, "display_name"),
       input.modelId ?? stringValue(row, "model_id"),
       JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
@@ -840,6 +1061,7 @@ export class AiManager {
       input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
       input.outputNote ?? stringValue(row, "output_note"),
       JSON.stringify(preset),
+      (input.thinkingEnabled ?? boolValue(row, "thinking_enabled")) ? 1 : 0,
       (input.enabled ?? boolValue(row, "enabled")) ? 1 : 0,
       input.note ?? stringValue(row, "note"),
       now(),
@@ -904,7 +1126,7 @@ export class AiManager {
       currentRequestActor()?.userId ?? null
     );
     if (input.taskType === "continue") await this.runSuggestionGuard(suggestionId);
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async createStreamingChat(
@@ -931,7 +1153,7 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
-    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls };
+    return { ...this.getSuggestion(suggestionId), outputTokens: generated.outputTokens, toolCalls: generated.toolCalls, processSteps: generated.processSteps };
   }
 
   async runSuggestionGuard(suggestionId: string, candidateContent?: string): Promise<Record<string, unknown>> {
@@ -953,19 +1175,19 @@ export class AiManager {
     const content = candidateContent ?? String(suggestion.content);
     const contextRefs = this.buildContinuationContextRefs(String(suggestion.workId), String(suggestion.chapterId), scope);
     try {
-      const generated = await this.generate({
+      const generated = await this.generateTaggedJson({
         workId: String(suggestion.workId),
         taskType: "consistency-check",
         modelId: stringValue(call, "model_id"),
         scope,
         instruction: [
-          "检查下面的续写候选是否与提供的上下文冲突。只输出 JSON 数组，没有冲突时输出 []。",
+          "检查下面的续写候选是否与提供的上下文冲突。输出 JSON 数组，没有冲突时输出 []。",
           "每项字段必须为：type（character/location/time/world/outline/foreshadow）、severity（low/medium/high）、title、description、candidateQuote、sourceRefs（数组）、suggestion。",
           "不得把文风偏好当成事实冲突，不得使用 Markdown 代码块。",
           "续写候选：",
           content
         ].join("\n\n"),
-        extraSystemPrompt: "你是续写一致性守卫。必须逐项对照人物状态、地点、时间、世界观硬约束、章节大纲和未回收伏笔，输出严格 JSON。"
+        extraSystemPrompt: "你是续写一致性守卫。必须逐项对照人物状态、地点、时间、世界观硬约束、章节大纲和未回收伏笔。"
       });
       const issues = parseGuardIssues(generated.content);
       return this.store.createContinuationGuard({
@@ -1117,6 +1339,10 @@ export class AiManager {
         result = await this.runTimelineAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "relationship-analysis") {
         result = await this.runRelationshipAnalysis(workId, scope, modelId, taskId);
+      } else if (taskType === "worldview-analysis") {
+        result = await this.runWorldviewAnalysis(workId, scope, modelId, taskId);
+      } else if (taskType === "setting-extraction") {
+        result = await this.runSettingExtraction(workId, scope, modelId, taskId);
       } else if (taskType === "consistency-check") {
         result = await this.runConsistencyCheck(workId, scope, modelId, taskId);
       } else {
@@ -1152,27 +1378,68 @@ export class AiManager {
     return task;
   }
 
+  private contextBudget(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "conversationId" | "excludeConversationMessageId">, model: ModelRow): Record<string, unknown> {
+    const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+    const preset = safeJsonObject(stringValue(model, "preset_json"));
+    const configuredOutputTokens = typeof preset.max_tokens === "number" ? preset.max_tokens : DEFAULT_MAX_TOKENS;
+    const outputReserveTokens = Math.max(512, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - 512));
+    const availableInputTokens = Math.max(256, contextWindow - outputReserveTokens - 512);
+    const conversation = input.conversationId
+      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+      : null;
+    const renderedMemory = conversation?.summary ? renderConversationMemory(conversation.summary) : "";
+    const conversationTokens = conversation
+      ? estimateAiTokens(renderedMemory) + conversation.messages.reduce((total, message) => total + estimateAiTokens(message.content), 0)
+      : 0;
+    const conversationBudgetTokens = Math.max(256, Math.floor(availableInputTokens * 0.32));
+    const instructionTokens = estimateAiTokens(input.instruction);
+    const workContextBudgetTokens = Math.max(256, availableInputTokens
+      - Math.min(conversationTokens, conversationBudgetTokens)
+      - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
+      - Math.min(1_024, Math.floor(availableInputTokens * 0.12)));
+    return {
+      contextWindow,
+      outputReserveTokens,
+      availableInputTokens,
+      conversation,
+      conversationTokens,
+      conversationBudgetTokens,
+      conversationUsagePercent: Math.round(conversationTokens / conversationBudgetTokens * 100),
+      workContextBudgetTokens
+    };
+  }
+
   getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId">): Record<string, unknown> {
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input.workId, input.scope, model);
+    const budget = this.contextBudget(input, model);
+    const contextPlan = this.buildContextPlan(input, model, budget);
+    const context = contextPlan.context;
     const messages = this.buildMessages(input, context);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
-    const conversation = input.conversationId
-      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
-      : null;
+    const conversation = budget.conversation as AiConversationContext | null;
+    const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
+    const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
     return {
       modelId: stringValue(model, "id"),
       contextWindow,
       inputTokens,
+      contextTokens: contextPlan.tokenCount,
+      conversationTokens: Number(budget.conversationTokens),
+      conversationBudgetTokens: Number(budget.conversationBudgetTokens),
+      conversationUsagePercent,
+      outputReserveTokens: Number(budget.outputReserveTokens),
       remainingTokens,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
       compactThreshold: threshold,
-      compactRecommended: inputTokens / contextWindow * 100 >= threshold,
+      compactRecommended: compactableMessageCount > 0 && conversationUsagePercent >= threshold,
       contextWarningPending: conversation?.warningPending ?? false,
-      compactedMessageCount: conversation?.compactedMessageCount ?? 0
+      compactedMessageCount: conversation?.compactedMessageCount ?? 0,
+      includedContextBlocks: contextPlan.includedBlockIds.length,
+      omittedContextBlocks: contextPlan.omittedBlockIds.length,
+      degradedContextBlocks: contextPlan.degradedBlockIds.length
     };
   }
 
@@ -1194,9 +1461,20 @@ export class AiManager {
 
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
-    const targetMessageCount = conversation.totalMessageCount <= 2
-      ? conversation.totalMessageCount
-      : Math.max(conversation.compactedMessageCount, conversation.totalMessageCount - 2);
+    const { model } = this.resolveModel(input.workId, "chat", input.modelId);
+    const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model);
+    const recentTokenBudget = Math.max(128, Math.floor(Number(budget.conversationBudgetTokens) * 0.75));
+    let retainedMessageCount = 0;
+    let retainedTokens = 0;
+    for (let index = conversation.messages.length - 1; index >= 0 && retainedMessageCount < 8; index -= 1) {
+      const message = conversation.messages[index];
+      if (!message) continue;
+      const messageTokens = estimateAiTokens(message.content);
+      if (retainedMessageCount >= 2 && retainedTokens + messageTokens > recentTokenBudget) break;
+      retainedMessageCount += 1;
+      retainedTokens += messageTokens;
+    }
+    const targetMessageCount = conversation.compactedMessageCount + Math.max(0, conversation.messages.length - retainedMessageCount);
     const numberToCompact = targetMessageCount - conversation.compactedMessageCount;
     if (numberToCompact <= 0) {
       this.store.setAiConversationContextWarning(input.conversationId, false);
@@ -1208,78 +1486,121 @@ export class AiManager {
       };
     }
     const transcript = conversation.messages.slice(0, numberToCompact)
-      .map((message) => `${message.role === "user" ? "作者" : "助手"}：${message.content}`)
+      .map((message) => `[${message.id}] ${message.role === "user" ? "作者" : "助手"}：${message.content}`)
       .join("\n\n");
-    const source = [conversation.summary ? `已有摘要：\n${conversation.summary}` : "", `待压缩对话：\n${transcript}`].filter(Boolean).join("\n\n");
-    const generated = await this.generate({
+    const source = [conversation.summary ? `已有结构化长期记忆：\n${conversation.summary}` : "", `待压缩对话：\n${transcript}`].filter(Boolean).join("\n\n");
+    const generated = await this.generateTaggedJson({
       workId: input.workId,
       taskType: "chat",
-      instruction: `将下面的历史对话压缩为可供后续创作对话继续使用的中文上下文摘要。保留作者目标、明确事实、决定、限制、未解决问题和重要引用；删除寒暄、重复表达和已经被后文取代的信息。只输出摘要正文。\n\n${source}`,
+      instruction: [
+        "将下面的历史对话整理为可供后续创作对话继续使用的结构化中文长期记忆。",
+        "输出 JSON 对象，字段必须为 authorGoals、confirmedDecisions、storyFacts、constraints、unresolvedQuestions、importantReferences。",
+        "每个字段都是数组，每项包含 text 和 sourceMessageIds；sourceMessageIds 只能引用输入中方括号内的消息 ID。",
+        "保留作者目标、明确事实、决定、限制、未解决问题和重要引用；删除寒暄、重复表达及已被后文取代的信息。",
+        "合并已有长期记忆时不得丢失仍然有效的项目，无法确定是否失效时继续保留。",
+        source
+      ].join("\n\n"),
       scope: { type: "entities" },
       modelId: input.modelId,
       parameters: { temperature: 0.2 },
-      extraSystemPrompt: "你正在执行对话上下文压缩。不得调用工具，不得回答原问题，只能生成忠实、紧凑且可继续使用的摘要。",
+      extraSystemPrompt: "你正在执行对话长期记忆整理。不得调用工具，不得回答原问题，只能生成忠实、紧凑且可追溯的结构化记忆。",
       disableTools: true
     });
-    this.store.saveAiConversationCompaction(input.conversationId, generated.content, targetMessageCount);
+    const memory = normalizeConversationMemory(extractJson<unknown>(generated.content));
+    const memoryItemCount = CONVERSATION_MEMORY_FIELDS.reduce((total, field) => total + memory[field].length, 0);
+    if (memoryItemCount === 0) throw new AppError(502, "AI_EMPTY_MEMORY", "AI 返回的对话长期记忆为空");
+    const serializedMemory = JSON.stringify(memory);
+    this.store.saveAiConversationCompaction(input.conversationId, serializedMemory, targetMessageCount);
     return {
       conversationId: input.conversationId,
       compactedMessageCount: targetMessageCount,
       retainedMessageCount: conversation.totalMessageCount - targetMessageCount,
-      summaryTokens: estimateAiTokens(generated.content),
+      summaryTokens: estimateAiTokens(renderConversationMemory(serializedMemory)),
+      memoryItemCount,
       changed: true
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
+  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
+    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType);
+    const toolGuidance = enabledToolIds.length > 0
+      ? [
+          `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
+          "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge。",
+          "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
+        ].join("\n")
+      : "";
     const systemPrompt = [
       "你是小说作者的创作协作助手。作者锁定的事实是不可违反的硬约束。",
       "只根据提供的正文和设定回答；不确定时明确说明，不得把推测当成事实。",
       "引用事实时注明章节或设定名称。不要声称已经修改正文。",
+      toolGuidance,
       platformPrompt ? `平台全局追加系统提示词：\n${platformPrompt}` : "",
       workPrompt ? `本书追加系统提示词：\n${workPrompt}` : "",
       input.extraSystemPrompt ?? ""
     ].filter(Boolean).join("\n\n");
+    const renderedContext = context.trim() || (enabledToolIds.length > 0
+      ? "[本轮未预加载作品上下文。若问题涉及当前作品，请先使用已启用的作品查询工具主动获取信息。]"
+      : "[本轮未提供作品上下文。]");
     const conversation = input.conversationId
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
       : null;
     if (!conversation) {
       return [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `上下文如下：\n\n${context}\n\n作者指令：\n${input.instruction}` }
+        { role: "user", content: `上下文如下：\n\n${renderedContext}\n\n作者指令：\n${input.instruction}` }
       ];
     }
     const conversationMessages: AiMessage[] = conversation?.messages.map((message) => ({ role: message.role, content: message.content })) ?? [];
     return [
       { role: "system", content: systemPrompt },
-      ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的压缩摘要：\n${conversation.summary}` }] : []),
-      { role: "user", content: `本次创作上下文如下：\n\n${context}` },
+      ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的结构化长期记忆：\n${renderConversationMemory(conversation.summary)}` }] : []),
+      { role: "user", content: `本次创作上下文如下：\n\n${renderedContext}` },
       ...conversationMessages,
       { role: "user", content: `作者当前指令：\n${input.instruction}` }
     ];
   }
 
-  private buildContext(workId: string, scope: ContextScope, model: ModelRow): string {
+  private buildContextPlan(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId">,
+    model: ModelRow,
+    existingBudget?: Record<string, unknown>
+  ): ContextBuildPlan {
+    const budget = existingBudget ?? this.contextBudget(input, model);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const settings = this.store.getWorkAiSettings(workId);
+    const settings = this.store.getWorkAiSettings(input.workId);
     const percentage = Math.min(90, Math.max(1, Number(settings.bookSummaryContextPercent) || 50));
-    const bookSummaryMaximumTokens = scope.includeBookSummary
-      ? Math.max(1, Math.floor(contextWindow * percentage / 100))
+    const workContextBudgetTokens = Number(budget.workContextBudgetTokens) || 256;
+    const bookSummaryMaximumTokens = input.scope.includeBookSummary || input.scope.type === "book" || input.scope.type === "volume"
+      ? Math.max(32, Math.min(Math.floor(contextWindow * percentage / 100), Math.floor(workContextBudgetTokens * 0.45)))
       : undefined;
-    return this.contextBuilder.build(workId, scope, 60_000, bookSummaryMaximumTokens);
+    return this.contextBuilder.buildPlan(input.workId, input.scope, workContextBudgetTokens, bookSummaryMaximumTokens, input.instruction);
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
+  private buildContext(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId">,
+    model: ModelRow
+  ): string {
+    return this.buildContextPlan(input, model).context;
+  }
+
+  private enabledAgentToolIds(workId: string, taskType: TaskType): AgentToolId[] {
     if (taskType !== "chat") return [];
     const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
-    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+  }
+
+  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
     const name = toolCall.function.name;
+    const calledAt = now();
     let rawArguments: unknown = toolCall.function.arguments;
     if (typeof rawArguments === "string") {
       try {
@@ -1288,6 +1609,7 @@ export class AiManager {
         return {
           id: toolCall.id,
           name,
+          calledAt,
           arguments: null,
           status: "failed",
           result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID_JSON", message: `Invalid arguments for ${name}: expected a JSON object.` } }
@@ -1305,6 +1627,7 @@ export class AiManager {
       return {
         id: toolCall.id,
         name,
+        calledAt,
         arguments: suppliedArguments,
         status: "failed",
         result: { ok: false, error: { code: "TOOL_NOT_AVAILABLE", message: `Tool '${name}' is not available for this request.` } }
@@ -1316,6 +1639,7 @@ export class AiManager {
       return {
         id: toolCall.id,
         name,
+        calledAt,
         arguments: suppliedArguments,
         status: "failed",
         result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID", message: `Invalid arguments for ${name}: ${details}` } }
@@ -1324,12 +1648,38 @@ export class AiManager {
     const args = parsed.data;
     if (name === "story_index") {
       const { offset, limit } = args as z.infer<typeof storyIndexArguments>;
+      const work = this.store.getWork(workId);
       const tree = this.store.getWorkTree(workId);
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
       const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
         id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
       })));
-      return { id: toolCall.id, name, arguments: { offset, limit }, status: "completed", result: { ok: true, data: { totalChapters: chapters.length, offset, chapters: chapters.slice(offset, offset + limit), nextOffset: offset + limit < chapters.length ? offset + limit : null } } };
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { offset, limit },
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            work: {
+              id: work.id,
+              title: work.title,
+              author: work.author,
+              description: work.description,
+              language: work.language,
+              tags: work.tags,
+              chapterCount: work.chapterCount,
+              wordCount: work.wordCount
+            },
+            totalChapters: chapters.length,
+            offset,
+            chapters: chapters.slice(offset, offset + limit),
+            nextOffset: offset + limit < chapters.length ? offset + limit : null
+          }
+        }
+      };
     }
     if (name === "read_chapters") {
       const { chapterIds, include } = args as z.infer<typeof readChaptersArguments>;
@@ -1347,7 +1697,7 @@ export class AiManager {
           return { chapterId, error: { code: "CHAPTER_NOT_FOUND", message: "The requested chapter was not found." } };
         }
       });
-      return { id: toolCall.id, name, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
+      return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
     }
     if (name === "query_story_knowledge") {
       const { query, categories: categoryList } = args as z.infer<typeof queryStoryKnowledgeArguments>;
@@ -1360,7 +1710,7 @@ export class AiManager {
         ...this.store.listChapterOutlines(workId).map((item) => ({ type: "outline", id: item.chapterId, title: item.chapterTitle, snippet: `${item.goal} ${item.conflict} ${item.turningPoint} ${item.notes}` })),
         ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
       ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
-      return { id: toolCall.id, name, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
+      return { id: toolCall.id, name, calledAt, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
   }
@@ -1377,18 +1727,27 @@ export class AiManager {
     };
   }
 
+  private generateTaggedJson(input: GenerateInput): Promise<GenerateResult> {
+    const userRequirement = "将最终 JSON 放在唯一一对 <json> 和 </json> 标签中；标签外不要输出任何内容，也不要使用 Markdown 代码块。";
+    const systemRequirement = "结构化响应要求：最终 JSON 必须且只能放在唯一一对 <json> 和 </json> 标签中。";
+    return this.generate({
+      ...input,
+      instruction: `${input.instruction}\n${userRequirement}`,
+      extraSystemPrompt: [input.extraSystemPrompt, systemRequirement].filter(Boolean).join("\n")
+    });
+  }
+
   async generate(input: GenerateInput): Promise<GenerateResult> {
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input.workId, input.scope, model);
+    const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType);
     const completionMessages: CompletionMessage[] = [...messages];
-    const parameters = this.constrainParametersForContext(
-      model,
-      messages,
-      this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS })
-    );
+    const parameters = this.constrainParametersForContext(model, messages, {
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
+      thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" }
+    });
     const callId = id("call");
     const timestamp = now();
     this.store.db.run(
@@ -1417,6 +1776,7 @@ export class AiManager {
           message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: CompletionToolCall[] };
         }>;
       };
+      type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
       const requestCompletion = async (toolChoice: "auto" | "none"): Promise<CompletionPayload> => {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
@@ -1465,8 +1825,25 @@ export class AiManager {
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
+      const processSteps: AiProcessStep[] = [];
+      const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
+        const reasoning = currentChoice?.message?.reasoning_content;
+        if (reasoning?.trim()) {
+          const step: AiProcessStep = { id: id("process"), type: "thinking", round, content: reasoning, createdAt: now() };
+          processSteps.push(step);
+          input.onProcessStep?.(step);
+        }
+        const intermediate = currentChoice?.message?.content;
+        if (includeIntermediate && intermediate?.trim()) {
+          const step: AiProcessStep = { id: id("process"), type: "intermediate", round, content: intermediate, createdAt: now() };
+          processSteps.push(step);
+          input.onProcessStep?.(step);
+        }
+      };
       let toolRound = 0;
       while (choice?.message?.tool_calls?.length) {
+        const round = toolRound + 1;
+        recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
         if (executedToolCalls.length + toolCalls.length > MAX_AGENT_TOOL_CALLS) {
           throw new Error(`AI requested more than ${MAX_AGENT_TOOL_CALLS} tool calls in one response cycle.`);
@@ -1478,11 +1855,17 @@ export class AiManager {
             arguments: typeof toolCall.function.arguments === "string" ? toolCall.function.arguments : JSON.stringify(toolCall.function.arguments ?? {})
           }
         }));
-        completionMessages.push({ role: "assistant", content: choice.message.content ?? null, tool_calls: normalizedToolCalls });
+        completionMessages.push({
+          role: "assistant",
+          content: choice.message.content ?? null,
+          reasoning_content: choice.message.reasoning_content ?? null,
+          tool_calls: normalizedToolCalls
+        });
         for (const toolCall of toolCalls) {
           const execution = this.executeAgentTool(input.workId, toolCall);
           executedToolCalls.push(execution);
-          input.onToolCall?.(execution);
+          processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
+          input.onToolCall?.(execution, round);
           completionMessages.push({ role: "tool", tool_call_id: toolCall.id, content: JSON.stringify(execution.result) });
         }
         toolRound += 1;
@@ -1493,6 +1876,7 @@ export class AiManager {
           throw new Error(`AI returned tool calls after tool_choice was set to none at the ${MAX_AGENT_TOOL_ROUNDS}-round safety limit.`);
         }
       }
+      recordChoiceProcess(choice, toolRound + 1, false);
       const content = choice?.message?.content;
       if (!content?.trim()) {
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
@@ -1507,7 +1891,7 @@ export class AiManager {
         now(),
         callId
       );
-      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls };
+      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1517,14 +1901,13 @@ export class AiManager {
 
   private async generateStream(input: GenerateInput, onDelta: (delta: string) => void): Promise<GenerateResult> {
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input.workId, input.scope, model);
+    const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
-    const parameters = this.constrainParametersForContext(
-      model,
-      messages,
-      this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS })
-    );
+    const parameters = this.constrainParametersForContext(model, messages, {
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
+      thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" }
+    });
     const callId = id("call");
     this.store.db.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
@@ -1544,9 +1927,11 @@ export class AiManager {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: { content: string; outputTokens: number } | null = null;
+      let streamedResult: { content: string; reasoning: string; outputTokens: number } | null = null;
       let lastFailure: unknown = null;
       let emitted = false;
+      const thinkingStepId = id("process");
+      const thinkingCreatedAt = now();
       for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
         try {
           const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
@@ -1563,10 +1948,17 @@ export class AiManager {
                 signal: controller.signal
               });
               if (!response.ok) return { ok: false as const, status: response.status, body: await response.text() };
-              const streamed = await this.readCompletionStream(response, (delta) => {
-                emitted = true;
-                onDelta(delta);
-              });
+              const streamed = await this.readCompletionStream(
+                response,
+                (delta) => {
+                  emitted = true;
+                  onDelta(delta);
+                },
+                (delta) => {
+                  emitted = true;
+                  input.onProcessStep?.({ id: thinkingStepId, type: "thinking", round: 1, content: delta, createdAt: thinkingCreatedAt, append: true });
+                }
+              );
               return { ok: true as const, status: response.status, result: streamed };
             } finally {
               clearTimeout(timeout);
@@ -1586,14 +1978,17 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, outputTokens } = streamedResult;
+      const { content, reasoning, outputTokens } = streamedResult;
+      const processSteps: AiProcessStep[] = reasoning.trim()
+        ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
+        : [];
       this.store.db.run(
         "UPDATE ai_calls SET status = 'completed', output_chars = ?, completed_at = ? WHERE id = ?",
         content.length,
         now(),
         callId
       );
-      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [] };
+      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -1601,12 +1996,17 @@ export class AiManager {
     }
   }
 
-  private async readCompletionStream(response: Response, onDelta: (delta: string) => void): Promise<{ content: string; outputTokens: number }> {
+  private async readCompletionStream(
+    response: Response,
+    onDelta: (delta: string) => void,
+    onThinkingDelta: (delta: string) => void
+  ): Promise<{ content: string; reasoning: string; outputTokens: number }> {
     if (!response.body) throw new Error("Chat Completions 流式响应缺少正文");
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let content = "";
+    let reasoning = "";
     let finishReason = "unknown";
     let usage: unknown = null;
     const consumeEvent = (eventText: string): void => {
@@ -1619,12 +2019,17 @@ export class AiManager {
       const payload = JSON.parse(data) as {
         error?: { message?: string };
         usage?: { completion_tokens?: number; output_tokens?: number };
-        choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null } }>;
+        choices?: Array<{ finish_reason?: string | null; delta?: { content?: string | null; reasoning_content?: string | null } }>;
       };
       if (payload.error) throw new Error(payload.error.message || "上游流式响应返回错误");
       if (payload.usage) usage = payload.usage;
       const choice = payload.choices?.[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const thinkingDelta = choice?.delta?.reasoning_content;
+      if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
+        reasoning += thinkingDelta;
+        onThinkingDelta(thinkingDelta);
+      }
       const delta = choice?.delta?.content;
       if (typeof delta === "string" && delta.length > 0) {
         content += delta;
@@ -1641,17 +2046,17 @@ export class AiManager {
     }
     if (buffer.trim()) consumeEvent(buffer);
     if (!content.trim()) throw new Error(`Chat Completions 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    return { content, outputTokens: resolveOutputTokens(usage, content) };
+    return { content, reasoning, outputTokens: resolveOutputTokens(usage, content) };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     if (!scope.chapterId) throw new AppError(400, "CHAPTER_REQUIRED", "章节分析必须指定章节");
     const chapter = this.store.getChapter(scope.chapterId);
-    const generated = await this.generate({
+    const generated = await this.generateTaggedJson({
       workId,
       taskType: "chapter-analysis",
       signal: this.taskSignal(taskId),
-      instruction: "分析本章并只输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。不得使用 Markdown 代码块。",
+      instruction: "分析本章并输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。",
       scope,
       ...(modelId ? { modelId } : {}),
       extraSystemPrompt: "本任务要求严格输出可解析的 JSON。"
@@ -1685,11 +2090,11 @@ export class AiManager {
   }
 
   private async runTimelineAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
-    const generated = await this.generate({
+    const generated = await this.generateTaggedJson({
       workId,
       taskType: "timeline-analysis",
       signal: this.taskSignal(taskId),
-      instruction: "抽取大事件候选并只输出 JSON 数组。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。不得使用 Markdown 代码块。",
+      instruction: "抽取大事件候选并输出 JSON 数组。每项字段：name、description、eventType、timeLabel、timeSort（无法确定为 null）、location、impactScope、chapterIds、participantIds、evidence。必须区分发生时间与叙述时间；不确定时使用‘时间待定’。",
       scope,
       ...(modelId ? { modelId } : {}),
       extraSystemPrompt: "本任务要求严格输出可解析的 JSON。仅生成候选，不得声称已确认。"
@@ -1718,12 +2123,253 @@ export class AiManager {
     return { eventIds, candidateCount: eventIds.length, callId: generated.callId };
   }
 
+  private async runWorldviewAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
+    const chapters = this.getScopeChapters(workId, scope);
+    if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "世界观分析范围内没有章节");
+    const generated = await this.generateTaggedJson({
+      workId,
+      taskType: "book-analysis",
+      signal: this.taskSignal(taskId),
+      instruction: [
+        "分析正文中已经出现的世界观并输出一个 JSON 对象。",
+        "顶层字段：summary、dimensions、conflicts、uncertainties。",
+        "dimensions 是数组，每项字段：category、title、conclusion、confidence（0 到 1 的数字）、evidence。",
+        "category 只能是：宇宙与自然、地理与环境、社会与制度、历史与文明、科技与能力、资源与经济、宗教与文化、规则与限制、其他。",
+        "conflicts 是数组，每项字段：title、description、evidence。uncertainties 是数组，每项字段：question、reason、evidence。",
+        "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是原文连续短引文且不超过 120 字。",
+        "只总结原文明示或可由多处证据直接支持的结论，区分事实、传闻、角色认知和未知项，不得补写正文中不存在的设定。"
+      ].join("\n"),
+      scope,
+      ...(modelId ? { modelId } : {}),
+      parameters: { temperature: 0.1 },
+      extraSystemPrompt: "你是可审计的小说世界观分析器。所有结论必须能追溯到给定正文；证据不足时放入 uncertainties。"
+    });
+    const parsed = extractJson<unknown>(generated.content, (value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+      const candidate = value as Record<string, unknown>;
+      return ["summary", "dimensions", "conflicts", "uncertainties"].some((key) => key in candidate);
+    });
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new AppError(502, "AI_INVALID_WORLDVIEW", "世界观分析结果必须是对象");
+    }
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callId: generated.callId };
+    const data = parsed as Record<string, unknown>;
+    const categories = new Set(["宇宙与自然", "地理与环境", "社会与制度", "历史与文明", "科技与能力", "资源与经济", "宗教与文化", "规则与限制", "其他"]);
+    let omittedDimensionCount = 0;
+    const dimensions = (Array.isArray(data.dimensions) ? data.dimensions : []).flatMap((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        omittedDimensionCount += 1;
+        return [];
+      }
+      const item = value as Record<string, unknown>;
+      const title = typeof item.title === "string" ? item.title.trim() : "";
+      const conclusion = typeof item.conclusion === "string" ? item.conclusion.trim() : "";
+      const evidence = this.validateAnalysisEvidence(chapters, item.evidence);
+      if (!title || !conclusion || evidence.length === 0) {
+        omittedDimensionCount += 1;
+        return [];
+      }
+      return [{
+        category: typeof item.category === "string" && categories.has(item.category) ? item.category : "其他",
+        title,
+        conclusion,
+        confidence: typeof item.confidence === "number"
+          ? clamp(item.confidence, 0, 1)
+          : ({ high: 0.9, medium: 0.7, low: 0.5 })[String(item.confidence).toLocaleLowerCase()] ?? 0.5,
+        evidence
+      }];
+    });
+    const sanitizeFinding = (value: unknown, titleField: "title" | "question"): Record<string, unknown>[] => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+      const item = value as Record<string, unknown>;
+      const title = typeof item[titleField] === "string" ? item[titleField].trim() : "";
+      const evidence = this.validateAnalysisEvidence(chapters, item.evidence);
+      if (!title || evidence.length === 0) return [];
+      return [{
+        [titleField]: title,
+        [titleField === "title" ? "description" : "reason"]: typeof item[titleField === "title" ? "description" : "reason"] === "string"
+          ? String(item[titleField === "title" ? "description" : "reason"]).trim()
+          : "",
+        evidence
+      }];
+    };
+    const conflicts = (Array.isArray(data.conflicts) ? data.conflicts : []).flatMap((item) => sanitizeFinding(item, "title"));
+    const uncertainties = (Array.isArray(data.uncertainties) ? data.uncertainties : []).flatMap((item) => sanitizeFinding(item, "question"));
+    const summary = typeof data.summary === "string" ? data.summary.trim() : "";
+    if (!summary && dimensions.length === 0 && conflicts.length === 0 && uncertainties.length === 0) {
+      throw new AppError(502, "AI_EMPTY_WORLDVIEW", "AI 返回的世界观分析为空");
+    }
+    return {
+      summary,
+      dimensions,
+      conflicts,
+      uncertainties,
+      dimensionCount: dimensions.length,
+      omittedDimensionCount,
+      coveredChapterCount: chapters.length,
+      callId: generated.callId
+    };
+  }
+
+  private async runSettingExtraction(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
+    const chapters = this.getScopeChapters(workId, scope);
+    if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "设定抽取范围内没有章节");
+    const chunks = this.buildChapterChunks(chapters, 10_000);
+    const concurrency = this.configuredConcurrency(workId, "book-analysis", modelId);
+    const chunkResults = await this.processChunks(chunks, concurrency, async (chunk) => {
+      if (taskId && this.store.getTask(taskId).status !== "running") return { candidates: [], callId: null };
+      const generated = await this.generateTaggedJson({
+        workId,
+        taskType: "book-analysis",
+        signal: this.taskSignal(taskId),
+        maxAttempts: 2,
+        scope: { type: "selection", selection: chunk.text },
+        ...(modelId ? { modelId } : {}),
+        parameters: { temperature: 0.1 },
+        instruction: [
+          "从本批正文抽取可复用、会影响后续创作的世界设定候选，输出 JSON 数组。",
+          "每项字段：title、category、content、tags、confidence、evidence。",
+          "category 只能是：世界规则、历史与年代、地点与地图、组织与阵营、物种与族群、科技与物品、术语与称谓、创作约束。",
+          "每条 evidence 必须包含 chapterId、chapterTitle、quote；quote 必须是原文连续短引文且不超过 120 字。",
+          "只抽取原文明示、跨场景可复用的事实或约束；不要把一次性动作、剧情摘要、人物关系、推测、梦境或未证实传闻当作确定设定。",
+          "同一设定在本批只输出一次。证据不足或 confidence 低于 0.6 时不要输出。"
+        ].join("\n"),
+        extraSystemPrompt: "你是严格的小说设定抽取器。不得补写、常识推断或伪造引文；候选最终由作者确认。"
+      });
+      const extracted = extractJson<unknown>(generated.content);
+      if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "设定抽取结果必须是数组");
+      return {
+        candidates: extracted.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)),
+        callId: generated.callId
+      };
+    }, (completed) => {
+      if (taskId && this.store.getTask(taskId).status === "running") {
+        this.store.updateTask(taskId, { status: "running", progress: Math.min(92, 5 + Math.round(completed / chunks.length * 87)) });
+      }
+    });
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds: chunkResults.map((item) => item.callId).filter(Boolean) };
+    const categories = new Set(["世界规则", "历史与年代", "地点与地图", "组织与阵营", "物种与族群", "科技与物品", "术语与称谓", "创作约束"]);
+    const rawCandidates = chunkResults.flatMap((item) => item.candidates);
+    const callIds = chunkResults.map((item) => item.callId).filter((item): item is string => typeof item === "string");
+    const skipped: Array<{ title: string; reason: string }> = [];
+    const merged = new Map<string, {
+      title: string;
+      category: string;
+      content: string;
+      tags: string[];
+      confidence: number;
+      evidence: Record<string, unknown>[];
+    }>();
+    for (const raw of rawCandidates) {
+      const title = typeof raw.title === "string" ? raw.title.normalize("NFKC").trim().slice(0, 200) : "";
+      const category = typeof raw.category === "string" ? raw.category.trim() : "";
+      const content = typeof raw.content === "string" ? raw.content.trim().slice(0, 200_000) : "";
+      const confidence = typeof raw.confidence === "number" ? clamp(raw.confidence, 0, 1) : 0;
+      const evidence = this.validateAnalysisEvidence(chapters, raw.evidence);
+      if (!title || !content || !categories.has(category) || confidence < 0.6 || evidence.length === 0) {
+        skipped.push({ title: title || "未命名候选", reason: "字段、分类、置信度或原文证据无效" });
+        continue;
+      }
+      const tags = [...new Set((Array.isArray(raw.tags) ? raw.tags : [])
+        .filter((tag): tag is string => typeof tag === "string")
+        .map((tag) => tag.normalize("NFKC").trim().slice(0, 100))
+        .filter(Boolean))].slice(0, 30);
+      const key = `${this.normalizeReference(category)}|${this.normalizeReference(title)}`;
+      const existing = merged.get(key);
+      if (!existing) {
+        merged.set(key, { title, category, content, tags, confidence, evidence });
+        continue;
+      }
+      const seenEvidence = new Set(existing.evidence.map((item) => `${String(item.chapterId)}|${String(item.quote)}`));
+      for (const item of evidence) {
+        const evidenceKey = `${String(item.chapterId)}|${String(item.quote)}`;
+        if (!seenEvidence.has(evidenceKey)) existing.evidence.push(item);
+      }
+      if (content.length > existing.content.length) existing.content = content;
+      existing.tags = [...new Set([...existing.tags, ...tags])].slice(0, 30);
+      existing.confidence = Math.max(existing.confidence, confidence);
+    }
+
+    const existingSettings = this.store.listSettings(workId);
+    const settingIds: string[] = [];
+    let createdCount = 0;
+    let updatedCount = 0;
+    this.store.db.transaction(() => {
+      for (const candidate of merged.values()) {
+        const duplicateIndex = existingSettings.findIndex((setting) => this.normalizeReference(String(setting.category)) === this.normalizeReference(candidate.category)
+          && this.normalizeReference(String(setting.title)) === this.normalizeReference(candidate.title));
+        const chapterIds = [...new Set(candidate.evidence.map((item) => String(item.chapterId)))];
+        if (duplicateIndex >= 0) {
+          const duplicate = existingSettings[duplicateIndex] as Record<string, unknown>;
+          if (duplicate.status !== "pending" || duplicate.locked === true) {
+            skipped.push({ title: candidate.title, reason: "同名作者设定已存在，未覆盖" });
+            continue;
+          }
+          const mergedEvidence = [...(Array.isArray(duplicate.evidence) ? duplicate.evidence as Record<string, unknown>[] : [])];
+          const seenEvidence = new Set(mergedEvidence.map((item) => `${String(item.chapterId)}|${String(item.quote)}`));
+          for (const item of candidate.evidence) {
+            const evidenceKey = `${String(item.chapterId)}|${String(item.quote)}`;
+            if (!seenEvidence.has(evidenceKey)) mergedEvidence.push(item);
+          }
+          const previousScope = duplicate.scope && typeof duplicate.scope === "object" && !Array.isArray(duplicate.scope)
+            ? duplicate.scope as Record<string, unknown>
+            : {};
+          const previousChapterIds = Array.isArray(previousScope.chapterIds) ? previousScope.chapterIds.map(String) : [];
+          const updated = this.store.updateSetting(String(duplicate.id), {
+            content: candidate.content.length > String(duplicate.content).length ? candidate.content : String(duplicate.content),
+            tags: [...new Set([...(Array.isArray(duplicate.tags) ? duplicate.tags.map(String) : []), ...candidate.tags])].slice(0, 30),
+            evidence: mergedEvidence,
+            scope: { ...previousScope, chapterIds: [...new Set([...previousChapterIds, ...chapterIds])] },
+            authorNote: `AI 设定候选，最高置信度 ${Math.round(candidate.confidence * 100)}%，需由作者确认。`
+          }, "analysis", taskId ?? callIds[0] ?? null, "AI 合并设定证据");
+          existingSettings[duplicateIndex] = updated;
+          settingIds.push(String(updated.id));
+          updatedCount += 1;
+          continue;
+        }
+        const created = this.store.createSetting(workId, {
+          title: candidate.title,
+          category: candidate.category,
+          content: candidate.content,
+          tags: candidate.tags,
+          status: "pending",
+          locked: false,
+          evidence: candidate.evidence,
+          scope: { chapterIds },
+          authorNote: `AI 设定候选，置信度 ${Math.round(candidate.confidence * 100)}%，需由作者确认。`
+        }, "analysis", taskId ?? callIds[0] ?? null);
+        existingSettings.push(created);
+        settingIds.push(String(created.id));
+        createdCount += 1;
+      }
+    });
+    this.store.audit(workId, "setting.analysis.completed", "work", workId, {
+      batchCount: chunks.length,
+      coveredChapterCount: chapters.length,
+      rawCandidateCount: rawCandidates.length,
+      savedCount: settingIds.length,
+      skippedCount: skipped.length,
+      scopeType: scope.type
+    });
+    return {
+      settingIds,
+      candidateCount: settingIds.length,
+      rawCandidateCount: rawCandidates.length,
+      createdCount,
+      updatedCount,
+      skipped,
+      batchCount: chunks.length,
+      coveredChapterCount: chapters.length,
+      callIds
+    };
+  }
+
   private async runConsistencyCheck(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
-    const generated = await this.generate({
+    const generated = await this.generateTaggedJson({
       workId,
       taskType: "consistency-check",
       signal: this.taskSignal(taskId),
-      instruction: "检查设定、人物状态、关系和时间是否冲突，只输出 JSON 数组。每项字段：itemType、severity（low/medium/high）、title、description、entityRefs、evidence、suggestion。没有问题时输出 []。不得使用 Markdown 代码块。",
+      instruction: "检查设定、人物状态、关系和时间是否冲突，输出 JSON 数组。每项字段：itemType、severity（low/medium/high）、title、description、entityRefs、evidence、suggestion。没有问题时输出 []。",
       scope,
       ...(modelId ? { modelId } : {}),
       extraSystemPrompt: "本任务要求严格输出可解析的 JSON。"
@@ -1756,7 +2402,7 @@ export class AiManager {
     const rawCandidates: Array<Record<string, unknown>> = [];
     const callIds: string[] = [];
     const extractChunk = async (text: string, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
-      const generated = await this.generate({
+      const generated = await this.generateTaggedJson({
         workId,
         taskType: "book-analysis",
         signal: this.taskSignal(taskId),
@@ -1765,7 +2411,7 @@ export class AiManager {
         ...(modelId ? { modelId } : {}),
         parameters: { temperature: 0.2 },
         instruction: [
-          "抽取本批原文中有名字且对跨章节剧情有意义的人物或具有人格的生物。只输出 JSON 数组。",
+          "抽取本批原文中有名字且对跨章节剧情有意义的人物或具有人格的生物。输出 JSON 数组。",
           "每项字段：canonicalName、aliases（仅无歧义昵称或拼写变体）、species（仅原文明确说明时填写）、identity、firstEvidence（chapterId、chapterTitle、quote）。",
           "规则：合并明显拼写变体；不能把怪兽之王、怪兽女王、君王、女王、吾王、博士、舰长、上尉、司令、族长、老师、父亲、母亲、哥哥、姐姐等称号作为全局别名；不能把单字母简称作为别名；梦境或作品内虚构角色需在 identity 标明；不得创造人物；quote 必须是原文连续引文且不超过 80 字。",
           "没有合格人物时输出 []，不得使用 Markdown 代码块。"
@@ -1919,7 +2565,7 @@ export class AiManager {
     const rawCandidates: Array<Record<string, unknown>> = [];
     const callIds: string[] = [];
     const extractChunk = async (text: string, maxAttempts = 3): Promise<{ candidates: Array<Record<string, unknown>>; callId: string }> => {
-      const generated = await this.generate({
+      const generated = await this.generateTaggedJson({
         workId,
         taskType: "relationship-analysis",
         signal: this.taskSignal(taskId),
@@ -1955,7 +2601,7 @@ export class AiManager {
           "20. 前任向继任者让位属于前任与继任，不是继任者统御前任；方向必须由原文中的权力交接和实际服从行为共同决定。",
           "21. 关键词只能描述双方互动，不得混入任何一方单独的基因改造、意识变化、物种背景或未参与本关系的事件，也不得把不同时间阶段压成互相矛盾的同一组关键词。",
           "22. 集合身份、分身或内部意识不能当作额外人物扩散关系。若银月基多拉等聚合角色已代表内部意识与外部对象的整体关系，不得再把同一任务协作复制成每个内部意识与该对象的多条边；别名更不能彼此建边。",
-          "23. 只输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。不得使用 Markdown。",
+          "23. 输出 JSON 数组。字段：fromCharacterId、toCharacterId、category（family/social/emotional/conflict/uncertain）、subtype、keywords、directed、currentStatus、timeRange、confidence、evidence。",
           "24. 共同执行一次任务、同属一个组织、在同一集体场景中被感谢或落泪、替第三人转发消息，都不能单独证明同事、朋友或盟友。此类关系必须有原文明示身份，或至少两个不同章节的持续互动证据。"
         ].join("\n"),
         extraSystemPrompt: "关系候选必须可审计。严禁把梦境伴侣、醉后梦话、单次约定、同章共现、礼称、同族归属、救援照护或类比提及写成现实长期关系。逐句校验说话人和关系方向。"
@@ -2359,6 +3005,30 @@ export class AiManager {
     }
     return volumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])
       .filter((chapter) => this.isAutomaticAnalysisChapter(chapter));
+  }
+
+  private validateAnalysisEvidence(chapters: Record<string, unknown>[], value: unknown): Record<string, unknown>[] {
+    const chaptersById = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
+    return (Array.isArray(value) ? value : []).flatMap((candidate) => {
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+      const evidence = candidate as Record<string, unknown>;
+      const chapterId = typeof evidence.chapterId === "string" ? evidence.chapterId : "";
+      const quote = typeof evidence.quote === "string" ? evidence.quote.trim().slice(0, 120) : "";
+      let chapter = chaptersById.get(chapterId);
+      if (!chapter) {
+        const normalizeTitle = (input: unknown): string => String(input ?? "").normalize("NFKC").replace(/[\s·:：—_\-]/gu, "").toLocaleLowerCase("zh-CN");
+        const idReference = normalizeTitle(chapterId);
+        const titleReference = normalizeTitle(evidence.chapterTitle);
+        const matches = chapters.filter((item) => {
+          const actualTitle = normalizeTitle(item.title);
+          return (idReference.length >= 2 && actualTitle.includes(idReference))
+            || (titleReference.length >= 2 && actualTitle.includes(titleReference));
+        });
+        if (matches.length === 1) chapter = matches[0];
+      }
+      if (!chapter || !this.quoteExists(String(chapter.content), quote)) return [];
+      return [{ chapterId: String(chapter.id), chapterTitle: String(chapter.title), quote }];
+    });
   }
 
   private isAutomaticAnalysisChapter(chapter: Record<string, unknown>): boolean {
@@ -2943,6 +3613,7 @@ export class AiManager {
       contextWindow: numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW,
       outputNote: stringValue(row, "output_note"),
       preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json"))),
+      thinkingEnabled: boolValue(row, "thinking_enabled"),
       enabled: boolValue(row, "enabled"),
       note: stringValue(row, "note"),
       createdAt: stringValue(row, "created_at"),

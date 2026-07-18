@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260717-api-key">
+    <link rel="stylesheet" href="/styles.css?v=20260718-toast-position">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -65,9 +65,10 @@
         <div id="work-meta" class="work-meta">尚未选择作品</div>
         <div class="top-actions">
           <span id="save-state" class="save-state">就绪</span>
-          <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar">作</span><span id="account-name">账户</span></button>
+          <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar" class="user-avatar account-avatar" aria-hidden="true"><span class="user-avatar-fallback">作</span></span><span id="account-name">账户</span></button>
           <div id="account-menu" class="account-menu hidden" role="menu">
             <strong id="account-menu-name">账户</strong><small id="account-menu-role">普通用户</small>
+            <button id="onboarding-menu-button" type="button" role="menuitem">功能导览</button>
             <button id="account-settings-button" type="button" role="menuitem">账户设置</button>
             <button id="logout-button" type="button" role="menuitem">退出登录</button>
           </div>
@@ -88,8 +89,10 @@
         <div id="left-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整作品侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="left-actions">
           <div class="left-primary-actions">
-            <label class="file-button">
-              导入 TXT / DOCX
+            <label class="file-button" aria-label="导入 TXT / DOCX">
+              <span class="import-file-label import-file-label-full" aria-hidden="true">导入 TXT / DOCX</span>
+              <span class="import-file-label import-file-label-compact" aria-hidden="true">导入TXT/DOCX</span>
+              <span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>
               <input id="import-file" type="file" accept=".txt,.docx">
             </label>
             <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
@@ -105,10 +108,10 @@
           <button type="button" data-module="timeline">时间轴</button>
           <button type="button" data-module="relationships">关系</button>
           <button type="button" data-module="outlines">大纲与伏笔</button>
+          <button class="ai-analysis-entry" type="button" data-module="tasks">AI 分析</button>
           <button id="module-more-button" type="button" aria-expanded="false">更多</button>
           <button class="module-nav-secondary hidden" type="button" data-module="races">种族</button>
           <button class="module-nav-secondary hidden" type="button" data-module="reviews">审核</button>
-          <button class="module-nav-secondary hidden" type="button" data-module="tasks">分析任务</button>
           <button class="module-nav-secondary hidden" type="button" data-module="ai-settings">AI 设置</button>
           <button class="module-nav-secondary hidden" type="button" data-work-settings>作品设置</button>
         </nav>
@@ -144,6 +147,7 @@
           <div class="settings-hub-grid">
             <button id="platform-ai-button" class="settings-hub-card hidden" type="button" data-settings-action="ai"><span class="settings-card-mark">AI</span><strong>AI 管理</strong><small>供应商、模型、上下文与全局提示词</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
+            <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面通知</strong><small>设置所有用户的 Toast 提示位置</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
@@ -172,6 +176,7 @@
               <button id="insight-button" class="ghost-button" type="button">章节概览</button>
               <button id="versions-button" class="ghost-button" type="button">版本</button>
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
+              <button id="toggle-whitespace-button" class="ghost-button" type="button" aria-pressed="true" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">隐藏空白符</button>
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
           </div>
@@ -180,6 +185,7 @@
             <div class="chapter-editor-frame">
               <aside id="chapter-line-numbers" class="chapter-line-numbers" aria-label="正文行号，可拖拽引用多行"><div id="chapter-line-numbers-inner"></div></aside>
               <textarea id="chapter-content" class="chapter-content" aria-label="章节正文" placeholder="在这里开始你的故事……"></textarea>
+              <div id="chapter-whitespace-overlay" class="chapter-whitespace-overlay is-visible" aria-hidden="true"><div id="chapter-whitespace-inner"></div></div>
               <div id="chapter-line-measure" class="chapter-line-measure" aria-hidden="true"></div>
             </div>
           </div>
@@ -225,8 +231,8 @@
         <div class="prompt-box">
           <div id="ai-citations" class="ai-citations hidden" aria-label="已添加的正文引用"></div>
           <section id="ai-context-warning" class="ai-context-warning hidden" role="status" aria-live="polite">
-            <div><strong id="ai-context-warning-title">对话上下文接近上限</strong><p id="ai-context-warning-message">建议压缩上下文或新开对话。</p></div>
-            <div><button id="ai-context-compact" type="button">压缩上下文</button><button id="ai-context-new-conversation" type="button">新开对话</button><button id="ai-context-dismiss" type="button">稍后处理</button></div>
+            <div><strong id="ai-context-warning-title">对话历史接近整理阈值</strong><p id="ai-context-warning-message">建议整理为长期记忆或新开对话。</p></div>
+            <div><button id="ai-context-compact" type="button">整理长期记忆</button><button id="ai-context-new-conversation" type="button">新开对话</button><button id="ai-context-dismiss" type="button">稍后处理</button></div>
           </section>
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
@@ -257,7 +263,7 @@
       </aside>
     </div>
 
-    <div id="toast-region" class="toast-region" aria-live="polite"></div>
+    <div id="toast-region" class="toast-region" data-position="bottom-right" aria-live="polite"></div>
     <div id="chapter-type-menu" class="chapter-type-menu hidden" role="menu" aria-label="设置章节类型" data-testid="chapter-type-menu">
       <strong>标记章节</strong>
       <div>
@@ -273,6 +279,26 @@
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
+    <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
+
+    <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-dialog-title" aria-describedby="onboarding-dialog-description" data-testid="first-use-onboarding">
+      <div id="onboarding-spotlight" class="onboarding-spotlight" aria-hidden="true"></div>
+      <section id="onboarding-popover" class="onboarding-popover" data-placement="bottom">
+        <header class="onboarding-popover-header">
+          <span id="onboarding-progress" aria-live="polite">第 1 步</span>
+          <button id="onboarding-skip" class="onboarding-skip" type="button">跳过导览</button>
+        </header>
+        <div class="onboarding-popover-body">
+          <span id="onboarding-eyebrow" class="eyebrow">快速导览</span>
+          <h2 id="onboarding-dialog-title" tabindex="-1">认识叙界</h2>
+          <p id="onboarding-dialog-description">跟随箭头认识工作台里的常用入口。</p>
+        </div>
+        <footer class="onboarding-popover-footer">
+          <button id="onboarding-previous" class="ghost-button" type="button" disabled>上一步</button>
+          <button id="onboarding-next" class="primary-button" type="button">下一步</button>
+        </footer>
+      </section>
+    </dialog>
 
     <dialog id="form-dialog" class="dialog">
       <form id="dynamic-form" method="dialog">
@@ -406,11 +432,27 @@
       </div>
     </dialog>
 
+    <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面通知</h2></div><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <form id="platform-ui-settings-form">
+        <div class="dialog-fields">
+          <label>Toast 提示位置<select id="toast-position" name="toastPosition" aria-label="Toast 提示位置"><option value="bottom-right">右下角（默认）</option><option value="top-right">右上角</option></select></label>
+          <small>该设置对所有用户生效，保存后的提示会立即显示在新位置。</small>
+        </div>
+        <div class="dialog-actions"><button class="ghost-button" id="platform-ui-settings-cancel" type="button">取消</button><button class="primary-button" id="platform-ui-settings-save" type="submit">保存设置</button></div>
+      </form>
+    </dialog>
+
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="account-settings-body">
         <section class="account-settings-section" aria-labelledby="profile-settings-title">
           <header class="account-settings-section-header"><h3 id="profile-settings-title">个人资料</h3><p>用于作品协作和历史记录中的作者标识。</p></header>
+          <div class="avatar-settings">
+            <div id="profile-avatar-preview" class="user-avatar profile-avatar-preview" role="img" aria-label="当前头像"><span class="user-avatar-fallback">作</span></div>
+            <div class="avatar-settings-copy"><strong>头像图片</strong><small>支持 PNG、JPEG、WebP，文件不超过 5 MB，尺寸不超过 4096 × 4096 像素。</small></div>
+            <div class="avatar-settings-actions"><button id="avatar-upload-button" class="ghost-button" type="button">上传头像</button><button id="avatar-remove-button" class="ghost-button hidden" type="button">移除头像</button></div>
+          </div>
           <form id="profile-form" class="account-settings-form"><label>显示名称<input id="profile-display-name" name="displayName" maxlength="80" required></label><button class="primary-button" type="submit">保存名称</button></form>
         </section>
         <section class="account-settings-section" aria-labelledby="password-settings-title">
@@ -453,6 +495,11 @@
         <button id="ai-tool-call-close" class="dialog-close" aria-label="关闭工具调用详情" type="button">×</button>
       </div>
       <div class="ai-tool-call-detail">
+        <dl class="ai-tool-call-info">
+          <div><dt>函数名称</dt><dd><code id="ai-tool-call-name"></code></dd></div>
+          <div><dt>调用时间</dt><dd><time id="ai-tool-call-time"></time></dd></div>
+          <div class="ai-tool-call-description"><dt>函数信息</dt><dd id="ai-tool-call-description"></dd></div>
+        </dl>
         <section><h3>参数</h3><pre id="ai-tool-call-arguments"></pre></section>
         <section><h3>返回值</h3><pre id="ai-tool-call-result"></pre></section>
       </div>
@@ -495,6 +542,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260717-api-key"></script>
+    <script type="module" src="/app.js?v=20260719-group-relation-list"></script>
   </body>
 </html>
