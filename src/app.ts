@@ -6,6 +6,7 @@ import { z, ZodError } from "zod";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
+import { assertSafeDocxArchive } from "./docx-security.js";
 import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
@@ -63,6 +64,15 @@ function validateImportedText(text: string): string {
   if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
   assertSafeImportedPlainText(text);
   return text;
+}
+
+async function extractDocxText(buffer: Buffer): Promise<string> {
+  assertSafeDocxArchive(buffer);
+  try {
+    return (await mammoth.extractRawText({ buffer })).value;
+  } catch {
+    throw new AppError(415, "INVALID_DOCX_FILE", "文件内容不是有效的 DOCX 文档");
+  }
 }
 
 const workSchema = z.object({
@@ -497,7 +507,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const extension = extname(originalFileName).toLocaleLowerCase();
     if (extension !== ".txt" && extension !== ".docx") throw new AppError(415, "UNSUPPORTED_FILE", "仅支持 TXT 和 DOCX 导入");
     const text = validateImportedText(extension === ".docx"
-      ? (await mammoth.extractRawText({ buffer: request.file.buffer })).value
+      ? await extractDocxText(request.file.buffer)
       : request.file.buffer.toString("utf8"));
     const parsedNovel = applyImportFileHints(parseNovelText(text), originalFileName);
     const inferredTitle = originalFileName.replace(/\.(txt|docx)$/iu, "").trim() || "未命名作品";
@@ -562,7 +572,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(415, "UNSUPPORTED_FILE", "MVP 仅支持 TXT 和 DOCX 导入");
     }
     const text = validateImportedText(extension === ".docx"
-      ? (await mammoth.extractRawText({ buffer: request.file.buffer })).value
+      ? await extractDocxText(request.file.buffer)
       : request.file.buffer.toString("utf8"));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
     data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed), 201);

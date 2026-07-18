@@ -62,6 +62,26 @@ describe("作品、导入和章节版本 API", () => {
       .expect(415);
   });
 
+  it("拒绝伪装成 DOCX 的普通文件，且不创建或覆盖作品", async () => {
+    const before = await request(runtime.app).get("/api/works").expect(200);
+    const createResponse = await request(runtime.app)
+      .post("/api/works/import")
+      .attach("file", Buffer.from("普通文本改成了 docx 后缀"), "fake.docx")
+      .expect(415);
+    expect(createResponse.body.error.code).toBe("INVALID_DOCX_FILE");
+    const after = await request(runtime.app).get("/api/works").expect(200);
+    expect(after.body.data).toHaveLength(before.body.data.length);
+
+    const work = await request(runtime.app).post("/api/works").send({ title: "不可覆盖作品" }).expect(201);
+    const importResponse = await request(runtime.app)
+      .post(`/api/works/${work.body.data.id}/import`)
+      .attach("file", Buffer.from("这同样不是 DOCX"), "fake.docx")
+      .expect(415);
+    expect(importResponse.body.error.code).toBe("INVALID_DOCX_FILE");
+    const unchanged = await request(runtime.app).get(`/api/works/${work.body.data.id}`).expect(200);
+    expect(unchanged.body.data.volumes).toHaveLength(0);
+  });
+
   it("创建和保存章节时自动压缩段间多余空行", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "空行规则作品" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "正文" }).expect(201);
