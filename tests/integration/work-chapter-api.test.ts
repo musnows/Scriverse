@@ -72,6 +72,16 @@ describe("作品、导入和章节版本 API", () => {
     const after = await request(runtime.app).get("/api/works").expect(200);
     expect(after.body.data).toHaveLength(before.body.data.length);
 
+    const disguisedZip = new JSZip();
+    disguisedZip.file("[Content_Types].xml", "普通内容");
+    disguisedZip.file("_rels/.rels", "普通内容");
+    disguisedZip.file("word/document.xml", "普通内容");
+    const disguisedResponse = await request(runtime.app)
+      .post("/api/works/import")
+      .attach("file", await disguisedZip.generateAsync({ type: "nodebuffer" }), "disguised.docx")
+      .expect(415);
+    expect(disguisedResponse.body.error.code).toBe("INVALID_DOCX_FILE");
+
     const work = await request(runtime.app).post("/api/works").send({ title: "不可覆盖作品" }).expect(201);
     const importResponse = await request(runtime.app)
       .post(`/api/works/${work.body.data.id}/import`)
