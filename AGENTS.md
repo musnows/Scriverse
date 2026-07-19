@@ -121,7 +121,7 @@ tests/
 - 功能、修复和文档变更应从 `develop` 派生分支，所有协作者的 PR 必须以 `develop` 为目标分支。
 - 只有项目维护者发起的版本发布合并可以从 `develop` 进入 `main`，不得绕过 `develop` 直接提交功能或修复。
 - **所有变更必须先合入 `develop`；除项目维护者发起的 `develop` → `main` 版本发布 PR 外，禁止任何功能、修复、文档、CI、构建或维护分支直接向 `main` 发起 PR。**
-- 更完整的协作流程见 `CONTRIBUTING.md`。
+- 更完整的协作流程见 `docs/CONTRIBUTING.md`。
 
 ### 版本发布
 
