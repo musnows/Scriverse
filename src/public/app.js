@@ -15,6 +15,7 @@ import { buildCharacterDetails, buildCharacterSections, buildCharacterState, cha
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
+import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 
 const state = {
@@ -136,7 +137,6 @@ function renderProfileAvatar() {
   $("#avatar-remove-button").classList.toggle("hidden", !state.user?.avatarUrl);
 }
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
-const onboardingStoragePrefix = "scriverse-onboarding-v2";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
@@ -180,18 +180,16 @@ const workspaceOnboardingSteps = [
   { selector: "#account-button", eyebrow: "账户", title: "管理账户并重看导览", description: "账户菜单保存个人设置入口，也可以随时重新打开这套功能导览。", placement: "bottom" }
 ];
 
-function onboardingStorageKey() {
-  return `${onboardingStoragePrefix}:${state.user?.userId ?? "anonymous"}`;
-}
-
 function hasCompletedOnboarding() {
-  try { return localStorage.getItem(onboardingStorageKey()) === "completed"; }
-  catch { return false; }
+  return state.user?.onboardingCompleted === true;
 }
 
 function persistOnboardingCompletion() {
-  try { localStorage.setItem(onboardingStorageKey(), "completed"); }
-  catch { /* 浏览器禁用存储时仅在当前页面关闭导览 */ }
+  if (!state.user || state.user.onboardingCompleted) return;
+  state.user = { ...state.user, onboardingCompleted: true };
+  api("/api/auth/onboarding/complete", { method: "POST", body: {} })
+    .then((user) => { state.user = user; })
+    .catch(() => { state.user = { ...state.user, onboardingCompleted: false }; });
 }
 
 function isOnboardingTargetVisible(target) {
@@ -462,6 +460,8 @@ let aiMentionRange = null;
 let settingsReturnContext = null;
 let characterEditorItem = null;
 let characterEditorVersions = [];
+let characterEditorRelationships = [];
+let characterEditorRelationshipsLoading = false;
 let entityHistoryContext = null;
 
 function setModuleNavExpanded(expanded) {
@@ -1389,9 +1389,10 @@ async function api(path, options = {}) {
 }
 
 function selectAuthMode(mode) {
-  const login = mode === "login";
+  const registerTab = $("#auth-register-tab");
+  const login = mode === "login" || registerTab.disabled;
   $("#auth-login-tab").setAttribute("aria-selected", String(login));
-  $("#auth-register-tab").setAttribute("aria-selected", String(!login));
+  registerTab.setAttribute("aria-selected", String(!login));
   $("#login-form").classList.toggle("hidden", !login);
   $("#register-form").classList.toggle("hidden", login);
   $("#auth-error").textContent = "";
@@ -1409,16 +1410,23 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
-function showAuth(setupRequired, registrationOpen = true) {
+function showAuth(setupRequired, registrationOpen = false) {
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
-  $("#auth-title").textContent = setupRequired ? "创建首个管理员账户" : "登录后继续创作";
+  const canRegister = registrationOpen === true;
+  $("#auth-title").textContent = setupRequired
+    ? canRegister ? "创建首个管理员账户" : "注册已禁用"
+    : "登录后继续创作";
   $("#auth-description").textContent = setupRequired
-    ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
+    ? canRegister
+      ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
+      : "请将 APP_ALLOW_REGISTRATION 设置为 true 后创建首个管理员账户。"
     : "你的作品、协作权限和每一次修改都会绑定到账户。";
-  const canRegister = setupRequired || registrationOpen;
-  $("#auth-register-tab").classList.toggle("hidden", !canRegister);
-  selectAuthMode(setupRequired ? "register" : "login");
+  const registerTab = $("#auth-register-tab");
+  registerTab.disabled = !canRegister;
+  registerTab.setAttribute("aria-disabled", String(!canRegister));
+  registerTab.textContent = canRegister ? "注册" : "注册已禁用";
+  selectAuthMode(setupRequired && canRegister ? "register" : "login");
 }
 
 function applyAuthenticatedUser(session) {
@@ -1455,7 +1463,7 @@ async function initializeAuthentication() {
   if (!session.authenticated) {
     // 未登录时一律转到登录页路由；登录页本身则保持原样
     if (route.view !== "login") window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-    showAuth(session.setupRequired, session.registrationOpen !== false);
+    showAuth(session.setupRequired, session.registrationOpen === true);
     return false;
   }
   // 已登录却停在登录页路由时，回到书架首页
@@ -2941,6 +2949,11 @@ function field(name, label, type = "text", value = "", options = []) {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
+  if (type === "keyword-chips") {
+    const values = uniqueRelationshipKeywords(Array.isArray(value) ? value : []);
+    const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`).join("");
+    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入关键词后按回车添加；也可用逗号一次添加多个。</small></div>`;
+  }
   if (type === "key-value-list") {
     const config = Array.isArray(options) ? {} : options;
     const keyName = config.keyName ?? "detailLabel";
@@ -3007,6 +3020,53 @@ function bindDynamicListControls(container) {
   };
 }
 
+function appendRelationshipKeywordChips(editor, values) {
+  const input = editor.querySelector("[data-keyword-input]");
+  if (!input) return;
+  const existing = new Set([...editor.querySelectorAll("[data-keyword-value]")].map((control) => String(control.value).toLocaleLowerCase("zh-CN")));
+  const name = editor.dataset.name || "keywords";
+  for (const keyword of uniqueRelationshipKeywords(values)) {
+    const key = keyword.toLocaleLowerCase("zh-CN");
+    if (existing.has(key)) continue;
+    existing.add(key);
+    input.insertAdjacentHTML("beforebegin", `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`);
+  }
+}
+
+function commitRelationshipKeywordInput(editor) {
+  const input = editor.querySelector("[data-keyword-input]");
+  if (!input) return;
+  appendRelationshipKeywordChips(editor, splitRelationshipKeywords(input.value));
+  input.value = "";
+}
+
+function bindRelationshipKeywordControls(container) {
+  container.querySelectorAll("[data-keyword-chips]").forEach((editor) => {
+    const input = editor.querySelector("[data-keyword-input]");
+    if (!input) return;
+    input.addEventListener("keydown", (event) => {
+      if (event.isComposing || event.key !== "Enter") return;
+      event.preventDefault();
+      commitRelationshipKeywordInput(editor);
+    });
+    input.addEventListener("input", () => {
+      const { completed, remainder } = splitRelationshipKeywordInput(input.value);
+      if (!completed.length) return;
+      appendRelationshipKeywordChips(editor, completed);
+      input.value = remainder;
+    });
+    editor.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-keyword-chip-remove]");
+      if (!remove) return;
+      remove.closest("[data-keyword-chip]")?.remove();
+    });
+  });
+}
+
+function commitRelationshipKeywordInputs(container) {
+  container.querySelectorAll("[data-keyword-chips]").forEach(commitRelationshipKeywordInput);
+}
+
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
@@ -3014,6 +3074,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-submit").textContent = options.submitLabel ?? "保存";
   $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
   bindDynamicListControls($("#dialog-fields"));
+  bindRelationshipKeywordControls($("#dialog-fields"));
   const form = $("#dynamic-form");
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") return;
@@ -3021,6 +3082,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
     const submit = $("#dialog-submit");
     submit.disabled = true;
     try {
+      commitRelationshipKeywordInputs(form);
       await onSubmit(new FormData(form));
       $("#form-dialog").close();
     } catch (error) {
@@ -3195,6 +3257,83 @@ function setCharacterHistoryVisible(visible) {
   $("#character-history-button").setAttribute("aria-expanded", String(visible));
 }
 
+const relationshipCategoryLabels = {
+  family: "亲属",
+  social: "社交",
+  emotional: "情感",
+  conflict: "冲突",
+  uncertain: "未确定"
+};
+
+function renderCharacterEditorRelationships() {
+  const host = $("#character-editor-relationships");
+  if (!host) return;
+  if (!characterEditorItem?.id) {
+    host.innerHTML = '<div class="character-editor-empty-field"><b>人物关系</b><span>保存人物档案后即可添加与其他人物的关系。</span></div>';
+    return;
+  }
+  if (characterEditorRelationshipsLoading) {
+    host.innerHTML = '<p class="character-relationship-status">正在读取人物关系……</p>';
+    return;
+  }
+  const characterId = String(characterEditorItem.id);
+  const nameOf = (id) => state.characters.find((character) => character.id === id)?.name ?? "未知角色";
+  const rows = characterEditorRelationships.map((relationship) => {
+    const isSource = relationship.fromCharacterId === characterId;
+    const otherCharacterId = isSource ? relationship.toCharacterId : relationship.fromCharacterId;
+    const direction = relationship.directed ? (isSource ? "→" : "←") : "↔";
+    const category = relationshipCategoryLabels[relationship.category] ?? relationship.category;
+    const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
+    const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
+    return `<article class="character-relationship-row">
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${canEditWork() ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
+    </article>`;
+  }).join("");
+  host.innerHTML = `<div class="character-relationship-toolbar"><p>与 ${esc(characterEditorItem.name)} 有关的其他人物及关系关键词。</p>${canEditWork() ? '<button type="button" class="ghost-button" data-character-relationship-create>新建关系</button>' : ""}</div>${rows || '<p class="character-relationship-status">暂未记录与其他人物的关系。</p>'}`;
+  host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
+    const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
+    if (relationship) void openRelationshipDialog(relationship, { characterId });
+  }));
+  host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
+}
+
+async function loadCharacterEditorRelationships(characterId) {
+  const workId = state.work?.id;
+  if (!workId || characterEditorItem?.id !== characterId) return;
+  characterEditorRelationshipsLoading = true;
+  renderCharacterEditorRelationships();
+  let loaded = false;
+  try {
+    const [characters, relationships] = await Promise.all([
+      api(`/api/works/${workId}/characters`),
+      api(`/api/works/${workId}/relationships`)
+    ]);
+    if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
+    state.characters = characters;
+    characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    loaded = true;
+  } catch (error) {
+    if (state.work?.id === workId && characterEditorItem?.id === characterId) {
+      $("#character-editor-relationships").innerHTML = `<p class="character-relationship-status">关系载入失败：${esc(error.message)}</p>`;
+    }
+  } finally {
+    if (state.work?.id === workId && characterEditorItem?.id === characterId) {
+      characterEditorRelationshipsLoading = false;
+      if (loaded) renderCharacterEditorRelationships();
+    }
+  }
+}
+
+async function refreshRelationshipSurfaces(characterId = null) {
+  const tasks = [];
+  if (state.module === "relationships") tasks.push(renderRelationships());
+  if (characterId && $("#character-editor-dialog").open && characterEditorItem?.id === characterId) {
+    tasks.push(loadCharacterEditorRelationships(characterId));
+  }
+  await Promise.all(tasks);
+}
+
 function renderCharacterEditorFields(item) {
   const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, race.name])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
@@ -3231,11 +3370,14 @@ function renderCharacterEditorFields(item) {
         addLabel: "添加状态"
       }) +
       '<p class="character-editor-field-help">未修改的数字、布尔值、数组和对象会保留原有数据类型；被修改的值会按文本保存。</p>' +
-      field("lockedFields", "锁定字段", "item-list", item?.lockedFields ?? []))
+      field("lockedFields", "锁定字段", "item-list", item?.lockedFields ?? [])),
+    characterEditorSection("relationships", "人物关系", "查看与其他人物的关系及关键词；编辑入口与“关系”面板共用同一份关系数据。",
+      '<div id="character-editor-relationships" class="character-editor-relationships-field"></div>')
   ].join("");
   const name = $("#character-editor-fields [name='name']");
   if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
+  renderCharacterEditorRelationships();
   activateCharacterEditorTab("basic");
 }
 
@@ -3339,6 +3481,8 @@ async function openCharacterDialog(item) {
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
+  characterEditorRelationships = [];
+  characterEditorRelationshipsLoading = Boolean(item);
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
   $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
@@ -3357,6 +3501,9 @@ async function openCharacterDialog(item) {
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
+  const relationshipTab = document.querySelector("[data-character-editor-tab='relationships']");
+  relationshipTab.disabled = !item;
+  relationshipTab.title = item ? "查看和编辑人物关系" : "创建人物档案后即可维护人物关系";
   const dialog = $("#character-editor-dialog");
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
@@ -3381,6 +3528,7 @@ async function openCharacterDialog(item) {
     }
   };
   dialog.showModal();
+  if (item) void loadCharacterEditorRelationships(item.id);
 }
 
 async function openRaceDialog(item) {
@@ -3505,14 +3653,16 @@ function openTimelineSplitDialog(item) {
   }, "原证据同步保留");
 }
 
-async function openRelationshipDialog(item) {
+async function openRelationshipDialog(item, options = {}) {
   state.characters = await api(`/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
-  const options = state.characters.map((item) => [item.id, item.name]);
-  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? options[0][0], options) + field("to", "终点人物", "select", item?.toCharacterId ?? options[1][0], options) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词（用逗号分隔）", "text", item?.keywords?.join("、") ?? "") + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
-    const keywords = String(form.get("keywords") ?? "").split(/[,，、；;]/u).map((value) => value.trim()).filter(Boolean);
+  const characterOptions = state.characters.map((item) => [item.id, item.name]);
+  const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
+  const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
+  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
+    const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed" } });
-    await renderRelationships();
+    await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
 }
 
