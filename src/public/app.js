@@ -15,6 +15,7 @@ import { buildCharacterDetails, buildCharacterSections, buildCharacterState, cha
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
+import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 
 const state = {
@@ -2940,6 +2941,11 @@ function field(name, label, type = "text", value = "", options = []) {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
   }
+  if (type === "keyword-chips") {
+    const values = uniqueRelationshipKeywords(Array.isArray(value) ? value : []);
+    const chips = values.map((keyword) => `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`).join("");
+    return `<div class="form-field keyword-chip-field" data-keyword-chips data-name="${esc(name)}"><span>${esc(label)}</span><div class="keyword-chip-editor" role="group" aria-label="${esc(label)}">${chips}<input type="text" data-keyword-input aria-label="${esc(label)}" placeholder="输入后按回车添加，逗号可批量添加" autocomplete="off"></div><small>输入关键词后按回车添加；也可用逗号一次添加多个。</small></div>`;
+  }
   if (type === "key-value-list") {
     const config = Array.isArray(options) ? {} : options;
     const keyName = config.keyName ?? "detailLabel";
@@ -3006,6 +3012,53 @@ function bindDynamicListControls(container) {
   };
 }
 
+function appendRelationshipKeywordChips(editor, values) {
+  const input = editor.querySelector("[data-keyword-input]");
+  if (!input) return;
+  const existing = new Set([...editor.querySelectorAll("[data-keyword-value]")].map((control) => String(control.value).toLocaleLowerCase("zh-CN")));
+  const name = editor.dataset.name || "keywords";
+  for (const keyword of uniqueRelationshipKeywords(values)) {
+    const key = keyword.toLocaleLowerCase("zh-CN");
+    if (existing.has(key)) continue;
+    existing.add(key);
+    input.insertAdjacentHTML("beforebegin", `<span class="keyword-chip" data-keyword-chip><span>${esc(keyword)}</span><input type="hidden" name="${esc(name)}" value="${esc(keyword)}" data-keyword-value><button type="button" data-keyword-chip-remove aria-label="删除关键词：${esc(keyword)}">×</button></span>`);
+  }
+}
+
+function commitRelationshipKeywordInput(editor) {
+  const input = editor.querySelector("[data-keyword-input]");
+  if (!input) return;
+  appendRelationshipKeywordChips(editor, splitRelationshipKeywords(input.value));
+  input.value = "";
+}
+
+function bindRelationshipKeywordControls(container) {
+  container.querySelectorAll("[data-keyword-chips]").forEach((editor) => {
+    const input = editor.querySelector("[data-keyword-input]");
+    if (!input) return;
+    input.addEventListener("keydown", (event) => {
+      if (event.isComposing || event.key !== "Enter") return;
+      event.preventDefault();
+      commitRelationshipKeywordInput(editor);
+    });
+    input.addEventListener("input", () => {
+      const { completed, remainder } = splitRelationshipKeywordInput(input.value);
+      if (!completed.length) return;
+      appendRelationshipKeywordChips(editor, completed);
+      input.value = remainder;
+    });
+    editor.addEventListener("click", (event) => {
+      const remove = event.target.closest("[data-keyword-chip-remove]");
+      if (!remove) return;
+      remove.closest("[data-keyword-chip]")?.remove();
+    });
+  });
+}
+
+function commitRelationshipKeywordInputs(container) {
+  container.querySelectorAll("[data-keyword-chips]").forEach(commitRelationshipKeywordInput);
+}
+
 function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-title").textContent = title;
   $("#dialog-eyebrow").textContent = eyebrow;
@@ -3013,6 +3066,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#dialog-submit").textContent = options.submitLabel ?? "保存";
   $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
   bindDynamicListControls($("#dialog-fields"));
+  bindRelationshipKeywordControls($("#dialog-fields"));
   const form = $("#dynamic-form");
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") return;
@@ -3020,6 +3074,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
     const submit = $("#dialog-submit");
     submit.disabled = true;
     try {
+      commitRelationshipKeywordInputs(form);
       await onSubmit(new FormData(form));
       $("#form-dialog").close();
     } catch (error) {
@@ -3596,8 +3651,8 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词（用逗号分隔）", "text", item?.keywords?.join("、") ?? "") + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
-    const keywords = String(form.get("keywords") ?? "").split(/[,，、；;]/u).map((value) => value.trim()).filter(Boolean);
+  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
+    const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed" } });
     await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
