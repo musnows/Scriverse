@@ -1427,13 +1427,34 @@ async function initializeAuthentication() {
   return true;
 }
 
+function raiseToastRegion() {
+  const region = $("#toast-region");
+  if (typeof region.showPopover !== "function") return;
+  if (region.matches(":popover-open")) region.hidePopover();
+  region.showPopover();
+}
+
 function toast(message, type = "info") {
+  const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
   element.textContent = message;
-  $("#toast-region").append(element);
-  setTimeout(() => element.remove(), 3600);
+  region.append(element);
+  raiseToastRegion();
+  setTimeout(() => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  }, 3600);
 }
+
+document.addEventListener("toggle", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
+    raiseToastRegion();
+  }
+}, true);
 
 function setSaveState(text, dirty = false) {
   state.dirty = dirty;

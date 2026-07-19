@@ -1226,7 +1226,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-citation-card.is-expanded pre { display: block; }
 .message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
 
-.toast-region { position: fixed; right: 24px; bottom: 24px; z-index: 30; display: grid; max-width: calc(100vw - 48px); gap: 8px; }
+.toast-region { position: fixed; inset: auto 24px 24px auto; z-index: 2147483647; display: grid; max-width: calc(100vw - 48px); margin: 0; padding: 0; gap: 8px; overflow: visible; border: 0; background: transparent; color: inherit; pointer-events: none; }
 .toast-region[data-position="top-right"] { top: 78px; bottom: auto; }
 .toast-region[data-position="bottom-right"] { top: auto; bottom: 24px; }
 .toast { max-width: 360px; background: var(--toast-bg); color: var(--toast-fg); padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: toast-appear-top .18s ease; }
