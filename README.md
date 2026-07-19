@@ -78,6 +78,18 @@ npm run build
 npm start
 ```
 
+### 命令行工具
+
+CLI 用于连接已运行的 Scriverse 服务，查询或编辑作品数据。全局安装后可直接使用 `scriverse` 命令：
+
+```bash
+npm install --global scriverse
+scriverse auth login --server https://your-scriverse.example.com --api-key-file ./api-key.txt
+scriverse work list
+```
+
+使用 `scriverse --help` 查看认证、作品、正文、资源、历史版本和搜索等全部命令。CLI 要求 Node.js `>= 22.5.0`。
+
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
