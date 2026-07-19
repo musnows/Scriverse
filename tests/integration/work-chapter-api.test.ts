@@ -129,6 +129,29 @@ describe("作品、导入和章节版本 API", () => {
     expect(saved.body.data.content).toBe("第一段。\n\n第二段。");
   });
 
+  it("作品目录不返回章节正文并按章节加载正文", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "按需加载作品" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "正文" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "这段正文只能通过章节接口返回。"
+    }).expect(201);
+
+    const directory = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(directory.body.data.volumes[0].chapters[0]).toMatchObject({
+      id: chapter.body.data.id,
+      title: "第一章",
+      wordCount: 14
+    });
+    expect(directory.body.data.volumes[0].chapters[0]).not.toHaveProperty("content");
+    expect(JSON.stringify(directory.body)).not.toContain("这段正文只能通过章节接口返回。");
+
+    const loadedChapter = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}`).expect(200);
+    expect(loadedChapter.body.data.content).toBe("这段正文只能通过章节接口返回。");
+  });
+
   it("从 DOCX 正文中提取并解析卷章", async () => {
     const zip = new JSZip();
     zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -264,8 +287,10 @@ describe("作品、导入和章节版本 API", () => {
       .attach("file", Buffer.from("第一卷 启航\n第一章 信号\n改写后的正文。"), "v2.txt")
       .expect(201);
 
-    const treeBefore = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
-    expect(treeBefore.body.data.volumes[0].chapters[0].content).toBe("改写后的正文。");
+    const directoryBefore = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    const chapterId = directoryBefore.body.data.volumes[0].chapters[0].id;
+    const chapterBefore = await request(runtime.app).get(`/api/chapters/${chapterId}`).expect(200);
+    expect(chapterBefore.body.data.content).toBe("改写后的正文。");
 
     const fileVersions = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     const v2VersionId = fileVersions.body.data.find((item: { fileName: string }) => item.fileName === "v2.txt").id;

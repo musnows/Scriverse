@@ -2,6 +2,7 @@ import type { ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { accountReference, logger } from "./logger.js";
 import { currentRequestActor } from "./request-context.js";
 import {
   countWords,
@@ -470,6 +471,14 @@ export class Store {
       now(),
       actor?.userId ?? null
     );
+    const detailKeys = detail && typeof detail === "object" && !Array.isArray(detail) ? Object.keys(detail as Record<string, unknown>) : [];
+    logger.info("domain.change.recorded", {
+      action,
+      workId,
+      entityType,
+      entityId: entityType === "user" && entityId ? accountReference(entityId) : entityId,
+      detailKeys
+    });
   }
 
   createWork(input: WorkInput): Record<string, unknown> {
@@ -727,6 +736,30 @@ export class Store {
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
     for (const row of chapterRows) {
       const chapter = this.mapChapter(row);
+      const volumeId = requiredString(row, "volume_id");
+      const list = chaptersByVolume.get(volumeId) ?? [];
+      list.push(chapter);
+      chaptersByVolume.set(volumeId, list);
+    }
+    const volumes = volumeRows.map((row) => ({
+      ...this.mapVolume(row),
+      chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
+    }));
+    return { ...work, volumes };
+  }
+
+  getWorkDirectory(workId: string): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const chapterRows = this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE work_id = ? ORDER BY sort_order, created_at`,
+      workId
+    );
+    const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
+    for (const row of chapterRows) {
+      const chapter = this.mapChapterDirectoryEntry(row);
       const volumeId = requiredString(row, "volume_id");
       const list = chaptersByVolume.get(volumeId) ?? [];
       list.push(chapter);
@@ -1439,7 +1472,7 @@ export class Store {
       ? "owner"
       : actor?.role === "admin"
         ? "admin"
-        : String(membership?.role ?? "") === "editor" ? "editor" : null;
+        : ["editor", "viewer"].includes(String(membership?.role ?? "")) ? String(membership?.role) : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")
@@ -1485,11 +1518,17 @@ export class Store {
 
   private mapChapter(row: Row): Record<string, unknown> {
     return {
+      ...this.mapChapterDirectoryEntry(row),
+      content: requiredString(row, "content")
+    };
+  }
+
+  private mapChapterDirectoryEntry(row: Row): Record<string, unknown> {
+    return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       volumeId: requiredString(row, "volume_id"),
       title: requiredString(row, "title"),
-      content: requiredString(row, "content"),
       chapterType: requiredString(row, "chapter_type") || "正文",
       sortOrder: numberValue(row, "sort_order"),
       wordCount: numberValue(row, "word_count"),

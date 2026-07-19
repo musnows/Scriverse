@@ -65,7 +65,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(privateWorks.body.data.map((work: { id: string }) => work.id)).toEqual([writerWorkId]);
     await writer.agent.get(`/api/works/${adminWorkId}`).expect(403);
 
-    await admin.agent.post(`/api/works/${adminWorkId}/members`).set("X-CSRF-Token", admin.csrfToken).send({ userId: writer.user.userId }).expect(201);
+    await admin.agent.post(`/api/works/${adminWorkId}/members`).set("X-CSRF-Token", admin.csrfToken).send({ userId: writer.user.userId, role: "editor" }).expect(201);
     const sharedWorks = await writer.agent.get("/api/works").expect(200);
     expect(new Set(sharedWorks.body.data.map((work: { id: string }) => work.id))).toEqual(new Set([adminWorkId, writerWorkId]));
 
@@ -87,6 +87,77 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await writer.agent.delete(`/api/works/${adminWorkId}`).set("X-CSRF-Token", writer.csrfToken).expect(403);
     await writer.agent.get("/api/platform/ai/providers").expect(403);
     await writer.agent.patch(`/api/chapters/${chapter.body.data.id}`).send({ content: "缺少 CSRF。" }).expect(403);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("仅查看成员可读取正文和设定，但所有作品写操作都会被拒绝", async () => {
+    const owner = await register(runtime, "viewer_owner");
+    const viewer = await register(runtime, "readonly_guest");
+    const workResponse = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "只读测试作品" })
+      .expect(201);
+    const workId = String(workResponse.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "第一章", content: "只能阅读的正文。" })
+      .expect(201);
+    const setting = await owner.agent.post(`/api/works/${workId}/settings`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "潮汐规则", category: "世界规则", content: "月升时开启航道。" })
+      .expect(201);
+
+    const invited = await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: viewer.user.userId, role: "viewer" })
+      .expect(201);
+    expect(invited.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: viewer.user.userId, role: "viewer" })
+    ]));
+
+    const works = await viewer.agent.get("/api/works").expect(200);
+    expect(works.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: workId, accessRole: "viewer" })
+    ]));
+    const workTree = await viewer.agent.get(`/api/works/${workId}`).expect(200);
+    expect(workTree.body.data.volumes[0].chapters[0]).toMatchObject({ id: chapter.body.data.id, title: "第一章" });
+    const visibleChapter = await viewer.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
+    expect(visibleChapter.body.data.content).toBe("只能阅读的正文。");
+    const settings = await viewer.agent.get(`/api/works/${workId}/settings`).expect(200);
+    expect(settings.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: setting.body.data.id, content: "月升时开启航道。" })
+    ]));
+
+    const chapterWrite = await viewer.agent.patch(`/api/chapters/${chapter.body.data.id}`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ content: "越权修改。" })
+      .expect(403);
+    expect(chapterWrite.body.error.code).toBe("WORK_EDIT_DENIED");
+    await viewer.agent.post(`/api/works/${workId}/settings`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ title: "越权设定", category: "世界规则", content: "不应创建。" })
+      .expect(403);
+    await viewer.agent.patch(`/api/works/${workId}/members/${viewer.user.userId}`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ role: "editor" })
+      .expect(403);
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content).toBe("只能阅读的正文。");
+
+    const promoted = await owner.agent.patch(`/api/works/${workId}/members/${viewer.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "editor" })
+      .expect(200);
+    expect(promoted.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: viewer.user.userId, role: "editor" })
+    ]));
+    await viewer.agent.patch(`/api/chapters/${chapter.body.data.id}`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ content: "获得编辑权限后的修改。" })
+      .expect(200);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 

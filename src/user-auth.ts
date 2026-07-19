@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import type { Request, RequestHandler, Response } from "express";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { sanitizeRequestPath } from "./http-logging.js";
+import { accountReference, logger } from "./logger.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 
 export type AuthUser = RequestActor & {
@@ -250,9 +252,15 @@ export class UserAuthService {
     const fallbackSalt = "invalid-login-salt";
     const calculated = passwordDigest(password, String(row?.password_salt ?? fallbackSalt));
     const valid = row && safeEqual(calculated, String(row.password_hash));
-    if (!valid) throw new AppError(401, "INVALID_CREDENTIALS", "用户名或密码不正确");
+    if (!valid) {
+      logger.warn("auth.login.failed", { reason: "invalid_credentials" });
+      throw new AppError(401, "INVALID_CREDENTIALS", "用户名或密码不正确");
+    }
     const user = mapUser(row);
-    if (user.status !== "active") throw new AppError(403, "ACCOUNT_DISABLED", "该账户已被停用");
+    if (user.status !== "active") {
+      logger.warn("auth.login.failed", { reason: "account_disabled", actorRef: accountReference(user.userId) });
+      throw new AppError(403, "ACCOUNT_DISABLED", "该账户已被停用");
+    }
     this.database.run("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", new Date().toISOString(), new Date().toISOString(), user.userId);
     return this.createSession(user.userId);
   }
@@ -443,7 +451,7 @@ export class UserAuthService {
     return this.database.all(
       `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
        FROM work_memberships membership JOIN users user ON user.id = membership.user_id
-       WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 ELSE 1 END, user.username`,
+       WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user.username`,
       workId
     ).map((row) => ({
       userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
@@ -454,17 +462,32 @@ export class UserAuthService {
     }));
   }
 
-  addMember(workId: string, userId: string, invitedByUserId: string): Record<string, unknown>[] {
+  addMember(workId: string, userId: string, role: "editor" | "viewer", invitedByUserId: string): Record<string, unknown>[] {
     const user = this.getUser(userId);
     if (user.status !== "active") throw new AppError(409, "USER_DISABLED", "不能邀请已停用用户");
     this.database.run(
       `INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at)
-       VALUES (?, ?, 'editor', ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET role = 'editor', invited_by_user_id = excluded.invited_by_user_id`,
+       VALUES (?, ?, ?, ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET role = excluded.role, invited_by_user_id = excluded.invited_by_user_id`,
       workId,
       userId,
+      role,
       invitedByUserId,
       new Date().toISOString()
     );
+    return this.listMembers(workId);
+  }
+
+  updateMemberRole(workId: string, userId: string, role: "editor" | "viewer"): Record<string, unknown>[] {
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    if (!work) throw notFound("作品");
+    if (String(work.owner_user_id ?? "") === userId) throw new AppError(409, "OWNER_REQUIRED", "不能修改作品创建者权限");
+    const result = this.database.run(
+      "UPDATE work_memberships SET role = ? WHERE work_id = ? AND user_id = ? AND role <> 'owner'",
+      role,
+      workId,
+      userId
+    );
+    if (result.changes === 0) throw notFound("作品成员");
     return this.listMembers(workId);
   }
 
@@ -476,13 +499,14 @@ export class UserAuthService {
     return this.listMembers(workId);
   }
 
-  workRole(user: AuthUser, workId: string, allowAdminAccess = true): "admin" | "owner" | "editor" | null {
+  workRole(user: AuthUser, workId: string, allowAdminAccess = true): "admin" | "owner" | "editor" | "viewer" | null {
     if (allowAdminAccess && user.role === "admin") return "admin";
     const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return "owner";
     const membership = this.database.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
-    return String(membership?.role ?? "") === "editor" ? "editor" : null;
+    const role = String(membership?.role ?? "");
+    return role === "editor" || role === "viewer" ? role : null;
   }
 
   assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false, allowAdminAccess = true): void {
@@ -513,6 +537,7 @@ export function createUserSessionMiddleware(auth: UserAuthService, disabled = fa
     if (disabled) return runWithRequestActor(null, next);
     const apiKey = auth.authenticateApiKey(request);
     if (auth.hasApiKeyCredential(request) && !apiKey) {
+      logger.warn("auth.request.rejected", { reason: "invalid_api_key", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "API_KEY_INVALID", message: "API Key 无效或已失效" } });
       return;
     }
@@ -532,18 +557,23 @@ export function createUserSessionMiddleware(auth: UserAuthService, disabled = fa
       || (request.path === "/api/auth/login" && request.method === "POST")
       || !request.path.startsWith("/api/");
     if (!session && !apiKey && !isPublic) {
+      logger.warn("auth.request.rejected", { reason: "authentication_required", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "AUTH_REQUIRED", message: "请先登录" } });
       return;
     }
     if (session && !["GET", "HEAD", "OPTIONS"].includes(request.method) && request.path !== "/api/auth/login" && request.path !== "/api/auth/register") {
       const csrf = request.get("x-csrf-token") ?? "";
       if (!safeEqual(csrf, session.csrfToken)) {
+        logger.warn("auth.request.rejected", { reason: "invalid_csrf", method: request.method, path: sanitizeRequestPath(request.path), actorRef: accountReference(session.user.userId) });
         response.status(403).json({ error: { code: "CSRF_TOKEN_INVALID", message: "请求校验失败，请刷新页面后重试" } });
         return;
       }
     }
     const user = apiKey?.user ?? session?.user ?? null;
-    return runWithRequestActor(user ? { ...user, authentication: apiKey ? "api-key" : "session" } : null, next);
+    return runWithRequestActor(user ? { ...user, authentication: apiKey ? "api-key" : "session" } : null, () => {
+      if (user) logger.debug("auth.request.authenticated", { authMethod: apiKey ? "api-key" : "session" });
+      next();
+    });
   };
 }
 
@@ -569,6 +599,7 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   return (request, response, next) => {
     if (disabled || request.authMethod !== "api-key") return next();
     if (cliApiRules.some((rule) => rule.methods.includes(request.method) && rule.path.test(request.path))) return next();
+    logger.warn("auth.request.rejected", { reason: "cli_scope_denied", method: request.method, path: sanitizeRequestPath(request.path) });
     response.status(403).json({ error: { code: "CLI_SCOPE_DENIED", message: "API Key 不能访问用户管理、系统管理或未开放给 CLI 的接口" } });
   };
 }

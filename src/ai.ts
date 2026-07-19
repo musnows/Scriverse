@@ -2,6 +2,7 @@ import type { AiMessage, ContextScope, TaskType } from "./domain.js";
 import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { logger, sanitizeError } from "./logger.js";
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { Store, type AiConversationContext } from "./store.js";
@@ -31,6 +32,15 @@ type ModelInput = {
   enabled?: boolean;
   note?: string;
 };
+
+export function aiErrorForLog(error: unknown): Record<string, unknown> {
+  const sanitized = sanitizeError(error);
+  const message = typeof sanitized.message === "string" ? sanitized.message : "AI operation failed";
+  const httpStatus = message.match(/^HTTP (\d{3}):/u)?.[1];
+  if (httpStatus) return { name: sanitized.name ?? "Error", message: `Provider returned HTTP ${httpStatus}` };
+  if (message.includes("returned invalid JSON")) return { name: sanitized.name ?? "Error", message: "Provider returned invalid JSON" };
+  return sanitized;
+}
 
 type ProviderRow = Row & {
   id: string;
@@ -788,6 +798,7 @@ export class AiManager {
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    logger.info("ai.manager.ready");
   }
 
   resetAutoRunBatch(workId: string): void {
@@ -807,6 +818,7 @@ export class AiManager {
       void this.drainAutoRun(workId);
     }, 0);
     this.autoRunTimers.set(workId, timer);
+    logger.debug("ai.auto_run.scheduled", { workId });
   }
 
   startAutoRunBatch(workId: string): Record<string, unknown> {
@@ -817,6 +829,11 @@ export class AiManager {
     }
     this.resetAutoRunBatch(workId);
     this.scheduleAutoRun(workId);
+    logger.info("ai.auto_run.batch_started", {
+      workId,
+      concurrency: settings.autoRunConcurrency,
+      batchLimit: settings.autoRunBatchLimit
+    });
     return {
       workId,
       autoRunEnabled: true,
@@ -828,10 +845,12 @@ export class AiManager {
   }
 
   dispose(): void {
+    logger.info("ai.manager.disposing", { scheduledWorks: this.autoRunTimers.size, activeTasks: this.taskControllers.size });
     for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
     this.autoRunTimers.clear();
     this.autoRunBatches.clear();
     this.store.setAnalysisTaskQueuedHandler(null);
+    logger.info("ai.manager.disposed");
   }
 
   private getAutoRunBatch(workId: string): { claimed: number; starting: Set<string> } {
@@ -844,6 +863,7 @@ export class AiManager {
 
   private async drainAutoRun(workId: string): Promise<void> {
     try {
+      logger.debug("ai.auto_run.drain_started", { workId });
       const settings = this.store.getWorkAiSettings(workId);
       if (!settings.autoRunEnabled) return;
       const batch = this.getAutoRunBatch(workId);
@@ -868,7 +888,8 @@ export class AiManager {
             this.scheduleAutoRun(workId);
           });
       }
-    } catch {
+    } catch (error) {
+      logger.warn("ai.auto_run.drain_failed", { workId, error: aiErrorForLog(error) });
       // 数据库已关闭或作品不存在时忽略自动调度
     }
   }
@@ -979,6 +1000,8 @@ export class AiManager {
     const apiKey = this.decryptKey(row);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
+    const startedAt = process.hrtime.bigint();
+    logger.info("ai.provider_test.started", { providerId });
     try {
       const endpoint = `${normalizeBaseUrl(stringValue(row, "base_url"))}/models`;
       const response = await this.outboundFetch(endpoint, {
@@ -998,6 +1021,12 @@ export class AiManager {
         timestamp,
         providerId
       );
+      logger.info("ai.provider_test.completed", {
+        providerId,
+        ok: true,
+        availableModelCount: availableModels.length,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      });
       return { ok: true, availableModels, provider: this.getProvider(providerId) };
     } catch (error) {
       const message = error instanceof Error ? error.message : "连接失败";
@@ -1007,6 +1036,12 @@ export class AiManager {
         now(),
         providerId
       );
+      logger.warn("ai.provider_test.completed", {
+        providerId,
+        ok: false,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: aiErrorForLog(error)
+      });
       return { ok: false, error: message, provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
@@ -1324,11 +1359,14 @@ export class AiManager {
     const task = this.store.getTask(taskId);
     const workId = String(task.workId);
     const batch = this.getAutoRunBatch(workId);
+    const startedAt = process.hrtime.bigint();
+    logger.info("ai.task.started", { taskId, workId, taskType: task.taskType, modelId: modelId ?? null });
     if (task.status !== "pending") throw new AppError(409, "TASK_NOT_PENDING", "只有待执行任务可以运行");
     if (!this.store.isTaskSourceCurrent(taskId)) {
       const expired = this.store.updateTask(taskId, { status: "expired" });
       batch.starting.delete(taskId);
       this.scheduleAutoRun(workId);
+      logger.warn("ai.task.expired", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
       return expired;
     }
     const settings = this.store.getWorkAiSettings(workId);
@@ -1368,12 +1406,18 @@ export class AiManager {
         });
         result = { content: generated.content, callId: generated.callId };
       }
-      if (!this.taskCanCommit(taskId)) return this.store.getTask(taskId);
-      return this.store.updateTask(taskId, { status: "review", progress: 100, result });
+      if (!this.taskCanCommit(taskId)) {
+        logger.warn("ai.task.result_discarded", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
+        return this.store.getTask(taskId);
+      }
+      const completed = this.store.updateTask(taskId, { status: "review", progress: 100, result });
+      logger.info("ai.task.completed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
+      return completed;
     } catch (error) {
       if (this.store.getTask(taskId).status !== "running") return this.store.getTask(taskId);
       const message = error instanceof Error ? error.message : "分析失败";
       this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [{ message }] });
+      logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {
       this.taskControllers.delete(taskId);
@@ -1387,6 +1431,7 @@ export class AiManager {
     this.taskControllers.get(taskId)?.abort(new Error("分析任务已取消"));
     this.taskControllers.delete(taskId);
     this.scheduleAutoRun(String(task.workId));
+    logger.warn("ai.task.cancelled", { taskId, workId: task.workId });
     return task;
   }
 
@@ -1789,6 +1834,18 @@ export class AiManager {
       timestamp,
       currentRequestActor()?.userId ?? null
     );
+    const callStartedAt = process.hrtime.bigint();
+    logger.info("ai.call.started", {
+      callId,
+      workId: input.workId,
+      taskType: input.taskType,
+      providerId: stringValue(provider, "id"),
+      modelId: stringValue(model, "id"),
+      streaming: false,
+      contextChars: context.length,
+      instructionChars: input.instruction.length,
+      toolCount: tools.length
+    });
     try {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
@@ -1806,6 +1863,8 @@ export class AiManager {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           let retryable = true;
+          const attemptStartedAt = process.hrtime.bigint();
+          logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, toolChoice });
           try {
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
               const controller = new AbortController();
@@ -1826,6 +1885,13 @@ export class AiManager {
                 input.signal?.removeEventListener("abort", forwardAbort);
               }
             });
+            logger.info("ai.call.attempt_completed", {
+              callId,
+              attempt,
+              status: candidate.status,
+              ok: candidate.ok,
+              durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000
+            });
             if (candidate.ok) {
               try {
                 return JSON.parse(candidate.body) as CompletionPayload;
@@ -1840,6 +1906,13 @@ export class AiManager {
             }
           } catch (error) {
             lastFailure = error;
+            logger.warn("ai.call.attempt_failed", {
+              callId,
+              attempt,
+              retryable: retryable && attempt < maximumAttempts && !input.signal?.aborted,
+              durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
+              error: aiErrorForLog(error)
+            });
             if (input.signal?.aborted) throw error;
             if (!retryable || attempt >= maximumAttempts) throw error;
           }
@@ -1888,6 +1961,7 @@ export class AiManager {
         });
         for (const toolCall of toolCalls) {
           const execution = this.executeAgentTool(input.workId, toolCall);
+          logger.info("ai.tool_call.completed", { callId, toolName: execution.name, status: execution.status, round });
           executedToolCalls.push(execution);
           processSteps.push({ id: id("process"), type: "tool", round, toolCall: execution, createdAt: execution.calledAt });
           input.onToolCall?.(execution, round);
@@ -1916,10 +1990,29 @@ export class AiManager {
         now(),
         callId
       );
-      return { callId, content, outputTokens: resolveOutputTokens(payload.usage, content), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
+      const outputTokens = resolveOutputTokens(payload.usage, content);
+      logger.info("ai.call.completed", {
+        callId,
+        workId: input.workId,
+        taskType: input.taskType,
+        streaming: false,
+        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
+        outputChars: content.length,
+        outputTokens,
+        toolCallCount: executedToolCalls.length
+      });
+      return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
+      logger.error("ai.call.failed", {
+        callId,
+        workId: input.workId,
+        taskType: input.taskType,
+        streaming: false,
+        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
+        error: aiErrorForLog(error)
+      });
       throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message });
     }
   }
@@ -1948,6 +2041,17 @@ export class AiManager {
       now(),
       currentRequestActor()?.userId ?? null
     );
+    const callStartedAt = process.hrtime.bigint();
+    logger.info("ai.call.started", {
+      callId,
+      workId: input.workId,
+      taskType: input.taskType,
+      providerId: stringValue(provider, "id"),
+      modelId: stringValue(model, "id"),
+      streaming: true,
+      contextChars: context.length,
+      instructionChars: input.instruction.length
+    });
     try {
       const apiKey = this.decryptKey(provider);
       const endpoint = `${normalizeBaseUrl(stringValue(provider, "base_url"))}/chat/completions`;
@@ -1958,6 +2062,8 @@ export class AiManager {
       const thinkingStepId = id("process");
       const thinkingCreatedAt = now();
       for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+        const attemptStartedAt = process.hrtime.bigint();
+        logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, streaming: true });
         try {
           const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
             const controller = new AbortController();
@@ -1990,6 +2096,14 @@ export class AiManager {
               input.signal?.removeEventListener("abort", forwardAbort);
             }
           });
+          logger.info("ai.call.attempt_completed", {
+            callId,
+            attempt,
+            status: candidate.status,
+            ok: candidate.ok,
+            durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
+            streaming: true
+          });
           if (candidate.ok) {
             streamedResult = candidate.result;
             break;
@@ -1998,6 +2112,14 @@ export class AiManager {
           if (candidate.status !== 429 && candidate.status < 500) attempt = maximumAttempts;
         } catch (error) {
           lastFailure = error;
+          logger.warn("ai.call.attempt_failed", {
+            callId,
+            attempt,
+            retryable: !input.signal?.aborted && !emitted && attempt < maximumAttempts,
+            durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
+            streaming: true,
+            error: aiErrorForLog(error)
+          });
           if (input.signal?.aborted || emitted || attempt >= maximumAttempts) throw error;
         }
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
@@ -2013,10 +2135,27 @@ export class AiManager {
         now(),
         callId
       );
+      logger.info("ai.call.completed", {
+        callId,
+        workId: input.workId,
+        taskType: input.taskType,
+        streaming: true,
+        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
+        outputChars: content.length,
+        outputTokens
+      });
       return { callId, content, outputTokens, provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
     } catch (error) {
       const message = error instanceof Error ? error.message : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
+      logger.error("ai.call.failed", {
+        callId,
+        workId: input.workId,
+        taskType: input.taskType,
+        streaming: true,
+        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
+        error: aiErrorForLog(error)
+      });
       throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message });
     }
   }
@@ -3505,6 +3644,13 @@ export class AiManager {
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       schedule.queue.push(entry);
+      logger.debug("ai.provider_queue.enqueued", {
+        providerId,
+        active: schedule.active,
+        queued: schedule.queue.length,
+        concurrencyLimit: schedule.concurrencyLimit,
+        rpmLimit: schedule.rpmLimit
+      });
       this.pumpProviderSchedule(providerId);
     });
   }
@@ -3528,16 +3674,19 @@ export class AiManager {
       }
       schedule.active += 1;
       schedule.starts.push(Date.now());
+      logger.debug("ai.provider_queue.dispatched", { providerId, active: schedule.active, queued: schedule.queue.length });
       void Promise.resolve()
         .then(entry.run)
         .then(entry.resolve, entry.reject)
         .finally(() => {
           schedule.active -= 1;
+          logger.debug("ai.provider_queue.finished", { providerId, active: schedule.active, queued: schedule.queue.length });
           this.pumpProviderSchedule(providerId);
         });
     }
     if (schedule.queue.length > 0 && schedule.active < schedule.concurrencyLimit && schedule.starts.length >= schedule.rpmLimit) {
       const delay = Math.max(1, (schedule.starts[0] ?? Date.now()) + 60_000 - Date.now() + 1);
+      logger.info("ai.provider_queue.rate_limited", { providerId, queued: schedule.queue.length, retryInMs: delay });
       schedule.timer = setTimeout(() => this.pumpProviderSchedule(providerId), delay);
       schedule.timer.unref?.();
     }

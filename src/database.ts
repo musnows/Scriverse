@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { logger, sanitizeError } from "./logger.js";
 import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentParagraphs } from "./utils.js";
 
 export type Row = Record<string, unknown>;
@@ -10,17 +11,27 @@ export class Database {
   readonly raw: DatabaseSync;
 
   constructor(filename: string) {
-    if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
-    this.raw = new DatabaseSync(filename);
-    this.raw.exec("PRAGMA foreign_keys = ON");
-    this.raw.exec("PRAGMA busy_timeout = 5000");
-    if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
-    this.migrate();
-    this.recoverInterruptedOperations();
+    logger.info("database.opening", { databasePath: filename, inMemory: filename === ":memory:" });
+    try {
+      if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
+      this.raw = new DatabaseSync(filename);
+      this.raw.exec("PRAGMA foreign_keys = ON");
+      this.raw.exec("PRAGMA busy_timeout = 5000");
+      if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
+      this.migrate();
+      this.recoverInterruptedOperations();
+      const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
+      logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
+    } catch (error) {
+      logger.error("database.open_failed", { databasePath: filename, error: sanitizeError(error) });
+      throw error;
+    }
   }
 
   close(): void {
+    logger.info("database.closing");
     this.raw.close();
+    logger.info("database.closed");
   }
 
   run(sql: string, ...params: SQLInputValue[]): { changes: number; lastInsertRowid: number | bigint } {
@@ -38,13 +49,20 @@ export class Database {
 
   transaction<T>(operation: () => T): T {
     if (this.raw.isTransaction) return operation();
+    const startedAt = process.hrtime.bigint();
+    logger.debug("database.transaction.started");
     this.raw.exec("BEGIN IMMEDIATE");
     try {
       const result = operation();
       this.raw.exec("COMMIT");
+      logger.debug("database.transaction.committed", { durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
       return result;
     } catch (error) {
       this.raw.exec("ROLLBACK");
+      logger.warn("database.transaction.rolled_back", {
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: sanitizeError(error)
+      });
       throw error;
     }
   }
@@ -1141,6 +1159,24 @@ export class Database {
     }
     if (!applied.has(27)) {
       this.transaction(() => {
+        this.run(`CREATE TABLE work_memberships_v27 (
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK(role IN ('owner', 'editor', 'viewer')),
+          invited_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(work_id, user_id)
+        )`);
+        this.run(`INSERT INTO work_memberships_v27 (work_id, user_id, role, invited_by_user_id, created_at)
+          SELECT work_id, user_id, role, invited_by_user_id, created_at FROM work_memberships`);
+        this.run("DROP TABLE work_memberships");
+        this.run("ALTER TABLE work_memberships_v27 RENAME TO work_memberships");
+        this.run("CREATE INDEX idx_work_memberships_user ON work_memberships(user_id, work_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(28)) {
+      this.transaction(() => {
         this.raw.exec(`
           CREATE TABLE IF NOT EXISTS chapter_paragraph_search (
             id INTEGER PRIMARY KEY,
@@ -1201,7 +1237,7 @@ export class Database {
           END
           WHERE NOT json_valid(agent_tools_json)
              OR NOT EXISTS (SELECT 1 FROM json_each(agent_tools_json) WHERE value = 'grep')`);
-        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?)", new Date().toISOString());
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (28, ?)", new Date().toISOString());
       });
     }
   }
