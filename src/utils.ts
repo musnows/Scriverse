@@ -25,6 +25,26 @@ export function normalizeParagraphSpacing(value: string): string {
     .replace(/\n{3,}/gu, "\n\n");
 }
 
+export function splitDocumentParagraphs(value: string): string[] {
+  return value
+    .split(/\n[\t\p{Zs}\uFEFF]*\n+/gu)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+}
+
+export function normalizeDocumentSearchText(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+}
+
+export function documentShortSearchTerms(value: string): string[] {
+  const characters = [...normalizeDocumentSearchText(value)];
+  const terms = new Set(characters);
+  for (let index = 0; index < characters.length - 1; index += 1) {
+    terms.add(`${characters[index]}${characters[index + 1]}`);
+  }
+  return [...terms];
+}
+
 export function json<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback;
   try {

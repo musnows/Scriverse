@@ -84,7 +84,7 @@ type GenerateResult = {
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const AGENT_TOOL_IDS = ["story_index", "read_chapters", "query_story_knowledge"] as const;
+const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
@@ -122,6 +122,10 @@ const readChaptersArguments = z.object({
   chapterIds: z.array(z.string().min(1).max(200)).min(1).max(3),
   include: z.enum(["summary", "content", "both"]).default("both")
 }).strict();
+const grepArguments = z.object({
+  keyword: z.string().trim().min(1).max(200),
+  limit: z.number().int().min(1).max(100).default(20)
+}).strict();
 const queryStoryKnowledgeArguments = z.object({
   query: z.string().trim().min(1).max(200),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([])
@@ -142,6 +146,14 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "read_chapters",
       description: "读取指定章节的当前正文与章节概要。仅在需要原文证据或精确措辞时使用；每次最多 3 章。",
       parameters: { type: "object", properties: { chapterIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["chapterIds"], additionalProperties: false }
+    }
+  },
+  grep: {
+    type: "function",
+    function: {
+      name: "grep",
+      description: "在当前作品的章节正文索引中查询关键字，返回关键字所在的完整段落及章节标题和 ID。默认返回前 20 条，可按需调整 limit。",
+      parameters: { type: "object", properties: { keyword: { type: "string", minLength: 1, maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: 100, default: 20 } }, required: ["keyword"], additionalProperties: false }
     }
   },
   query_story_knowledge: {
@@ -1529,7 +1541,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -1621,6 +1633,7 @@ export class AiManager {
       : null;
     const schema = name === "story_index" ? storyIndexArguments
       : name === "read_chapters" ? readChaptersArguments
+      : name === "grep" ? grepArguments
       : name === "query_story_knowledge" ? queryStoryKnowledgeArguments
       : null;
     if (!schema) {
@@ -1698,6 +1711,18 @@ export class AiManager {
         }
       });
       return { id: toolCall.id, name, calledAt, arguments: { chapterIds, include }, status: "completed", result: { ok: true, data: { chapters, contentLimitChars: 36_000 } } };
+    }
+    if (name === "grep") {
+      const { keyword, limit } = args as z.infer<typeof grepArguments>;
+      const matches = this.store.searchChapterParagraphs(workId, keyword, limit);
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { keyword, limit },
+        status: "completed",
+        result: { ok: true, data: { keyword, limit, matches } }
+      };
     }
     if (name === "query_story_knowledge") {
       const { query, categories: categoryList } = args as z.infer<typeof queryStoryKnowledgeArguments>;
