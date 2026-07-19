@@ -1340,9 +1340,10 @@ async function api(path, options = {}) {
 }
 
 function selectAuthMode(mode) {
-  const login = mode === "login";
+  const registerTab = $("#auth-register-tab");
+  const login = mode === "login" || registerTab.disabled;
   $("#auth-login-tab").setAttribute("aria-selected", String(login));
-  $("#auth-register-tab").setAttribute("aria-selected", String(!login));
+  registerTab.setAttribute("aria-selected", String(!login));
   $("#login-form").classList.toggle("hidden", !login);
   $("#register-form").classList.toggle("hidden", login);
   $("#auth-error").textContent = "";
@@ -1368,7 +1369,10 @@ function showAuth(setupRequired, registrationOpen = true) {
     ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
     : "你的作品、协作权限和每一次修改都会绑定到账户。";
   const canRegister = setupRequired || registrationOpen;
-  $("#auth-register-tab").classList.toggle("hidden", !canRegister);
+  const registerTab = $("#auth-register-tab");
+  registerTab.disabled = !canRegister;
+  registerTab.setAttribute("aria-disabled", String(!canRegister));
+  registerTab.textContent = canRegister ? "注册" : "注册已禁用";
   selectAuthMode(setupRequired ? "register" : "login");
 }
 
