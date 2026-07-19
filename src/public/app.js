@@ -459,6 +459,8 @@ let aiMentionRange = null;
 let settingsReturnContext = null;
 let characterEditorItem = null;
 let characterEditorVersions = [];
+let characterEditorRelationships = [];
+let characterEditorRelationshipsLoading = false;
 let entityHistoryContext = null;
 
 function setModuleNavExpanded(expanded) {
@@ -3192,6 +3194,83 @@ function setCharacterHistoryVisible(visible) {
   $("#character-history-button").setAttribute("aria-expanded", String(visible));
 }
 
+const relationshipCategoryLabels = {
+  family: "亲属",
+  social: "社交",
+  emotional: "情感",
+  conflict: "冲突",
+  uncertain: "未确定"
+};
+
+function renderCharacterEditorRelationships() {
+  const host = $("#character-editor-relationships");
+  if (!host) return;
+  if (!characterEditorItem?.id) {
+    host.innerHTML = '<div class="character-editor-empty-field"><b>人物关系</b><span>保存人物档案后即可添加与其他人物的关系。</span></div>';
+    return;
+  }
+  if (characterEditorRelationshipsLoading) {
+    host.innerHTML = '<p class="character-relationship-status">正在读取人物关系……</p>';
+    return;
+  }
+  const characterId = String(characterEditorItem.id);
+  const nameOf = (id) => state.characters.find((character) => character.id === id)?.name ?? "未知角色";
+  const rows = characterEditorRelationships.map((relationship) => {
+    const isSource = relationship.fromCharacterId === characterId;
+    const otherCharacterId = isSource ? relationship.toCharacterId : relationship.fromCharacterId;
+    const direction = relationship.directed ? (isSource ? "→" : "←") : "↔";
+    const category = relationshipCategoryLabels[relationship.category] ?? relationship.category;
+    const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
+    const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
+    return `<article class="character-relationship-row">
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${canEditWork() ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
+    </article>`;
+  }).join("");
+  host.innerHTML = `<div class="character-relationship-toolbar"><p>与 ${esc(characterEditorItem.name)} 有关的其他人物及关系关键词。</p>${canEditWork() ? '<button type="button" class="ghost-button" data-character-relationship-create>新建关系</button>' : ""}</div>${rows || '<p class="character-relationship-status">暂未记录与其他人物的关系。</p>'}`;
+  host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
+    const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
+    if (relationship) void openRelationshipDialog(relationship, { characterId });
+  }));
+  host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
+}
+
+async function loadCharacterEditorRelationships(characterId) {
+  const workId = state.work?.id;
+  if (!workId || characterEditorItem?.id !== characterId) return;
+  characterEditorRelationshipsLoading = true;
+  renderCharacterEditorRelationships();
+  let loaded = false;
+  try {
+    const [characters, relationships] = await Promise.all([
+      api(`/api/works/${workId}/characters`),
+      api(`/api/works/${workId}/relationships`)
+    ]);
+    if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
+    state.characters = characters;
+    characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    loaded = true;
+  } catch (error) {
+    if (state.work?.id === workId && characterEditorItem?.id === characterId) {
+      $("#character-editor-relationships").innerHTML = `<p class="character-relationship-status">关系载入失败：${esc(error.message)}</p>`;
+    }
+  } finally {
+    if (state.work?.id === workId && characterEditorItem?.id === characterId) {
+      characterEditorRelationshipsLoading = false;
+      if (loaded) renderCharacterEditorRelationships();
+    }
+  }
+}
+
+async function refreshRelationshipSurfaces(characterId = null) {
+  const tasks = [];
+  if (state.module === "relationships") tasks.push(renderRelationships());
+  if (characterId && $("#character-editor-dialog").open && characterEditorItem?.id === characterId) {
+    tasks.push(loadCharacterEditorRelationships(characterId));
+  }
+  await Promise.all(tasks);
+}
+
 function renderCharacterEditorFields(item) {
   const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, race.name])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
@@ -3228,11 +3307,14 @@ function renderCharacterEditorFields(item) {
         addLabel: "添加状态"
       }) +
       '<p class="character-editor-field-help">未修改的数字、布尔值、数组和对象会保留原有数据类型；被修改的值会按文本保存。</p>' +
-      field("lockedFields", "锁定字段", "item-list", item?.lockedFields ?? []))
+      field("lockedFields", "锁定字段", "item-list", item?.lockedFields ?? [])),
+    characterEditorSection("relationships", "人物关系", "查看与其他人物的关系及关键词；编辑入口与“关系”面板共用同一份关系数据。",
+      '<div id="character-editor-relationships" class="character-editor-relationships-field"></div>')
   ].join("");
   const name = $("#character-editor-fields [name='name']");
   if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
+  renderCharacterEditorRelationships();
   activateCharacterEditorTab("basic");
 }
 
@@ -3336,6 +3418,8 @@ async function openCharacterDialog(item) {
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
+  characterEditorRelationships = [];
+  characterEditorRelationshipsLoading = Boolean(item);
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
   $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
@@ -3354,6 +3438,9 @@ async function openCharacterDialog(item) {
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
+  const relationshipTab = document.querySelector("[data-character-editor-tab='relationships']");
+  relationshipTab.disabled = !item;
+  relationshipTab.title = item ? "查看和编辑人物关系" : "创建人物档案后即可维护人物关系";
   const dialog = $("#character-editor-dialog");
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
@@ -3378,6 +3465,7 @@ async function openCharacterDialog(item) {
     }
   };
   dialog.showModal();
+  if (item) void loadCharacterEditorRelationships(item.id);
 }
 
 async function openRaceDialog(item) {
@@ -3502,14 +3590,16 @@ function openTimelineSplitDialog(item) {
   }, "原证据同步保留");
 }
 
-async function openRelationshipDialog(item) {
+async function openRelationshipDialog(item, options = {}) {
   state.characters = await api(`/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
-  const options = state.characters.map((item) => [item.id, item.name]);
-  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? options[0][0], options) + field("to", "终点人物", "select", item?.toCharacterId ?? options[1][0], options) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词（用逗号分隔）", "text", item?.keywords?.join("、") ?? "") + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
+  const characterOptions = state.characters.map((item) => [item.id, item.name]);
+  const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
+  const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
+  openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词（用逗号分隔）", "text", item?.keywords?.join("、") ?? "") + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
     const keywords = String(form.get("keywords") ?? "").split(/[,，、；;]/u).map((value) => value.trim()).filter(Boolean);
     await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed" } });
-    await renderRelationships();
+    await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
 }
 
