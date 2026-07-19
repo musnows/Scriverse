@@ -437,6 +437,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     clearSessionCookie(response, request.secure);
     noContent(response);
   });
+  app.post("/api/auth/onboarding/complete", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话完成新手引导");
+    parse(z.object({}).strict(), request.body ?? {});
+    const updated = auth.completeOnboarding(request.authUser.userId);
+    store.audit(null, "user.onboarding-completed", "user", updated.userId);
+    data(response, updated);
+  });
   app.patch("/api/auth/profile", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const updated = auth.updateProfile(request.authUser.userId, parse(profileSchema, request.body).displayName);

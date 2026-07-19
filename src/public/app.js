@@ -136,7 +136,6 @@ function renderProfileAvatar() {
   $("#avatar-remove-button").classList.toggle("hidden", !state.user?.avatarUrl);
 }
 const platformDocumentTitle = "叙界 · 小说 AI 创作工作台";
-const onboardingStoragePrefix = "scriverse-onboarding-v2";
 const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
@@ -180,18 +179,16 @@ const workspaceOnboardingSteps = [
   { selector: "#account-button", eyebrow: "账户", title: "管理账户并重看导览", description: "账户菜单保存个人设置入口，也可以随时重新打开这套功能导览。", placement: "bottom" }
 ];
 
-function onboardingStorageKey() {
-  return `${onboardingStoragePrefix}:${state.user?.userId ?? "anonymous"}`;
-}
-
 function hasCompletedOnboarding() {
-  try { return localStorage.getItem(onboardingStorageKey()) === "completed"; }
-  catch { return false; }
+  return state.user?.onboardingCompleted === true;
 }
 
 function persistOnboardingCompletion() {
-  try { localStorage.setItem(onboardingStorageKey(), "completed"); }
-  catch { /* 浏览器禁用存储时仅在当前页面关闭导览 */ }
+  if (!state.user || state.user.onboardingCompleted) return;
+  state.user = { ...state.user, onboardingCompleted: true };
+  api("/api/auth/onboarding/complete", { method: "POST", body: {} })
+    .then((user) => { state.user = user; })
+    .catch(() => { state.user = { ...state.user, onboardingCompleted: false }; });
 }
 
 function isOnboardingTargetVisible(target) {

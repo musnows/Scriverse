@@ -158,14 +158,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="onboarding-spotlight"');
     expect(page.text).toContain('id="onboarding-popover"');
     expect(page.text).not.toContain("data-onboarding-step");
-    expect(application.text).toContain('const onboardingStoragePrefix = "scriverse-onboarding-v2"');
     expect(application.text).toContain("const shelfOnboardingSteps = [");
     expect(application.text).toContain("const workspaceOnboardingSteps = [");
     expect(application.text).toContain("function positionOnboardingElements()");
     expect(application.text).toContain('selector: "#new-chapter-button"');
     expect(application.text).toContain('selector: ".quick-actions button[data-task=\\"continue\\"]"');
     expect(application.text).toContain("function scheduleFirstUseOnboarding()");
-    expect(application.text).toContain('localStorage.setItem(onboardingStorageKey(), "completed")');
+    expect(application.text).toContain('api("/api/auth/onboarding/complete", { method: "POST", body: {} })');
     expect(application.text).toContain('addEventListener("cancel"');
     expect(application.text).toContain('event.key === "Escape"');
     expect(styles.text).toContain(".onboarding-dialog {");
