@@ -242,6 +242,8 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       .expect(201);
     const workId = imported.body.data.work.id;
     expect(imported.body.data.work).toMatchObject({ title: "导入书名", chapterCount: 1 });
+    expect(imported.body.data).not.toHaveProperty("tree");
+    expect(JSON.stringify(imported.body)).not.toContain("故事开始。");
 
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
     const uploaded = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", png, "cover.png").expect(200);

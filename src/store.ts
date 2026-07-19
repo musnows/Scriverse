@@ -861,7 +861,7 @@ export class Store {
       return {
         fileVersionId: restorePointId,
         restoredFrom: fileVersionId,
-        tree: this.getWorkTree(workId)
+        tree: this.getWorkDirectory(workId)
       };
     });
   }
@@ -870,7 +870,7 @@ export class Store {
     this.getWork(workId);
     let result: Record<string, unknown> = {};
     this.db.transaction(() => { result = this.importNovelInTransaction(workId, fileName, fileType, parsed); });
-    return result;
+    return { ...result, tree: this.getWorkDirectory(workId) };
   }
 
   createImportedWork(input: WorkInput, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
@@ -928,8 +928,7 @@ export class Store {
       fileVersionId,
       warnings: parsed.warnings,
       wordCount: parsed.wordCount,
-      paragraphCount: parsed.paragraphCount,
-      tree: this.getWorkTree(workId)
+      paragraphCount: parsed.paragraphCount
     };
   }
 
