@@ -1138,6 +1138,24 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (26, ?)", timestamp);
       });
     }
+    if (!applied.has(27)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE work_memberships_v27 (
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK(role IN ('owner', 'editor', 'viewer')),
+          invited_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(work_id, user_id)
+        )`);
+        this.run(`INSERT INTO work_memberships_v27 (work_id, user_id, role, invited_by_user_id, created_at)
+          SELECT work_id, user_id, role, invited_by_user_id, created_at FROM work_memberships`);
+        this.run("DROP TABLE work_memberships");
+        this.run("ALTER TABLE work_memberships_v27 RENAME TO work_memberships");
+        this.run("CREATE INDEX idx_work_memberships_user ON work_memberships(user_id, work_id)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {
