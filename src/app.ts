@@ -519,7 +519,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     });
     data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
   });
-  app.get("/api/works/:workId", (request, response) => data(response, store.getWorkTree(request.params.workId)));
+  app.get("/api/works/:workId", (request, response) => data(response, store.getWorkDirectory(request.params.workId)));
   app.get("/api/works/:workId/members", (request, response) => data(response, auth.listMembers(request.params.workId)));
   app.post("/api/works/:workId/members", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
