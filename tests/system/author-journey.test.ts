@@ -205,7 +205,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260719-registration-disabled');
+    expect(page.text).toContain('/app.js?v=20260719-registration-opt-in');
     expect(page.text).toContain('/styles.css?v=20260719-registration-disabled');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');

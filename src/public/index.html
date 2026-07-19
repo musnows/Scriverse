@@ -20,7 +20,7 @@
         <p id="auth-description">你的作品、协作权限和每一次修改都会绑定到账户。</p>
         <div class="auth-tabs" role="tablist" aria-label="登录或注册">
           <button id="auth-login-tab" type="button" role="tab" aria-selected="true">登录</button>
-          <button id="auth-register-tab" type="button" role="tab" aria-selected="false">注册</button>
+          <button id="auth-register-tab" type="button" role="tab" aria-selected="false" aria-disabled="true" disabled>注册已禁用</button>
         </div>
         <form id="login-form" class="auth-form">
           <label>用户名<input name="username" autocomplete="username" maxlength="100" required></label>
@@ -542,6 +542,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260719-registration-disabled"></script>
+    <script type="module" src="/app.js?v=20260719-registration-opt-in"></script>
   </body>
 </html>

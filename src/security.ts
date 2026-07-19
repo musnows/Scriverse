@@ -257,6 +257,6 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
     trustProxy,
     enforceSameOrigin: true,
     allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production,
-    allowRegistration: environment.APP_ALLOW_REGISTRATION !== "false"
+    allowRegistration: environment.APP_ALLOW_REGISTRATION === "true"
   };
 }
