@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260713-dark-mode"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260718-toast-position">
+    <link rel="stylesheet" href="/styles.css?v=20260719-toast-top-layer">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
@@ -263,7 +263,7 @@
       </aside>
     </div>
 
-    <div id="toast-region" class="toast-region" data-position="bottom-right" aria-live="polite"></div>
+    <div id="toast-region" class="toast-region" data-position="bottom-right" aria-live="polite" popover="manual"></div>
     <div id="chapter-type-menu" class="chapter-type-menu hidden" role="menu" aria-label="设置章节类型" data-testid="chapter-type-menu">
       <strong>标记章节</strong>
       <div>
@@ -542,6 +542,6 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260719-group-relation-list"></script>
+    <script type="module" src="/app.js?v=20260719-toast-top-layer"></script>
   </body>
 </html>
