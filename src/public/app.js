@@ -1437,7 +1437,9 @@ function applyAuthenticatedUser(session) {
   $("#account-menu-name").textContent = `${session.user.displayName} · @${session.user.username}`;
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
-  document.body.classList.remove("auth-pending");
+  document.documentElement.classList.remove("login-route");
+  // 注意：auth-pending 由 initializePage 路由完成后才移除，
+  // 避免会话确认后、目标视图渲染前露出无内容的编辑器外壳
 }
 
 function applyPlatformUiSettings(settings) {
@@ -1454,13 +1456,18 @@ async function loadPlatformUiSettings() {
 }
 
 async function initializeAuthentication() {
+  const route = parsePageRoute(window.location.hash);
   const response = await fetch("/api/auth/session", { headers: { Accept: "application/json" } });
   if (!response.ok) throw new Error("无法读取登录状态");
   const session = (await response.json()).data;
   if (!session.authenticated) {
+    // 未登录时一律转到登录页路由；登录页本身则保持原样
+    if (route.view !== "login") window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
     showAuth(session.setupRequired, session.registrationOpen === true);
     return false;
   }
+  // 已登录却停在登录页路由时，回到书架首页
+  if (route.view === "login") window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
   applyAuthenticatedUser(session);
   await loadPlatformUiSettings();
   return true;
@@ -1667,6 +1674,7 @@ async function initializePage() {
       settingsReturnContext = restoredSettingsReturnContext(route);
     }
   } finally {
+    document.body.classList.remove("auth-pending");
     restoringPageRoute = false;
     replacePageRoute(currentPageRoute());
     scheduleFirstUseOnboarding();

@@ -6,13 +6,13 @@
     <meta name="description" content="面向长篇小说创作的 AI 协作工作台">
     <meta name="theme-color" content="#8b3d2c">
     <title>叙界 · 小说 AI 创作工作台</title>
-    <script src="/theme-init.js?v=20260713-dark-mode"></script>
+    <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260720-relationship-keyword-chips">
+    <link rel="stylesheet" href="/styles.css?v=20260720-login-firstpaint">
   </head>
   <body class="auth-pending">
-    <section id="auth-view" class="auth-view" aria-labelledby="auth-title">
+    <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
       <div class="auth-card">
         <div class="auth-brand"><span class="brand-mark">叙</span><div><strong>叙界</strong><small>小说 AI 创作工作台</small></div></div>
         <span class="eyebrow">账户与作品空间</span>
@@ -543,6 +543,7 @@
       </section>
     </dialog>
 
-    <script type="module" src="/app.js?v=20260720-relationship-keyword-chips"></script>
+    <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
+    <script type="module" src="/app.js?v=20260720-pending-until-route"></script>
   </body>
 </html>
