@@ -16,6 +16,8 @@ import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticatio
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
+import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
+import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
   clearSessionCookie,
@@ -55,7 +57,8 @@ const loginSchema = z.object({
   ...captchaFields
 }).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
-const memberSchema = z.object({ userId: identifier }).strict();
+const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "viewer"]) }).strict();
+const memberRoleSchema = z.object({ role: z.enum(["editor", "viewer"]) }).strict();
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 const changeNoteSchema = z.string().trim().max(500).optional();
@@ -297,7 +300,7 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "query_story_knowledge"])).max(3).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge"])).max(4).optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -345,6 +348,13 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 export function createRuntime(options: RuntimeOptions): Runtime {
+  logger.info("runtime.initializing", {
+    databasePath: options.databasePath,
+    serveUi: options.serveUi ?? true,
+    userAuthDisabled: options.disableUserAuth === true,
+    deploymentAuthEnabled: Boolean(options.security?.auth),
+    sameOriginEnforced: options.security?.enforceSameOrigin ?? true
+  });
   const database = new Database(options.databasePath);
   const auth = new UserAuthService(database);
   const store = new Store(database);
@@ -371,10 +381,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.disable("x-powered-by");
   if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
+  app.use(createRequestLoggingMiddleware());
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: "0.3.0", protocol: "openai-chat-completions" });
+    data(response, { status: "ok", version: "0.3.1", protocol: "openai-chat-completions" });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
@@ -402,6 +413,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const result = auth.register({ username: input.username, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
+    logger.info("auth.registration.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken }, 201);
   });
   app.post("/api/auth/login", (request, response) => {
@@ -410,6 +422,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const result = auth.login(input.username, input.password);
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId));
+    logger.info("auth.login.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
   });
   app.use(createUserSessionMiddleware(auth, options.disableUserAuth));
@@ -519,14 +532,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     });
     data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
   });
-  app.get("/api/works/:workId", (request, response) => data(response, store.getWorkTree(request.params.workId)));
+  app.get("/api/works/:workId", (request, response) => data(response, store.getWorkDirectory(request.params.workId)));
   app.get("/api/works/:workId/members", (request, response) => data(response, auth.listMembers(request.params.workId)));
   app.post("/api/works/:workId/members", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(memberSchema, request.body);
-    const members = auth.addMember(request.params.workId, input.userId, request.authUser.userId);
-    store.audit(request.params.workId, "work.member-added", "user", input.userId);
+    const members = auth.addMember(request.params.workId, input.userId, input.role, request.authUser.userId);
+    store.audit(request.params.workId, "work.member-added", "user", input.userId, { role: input.role });
     data(response, members, 201);
+  });
+  app.patch("/api/works/:workId/members/:userId", (request, response) => {
+    const input = parse(memberRoleSchema, request.body);
+    const members = auth.updateMemberRole(request.params.workId, request.params.userId, input.role);
+    store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, { role: input.role });
+    data(response, members);
   });
   app.delete("/api/works/:workId/members/:userId", (request, response) => {
     const members = auth.removeMember(request.params.workId, request.params.userId);
@@ -1068,8 +1087,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   }
 
   app.use((_request, _response, next) => next(new AppError(404, "ROUTE_NOT_FOUND", "请求的接口不存在")));
-  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+  app.use((error: unknown, request: Request, response: Response, _next: NextFunction) => {
+    const commonFields = { method: request.method, path: sanitizeRequestPath(request.path), error: sanitizeError(error) };
     if (error instanceof ZodError) {
+      logger.warn("http.request.validation_failed", { ...commonFields, issuePaths: error.issues.map((issue) => issue.path.join(".")) });
       response.status(400).json({
         error: {
           code: "VALIDATION_ERROR",
@@ -1080,31 +1101,41 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       return;
     }
     if (error instanceof multer.MulterError) {
+      logger.warn("http.request.upload_rejected", { ...commonFields, uploadCode: error.code });
       response.status(400).json({ error: { code: "UPLOAD_ERROR", message: error.message } });
       return;
     }
     if (error instanceof SyntaxError && "status" in error && error.status === 400) {
+      logger.warn("http.request.invalid_json", commonFields);
       response.status(400).json({ error: { code: "INVALID_JSON", message: "请求体不是有效的 JSON" } });
       return;
     }
     if (error && typeof error === "object" && "type" in error && error.type === "entity.too.large") {
+      logger.warn("http.request.body_too_large", commonFields);
       response.status(413).json({ error: { code: "REQUEST_TOO_LARGE", message: "请求体超过大小限制" } });
       return;
     }
     if (error instanceof AppError) {
+      const logFields = { ...commonFields, errorCode: error.code, status: error.status };
+      if (error.status >= 500) logger.error("http.request.application_error", logFields);
+      else logger.warn("http.request.application_error", logFields);
       response.status(error.status).json({ error: { code: error.code, message: error.message, ...(error.details === undefined ? {} : { details: error.details }) } });
       return;
     }
     if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+      logger.warn("http.request.duplicate_record", commonFields);
       response.status(409).json({ error: { code: "DUPLICATE_RECORD", message: "记录已存在" } });
       return;
     }
-    console.error("Unhandled request error", error);
+    logger.error("http.request.unhandled_error", commonFields);
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
+  logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   return { app, database, store, ai, auth, close: () => {
+    logger.info("runtime.closing");
     ai.dispose();
     database.close();
+    logger.info("runtime.closed");
   } };
 }

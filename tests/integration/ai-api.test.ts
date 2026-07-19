@@ -279,7 +279,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "query_story_knowledge"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "query_story_knowledge"]);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -311,6 +311,8 @@ describe("AI 供应商、模型与建议 API", () => {
       { id: "chapter-summary", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "summary" } },
       { id: "chapter-content", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } },
       { id: "chapter-both", name: "read_chapters", arguments: { chapterIds: [chapterId], include: "both" } },
+      { id: "grep-default", name: "grep", arguments: { keyword: "林舟" } },
+      { id: "grep-limit", name: "grep", arguments: { keyword: "林舟", limit: 1 } },
       { id: "knowledge-default", name: "query_story_knowledge", arguments: { query: "跃迁" } },
       { id: "knowledge-categories", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } }
     ];
@@ -331,6 +333,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("chapter-content")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, content: "林舟启动了飞船。" }] } });
       expect(results.get("chapter-content")).not.toHaveProperty("data.chapters.0.summary");
       expect(results.get("chapter-both")).toMatchObject({ ok: true, data: { chapters: [{ chapterId, summary: "", content: "林舟启动了飞船。" }] } });
+      expect(results.get("grep-default")).toMatchObject({ ok: true, data: { keyword: "林舟", limit: 20, matches: [{ chapterId, chapterTitle: "第一章", paragraph: "林舟启动了飞船。" }] } });
+      expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
       expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matches: expect.any(Array) } });
       return new Response(JSON.stringify({ choices: [{ message: { content: "工具参数组合均已处理。" } }] }), { status: 200 });
@@ -361,12 +365,13 @@ describe("AI 供应商、模型与建议 API", () => {
           { id: "bad-json", type: "function", function: { name: "story_index", arguments: "{" } },
           { id: "bad-index", type: "function", function: { name: "story_index", arguments: { limit: 0, extra: true } } },
           { id: "bad-read", type: "function", function: { name: "read_chapters", arguments: { chapterIds: [], include: "invalid" } } },
+          { id: "bad-grep", type: "function", function: { name: "grep", arguments: { keyword: "", limit: 0 } } },
           { id: "bad-query", type: "function", function: { name: "query_story_knowledge", arguments: { query: "", categories: ["unknown"] } } },
           { id: "unknown", type: "function", function: { name: "write_chapter", arguments: {} } }
         ] } }] }), { status: 200 });
       }
       const errors = body.messages.filter((message) => message.role === "tool").map((message) => JSON.parse(message.content ?? "{}") as { ok: boolean; error: { code: string; message: string } });
-      expect(errors).toHaveLength(5);
+      expect(errors).toHaveLength(6);
       expect(errors.every((result) => result.ok === false && /^[A-Z_]+$/u.test(result.error.code))).toBe(true);
       expect(errors.every((result) => /Invalid|not available/u.test(result.error.message))).toBe(true);
       return new Response(JSON.stringify({ choices: [{ message: { content: "工具失败信息已正确处理。" } }] }), { status: 200 });
@@ -379,7 +384,7 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
 
-    expect(response.body.data.toolCalls).toHaveLength(5);
+    expect(response.body.data.toolCalls).toHaveLength(6);
     expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "failed")).toBe(true);
     expect(response.body.data.content).toBe("工具失败信息已正确处理。");
   });

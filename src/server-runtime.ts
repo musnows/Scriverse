@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
 import { loadMasterSecret } from "./credential-vault.js";
 import { resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
+import { logger, sanitizeError } from "./logger.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -28,17 +29,26 @@ export type RunningLocalServer = {
 const publicPath = fileURLToPath(new URL("./public/", import.meta.url));
 
 export async function startLocalServer(options: LocalServerOptions): Promise<RunningLocalServer> {
-  const security = resolveRuntimeSecurity(options.env);
-  const runtime = createRuntime({
-    databasePath: options.databasePath,
-    masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
-    publicPath,
-    security
-  });
+  logger.info("server.starting", { host: options.host, port: options.port, dataDirectory: options.dataDirectory, databasePath: options.databasePath });
+  let security: RuntimeSecurityOptions;
+  let runtime: Runtime;
+  try {
+    security = resolveRuntimeSecurity(options.env);
+    runtime = createRuntime({
+      databasePath: options.databasePath,
+      masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
+      publicPath,
+      security
+    });
+  } catch (error) {
+    logger.error("server.initialization_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
+    throw error;
+  }
 
   return await new Promise<RunningLocalServer>((resolveStart, rejectStart) => {
     const server = runtime.app.listen(options.port, options.host);
     const handleStartupError = (error: Error): void => {
+      logger.error("server.start_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
       runtime.close();
       rejectStart(error);
     };
@@ -58,6 +68,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       const close = async (): Promise<void> => {
         if (closed) return;
         closed = true;
+        logger.info("server.stopping", { host: options.host, port });
         server.closeAllConnections();
         try {
           await new Promise<void>((resolveClose, rejectClose) => {
@@ -65,6 +76,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
           });
         } finally {
           runtime.close();
+          logger.info("server.stopped", { host: options.host, port });
         }
       };
       resolveStart({
@@ -87,11 +99,11 @@ export function installServerShutdownHandlers(running: RunningLocalServer): void
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`Received ${signal}, shutting down`);
+    logger.info("server.shutdown_signal_received", { signal });
     void running.close().then(
       () => { process.exitCode = 0; },
       (error: unknown) => {
-        console.error(error instanceof Error ? error.message : "Failed to stop Scriverse server");
+        logger.error("server.stop_failed", { signal, error: sanitizeError(error) });
         process.exitCode = 1;
       }
     );

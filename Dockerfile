@@ -13,6 +13,7 @@ RUN npm run build
 FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
+    LOG_LEVEL=info \
     HOST=0.0.0.0 \
     PORT=13210 \
     DATA_DIR=/app/.data

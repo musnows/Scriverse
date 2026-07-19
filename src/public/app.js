@@ -76,6 +76,24 @@ function analysisTaskStatusLabel(status) {
   })[String(status)] ?? String(status);
 }
 
+function canEditWork(work = state.work) {
+  return ["admin", "owner", "editor"].includes(String(work?.accessRole));
+}
+
+function applyWorkAccessMode() {
+  const viewOnly = Boolean(state.work) && !canEditWork();
+  $("#app").classList.toggle("view-only-mode", viewOnly);
+  document.body.classList.toggle("work-viewer-mode", viewOnly);
+  $("#chapter-title").readOnly = viewOnly;
+  $("#chapter-content").readOnly = viewOnly;
+  $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
+  $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
+  if (viewOnly) {
+    cancelChapterAutoSave();
+    state.dirty = false;
+  }
+}
+
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const maximumAvatarFileSize = 5 * 1024 * 1024;
@@ -127,6 +145,15 @@ let onboardingStep = 0;
 let onboardingAutoScheduled = false;
 let onboardingPositionFrame = null;
 let onboardingSteps = [];
+let loadedAiModelsWorkId = null;
+let loadedAiReferencesWorkId = null;
+let loadedAiConversationsWorkId = null;
+let aiModelsLoadPromise = null;
+let aiModelsLoadWorkId = null;
+let aiReferencesLoadPromise = null;
+let aiReferencesLoadWorkId = null;
+let aiConversationsLoadPromise = null;
+let aiConversationsLoadWorkId = null;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -799,12 +826,14 @@ function attachMessageIdentity(message, messageId) {
 const AI_TOOL_DISPLAY_NAMES = {
   story_index: "作品目录与章节概要",
   read_chapters: "读取章节",
+  grep: "查询正文关键字",
   query_story_knowledge: "查询作品知识"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
   story_index: "分页读取当前作品的卷章目录和章节概要。",
   read_chapters: "读取指定章节的概要、正文或两者。",
+  grep: "查询正文关键字所在的完整段落及章节信息。",
   query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。"
 };
 
@@ -977,13 +1006,33 @@ function renderAiConversationHistory() {
 }
 
 async function loadAiConversations(openLatest = true) {
-  if (!state.work) return;
-  state.aiConversations = await api(`/api/works/${state.work.id}/ai-conversations`);
+  const workId = state.work?.id;
+  if (!workId) return;
+  const conversations = await api(`/api/works/${workId}/ai-conversations`);
+  if (state.work?.id !== workId) return;
+  state.aiConversations = conversations;
+  loadedAiConversationsWorkId = workId;
   renderAiConversationHistory();
   if (openLatest && state.aiConversations.length) await openAiConversation(state.aiConversations[0].id, false);
   else {
     const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
     if (current) $("#ai-conversation-title").textContent = current.title;
+  }
+}
+
+async function ensureAiConversationsLoaded() {
+  const workId = state.work?.id;
+  if (!workId || loadedAiConversationsWorkId === workId) return;
+  if (aiConversationsLoadPromise && aiConversationsLoadWorkId === workId) return aiConversationsLoadPromise;
+  aiConversationsLoadWorkId = workId;
+  aiConversationsLoadPromise = loadAiConversations(false);
+  try {
+    await aiConversationsLoadPromise;
+  } finally {
+    if (aiConversationsLoadWorkId === workId) {
+      aiConversationsLoadPromise = null;
+      aiConversationsLoadWorkId = null;
+    }
   }
 }
 
@@ -1409,13 +1458,34 @@ async function initializeAuthentication() {
   return true;
 }
 
+function raiseToastRegion() {
+  const region = $("#toast-region");
+  if (typeof region.showPopover !== "function") return;
+  if (region.matches(":popover-open")) region.hidePopover();
+  region.showPopover();
+}
+
 function toast(message, type = "info") {
+  const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
   element.textContent = message;
-  $("#toast-region").append(element);
-  setTimeout(() => element.remove(), 3600);
+  region.append(element);
+  raiseToastRegion();
+  setTimeout(() => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  }, 3600);
 }
+
+document.addEventListener("toggle", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
+    raiseToastRegion();
+  }
+}, true);
 
 function setSaveState(text, dirty = false) {
   state.dirty = dirty;
@@ -1442,7 +1512,7 @@ function cancelChapterAutoSave() {
 }
 
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
-  if (!state.chapter) return;
+  if (!state.chapter || !canEditWork()) return;
   cancelChapterAutoSave();
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
@@ -1452,6 +1522,7 @@ function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
 }
 
 async function persistChapter({ automatic = false } = {}) {
+  if (!canEditWork()) return null;
   if (!state.chapter) {
     if (!automatic) toast("请先选择章节", "error");
     return null;
@@ -1564,7 +1635,7 @@ async function initializePage() {
 
     if (requestedWork) {
       state.module = route.view === "module" ? route.module : "editor";
-      await selectWork(requestedWork.id);
+      await selectWork(requestedWork.id, route.view === "editor" ? route.chapterId : null);
     }
 
     if (route.view === "editor") {
@@ -1696,11 +1767,23 @@ function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
-    <span>${member.role === "owner" ? "所有者" : "可编辑"}</span>
+    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
+    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>可编辑</option></select>`}
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
   bindUserAvatarFallbacks($("#members-list"));
+  $("#members-list").querySelectorAll("[data-member-role]").forEach((select) => select.addEventListener("change", async () => {
+    if (!work) return;
+    const previousRole = members.find((member) => member.userId === select.dataset.memberRole)?.role ?? "viewer";
+    try {
+      const updated = await api(`/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(select.dataset.memberRole)}`, { method: "PATCH", body: { role: select.value } });
+      renderMembers(updated);
+      toast("成员权限已更新");
+    } catch (error) {
+      select.value = previousRole;
+      toast(error.message, "error");
+    }
+  }));
   $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
     if (!work) return;
     try {
@@ -1888,9 +1971,9 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
-      <button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>
+      ${canEditWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
     </article>`).join("")}
     <button class="book-card book-add-card" id="book-add-card" type="button" aria-label="新建作品" data-testid="book-add-card"><span>＋</span><strong>新建作品</strong><small>从零开始或导入 TXT / DOCX</small></button>`;
   shelf.querySelectorAll("[data-open-work]").forEach((button) => button.addEventListener("click", () => selectWork(button.dataset.openWork)));
@@ -1901,11 +1984,20 @@ function renderShelf() {
   $("#book-add-card").addEventListener("click", openWorkDialog);
 }
 
-async function selectWork(workId) {
+async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
   const nextWork = await api(`/api/works/${workId}`);
   if (state.work?.id !== nextWork.id) {
+    loadedAiModelsWorkId = null;
+    loadedAiReferencesWorkId = null;
+    loadedAiConversationsWorkId = null;
+    state.models = [];
+    state.characters = [];
+    state.settings = [];
+    if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
+    aiContextUsageTimer = null;
+    aiContextUsageRequest += 1;
     state.aiCitations = [];
     state.aiReferences = [];
     state.aiPromptSent = false;
@@ -1916,6 +2008,8 @@ async function selectWork(workId) {
     renderAiQuickActions();
     resetAiFeed();
     $("#ai-conversation-title").textContent = "新对话";
+    $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
+    setAiContextMeter(null);
     renderAiConversationHistory();
   }
   if (discarding) setSaveState("就绪");
@@ -1927,15 +2021,14 @@ async function selectWork(workId) {
   settingsReturnContext = null;
   state.work = nextWork;
   state.chapter = null;
+  applyWorkAccessMode();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
   $("#top-search-button").disabled = false;
   renderTree();
-  await loadModels();
-  await loadAiReferences();
-  await loadAiConversations();
-  const firstChapter = state.work.volumes.flatMap((volume) => volume.chapters)[0];
-  if (state.module === "editor" && firstChapter) await selectChapter(firstChapter.id);
+  const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
+  const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
+  if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
   else if (state.module === "editor") showWelcome(true);
   else await showModule(state.module);
   return true;
@@ -1964,6 +2057,7 @@ function renderTree() {
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
+      if (!canEditWork()) return;
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
@@ -1971,6 +2065,7 @@ function renderTree() {
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
     button.addEventListener("contextmenu", (event) => {
+      if (!canEditWork()) return;
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
@@ -2020,7 +2115,8 @@ async function selectChapter(chapterId) {
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  if (spacingChanged) scheduleChapterAutoSave(120);
+  if (!canEditWork()) setSaveState("仅查看");
+  else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
   replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
@@ -2077,6 +2173,7 @@ const moduleMeta = {
 
 async function showModule(module) {
   if (!state.work) return showWelcome();
+  if (!canEditWork() && ["tasks", "ai-settings"].includes(module)) module = "editor";
   if (module !== "editor" && state.module === "editor" && !confirmDiscardChanges()) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
@@ -2098,7 +2195,7 @@ async function showModule(module) {
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings");
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditWork());
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
@@ -2189,6 +2286,7 @@ function bindEntityHistoryButtons(refresh) {
 
 async function renderSettings() {
   const records = await api(`/api/works/${state.work.id}/settings`);
+  state.settings = records;
   $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
     <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
     <h3>${esc(item.title)}</h3><p>${esc(item.content)}</p>
@@ -2587,8 +2685,12 @@ async function renderBookAiSettings() {
     api(`/api/works/${state.work.id}/task-defaults`)
   ]);
   const host = $("#module-content");
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "query_story_knowledge"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "query_story_knowledge"]);
   host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话长期记忆</h2><p>对话历史使用独立预算；达到阈值时先提醒，继续发送会把较早消息整理成带来源的结构化长期记忆，并尽量保留最近八条原文。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">整理提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话长期记忆整理提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存整理阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  host.querySelector('input[name="agent-tool"][value="query_story_knowledge"]').closest("label").insertAdjacentHTML(
+    "beforebegin",
+    `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
+  );
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -2655,13 +2757,38 @@ async function renderBookAiSettings() {
 }
 
 async function loadModels() {
-  if (!state.work) return;
-  state.models = await api(`/api/works/${state.work.id}/models`);
+  const workId = state.work?.id;
+  if (!workId) return;
+  const models = await api(`/api/works/${workId}/models`);
+  if (state.work?.id !== workId) return;
+  state.models = models;
+  loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
   scheduleAiContextUsage();
+}
+
+async function ensureAiModelsLoaded() {
+  const workId = state.work?.id;
+  if (!workId || loadedAiModelsWorkId === workId) return;
+  if (aiModelsLoadPromise && aiModelsLoadWorkId === workId) return aiModelsLoadPromise;
+  const select = $("#ai-model");
+  select.innerHTML = '<option value="">正在加载模型……</option>';
+  aiModelsLoadWorkId = workId;
+  aiModelsLoadPromise = loadModels();
+  try {
+    await aiModelsLoadPromise;
+  } catch (error) {
+    if (state.work?.id === workId) select.innerHTML = '<option value="">模型加载失败，点击重试</option>';
+    throw error;
+  } finally {
+    if (aiModelsLoadWorkId === workId) {
+      aiModelsLoadPromise = null;
+      aiModelsLoadWorkId = null;
+    }
+  }
 }
 
 let aiContextUsageTimer = null;
@@ -2772,11 +2899,32 @@ async function refreshAiContextUsage() {
 }
 
 async function loadAiReferences() {
-  if (!state.work) return;
-  [state.characters, state.settings] = await Promise.all([
-    api(`/api/works/${state.work.id}/characters`),
-    api(`/api/works/${state.work.id}/settings`)
+  const workId = state.work?.id;
+  if (!workId) return;
+  const [characters, settings] = await Promise.all([
+    api(`/api/works/${workId}/characters`),
+    api(`/api/works/${workId}/settings`)
   ]);
+  if (state.work?.id !== workId) return;
+  state.characters = characters;
+  state.settings = settings;
+  loadedAiReferencesWorkId = workId;
+}
+
+async function ensureAiReferencesLoaded() {
+  const workId = state.work?.id;
+  if (!workId || loadedAiReferencesWorkId === workId) return;
+  if (aiReferencesLoadPromise && aiReferencesLoadWorkId === workId) return aiReferencesLoadPromise;
+  aiReferencesLoadWorkId = workId;
+  aiReferencesLoadPromise = loadAiReferences();
+  try {
+    await aiReferencesLoadPromise;
+  } finally {
+    if (aiReferencesLoadWorkId === workId) {
+      aiReferencesLoadPromise = null;
+      aiReferencesLoadWorkId = null;
+    }
+  }
 }
 
 function field(name, label, type = "text", value = "", options = []) {
@@ -2938,7 +3086,7 @@ function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
   const accessField = `<section class="work-access-field" aria-labelledby="work-access-title">
-    <div><strong id="work-access-title">可访问人</strong><small>作品创建者和受邀协作者可以访问并共同编辑这部作品。</small></div>
+    <div><strong id="work-access-title">可访问人</strong><small>可以分别授予成员仅查看或共同编辑权限。</small></div>
     ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">添加或管理可访问人</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
   </section>`;
   openDialog("作品信息",
@@ -3192,6 +3340,12 @@ async function openCharacterDialog(item) {
   $("#character-history-button").title = item ? "查看、比较和回滚历史版本" : "创建人物档案后即可查看版本历史";
   setCharacterHistoryVisible(false);
   renderCharacterEditorFields(item);
+  const viewOnly = !canEditWork();
+  if (viewOnly) {
+    $("#character-editor-eyebrow").textContent = "人物档案";
+    $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
+    $("#character-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
+  }
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
@@ -3199,6 +3353,7 @@ async function openCharacterDialog(item) {
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
+    if (!canEditWork()) return;
     const submit = $("#character-editor-submit");
     submit.disabled = true;
     try {
@@ -3391,6 +3546,11 @@ function openModelDialog(providerId, item = null) {
 
 async function sendAi() {
   if (!state.work || !state.chapter) return toast("请先选择章节", "error");
+  try {
+    await Promise.all([ensureAiModelsLoaded(), ensureAiConversationsLoaded()]);
+  } catch (error) {
+    return toast(`创作助手加载失败：${error.message}`, "error");
+  }
   const modelId = $("#ai-model").value;
   if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
   const instruction = aiPromptText().trim();
@@ -3936,10 +4096,11 @@ $("#member-invite-form").addEventListener("submit", async (event) => {
   const work = memberDialogWork ?? state.work;
   if (!work || !userId) return;
   try {
-    const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId } });
+    const role = $("#member-role-select").value;
+    const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId, role } });
     renderMembers(members);
     await fillMemberCandidates(members);
-    toast("协作者已邀请");
+    toast(role === "viewer" ? "仅查看成员已邀请" : "协作者已邀请");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
@@ -4055,9 +4216,22 @@ $("#module-nav").addEventListener("click", (event) => {
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
-$("#ai-prompt").addEventListener("input", () => {
+$("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   scheduleAiContextUsage();
+  if (!findAiMention(aiPromptTextBeforeCursor())) return;
+  try {
+    await ensureAiReferencesLoaded();
+    updateAiMentionMenu();
+  } catch (error) {
+    toast(`引用数据加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-prompt").addEventListener("focus", () => {
+  ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
+});
+$("#ai-model").addEventListener("focus", () => {
+  ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
 $("#ai-model").addEventListener("change", scheduleAiContextUsage);
 $("#ai-task").addEventListener("change", scheduleAiContextUsage);
@@ -4208,8 +4382,14 @@ $("#ai-context-new-conversation").addEventListener("click", async () => {
   }
 });
 $("#ai-context-dismiss").addEventListener("click", hideAiContextWarning);
-$("#ai-history-toggle").addEventListener("click", () => {
-  setAiHistoryVisible(!$("#ai-history-dialog").open);
+$("#ai-history-toggle").addEventListener("click", async () => {
+  if ($("#ai-history-dialog").open) return setAiHistoryVisible(false);
+  try {
+    await ensureAiConversationsLoaded();
+    setAiHistoryVisible(true);
+  } catch (error) {
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
 });
 $("#ai-history-close").addEventListener("click", () => setAiHistoryVisible(false));
 $("#ai-history-dialog").addEventListener("close", () => {

@@ -2,8 +2,18 @@ import type { ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { accountReference, logger } from "./logger.js";
 import { currentRequestActor } from "./request-context.js";
-import { countWords, id, json, normalizeParagraphSpacing, now } from "./utils.js";
+import {
+  countWords,
+  documentShortSearchTerms,
+  id,
+  json,
+  normalizeDocumentSearchText,
+  normalizeParagraphSpacing,
+  now,
+  splitDocumentParagraphs
+} from "./utils.js";
 
 type WorkInput = {
   title: string;
@@ -461,6 +471,14 @@ export class Store {
       now(),
       actor?.userId ?? null
     );
+    const detailKeys = detail && typeof detail === "object" && !Array.isArray(detail) ? Object.keys(detail as Record<string, unknown>) : [];
+    logger.info("domain.change.recorded", {
+      action,
+      workId,
+      entityType,
+      entityId: entityType === "user" && entityId ? accountReference(entityId) : entityId,
+      detailKeys
+    });
   }
 
   createWork(input: WorkInput): Record<string, unknown> {
@@ -584,7 +602,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge"]'), ["story_index", "read_chapters", "query_story_knowledge"]),
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep"]),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -718,6 +736,30 @@ export class Store {
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
     for (const row of chapterRows) {
       const chapter = this.mapChapter(row);
+      const volumeId = requiredString(row, "volume_id");
+      const list = chaptersByVolume.get(volumeId) ?? [];
+      list.push(chapter);
+      chaptersByVolume.set(volumeId, list);
+    }
+    const volumes = volumeRows.map((row) => ({
+      ...this.mapVolume(row),
+      chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
+    }));
+    return { ...work, volumes };
+  }
+
+  getWorkDirectory(workId: string): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const chapterRows = this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE work_id = ? ORDER BY sort_order, created_at`,
+      workId
+    );
+    const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
+    for (const row of chapterRows) {
+      const chapter = this.mapChapterDirectoryEntry(row);
       const volumeId = requiredString(row, "volume_id");
       const list = chaptersByVolume.get(volumeId) ?? [];
       list.push(chapter);
@@ -1120,6 +1162,7 @@ export class Store {
         timestamp,
         chapterId
       );
+      if (hasTextChange) this.syncChapterParagraphSearch(String(current.workId), chapterId, nextContent);
       if (hasTextChange) {
         this.insertChapterVersionRow({
           workId: String(current.workId),
@@ -1192,6 +1235,7 @@ export class Store {
         timestamp,
         timestamp
       );
+      this.syncChapterParagraphSearch(workId, chapterId, content);
       this.insertChapterVersionRow({
         workId,
         chapterId,
@@ -1290,6 +1334,7 @@ export class Store {
       timestamp,
       timestamp
     );
+    this.syncChapterParagraphSearch(workId, chapterId, normalizedContent);
     this.insertChapterVersionRow({
       workId,
       chapterId,
@@ -1305,6 +1350,70 @@ export class Store {
       timestamp
     });
     return chapterId;
+  }
+
+  private syncChapterParagraphSearch(workId: string, chapterId: string, content: string): void {
+    this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
+    for (const [paragraphOrder, paragraph] of splitDocumentParagraphs(content).entries()) {
+      const searchContent = normalizeDocumentSearchText(paragraph);
+      const inserted = this.db.run(
+        `INSERT INTO chapter_paragraph_search (work_id, chapter_id, paragraph_order, content, search_content)
+         VALUES (?, ?, ?, ?, ?)`,
+        workId,
+        chapterId,
+        paragraphOrder,
+        paragraph,
+        searchContent
+      );
+      for (const term of documentShortSearchTerms(searchContent)) {
+        this.db.run(
+          "INSERT INTO chapter_paragraph_short_terms (paragraph_id, term) VALUES (?, ?)",
+          inserted.lastInsertRowid,
+          term
+        );
+      }
+    }
+  }
+
+  searchChapterParagraphs(workId: string, keyword: string, limit = 20): Array<{
+    chapterId: string;
+    chapterTitle: string;
+    paragraph: string;
+  }> {
+    this.getWork(workId);
+    const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
+    if (!normalizedKeyword) return [];
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    const columns = `SELECT paragraph.chapter_id, chapter.title AS chapter_title, paragraph.content
+      FROM chapter_paragraph_search paragraph
+      JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+      JOIN volumes volume ON volume.id = chapter.volume_id`;
+    const rows = [...normalizedKeyword].length < 3
+      ? this.db.all(
+          `${columns}
+           JOIN chapter_paragraph_short_terms term ON term.paragraph_id = paragraph.id
+           WHERE paragraph.work_id = ? AND term.term = ?
+           ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+           LIMIT ?`,
+          workId,
+          normalizedKeyword,
+          safeLimit
+        )
+      : this.db.all(
+          `${columns}
+           JOIN chapter_paragraph_search_fts fts ON fts.rowid = paragraph.id
+           WHERE paragraph.work_id = ? AND chapter_paragraph_search_fts MATCH ?
+           ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+           LIMIT ?`,
+          workId,
+          `"${normalizedKeyword.replaceAll('"', '""')}"`,
+          safeLimit
+        );
+    return rows.map((row) => ({
+      chapterId: requiredString(row, "chapter_id"),
+      chapterTitle: requiredString(row, "chapter_title"),
+      paragraph: requiredString(row, "content")
+    }));
   }
 
   private invalidateChapter(workId: string, chapterId: string, versionNo: number): void {
@@ -1363,7 +1472,7 @@ export class Store {
       ? "owner"
       : actor?.role === "admin"
         ? "admin"
-        : String(membership?.role ?? "") === "editor" ? "editor" : null;
+        : ["editor", "viewer"].includes(String(membership?.role ?? "")) ? String(membership?.role) : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")
@@ -1409,11 +1518,17 @@ export class Store {
 
   private mapChapter(row: Row): Record<string, unknown> {
     return {
+      ...this.mapChapterDirectoryEntry(row),
+      content: requiredString(row, "content")
+    };
+  }
+
+  private mapChapterDirectoryEntry(row: Row): Record<string, unknown> {
+    return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       volumeId: requiredString(row, "volume_id"),
       title: requiredString(row, "title"),
-      content: requiredString(row, "content"),
       chapterType: requiredString(row, "chapter_type") || "正文",
       sortOrder: numberValue(row, "sort_order"),
       wordCount: numberValue(row, "word_count"),

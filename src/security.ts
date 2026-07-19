@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { AppError } from "./errors.js";
+import { logger } from "./logger.js";
 
 export type BasicAuthOptions = {
   username: string;
@@ -75,14 +76,17 @@ export function createBasicAuthMiddleware(options: BasicAuthOptions): RequestHan
       && constantTimeEqual(credentials.password, options.password);
     if (valid) {
       failures.delete(key);
+      logger.debug("security.deployment_auth.succeeded");
       return next();
     }
     const rate = consumeRate(failures, key, failureLimit, failureWindowMs);
     if (!rate.allowed) {
+      logger.warn("security.request.blocked", { control: "deployment_auth_rate_limit", retryAfterSeconds: rate.retryAfter });
       response.setHeader("Retry-After", String(rate.retryAfter));
       response.status(429).json({ error: { code: "AUTH_RATE_LIMITED", message: "身份验证失败次数过多，请稍后重试" } });
       return;
     }
+    logger.warn("security.request.blocked", { control: "deployment_auth", reason: credentials ? "invalid_credentials" : "missing_credentials" });
     unauthorized(response, realm);
   };
 }
@@ -108,6 +112,7 @@ export function createSameOriginMiddleware(): RequestHandler {
   return (request, response, next) => {
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
     if (request.get("sec-fetch-site") === "cross-site") {
+      logger.warn("security.request.blocked", { control: "same_origin", reason: "cross_site_fetch" });
       response.status(403).json({ error: { code: "CROSS_ORIGIN_WRITE_BLOCKED", message: "已拒绝跨站写请求" } });
       return;
     }
@@ -118,10 +123,12 @@ export function createSameOriginMiddleware(): RequestHandler {
     try {
       expectedOrigin = new URL(`${request.protocol}://${host}`).origin;
     } catch {
+      logger.warn("security.request.blocked", { control: "same_origin", reason: "invalid_host" });
       response.status(400).json({ error: { code: "INVALID_HOST", message: "请求主机信息无效" } });
       return;
     }
     if (origin !== expectedOrigin) {
+      logger.warn("security.request.blocked", { control: "same_origin", reason: "origin_mismatch" });
       response.status(403).json({ error: { code: "CROSS_ORIGIN_WRITE_BLOCKED", message: "已拒绝跨站写请求" } });
       return;
     }
@@ -135,6 +142,7 @@ export function createApiRateLimitMiddleware(limit = 600, windowMs = 60_000): Re
     if (!request.path.startsWith("/api/") || request.path === "/api/health") return next();
     const rate = consumeRate(entries, requestKey(request), limit, windowMs);
     if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "api_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
     response.status(429).json({ error: { code: "API_RATE_LIMITED", message: "请求过于频繁，请稍后重试" } });
   };
@@ -147,6 +155,7 @@ export function createAuthenticationRateLimitMiddleware(limit = 20, windowMs = 1
     if (!authenticationWrite) return next();
     const rate = consumeRate(entries, `${requestKey(request)}:${request.path}`, limit, windowMs);
     if (rate.allowed) return next();
+    logger.warn("security.request.blocked", { control: "authentication_rate_limit", retryAfterSeconds: rate.retryAfter });
     response.setHeader("Retry-After", String(rate.retryAfter));
     response.status(429).json({ error: { code: "AUTH_RATE_LIMITED", message: "登录或注册尝试过于频繁，请稍后重试" } });
   };
@@ -185,6 +194,7 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
     if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
+      logger.warn("security.ai_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
       throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
     }
   }
@@ -206,8 +216,10 @@ export async function fetchSafeAiEndpoint(
   let currentUrl = url;
   const baseHeaders = new Headers(init.headers);
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
+    logger.debug("ai.outbound_request.validating", { hostname: new URL(currentUrl).hostname, hop });
     await validateOutboundUrl?.(currentUrl);
     const response = await fetchImpl(currentUrl, { ...init, headers: baseHeaders, redirect: "manual" });
+    logger.debug("ai.outbound_request.response", { hostname: new URL(currentUrl).hostname, hop, status: response.status });
     if (!redirectStatuses.has(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) {
