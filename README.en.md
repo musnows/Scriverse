@@ -203,7 +203,7 @@ Expected response:
 {
   "data": {
     "status": "ok",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "protocol": "openai-chat-completions"
   }
 }
