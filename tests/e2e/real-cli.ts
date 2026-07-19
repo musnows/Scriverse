@@ -179,7 +179,7 @@ function restoreResource(type: Exclude<CliResourceType, "volume">, id: string, v
 async function startServer(): Promise<void> {
   server = spawn(tsxPath, [fixturePath], {
     cwd: process.cwd(),
-    env: { ...process.env, CLI_E2E_DATABASE_PATH: databasePath },
+    env: { ...process.env, NODE_ENV: "test", CLI_E2E_DATABASE_PATH: databasePath },
     stdio: ["pipe", "pipe", "pipe"]
   });
   server.stderr.on("data", (chunk: Buffer) => {

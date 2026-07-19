@@ -8,12 +8,26 @@ export type RequestActor = {
   authentication?: "session" | "api-key";
 };
 
-const actorStorage = new AsyncLocalStorage<RequestActor | null>();
+export type RequestContext = {
+  requestId?: string;
+  actor: RequestActor | null;
+};
+
+const requestStorage = new AsyncLocalStorage<RequestContext | null>();
+
+export function runWithRequestContext<T>(context: RequestContext, operation: () => T): T {
+  return requestStorage.run(context, operation);
+}
 
 export function runWithRequestActor<T>(actor: RequestActor | null, operation: () => T): T {
-  return actorStorage.run(actor, operation);
+  const current = requestStorage.getStore();
+  return requestStorage.run({ ...(current?.requestId ? { requestId: current.requestId } : {}), actor }, operation);
 }
 
 export function currentRequestActor(): RequestActor | null {
-  return actorStorage.getStore() ?? null;
+  return requestStorage.getStore()?.actor ?? null;
+}
+
+export function currentRequestContext(): RequestContext | null {
+  return requestStorage.getStore() ?? null;
 }
