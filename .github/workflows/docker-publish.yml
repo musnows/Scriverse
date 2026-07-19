@@ -4,12 +4,18 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Docker image tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-publish-${{ github.ref }}
+  group: docker-publish-${{ github.event.release.tag_name || inputs.tag || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -42,8 +48,8 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ github.event.release.tag_name }}
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+            type=raw,value=${{ github.event.release.tag_name || inputs.tag }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
 
       - name: Build and push image
         uses: docker/build-push-action@v7
