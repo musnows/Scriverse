@@ -385,7 +385,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: "0.3.1", protocol: "openai-chat-completions" });
+    data(response, { status: "ok", version: "0.3.2", protocol: "openai-chat-completions" });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
