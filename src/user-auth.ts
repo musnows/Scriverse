@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import type { Request, RequestHandler, Response } from "express";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { sanitizeRequestPath } from "./http-logging.js";
+import { accountReference, logger } from "./logger.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 
 export type AuthUser = RequestActor & {
@@ -250,9 +252,15 @@ export class UserAuthService {
     const fallbackSalt = "invalid-login-salt";
     const calculated = passwordDigest(password, String(row?.password_salt ?? fallbackSalt));
     const valid = row && safeEqual(calculated, String(row.password_hash));
-    if (!valid) throw new AppError(401, "INVALID_CREDENTIALS", "用户名或密码不正确");
+    if (!valid) {
+      logger.warn("auth.login.failed", { reason: "invalid_credentials" });
+      throw new AppError(401, "INVALID_CREDENTIALS", "用户名或密码不正确");
+    }
     const user = mapUser(row);
-    if (user.status !== "active") throw new AppError(403, "ACCOUNT_DISABLED", "该账户已被停用");
+    if (user.status !== "active") {
+      logger.warn("auth.login.failed", { reason: "account_disabled", actorRef: accountReference(user.userId) });
+      throw new AppError(403, "ACCOUNT_DISABLED", "该账户已被停用");
+    }
     this.database.run("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", new Date().toISOString(), new Date().toISOString(), user.userId);
     return this.createSession(user.userId);
   }
@@ -529,6 +537,7 @@ export function createUserSessionMiddleware(auth: UserAuthService, disabled = fa
     if (disabled) return runWithRequestActor(null, next);
     const apiKey = auth.authenticateApiKey(request);
     if (auth.hasApiKeyCredential(request) && !apiKey) {
+      logger.warn("auth.request.rejected", { reason: "invalid_api_key", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "API_KEY_INVALID", message: "API Key 无效或已失效" } });
       return;
     }
@@ -548,18 +557,23 @@ export function createUserSessionMiddleware(auth: UserAuthService, disabled = fa
       || (request.path === "/api/auth/login" && request.method === "POST")
       || !request.path.startsWith("/api/");
     if (!session && !apiKey && !isPublic) {
+      logger.warn("auth.request.rejected", { reason: "authentication_required", method: request.method, path: sanitizeRequestPath(request.path) });
       response.status(401).json({ error: { code: "AUTH_REQUIRED", message: "请先登录" } });
       return;
     }
     if (session && !["GET", "HEAD", "OPTIONS"].includes(request.method) && request.path !== "/api/auth/login" && request.path !== "/api/auth/register") {
       const csrf = request.get("x-csrf-token") ?? "";
       if (!safeEqual(csrf, session.csrfToken)) {
+        logger.warn("auth.request.rejected", { reason: "invalid_csrf", method: request.method, path: sanitizeRequestPath(request.path), actorRef: accountReference(session.user.userId) });
         response.status(403).json({ error: { code: "CSRF_TOKEN_INVALID", message: "请求校验失败，请刷新页面后重试" } });
         return;
       }
     }
     const user = apiKey?.user ?? session?.user ?? null;
-    return runWithRequestActor(user ? { ...user, authentication: apiKey ? "api-key" : "session" } : null, next);
+    return runWithRequestActor(user ? { ...user, authentication: apiKey ? "api-key" : "session" } : null, () => {
+      if (user) logger.debug("auth.request.authenticated", { authMethod: apiKey ? "api-key" : "session" });
+      next();
+    });
   };
 }
 
@@ -585,6 +599,7 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   return (request, response, next) => {
     if (disabled || request.authMethod !== "api-key") return next();
     if (cliApiRules.some((rule) => rule.methods.includes(request.method) && rule.path.test(request.path))) return next();
+    logger.warn("auth.request.rejected", { reason: "cli_scope_denied", method: request.method, path: sanitizeRequestPath(request.path) });
     response.status(403).json({ error: { code: "CLI_SCOPE_DENIED", message: "API Key 不能访问用户管理、系统管理或未开放给 CLI 的接口" } });
   };
 }

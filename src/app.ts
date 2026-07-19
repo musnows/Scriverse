@@ -16,6 +16,8 @@ import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticatio
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
+import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
+import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
 import {
   clearSessionCookie,
@@ -346,6 +348,13 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 export function createRuntime(options: RuntimeOptions): Runtime {
+  logger.info("runtime.initializing", {
+    databasePath: options.databasePath,
+    serveUi: options.serveUi ?? true,
+    userAuthDisabled: options.disableUserAuth === true,
+    deploymentAuthEnabled: Boolean(options.security?.auth),
+    sameOriginEnforced: options.security?.enforceSameOrigin ?? true
+  });
   const database = new Database(options.databasePath);
   const auth = new UserAuthService(database);
   const store = new Store(database);
@@ -372,6 +381,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.disable("x-powered-by");
   if (options.security?.trustProxy !== undefined) app.set("trust proxy", options.security.trustProxy);
+  app.use(createRequestLoggingMiddleware());
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
@@ -403,6 +413,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const result = auth.register({ username: input.username, password: input.password });
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.registered", "user", result.session.user.userId, { role: result.session.user.role }));
+    logger.info("auth.registration.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken }, 201);
   });
   app.post("/api/auth/login", (request, response) => {
@@ -411,6 +422,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const result = auth.login(input.username, input.password);
     setSessionCookie(response, result.token, request.secure);
     runWithRequestActor(result.session.user, () => store.audit(null, "user.logged-in", "user", result.session.user.userId));
+    logger.info("auth.login.succeeded", { actorRef: accountReference(result.session.user.userId) });
     data(response, { user: result.session.user, csrfToken: result.session.csrfToken });
   });
   app.use(createUserSessionMiddleware(auth, options.disableUserAuth));
@@ -1075,8 +1087,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   }
 
   app.use((_request, _response, next) => next(new AppError(404, "ROUTE_NOT_FOUND", "请求的接口不存在")));
-  app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+  app.use((error: unknown, request: Request, response: Response, _next: NextFunction) => {
+    const commonFields = { method: request.method, path: sanitizeRequestPath(request.path), error: sanitizeError(error) };
     if (error instanceof ZodError) {
+      logger.warn("http.request.validation_failed", { ...commonFields, issuePaths: error.issues.map((issue) => issue.path.join(".")) });
       response.status(400).json({
         error: {
           code: "VALIDATION_ERROR",
@@ -1087,31 +1101,41 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       return;
     }
     if (error instanceof multer.MulterError) {
+      logger.warn("http.request.upload_rejected", { ...commonFields, uploadCode: error.code });
       response.status(400).json({ error: { code: "UPLOAD_ERROR", message: error.message } });
       return;
     }
     if (error instanceof SyntaxError && "status" in error && error.status === 400) {
+      logger.warn("http.request.invalid_json", commonFields);
       response.status(400).json({ error: { code: "INVALID_JSON", message: "请求体不是有效的 JSON" } });
       return;
     }
     if (error && typeof error === "object" && "type" in error && error.type === "entity.too.large") {
+      logger.warn("http.request.body_too_large", commonFields);
       response.status(413).json({ error: { code: "REQUEST_TOO_LARGE", message: "请求体超过大小限制" } });
       return;
     }
     if (error instanceof AppError) {
+      const logFields = { ...commonFields, errorCode: error.code, status: error.status };
+      if (error.status >= 500) logger.error("http.request.application_error", logFields);
+      else logger.warn("http.request.application_error", logFields);
       response.status(error.status).json({ error: { code: error.code, message: error.message, ...(error.details === undefined ? {} : { details: error.details }) } });
       return;
     }
     if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
+      logger.warn("http.request.duplicate_record", commonFields);
       response.status(409).json({ error: { code: "DUPLICATE_RECORD", message: "记录已存在" } });
       return;
     }
-    console.error("Unhandled request error", error);
+    logger.error("http.request.unhandled_error", commonFields);
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
+  logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   return { app, database, store, ai, auth, close: () => {
+    logger.info("runtime.closing");
     ai.dispose();
     database.close();
+    logger.info("runtime.closed");
   } };
 }

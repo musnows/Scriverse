@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { currentRequestActor } from "./request-context.js";
+import { accountReference, logger } from "./logger.js";
 import { countWords, id, json, normalizeParagraphSpacing, now } from "./utils.js";
 
 type WorkInput = {
@@ -461,6 +462,14 @@ export class Store {
       now(),
       actor?.userId ?? null
     );
+    const detailKeys = detail && typeof detail === "object" && !Array.isArray(detail) ? Object.keys(detail as Record<string, unknown>) : [];
+    logger.info("domain.change.recorded", {
+      action,
+      workId,
+      entityType,
+      entityId: entityType === "user" && entityId ? accountReference(entityId) : entityId,
+      detailKeys
+    });
   }
 
   createWork(input: WorkInput): Record<string, unknown> {

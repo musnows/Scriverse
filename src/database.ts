@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { logger, sanitizeError } from "./logger.js";
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
@@ -9,17 +10,27 @@ export class Database {
   readonly raw: DatabaseSync;
 
   constructor(filename: string) {
-    if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
-    this.raw = new DatabaseSync(filename);
-    this.raw.exec("PRAGMA foreign_keys = ON");
-    this.raw.exec("PRAGMA busy_timeout = 5000");
-    if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
-    this.migrate();
-    this.recoverInterruptedOperations();
+    logger.info("database.opening", { databasePath: filename, inMemory: filename === ":memory:" });
+    try {
+      if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
+      this.raw = new DatabaseSync(filename);
+      this.raw.exec("PRAGMA foreign_keys = ON");
+      this.raw.exec("PRAGMA busy_timeout = 5000");
+      if (filename !== ":memory:") this.raw.exec("PRAGMA journal_mode = WAL");
+      this.migrate();
+      this.recoverInterruptedOperations();
+      const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
+      logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
+    } catch (error) {
+      logger.error("database.open_failed", { databasePath: filename, error: sanitizeError(error) });
+      throw error;
+    }
   }
 
   close(): void {
+    logger.info("database.closing");
     this.raw.close();
+    logger.info("database.closed");
   }
 
   run(sql: string, ...params: SQLInputValue[]): { changes: number; lastInsertRowid: number | bigint } {
@@ -37,13 +48,20 @@ export class Database {
 
   transaction<T>(operation: () => T): T {
     if (this.raw.isTransaction) return operation();
+    const startedAt = process.hrtime.bigint();
+    logger.debug("database.transaction.started");
     this.raw.exec("BEGIN IMMEDIATE");
     try {
       const result = operation();
       this.raw.exec("COMMIT");
+      logger.debug("database.transaction.committed", { durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
       return result;
     } catch (error) {
       this.raw.exec("ROLLBACK");
+      logger.warn("database.transaction.rolled_back", {
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: sanitizeError(error)
+      });
       throw error;
     }
   }
