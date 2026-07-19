@@ -300,7 +300,7 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "query_story_knowledge"])).max(3).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge"])).max(4).optional()
 }).strict();
 
 const contextSchema = z.object({

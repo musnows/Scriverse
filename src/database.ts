@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { logger, sanitizeError } from "./logger.js";
+import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentParagraphs } from "./utils.js";
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
@@ -367,7 +368,7 @@ export class Database {
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge","grep"]',
         updated_at TEXT NOT NULL
       );
 
@@ -1172,6 +1173,71 @@ export class Database {
         this.run("ALTER TABLE work_memberships_v27 RENAME TO work_memberships");
         this.run("CREATE INDEX idx_work_memberships_user ON work_memberships(user_id, work_id)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (27, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(28)) {
+      this.transaction(() => {
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS chapter_paragraph_search (
+            id INTEGER PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            chapter_id TEXT NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+            paragraph_order INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            search_content TEXT NOT NULL,
+            UNIQUE(chapter_id, paragraph_order)
+          );
+          CREATE INDEX IF NOT EXISTS idx_chapter_paragraph_search_work
+            ON chapter_paragraph_search(work_id, chapter_id, paragraph_order);
+          CREATE VIRTUAL TABLE IF NOT EXISTS chapter_paragraph_search_fts USING fts5(
+            search_content,
+            content='chapter_paragraph_search',
+            content_rowid='id',
+            tokenize='trigram'
+          );
+          CREATE TRIGGER IF NOT EXISTS chapter_paragraph_search_ai AFTER INSERT ON chapter_paragraph_search BEGIN
+            INSERT INTO chapter_paragraph_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS chapter_paragraph_search_ad AFTER DELETE ON chapter_paragraph_search BEGIN
+            INSERT INTO chapter_paragraph_search_fts(chapter_paragraph_search_fts, rowid, search_content)
+            VALUES ('delete', old.id, old.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS chapter_paragraph_search_au AFTER UPDATE ON chapter_paragraph_search BEGIN
+            INSERT INTO chapter_paragraph_search_fts(chapter_paragraph_search_fts, rowid, search_content)
+            VALUES ('delete', old.id, old.search_content);
+            INSERT INTO chapter_paragraph_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TABLE IF NOT EXISTS chapter_paragraph_short_terms (
+            paragraph_id INTEGER NOT NULL REFERENCES chapter_paragraph_search(id) ON DELETE CASCADE,
+            term TEXT NOT NULL,
+            PRIMARY KEY(term, paragraph_id)
+          ) WITHOUT ROWID;
+        `);
+        const insertParagraph = this.raw.prepare(
+          `INSERT INTO chapter_paragraph_search (work_id, chapter_id, paragraph_order, content, search_content)
+           VALUES (?, ?, ?, ?, ?)`
+        );
+        const insertTerm = this.raw.prepare(
+          "INSERT INTO chapter_paragraph_short_terms (paragraph_id, term) VALUES (?, ?)"
+        );
+        const chapters = this.all<{ id: string; work_id: string; content: string }>(
+          "SELECT id, work_id, content FROM chapters ORDER BY work_id, volume_id, sort_order"
+        );
+        for (const chapter of chapters) {
+          for (const [paragraphOrder, content] of splitDocumentParagraphs(chapter.content).entries()) {
+            const searchContent = normalizeDocumentSearchText(content);
+            const result = insertParagraph.run(chapter.work_id, chapter.id, paragraphOrder, content, searchContent);
+            for (const term of documentShortSearchTerms(searchContent)) insertTerm.run(result.lastInsertRowid, term);
+          }
+        }
+        this.run(`UPDATE work_ai_settings
+          SET agent_tools_json = CASE
+            WHEN json_valid(agent_tools_json) THEN json_insert(agent_tools_json, '$[#]', 'grep')
+            ELSE '["story_index","read_chapters","query_story_knowledge","grep"]'
+          END
+          WHERE NOT json_valid(agent_tools_json)
+             OR NOT EXISTS (SELECT 1 FROM json_each(agent_tools_json) WHERE value = 'grep')`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (28, ?)", new Date().toISOString());
       });
     }
   }

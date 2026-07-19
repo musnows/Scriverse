@@ -2,9 +2,18 @@ import type { ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
-import { currentRequestActor } from "./request-context.js";
 import { accountReference, logger } from "./logger.js";
-import { countWords, id, json, normalizeParagraphSpacing, now } from "./utils.js";
+import { currentRequestActor } from "./request-context.js";
+import {
+  countWords,
+  documentShortSearchTerms,
+  id,
+  json,
+  normalizeDocumentSearchText,
+  normalizeParagraphSpacing,
+  now,
+  splitDocumentParagraphs
+} from "./utils.js";
 
 type WorkInput = {
   title: string;
@@ -593,7 +602,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge"]'), ["story_index", "read_chapters", "query_story_knowledge"]),
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep"]),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -1153,6 +1162,7 @@ export class Store {
         timestamp,
         chapterId
       );
+      if (hasTextChange) this.syncChapterParagraphSearch(String(current.workId), chapterId, nextContent);
       if (hasTextChange) {
         this.insertChapterVersionRow({
           workId: String(current.workId),
@@ -1225,6 +1235,7 @@ export class Store {
         timestamp,
         timestamp
       );
+      this.syncChapterParagraphSearch(workId, chapterId, content);
       this.insertChapterVersionRow({
         workId,
         chapterId,
@@ -1323,6 +1334,7 @@ export class Store {
       timestamp,
       timestamp
     );
+    this.syncChapterParagraphSearch(workId, chapterId, normalizedContent);
     this.insertChapterVersionRow({
       workId,
       chapterId,
@@ -1338,6 +1350,70 @@ export class Store {
       timestamp
     });
     return chapterId;
+  }
+
+  private syncChapterParagraphSearch(workId: string, chapterId: string, content: string): void {
+    this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
+    for (const [paragraphOrder, paragraph] of splitDocumentParagraphs(content).entries()) {
+      const searchContent = normalizeDocumentSearchText(paragraph);
+      const inserted = this.db.run(
+        `INSERT INTO chapter_paragraph_search (work_id, chapter_id, paragraph_order, content, search_content)
+         VALUES (?, ?, ?, ?, ?)`,
+        workId,
+        chapterId,
+        paragraphOrder,
+        paragraph,
+        searchContent
+      );
+      for (const term of documentShortSearchTerms(searchContent)) {
+        this.db.run(
+          "INSERT INTO chapter_paragraph_short_terms (paragraph_id, term) VALUES (?, ?)",
+          inserted.lastInsertRowid,
+          term
+        );
+      }
+    }
+  }
+
+  searchChapterParagraphs(workId: string, keyword: string, limit = 20): Array<{
+    chapterId: string;
+    chapterTitle: string;
+    paragraph: string;
+  }> {
+    this.getWork(workId);
+    const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
+    if (!normalizedKeyword) return [];
+    const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    const columns = `SELECT paragraph.chapter_id, chapter.title AS chapter_title, paragraph.content
+      FROM chapter_paragraph_search paragraph
+      JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+      JOIN volumes volume ON volume.id = chapter.volume_id`;
+    const rows = [...normalizedKeyword].length < 3
+      ? this.db.all(
+          `${columns}
+           JOIN chapter_paragraph_short_terms term ON term.paragraph_id = paragraph.id
+           WHERE paragraph.work_id = ? AND term.term = ?
+           ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+           LIMIT ?`,
+          workId,
+          normalizedKeyword,
+          safeLimit
+        )
+      : this.db.all(
+          `${columns}
+           JOIN chapter_paragraph_search_fts fts ON fts.rowid = paragraph.id
+           WHERE paragraph.work_id = ? AND chapter_paragraph_search_fts MATCH ?
+           ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
+           LIMIT ?`,
+          workId,
+          `"${normalizedKeyword.replaceAll('"', '""')}"`,
+          safeLimit
+        );
+    return rows.map((row) => ({
+      chapterId: requiredString(row, "chapter_id"),
+      chapterTitle: requiredString(row, "chapter_title"),
+      paragraph: requiredString(row, "content")
+    }));
   }
 
   private invalidateChapter(workId: string, chapterId: string, versionNo: number): void {

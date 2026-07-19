@@ -64,7 +64,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }]);
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
@@ -100,6 +100,9 @@ describe("数据库版本化迁移", () => {
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
     expect(first.get("SELECT toast_position FROM platform_ui_settings WHERE id = 1")).toEqual({ toast_position: "bottom-right" });
+    expect(first.get("SELECT chapter_id, content FROM chapter_paragraph_search WHERE chapter_id = 'chapter-old'")).toEqual({ chapter_id: "chapter-old", content: "旧正文" });
+    expect(first.get(`SELECT paragraph.rowid AS id FROM chapter_paragraph_search_fts paragraph
+      WHERE chapter_paragraph_search_fts MATCH '"旧正文"'`)).toEqual({ id: 1 });
     expect(first.all("PRAGMA table_info(work_ai_settings)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["auto_run_enabled", "auto_run_concurrency", "auto_run_batch_limit", "book_summary_context_percent", "context_compact_threshold", "agent_tools_json"])
     );
