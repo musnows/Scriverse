@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveRuntimeSecurity } from "../../src/security.js";
 import { startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
+import { APP_VERSION } from "../../src/version.js";
 
 const roots: string[] = [];
 const runningServers: RunningLocalServer[] = [];
@@ -34,10 +35,10 @@ describe("本地服务运行时", () => {
     });
     runningServers.push(running);
 
-    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as { data: { status: string } };
+    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as { data: { status: string; version: string } };
     const page = await fetch(running.url).then((response) => response.text());
 
-    expect(health.data.status).toBe("ok");
+    expect(health.data).toMatchObject({ status: "ok", version: APP_VERSION });
     expect(page).toContain("叙界");
     expect(existsSync(databasePath)).toBe(true);
     expect(existsSync(join(root, "master.key"))).toBe(true);
