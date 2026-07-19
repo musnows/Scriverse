@@ -1395,7 +1395,19 @@ function selectAuthMode(mode) {
   $("#login-form").classList.toggle("hidden", !login);
   $("#register-form").classList.toggle("hidden", login);
   $("#auth-error").textContent = "";
-  refreshAuthCaptcha(login ? "login" : "register").catch(() => {});
+  // 验证码默认不加载，等用户点击“点击显示验证码”按钮后再请求，避免首屏空白等待
+  resetAuthCaptcha(login ? "login" : "register");
+}
+
+function resetAuthCaptcha(target = "login") {
+  const prefix = target === "register" ? "register" : "login";
+  const image = $(`#${prefix}-captcha-image`);
+  image.hidden = true;
+  image.removeAttribute("src");
+  $(`#${prefix}-captcha-placeholder`).hidden = false;
+  $(`#${prefix}-captcha-id`).value = "";
+  const answerInput = $(`#${prefix}-form`).querySelector('input[name="captchaAnswer"]');
+  if (answerInput) answerInput.value = "";
 }
 
 async function refreshAuthCaptcha(target = "login") {
@@ -1404,7 +1416,10 @@ async function refreshAuthCaptcha(target = "login") {
   const challenge = (await response.json()).data;
   const prefix = target === "register" ? "register" : "login";
   $(`#${prefix}-captcha-id`).value = challenge.captchaId;
-  $(`#${prefix}-captcha-image`).src = challenge.imageDataUrl;
+  const image = $(`#${prefix}-captcha-image`);
+  image.src = challenge.imageDataUrl;
+  image.hidden = false;
+  $(`#${prefix}-captcha-placeholder`).hidden = true;
   const answerInput = $(`#${prefix}-form`).querySelector('input[name="captchaAnswer"]');
   if (answerInput) answerInput.value = "";
 }
@@ -4033,7 +4048,8 @@ $("#login-form").addEventListener("submit", async (event) => {
     window.location.reload();
   } catch (error) {
     $("#auth-error").textContent = error.message;
-    refreshAuthCaptcha("login").catch(() => {});
+    // 仅在验证码已显示时自动换一张，未加载过则保持默认隐藏状态
+    if (!$("#login-captcha-image").hidden) refreshAuthCaptcha("login").catch(() => {});
   }
 });
 $("#register-form").addEventListener("submit", async (event) => {
@@ -4059,7 +4075,8 @@ $("#register-form").addEventListener("submit", async (event) => {
     window.location.reload();
   } catch (error) {
     $("#auth-error").textContent = error.message;
-    refreshAuthCaptcha("register").catch(() => {});
+    // 仅在验证码已显示时自动换一张，未加载过则保持默认隐藏状态
+    if (!$("#register-captcha-image").hidden) refreshAuthCaptcha("register").catch(() => {});
   }
 });
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
