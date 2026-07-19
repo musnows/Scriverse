@@ -224,7 +224,9 @@ async function run(): Promise<void> {
   const help = cli(["--help"]);
   assert.match(help.stdout, /Scriverse CLI/u);
   assert.doesNotMatch(help.stdout, /用户管理|供应商管理/u);
-  assert.deepEqual(cliJson(["auth", "status"]), { authenticated: false, configPath });
+  assert.deepEqual(cliJson(["auth", "status"]), { authenticated: false, defaultServer: null, configPath });
+  assert.deepEqual(cliJson(["connect", baseUrl]), { defaultServer: baseUrl, authenticated: false, configPath });
+  assert.deepEqual(cliJson(["auth", "status"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   const schemaList = cliJson(["schema", "list"]) as { prohibited: string[]; resources: unknown[] };
   assert.ok(schemaList.prohibited.includes("用户管理"));
   assert.equal(schemaList.resources.length, 11);
@@ -246,7 +248,7 @@ async function run(): Promise<void> {
   const keyPath = textFile("admin-api-key", `${adminKey}\n`);
   chmodSync(keyPath, 0o600);
 
-  const login = cliJson(["auth", "login", "--server", baseUrl, "--api-key-file", keyPath]) as {
+  const login = cliJson(["auth", "login", "--api-key-file", keyPath]) as {
     authenticated: boolean;
     user: { userId: string };
   };
@@ -474,16 +476,16 @@ async function run(): Promise<void> {
   assert.equal(deleteResponse.status, 403);
   checked("server-scope", "raw API key calls could not access another user work, platform management or deletion");
 
-  assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, configPath });
+  assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   cliError(["work", "list"], "CLI_LOGIN_REQUIRED");
   const writerKeyPath = textFile("writer-api-key", writerKey);
-  cliJson(["auth", "login", "--server", baseUrl, "--api-key-file", writerKeyPath]);
+  cliJson(["auth", "login", "--api-key-file", writerKeyPath]);
   const writerWorks = cliJson(["work", "list"]) as Array<Record<string, unknown>>;
   assert.deepEqual(writerWorks.map((item) => item.id), [writerWork.id]);
   cliError(["work", "get", workId], "WORK_ACCESS_DENIED");
   await resetApiKey(writer);
   cliError(["auth", "status"], "API_KEY_INVALID");
-  assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, configPath });
+  assert.deepEqual(cliJson(["auth", "logout"]), { authenticated: false, server: baseUrl, defaultServer: baseUrl, configPath });
   checked("identity-isolation", "logout blocked data commands, writer key saw only writer data, and key rotation invalidated the saved login");
 
   await stopServer();

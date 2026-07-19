@@ -316,6 +316,7 @@ export type RuntimeOptions = {
   masterSecret: string;
   fetchImpl?: typeof fetch;
   serveUi?: boolean;
+  publicPath?: string;
   security?: RuntimeSecurityOptions;
   disableUserAuth?: boolean;
   /** 测试用：在验证码接口中回显答案 */
@@ -373,7 +374,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: "0.2.0", protocol: "openai-chat-completions" });
+    data(response, { status: "ok", version: "0.3.0", protocol: "openai-chat-completions" });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
@@ -1054,7 +1055,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/audit-logs", (request, response) => data(response, store.listAuditLogs(request.params.workId)));
 
   if (options.serveUi ?? true) {
-    const publicPath = join(process.cwd(), "src", "public");
+    const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
     app.use(express.static(publicPath, {
       index: "index.html",
       maxAge: 0,

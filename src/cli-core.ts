@@ -1,13 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { cliResourceDefinitions, cliResourceTypes, cliWorkDefinition, type CliResourceType } from "./cli-contract.js";
+import type { LocalServerOptions } from "./server-runtime.js";
 
 type OutputStream = { write(chunk: string): unknown };
 type InputStream = NodeJS.ReadableStream & AsyncIterable<Buffer | string>;
 
 type CliDependencies = {
   fetchImpl?: typeof fetch;
+  serveImpl?: (options: LocalServerOptions) => Promise<{ url: string; port: number; dataDirectory: string; databasePath: string }>;
   stdin?: InputStream;
   stdout?: OutputStream;
   stderr?: OutputStream;
@@ -21,17 +23,27 @@ type ParsedArguments = {
   options: Map<string, string[]>;
 };
 
-type CliConfig = {
-  version: 1;
-  server: string;
+type CliUser = {
+  userId: string;
+  username: string;
+  displayName: string;
+  role: "admin" | "user";
+};
+
+type CliServerCredentials = {
   apiKey: string;
   apiKeyPrefix: string | null;
-  user: {
-    userId: string;
-    username: string;
-    displayName: string;
-    role: "admin" | "user";
-  };
+  user: CliUser;
+};
+
+type CliConfig = {
+  version: 2;
+  defaultServer: string | null;
+  servers: Record<string, CliServerCredentials>;
+};
+
+type CliRequestConfig = CliServerCredentials & {
+  server: string;
 };
 
 type RequestOptions = {
@@ -92,7 +104,7 @@ function optionValues(parsed: ParsedArguments, name: string): string[] {
 }
 
 function assertAllowedOptions(parsed: ParsedArguments, allowed: string[]): void {
-  const allowedSet = new Set(["config", "compact", "help", ...allowed]);
+  const allowedSet = new Set(["config", "compact", "help", "server", ...allowed]);
   for (const name of parsed.options.keys()) {
     if (!allowedSet.has(name)) throw new CliError("CLI_OPTION_UNKNOWN", `当前命令不支持 --${name}`);
   }
@@ -141,6 +153,27 @@ function normalizeServer(value: string): string {
   return url.origin;
 }
 
+function emptyConfig(): CliConfig {
+  return { version: 2, defaultServer: null, servers: {} };
+}
+
+function validUser(value: unknown): value is CliUser {
+  if (!value || typeof value !== "object") return false;
+  const user = value as Partial<CliUser>;
+  return typeof user.userId === "string"
+    && typeof user.username === "string"
+    && typeof user.displayName === "string"
+    && (user.role === "admin" || user.role === "user");
+}
+
+function validCredentials(value: unknown): value is CliServerCredentials {
+  if (!value || typeof value !== "object") return false;
+  const credentials = value as Partial<CliServerCredentials>;
+  return typeof credentials.apiKey === "string"
+    && (typeof credentials.apiKeyPrefix === "string" || credentials.apiKeyPrefix === null)
+    && validUser(credentials.user);
+}
+
 function readConfig(path: string): CliConfig {
   if (!existsSync(path)) throw new CliError("CLI_LOGIN_REQUIRED", "请先执行 auth login");
   let parsed: unknown;
@@ -150,11 +183,36 @@ function readConfig(path: string): CliConfig {
     throw new CliError("CLI_CONFIG_INVALID", `CLI 配置文件无法读取：${path}`);
   }
   if (!parsed || typeof parsed !== "object") throw new CliError("CLI_CONFIG_INVALID", "CLI 配置内容无效");
-  const value = parsed as Partial<CliConfig>;
-  if (value.version !== 1 || typeof value.server !== "string" || typeof value.apiKey !== "string" || !value.user || typeof value.user.userId !== "string") {
+  const value = parsed as Record<string, unknown>;
+  const legacyServer = typeof value.server === "string" ? value.server : null;
+  if (value.version === 1 && legacyServer && validCredentials(value)) {
+    const server = normalizeServer(legacyServer);
+    return {
+      version: 2,
+      defaultServer: server,
+      servers: {
+        [server]: {
+          apiKey: value.apiKey,
+          apiKeyPrefix: value.apiKeyPrefix,
+          user: value.user
+        }
+      }
+    };
+  }
+  if (value.version !== 2 || (value.defaultServer !== null && typeof value.defaultServer !== "string") || !value.servers || typeof value.servers !== "object" || Array.isArray(value.servers)) {
     throw new CliError("CLI_CONFIG_INVALID", "CLI 配置字段不完整，请重新登录");
   }
-  return value as CliConfig;
+  const defaultServer = value.defaultServer === null ? null : normalizeServer(value.defaultServer);
+  const servers: Record<string, CliServerCredentials> = {};
+  for (const [serverValue, credentials] of Object.entries(value.servers)) {
+    if (!validCredentials(credentials)) throw new CliError("CLI_CONFIG_INVALID", "CLI 服务器凭据字段不完整，请重新登录");
+    servers[normalizeServer(serverValue)] = credentials;
+  }
+  return { version: 2, defaultServer, servers };
+}
+
+function readOptionalConfig(path: string): CliConfig {
+  return existsSync(path) ? readConfig(path) : emptyConfig();
 }
 
 function writeConfig(path: string, config: CliConfig): void {
@@ -225,7 +283,22 @@ async function editInput(parsed: ParsedArguments, dependencies: Required<Pick<Cl
   return input;
 }
 
-async function apiRequest(fetchImpl: typeof fetch, config: CliConfig, path: string, options: RequestOptions = {}): Promise<unknown> {
+function selectedServer(parsed: ParsedArguments, config: CliConfig): string {
+  const configured = option(parsed, "server");
+  if (configured) return normalizeServer(configured);
+  if (config.defaultServer) return config.defaultServer;
+  throw new CliError("CLI_SERVER_REQUIRED", "请先执行 connect <url>，或使用 --server 指定服务器");
+}
+
+function requestConfig(parsed: ParsedArguments, path: string): CliRequestConfig {
+  const config = readConfig(path);
+  const server = selectedServer(parsed, config);
+  const credentials = config.servers[server];
+  if (!credentials) throw new CliError("CLI_LOGIN_REQUIRED", `请先对 ${server} 执行 auth login`);
+  return { server, ...credentials };
+}
+
+async function apiRequest(fetchImpl: typeof fetch, config: CliRequestConfig, path: string, options: RequestOptions = {}): Promise<unknown> {
   const response = await fetchImpl(`${config.server}${path}`, {
     method: options.method ?? "GET",
     headers: {
@@ -371,10 +444,17 @@ function summarizeTreeList(type: "volume" | "chapter", tree: unknown): unknown[]
 function helpText(): string {
   return `Scriverse CLI
 
+本地服务：
+  scriverse serve [--host <host>] [--port <port>] [--data-dir <path>]
+
+默认服务器：
+  scriverse connect <url>
+  scriverse connect
+
 认证：
-  scriverse auth login --server <url> [--api-key <key> | --api-key-file <path>]
-  scriverse auth status
-  scriverse auth logout
+  scriverse auth login [--server <url>] [--api-key <key> | --api-key-file <path>]
+  scriverse auth status [--server <url>]
+  scriverse auth logout [--server <url>]
 
 查询：
   scriverse work list
@@ -400,6 +480,7 @@ AI 编辑辅助：
 
 全局选项：
   --config <path>  指定登录配置文件
+  --server <url>   仅为当前子命令覆盖默认服务器
   --compact        输出单行 JSON
 `;
 }
@@ -433,11 +514,53 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
   }
 
   const path = configPath(parsed, dependencies);
+  if (group === "serve") {
+    assertAllowedOptions(parsed, ["host", "port", "data-dir", "database-path"]);
+    assertPositionCount(parsed.positionals, 1);
+    const host = (option(parsed, "host") ?? dependencies.env.HOST ?? "127.0.0.1").trim();
+    if (!host) throw new CliError("CLI_HOST_INVALID", "监听地址不能为空");
+    const port = Number(option(parsed, "port") ?? dependencies.env.PORT ?? 13210);
+    if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+      throw new CliError("CLI_PORT_INVALID", "端口必须是 1 到 65535 之间的整数");
+    }
+    const dataDirectoryValue = option(parsed, "data-dir") ?? dependencies.env.DATA_DIR ?? join(dependencies.cwd, ".data");
+    const dataDirectory = isAbsolute(dataDirectoryValue) ? dataDirectoryValue : resolve(dependencies.cwd, dataDirectoryValue);
+    const databasePathValue = option(parsed, "database-path") ?? dependencies.env.DATABASE_PATH ?? join(dataDirectory, "novel.db");
+    const databasePath = isAbsolute(databasePathValue) ? databasePathValue : resolve(dependencies.cwd, databasePathValue);
+    const result = await dependencies.serveImpl({ host, port, dataDirectory, databasePath, env: dependencies.env });
+    emitJson(dependencies.stdout, {
+      running: true,
+      url: result.url,
+      port: result.port,
+      dataDirectory: result.dataDirectory,
+      databasePath: result.databasePath
+    }, compact);
+    return;
+  }
+
+  if (group === "connect") {
+    assertAllowedOptions(parsed, []);
+    assertPositionCount(parsed.positionals, 2);
+    const config = readOptionalConfig(path);
+    const requested = parsed.positionals[1];
+    if (requested) {
+      config.defaultServer = normalizeServer(requested);
+      writeConfig(path, config);
+    }
+    emitJson(dependencies.stdout, {
+      defaultServer: config.defaultServer,
+      authenticated: config.defaultServer ? Boolean(config.servers[config.defaultServer]) : false,
+      configPath: path
+    }, compact);
+    return;
+  }
+
   if (group === "auth") {
     if (action === "login") {
       assertAllowedOptions(parsed, ["server", "api-key", "api-key-file"]);
       assertPositionCount(parsed.positionals, 2);
-      const server = normalizeServer(option(parsed, "server") ?? "");
+      const existing = readOptionalConfig(path);
+      const server = selectedServer(parsed, existing);
       const directKey = option(parsed, "api-key");
       const keyFile = option(parsed, "api-key-file");
       const environmentKey = dependencies.env.SCRIVERSE_API_KEY?.trim();
@@ -446,46 +569,57 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
         throw new CliError("CLI_API_KEY_REQUIRED", "请通过 --api-key、--api-key-file 或 SCRIVERSE_API_KEY 三者之一提供 API Key");
       }
       const apiKey = supplied[0]!;
-      const temporary: CliConfig = {
-        version: 1,
+      const temporary: CliRequestConfig = {
         server,
         apiKey,
         apiKeyPrefix: null,
         user: { userId: "", username: "", displayName: "", role: "user" }
       };
       const session = await apiRequest(dependencies.fetchImpl, temporary, "/api/cli/session") as {
-        user?: CliConfig["user"];
+        user?: CliUser;
         apiKeyPrefix?: string | null;
       };
       if (!session.user?.userId) throw new CliError("CLI_RESPONSE_INVALID", "服务端没有返回有效用户信息");
-      const config: CliConfig = {
-        version: 1,
-        server,
+      existing.defaultServer ??= server;
+      existing.servers[server] = {
         apiKey,
         apiKeyPrefix: session.apiKeyPrefix ?? null,
         user: session.user
       };
-      writeConfig(path, config);
-      emitJson(dependencies.stdout, { authenticated: true, server, user: config.user, apiKeyPrefix: config.apiKeyPrefix, configPath: path }, compact);
+      writeConfig(path, existing);
+      emitJson(dependencies.stdout, { authenticated: true, server, user: session.user, apiKeyPrefix: session.apiKeyPrefix ?? null, configPath: path }, compact);
       return;
     }
     if (action === "status") {
       assertAllowedOptions(parsed, []);
       assertPositionCount(parsed.positionals, 2);
       if (!existsSync(path)) {
-        emitJson(dependencies.stdout, { authenticated: false, configPath: path }, compact);
+        emitJson(dependencies.stdout, { authenticated: false, defaultServer: null, configPath: path }, compact);
         return;
       }
       const config = readConfig(path);
-      const session = await apiRequest(dependencies.fetchImpl, config, "/api/cli/session");
-      emitJson(dependencies.stdout, { ...(session as Record<string, unknown>), server: config.server, configPath: path }, compact);
+      const server = selectedServer(parsed, config);
+      const credentials = config.servers[server];
+      if (!credentials) {
+        emitJson(dependencies.stdout, { authenticated: false, server, defaultServer: config.defaultServer, configPath: path }, compact);
+        return;
+      }
+      const session = await apiRequest(dependencies.fetchImpl, { server, ...credentials }, "/api/cli/session");
+      emitJson(dependencies.stdout, { ...(session as Record<string, unknown>), server, defaultServer: config.defaultServer, configPath: path }, compact);
       return;
     }
     if (action === "logout") {
       assertAllowedOptions(parsed, []);
       assertPositionCount(parsed.positionals, 2);
-      rmSync(path, { force: true });
-      emitJson(dependencies.stdout, { authenticated: false, configPath: path }, compact);
+      if (!existsSync(path)) {
+        emitJson(dependencies.stdout, { authenticated: false, defaultServer: null, configPath: path }, compact);
+        return;
+      }
+      const config = readConfig(path);
+      const server = selectedServer(parsed, config);
+      delete config.servers[server];
+      writeConfig(path, config);
+      emitJson(dependencies.stdout, { authenticated: false, server, defaultServer: config.defaultServer, configPath: path }, compact);
       return;
     }
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知 auth 命令");
@@ -516,7 +650,7 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
   if (!["work", "manuscript", "search", "audit", "resource"].includes(group)) {
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知命令；使用 --help 查看可用命令");
   }
-  const config = readConfig(path);
+  const config = requestConfig(parsed, path);
   if (group === "work") {
     if (action === "list") {
       assertAllowedOptions(parsed, []);
@@ -634,6 +768,12 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
 export async function runCli(args: string[], inputDependencies: CliDependencies = {}): Promise<number> {
   const dependencies: Required<CliDependencies> = {
     fetchImpl: inputDependencies.fetchImpl ?? fetch,
+    serveImpl: inputDependencies.serveImpl ?? (async (options) => {
+      const { installServerShutdownHandlers, startLocalServer } = await import("./server-runtime.js");
+      const running = await startLocalServer(options);
+      installServerShutdownHandlers(running);
+      return running;
+    }),
     stdin: inputDependencies.stdin ?? process.stdin,
     stdout: inputDependencies.stdout ?? process.stdout,
     stderr: inputDependencies.stderr ?? process.stderr,

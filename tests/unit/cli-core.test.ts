@@ -72,7 +72,13 @@ describe("Scriverse CLI 核心", () => {
     expect(stderr.text()).toBe("");
     expect(JSON.parse(stdout.text())).toMatchObject({ authenticated: true, apiKeyPrefix: "scrv_test" });
     expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ apiKey: "scrv_test_key", user: { userId: "user-1" } });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": { apiKey: "scrv_test_key", user: { userId: "user-1" } }
+      }
+    });
 
     const statusOutput = outputCapture();
     expect(await runCli(["auth", "status", "--config", path], {
@@ -88,6 +94,116 @@ describe("Scriverse CLI 核心", () => {
       stderr: stderr.stream
     })).toBe(0);
     expect(JSON.parse(logoutOutput.text())).toMatchObject({ authenticated: false });
+  });
+
+  it("保存默认服务器，并允许子命令临时覆盖到已登录的其他服务器", async () => {
+    const root = temporaryRoot();
+    const path = join(root, "cli.json");
+    const stderr = outputCapture();
+    const connectOutput = outputCapture();
+
+    expect(await runCli(["connect", "https://default.example.com", "--config", path], {
+      stdout: connectOutput.stream,
+      stderr: stderr.stream
+    })).toBe(0);
+    expect(JSON.parse(connectOutput.text())).toMatchObject({
+      defaultServer: "https://default.example.com",
+      authenticated: false
+    });
+
+    const loginOutput = outputCapture();
+    const loginFetch = (async () => new Response(JSON.stringify({
+      data: {
+        authenticated: true,
+        apiKeyPrefix: "scrv_ove",
+        user: { userId: "user-2", username: "override", displayName: "Override", role: "user" }
+      }
+    }), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+    expect(await runCli([
+      "auth", "login",
+      "--server", "https://override.example.com",
+      "--api-key", "scrv_override",
+      "--config", path
+    ], {
+      fetchImpl: loginFetch,
+      stdout: loginOutput.stream,
+      stderr: stderr.stream
+    })).toBe(0);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+      defaultServer: "https://default.example.com",
+      servers: { "https://override.example.com": { apiKey: "scrv_override" } }
+    });
+
+    writeFileSync(path, JSON.stringify({
+      version: 2,
+      defaultServer: "https://default.example.com",
+      servers: {
+        "https://default.example.com": {
+          apiKey: "scrv_default",
+          apiKeyPrefix: "scrv_def",
+          user: { userId: "user-1", username: "default", displayName: "Default", role: "admin" }
+        },
+        "https://override.example.com": {
+          apiKey: "scrv_override",
+          apiKeyPrefix: "scrv_ove",
+          user: { userId: "user-2", username: "override", displayName: "Override", role: "user" }
+        }
+      }
+    }));
+    const requestedUrls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrls.push(String(input));
+      const server = String(input).startsWith("https://override.example.com") ? "override" : "default";
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer scrv_${server}`);
+      return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    expect(await runCli(["work", "list", "--config", path], {
+      fetchImpl,
+      stdout: outputCapture().stream,
+      stderr: stderr.stream
+    })).toBe(0);
+    expect(await runCli(["work", "list", "--server", "https://override.example.com", "--config", path], {
+      fetchImpl,
+      stdout: outputCapture().stream,
+      stderr: stderr.stream
+    })).toBe(0);
+    expect(requestedUrls).toEqual([
+      "https://default.example.com/api/works",
+      "https://override.example.com/api/works"
+    ]);
+    expect(stderr.text()).toBe("");
+  });
+
+  it("解析 serve 选项并启动隔离的数据目录", async () => {
+    const root = temporaryRoot();
+    const stdout = outputCapture();
+    const stderr = outputCapture();
+    let received: Record<string, unknown> | null = null;
+
+    expect(await runCli([
+      "serve",
+      "--host", "0.0.0.0",
+      "--port", "14321",
+      "--data-dir", "local-data"
+    ], {
+      cwd: root,
+      env: {},
+      stdout: stdout.stream,
+      stderr: stderr.stream,
+      serveImpl: async (options) => {
+        received = options;
+        return { url: "http://0.0.0.0:14321", port: 14321, dataDirectory: options.dataDirectory, databasePath: options.databasePath };
+      }
+    })).toBe(0);
+    expect(received).toMatchObject({
+      host: "0.0.0.0",
+      port: 14321,
+      dataDirectory: join(root, "local-data"),
+      databasePath: join(root, "local-data", "novel.db")
+    });
+    expect(JSON.parse(stdout.text())).toMatchObject({ running: true, url: "http://0.0.0.0:14321" });
+    expect(stderr.text()).toBe("");
   });
 
   it("通过字段文件和 changeNote 生成适合长正文的版本化编辑请求", async () => {
