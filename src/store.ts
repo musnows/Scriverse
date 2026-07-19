@@ -1387,7 +1387,7 @@ export class Store {
       ? "owner"
       : actor?.role === "admin"
         ? "admin"
-        : String(membership?.role ?? "") === "editor" ? "editor" : null;
+        : ["editor", "viewer"].includes(String(membership?.role ?? "")) ? String(membership?.role) : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")

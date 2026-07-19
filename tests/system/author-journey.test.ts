@@ -206,8 +206,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260719-lazy-work-loading');
-    expect(page.text).toContain('/styles.css?v=20260718-toast-position');
+    expect(page.text).toContain('/app.js?v=20260719-lazy-viewer-toast');
+    expect(page.text).toContain('/styles.css?v=20260719-viewer-toast-layer');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
@@ -265,6 +265,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-testid="book-add-card"');
     expect(application.text).toContain('id="work-access-title">可访问人</strong>');
     expect(application.text).toContain('id="work-access-manage"');
+    expect(page.text).toContain('id="member-role-select"');
+    expect(page.text).toContain('<option value="viewer">仅查看</option>');
+    expect(application.text).toContain('classList.toggle("view-only-mode", viewOnly)');
+    expect(application.text).toContain('setSaveState("仅查看")');
+    expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
     expect(application.text).toContain('class="book-card-settings"');
     expect(application.text).toContain("function workCoverFieldHtml(work)");
     expect(application.text).toContain('id="work-cover-upload"');

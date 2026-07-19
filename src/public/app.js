@@ -76,6 +76,24 @@ function analysisTaskStatusLabel(status) {
   })[String(status)] ?? String(status);
 }
 
+function canEditWork(work = state.work) {
+  return ["admin", "owner", "editor"].includes(String(work?.accessRole));
+}
+
+function applyWorkAccessMode() {
+  const viewOnly = Boolean(state.work) && !canEditWork();
+  $("#app").classList.toggle("view-only-mode", viewOnly);
+  document.body.classList.toggle("work-viewer-mode", viewOnly);
+  $("#chapter-title").readOnly = viewOnly;
+  $("#chapter-content").readOnly = viewOnly;
+  $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
+  $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
+  if (viewOnly) {
+    cancelChapterAutoSave();
+    state.dirty = false;
+  }
+}
+
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 const maximumAvatarFileSize = 5 * 1024 * 1024;
@@ -1438,13 +1456,34 @@ async function initializeAuthentication() {
   return true;
 }
 
+function raiseToastRegion() {
+  const region = $("#toast-region");
+  if (typeof region.showPopover !== "function") return;
+  if (region.matches(":popover-open")) region.hidePopover();
+  region.showPopover();
+}
+
 function toast(message, type = "info") {
+  const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
   element.textContent = message;
-  $("#toast-region").append(element);
-  setTimeout(() => element.remove(), 3600);
+  region.append(element);
+  raiseToastRegion();
+  setTimeout(() => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  }, 3600);
 }
+
+document.addEventListener("toggle", (event) => {
+  const target = event.target;
+  if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
+    raiseToastRegion();
+  }
+}, true);
 
 function setSaveState(text, dirty = false) {
   state.dirty = dirty;
@@ -1471,7 +1510,7 @@ function cancelChapterAutoSave() {
 }
 
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
-  if (!state.chapter) return;
+  if (!state.chapter || !canEditWork()) return;
   cancelChapterAutoSave();
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
@@ -1481,6 +1520,7 @@ function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
 }
 
 async function persistChapter({ automatic = false } = {}) {
+  if (!canEditWork()) return null;
   if (!state.chapter) {
     if (!automatic) toast("请先选择章节", "error");
     return null;
@@ -1725,11 +1765,23 @@ function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
-    <span>${member.role === "owner" ? "所有者" : "可编辑"}</span>
+    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
+    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>可编辑</option></select>`}
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
   bindUserAvatarFallbacks($("#members-list"));
+  $("#members-list").querySelectorAll("[data-member-role]").forEach((select) => select.addEventListener("change", async () => {
+    if (!work) return;
+    const previousRole = members.find((member) => member.userId === select.dataset.memberRole)?.role ?? "viewer";
+    try {
+      const updated = await api(`/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(select.dataset.memberRole)}`, { method: "PATCH", body: { role: select.value } });
+      renderMembers(updated);
+      toast("成员权限已更新");
+    } catch (error) {
+      select.value = previousRole;
+      toast(error.message, "error");
+    }
+  }));
   $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
     if (!work) return;
     try {
@@ -1917,9 +1969,9 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
-      <button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>
+      ${canEditWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
     </article>`).join("")}
     <button class="book-card book-add-card" id="book-add-card" type="button" aria-label="新建作品" data-testid="book-add-card"><span>＋</span><strong>新建作品</strong><small>从零开始或导入 TXT / DOCX</small></button>`;
   shelf.querySelectorAll("[data-open-work]").forEach((button) => button.addEventListener("click", () => selectWork(button.dataset.openWork)));
@@ -1967,6 +2019,7 @@ async function selectWork(workId, preferredChapterId = null) {
   settingsReturnContext = null;
   state.work = nextWork;
   state.chapter = null;
+  applyWorkAccessMode();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
   $("#top-search-button").disabled = false;
@@ -2002,6 +2055,7 @@ function renderTree() {
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
+      if (!canEditWork()) return;
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
@@ -2009,6 +2063,7 @@ function renderTree() {
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
     button.addEventListener("contextmenu", (event) => {
+      if (!canEditWork()) return;
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
@@ -2058,7 +2113,8 @@ async function selectChapter(chapterId) {
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  if (spacingChanged) scheduleChapterAutoSave(120);
+  if (!canEditWork()) setSaveState("仅查看");
+  else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
   replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
@@ -2115,6 +2171,7 @@ const moduleMeta = {
 
 async function showModule(module) {
   if (!state.work) return showWelcome();
+  if (!canEditWork() && ["tasks", "ai-settings"].includes(module)) module = "editor";
   if (module !== "editor" && state.module === "editor" && !confirmDiscardChanges()) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
@@ -2136,7 +2193,7 @@ async function showModule(module) {
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings");
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditWork());
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
@@ -3023,7 +3080,7 @@ function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
   const accessField = `<section class="work-access-field" aria-labelledby="work-access-title">
-    <div><strong id="work-access-title">可访问人</strong><small>作品创建者和受邀协作者可以访问并共同编辑这部作品。</small></div>
+    <div><strong id="work-access-title">可访问人</strong><small>可以分别授予成员仅查看或共同编辑权限。</small></div>
     ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">添加或管理可访问人</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
   </section>`;
   openDialog("作品信息",
@@ -3277,6 +3334,12 @@ async function openCharacterDialog(item) {
   $("#character-history-button").title = item ? "查看、比较和回滚历史版本" : "创建人物档案后即可查看版本历史";
   setCharacterHistoryVisible(false);
   renderCharacterEditorFields(item);
+  const viewOnly = !canEditWork();
+  if (viewOnly) {
+    $("#character-editor-eyebrow").textContent = "人物档案";
+    $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
+    $("#character-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
+  }
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
@@ -3284,6 +3347,7 @@ async function openCharacterDialog(item) {
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
+    if (!canEditWork()) return;
     const submit = $("#character-editor-submit");
     submit.disabled = true;
     try {
@@ -4026,10 +4090,11 @@ $("#member-invite-form").addEventListener("submit", async (event) => {
   const work = memberDialogWork ?? state.work;
   if (!work || !userId) return;
   try {
-    const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId } });
+    const role = $("#member-role-select").value;
+    const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId, role } });
     renderMembers(members);
     await fillMemberCandidates(members);
-    toast("协作者已邀请");
+    toast(role === "viewer" ? "仅查看成员已邀请" : "协作者已邀请");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
