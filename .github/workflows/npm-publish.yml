@@ -26,7 +26,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22.12.0
+          node-version: 22.13.0
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -44,7 +44,10 @@ jobs:
         run: npm ci
 
       - name: Check package
-        run: npm run check
+        run: |
+          npm run typecheck
+          npm run build
+          npm pack --dry-run
 
       - name: Publish package
         run: npm publish --access public --provenance
