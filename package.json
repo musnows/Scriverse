@@ -7,7 +7,7 @@
   "homepage": "https://scriverse.top/",
   "repository": {
     "type": "git",
-    "url": "https://github.com/musnows/Scriverse.git"
+    "url": "git+https://github.com/musnows/Scriverse.git"
   },
   "bugs": {
     "url": "https://github.com/musnows/Scriverse/issues"
