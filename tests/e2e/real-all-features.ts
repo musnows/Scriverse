@@ -12,11 +12,16 @@ let disposableWorkId: string | null = null;
 const cleanupWorkIds = new Set<string>();
 const cleanupProviderIds = new Set<string>();
 let upstreamStreamCompleted = false;
+let releaseUpstreamStream: (() => void) | null = null;
 let originalPlatformSystemPrompt: string | null = null;
 
 function checked(feature: string, detail: string): void {
   checks.push({ feature, detail });
   console.log(`[e2e] ${feature}: ${detail}`);
+}
+
+function releasePendingUpstreamStream(): void {
+  releaseUpstreamStream?.();
 }
 
 async function readRequest(incoming: IncomingMessage): Promise<Record<string, unknown>> {
@@ -63,7 +68,14 @@ const mockAi = createServer(async (incoming: IncomingMessage, outgoing: ServerRe
       upstreamStreamCompleted = false;
       outgoing.writeHead(200, { "Content-Type": "text/event-stream" });
       outgoing.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "林舟收到" } }] })}\n\n`);
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      await new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 2_000);
+        releaseUpstreamStream = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+      });
+      releaseUpstreamStream = null;
       outgoing.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "流式回复。" }, finish_reason: "stop" }] })}\n\n`);
       upstreamStreamCompleted = true;
       outgoing.end("data: [DONE]\n\n");
@@ -171,7 +183,9 @@ try {
   assert.equal(chapters.length, 4);
   const [firstChapter, secondChapter, thirdChapter, postscriptChapter] = chapters;
   assert.ok(firstChapter && secondChapter && thirdChapter && postscriptChapter);
-  assert.ok(chapters.every((chapter) => chapter.content.trim()));
+  assert.ok(chapters.every((chapter) => !("content" in chapter)));
+  const chapterDetails = await Promise.all(chapters.map((chapter) => api<Entity>("GET", `/chapters/${chapter.id}`)));
+  assert.ok(chapterDetails.every((chapter) => chapter.content.trim()));
   assert.equal(tree.volumes.length, 1);
   assert.equal(postscriptChapter.title, "后记");
   assert.equal(postscriptChapter.chapterType, "作者的话");
@@ -286,8 +300,12 @@ try {
   originalPlatformSystemPrompt = String(existingPlatformSettings.systemPrompt ?? "");
   const platformSettings = await api<Entity>("PATCH", "/platform/ai/settings", { systemPrompt: "平台统一约束。" });
   assert.equal(platformSettings.systemPrompt, "平台统一约束。");
-  const workSettings = await api<Entity>("PATCH", `/works/${disposableWorkId}/ai-settings`, { systemPrompt: "本书专属约束。" });
+  const workSettings = await api<Entity>("PATCH", `/works/${disposableWorkId}/ai-settings`, {
+    systemPrompt: "本书专属约束。",
+    agentTools: []
+  });
   assert.equal(workSettings.systemPrompt, "本书专属约束。");
+  assert.deepEqual(workSettings.agentTools, []);
   const configuredProvider = await api<Entity>("PATCH", `/providers/${provider.id}`, { concurrencyLimit: 4, rpmLimit: 20 });
   assert.equal(configuredProvider.concurrencyLimit, 4);
   assert.equal(configuredProvider.rpmLimit, 20);
@@ -326,6 +344,7 @@ try {
     streamedText += streamDecoder.decode(chunk.value, { stream: !chunk.done });
     if (streamedText.includes('event: delta\ndata: {"delta":"林舟收到"}') && !upstreamStreamCompleted) {
       observedDeltaBeforeUpstreamEnd = true;
+      releasePendingUpstreamStream();
     }
     if (chunk.done) break;
   }
