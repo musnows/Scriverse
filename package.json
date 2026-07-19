@@ -1,7 +1,7 @@
 {
   "name": "@musnows/scriverse",
-  "version": "0.2.0",
-  "description": "Command-line client for the Scriverse long-form fiction workspace",
+  "version": "0.3.0",
+  "description": "Command-line client and local server for the Scriverse long-form fiction workspace",
   "license": "MIT",
   "author": "musnows",
   "homepage": "https://scriverse.top/",
@@ -20,12 +20,7 @@
   ],
   "type": "module",
   "files": [
-    "dist/cli.js",
-    "dist/cli.js.map",
-    "dist/cli-core.js",
-    "dist/cli-core.js.map",
-    "dist/cli-contract.js",
-    "dist/cli-contract.js.map"
+    "dist/**/*"
   ],
   "bin": {
     "scriverse": "dist/cli.js"
@@ -40,7 +35,7 @@
     "dev": "tsx watch src/server.ts",
     "cli": "tsx src/cli.ts",
     "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "build": "npm run clean && tsc -p tsconfig.build.json && node scripts/copy-public.mjs",
     "prepack": "npm run build",
     "start": "node dist/server.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
