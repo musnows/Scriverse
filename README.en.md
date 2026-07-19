@@ -77,7 +77,7 @@ npm start
 The CLI connects to a running Scriverse server to query or edit work data. Install it globally to use the `scriverse` command:
 
 ```bash
-npm install --global scriverse
+npm install --global @musnows/scriverse
 scriverse auth login --server https://your-scriverse.example.com --api-key-file ./api-key.txt
 scriverse work list
 ```

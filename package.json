@@ -1,5 +1,5 @@
 {
-  "name": "scriverse",
+  "name": "@musnows/scriverse",
   "version": "0.2.0",
   "description": "Command-line client for the Scriverse long-form fiction workspace",
   "license": "MIT",

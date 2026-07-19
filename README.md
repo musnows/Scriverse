@@ -83,7 +83,7 @@ npm start
 CLI 用于连接已运行的 Scriverse 服务，查询或编辑作品数据。全局安装后可直接使用 `scriverse` 命令：
 
 ```bash
-npm install --global scriverse
+npm install --global @musnows/scriverse
 scriverse auth login --server https://your-scriverse.example.com --api-key-file ./api-key.txt
 scriverse work list
 ```
