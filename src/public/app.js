@@ -145,6 +145,15 @@ let onboardingStep = 0;
 let onboardingAutoScheduled = false;
 let onboardingPositionFrame = null;
 let onboardingSteps = [];
+let loadedAiModelsWorkId = null;
+let loadedAiReferencesWorkId = null;
+let loadedAiConversationsWorkId = null;
+let aiModelsLoadPromise = null;
+let aiModelsLoadWorkId = null;
+let aiReferencesLoadPromise = null;
+let aiReferencesLoadWorkId = null;
+let aiConversationsLoadPromise = null;
+let aiConversationsLoadWorkId = null;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -995,13 +1004,33 @@ function renderAiConversationHistory() {
 }
 
 async function loadAiConversations(openLatest = true) {
-  if (!state.work) return;
-  state.aiConversations = await api(`/api/works/${state.work.id}/ai-conversations`);
+  const workId = state.work?.id;
+  if (!workId) return;
+  const conversations = await api(`/api/works/${workId}/ai-conversations`);
+  if (state.work?.id !== workId) return;
+  state.aiConversations = conversations;
+  loadedAiConversationsWorkId = workId;
   renderAiConversationHistory();
   if (openLatest && state.aiConversations.length) await openAiConversation(state.aiConversations[0].id, false);
   else {
     const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
     if (current) $("#ai-conversation-title").textContent = current.title;
+  }
+}
+
+async function ensureAiConversationsLoaded() {
+  const workId = state.work?.id;
+  if (!workId || loadedAiConversationsWorkId === workId) return;
+  if (aiConversationsLoadPromise && aiConversationsLoadWorkId === workId) return aiConversationsLoadPromise;
+  aiConversationsLoadWorkId = workId;
+  aiConversationsLoadPromise = loadAiConversations(false);
+  try {
+    await aiConversationsLoadPromise;
+  } finally {
+    if (aiConversationsLoadWorkId === workId) {
+      aiConversationsLoadPromise = null;
+      aiConversationsLoadWorkId = null;
+    }
   }
 }
 
@@ -1604,7 +1633,7 @@ async function initializePage() {
 
     if (requestedWork) {
       state.module = route.view === "module" ? route.module : "editor";
-      await selectWork(requestedWork.id);
+      await selectWork(requestedWork.id, route.view === "editor" ? route.chapterId : null);
     }
 
     if (route.view === "editor") {
@@ -1953,11 +1982,20 @@ function renderShelf() {
   $("#book-add-card").addEventListener("click", openWorkDialog);
 }
 
-async function selectWork(workId) {
+async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
   const nextWork = await api(`/api/works/${workId}`);
   if (state.work?.id !== nextWork.id) {
+    loadedAiModelsWorkId = null;
+    loadedAiReferencesWorkId = null;
+    loadedAiConversationsWorkId = null;
+    state.models = [];
+    state.characters = [];
+    state.settings = [];
+    if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
+    aiContextUsageTimer = null;
+    aiContextUsageRequest += 1;
     state.aiCitations = [];
     state.aiReferences = [];
     state.aiPromptSent = false;
@@ -1968,6 +2006,8 @@ async function selectWork(workId) {
     renderAiQuickActions();
     resetAiFeed();
     $("#ai-conversation-title").textContent = "新对话";
+    $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
+    setAiContextMeter(null);
     renderAiConversationHistory();
   }
   if (discarding) setSaveState("就绪");
@@ -1984,11 +2024,9 @@ async function selectWork(workId) {
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
   $("#top-search-button").disabled = false;
   renderTree();
-  await loadModels();
-  await loadAiReferences();
-  await loadAiConversations();
-  const firstChapter = state.work.volumes.flatMap((volume) => volume.chapters)[0];
-  if (state.module === "editor" && firstChapter) await selectChapter(firstChapter.id);
+  const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
+  const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
+  if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
   else if (state.module === "editor") showWelcome(true);
   else await showModule(state.module);
   return true;
@@ -2246,6 +2284,7 @@ function bindEntityHistoryButtons(refresh) {
 
 async function renderSettings() {
   const records = await api(`/api/works/${state.work.id}/settings`);
+  state.settings = records;
   $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
     <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
     <h3>${esc(item.title)}</h3><p>${esc(item.content)}</p>
@@ -2712,13 +2751,38 @@ async function renderBookAiSettings() {
 }
 
 async function loadModels() {
-  if (!state.work) return;
-  state.models = await api(`/api/works/${state.work.id}/models`);
+  const workId = state.work?.id;
+  if (!workId) return;
+  const models = await api(`/api/works/${workId}/models`);
+  if (state.work?.id !== workId) return;
+  state.models = models;
+  loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
   scheduleAiContextUsage();
+}
+
+async function ensureAiModelsLoaded() {
+  const workId = state.work?.id;
+  if (!workId || loadedAiModelsWorkId === workId) return;
+  if (aiModelsLoadPromise && aiModelsLoadWorkId === workId) return aiModelsLoadPromise;
+  const select = $("#ai-model");
+  select.innerHTML = '<option value="">正在加载模型……</option>';
+  aiModelsLoadWorkId = workId;
+  aiModelsLoadPromise = loadModels();
+  try {
+    await aiModelsLoadPromise;
+  } catch (error) {
+    if (state.work?.id === workId) select.innerHTML = '<option value="">模型加载失败，点击重试</option>';
+    throw error;
+  } finally {
+    if (aiModelsLoadWorkId === workId) {
+      aiModelsLoadPromise = null;
+      aiModelsLoadWorkId = null;
+    }
+  }
 }
 
 let aiContextUsageTimer = null;
@@ -2829,11 +2893,32 @@ async function refreshAiContextUsage() {
 }
 
 async function loadAiReferences() {
-  if (!state.work) return;
-  [state.characters, state.settings] = await Promise.all([
-    api(`/api/works/${state.work.id}/characters`),
-    api(`/api/works/${state.work.id}/settings`)
+  const workId = state.work?.id;
+  if (!workId) return;
+  const [characters, settings] = await Promise.all([
+    api(`/api/works/${workId}/characters`),
+    api(`/api/works/${workId}/settings`)
   ]);
+  if (state.work?.id !== workId) return;
+  state.characters = characters;
+  state.settings = settings;
+  loadedAiReferencesWorkId = workId;
+}
+
+async function ensureAiReferencesLoaded() {
+  const workId = state.work?.id;
+  if (!workId || loadedAiReferencesWorkId === workId) return;
+  if (aiReferencesLoadPromise && aiReferencesLoadWorkId === workId) return aiReferencesLoadPromise;
+  aiReferencesLoadWorkId = workId;
+  aiReferencesLoadPromise = loadAiReferences();
+  try {
+    await aiReferencesLoadPromise;
+  } finally {
+    if (aiReferencesLoadWorkId === workId) {
+      aiReferencesLoadPromise = null;
+      aiReferencesLoadWorkId = null;
+    }
+  }
 }
 
 function field(name, label, type = "text", value = "", options = []) {
@@ -3455,6 +3540,11 @@ function openModelDialog(providerId, item = null) {
 
 async function sendAi() {
   if (!state.work || !state.chapter) return toast("请先选择章节", "error");
+  try {
+    await Promise.all([ensureAiModelsLoaded(), ensureAiConversationsLoaded()]);
+  } catch (error) {
+    return toast(`创作助手加载失败：${error.message}`, "error");
+  }
   const modelId = $("#ai-model").value;
   if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
   const instruction = aiPromptText().trim();
@@ -4120,9 +4210,22 @@ $("#module-nav").addEventListener("click", (event) => {
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
-$("#ai-prompt").addEventListener("input", () => {
+$("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   scheduleAiContextUsage();
+  if (!findAiMention(aiPromptTextBeforeCursor())) return;
+  try {
+    await ensureAiReferencesLoaded();
+    updateAiMentionMenu();
+  } catch (error) {
+    toast(`引用数据加载失败：${error.message}`, "error");
+  }
+});
+$("#ai-prompt").addEventListener("focus", () => {
+  ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
+});
+$("#ai-model").addEventListener("focus", () => {
+  ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
 $("#ai-model").addEventListener("change", scheduleAiContextUsage);
 $("#ai-task").addEventListener("change", scheduleAiContextUsage);
@@ -4273,8 +4376,14 @@ $("#ai-context-new-conversation").addEventListener("click", async () => {
   }
 });
 $("#ai-context-dismiss").addEventListener("click", hideAiContextWarning);
-$("#ai-history-toggle").addEventListener("click", () => {
-  setAiHistoryVisible(!$("#ai-history-dialog").open);
+$("#ai-history-toggle").addEventListener("click", async () => {
+  if ($("#ai-history-dialog").open) return setAiHistoryVisible(false);
+  try {
+    await ensureAiConversationsLoaded();
+    setAiHistoryVisible(true);
+  } catch (error) {
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
 });
 $("#ai-history-close").addEventListener("click", () => setAiHistoryVisible(false));
 $("#ai-history-dialog").addEventListener("close", () => {
