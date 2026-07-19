@@ -180,14 +180,23 @@ describe("作者完整创作流程", () => {
     await request(runtime.app).get("/character-version.js").expect(200);
     expect(page.text).toContain('id="character-editor-dialog"');
     expect(page.text).toContain('id="character-history-button"');
-    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(4);
+    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
+    expect(page.text).toContain('data-character-editor-tab="relationships"');
     expect(page.text).toContain("保存新版本");
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
+    expect(application.text).toContain("function renderCharacterEditorRelationships()");
+    expect(application.text).toContain("refreshRelationshipSurfaces");
+    expect(application.text).toContain("data-character-relationship-edit");
+    expect(application.text).toContain('field("keywords", "关系关键词", "keyword-chips"');
+    expect(application.text).toContain("splitRelationshipKeywordInput");
+    expect(application.text).toContain('form.getAll("keywords")');
     expect(application.text).toContain("function renderCharacterHistory()");
     expect(application.text).toContain("/versions`");
     expect(application.text).toContain("/restore`");
     expect(application.text).toContain("buildCharacterState(form.getAll");
     expect(styles.text).toContain(".character-editor-workspace");
+    expect(styles.text).toContain(".character-relationship-row");
+    expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
   });
 
@@ -205,8 +214,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260719-registration-opt-in');
-    expect(page.text).toContain('/styles.css?v=20260719-registration-disabled');
+    expect(page.text).toContain('/app.js?v=20260720-relationship-keyword-chips');
+    expect(page.text).toContain('/styles.css?v=20260720-relationship-keyword-chips');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
