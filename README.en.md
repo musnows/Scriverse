@@ -74,15 +74,24 @@ npm start
 
 ### Command-line client
 
-The CLI connects to a running Scriverse server to query or edit work data. Install it globally to use the `scriverse` command:
+The CLI can start Scriverse locally or connect to any running server to query and edit work data. Install it globally to use the `scriverse` command:
 
 ```bash
 npm install --global @musnows/scriverse
-scriverse auth login --server https://your-scriverse.example.com --api-key-file ./api-key.txt
+scriverse serve --data-dir ./scriverse-data
+```
+
+`serve` listens on `http://127.0.0.1:13210` by default. Starting a local server is not required for the other CLI commands; you can save a remote server as the default target:
+
+```bash
+scriverse connect https://your-scriverse.example.com
+scriverse auth login --api-key-file ./api-key.txt
 scriverse work list
 ```
 
-Run `scriverse --help` for all authentication, work, manuscript, resource, history, and search commands. The CLI requires Node.js `>= 22.5.0`.
+The CLI stores credentials per server. Every data command accepts `--server <url>` to override the default for that invocation, for example `scriverse work list --server https://another.example.com`; authenticate to that server first with `auth login --server <url>`. Run `scriverse connect` to show the current default server.
+
+Run `scriverse --help` for all local server, default server, authentication, work, manuscript, resource, history, and search commands. The CLI requires Node.js `>= 22.5.0`.
 
 ## Environment Variables
 

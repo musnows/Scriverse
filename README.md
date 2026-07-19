@@ -80,15 +80,24 @@ npm start
 
 ### 命令行工具
 
-CLI 用于连接已运行的 Scriverse 服务，查询或编辑作品数据。全局安装后可直接使用 `scriverse` 命令：
+CLI 既可以启动本地 Scriverse，也可以连接任意已运行的服务来查询或编辑作品数据。全局安装后可直接使用 `scriverse` 命令：
 
 ```bash
 npm install --global @musnows/scriverse
-scriverse auth login --server https://your-scriverse.example.com --api-key-file ./api-key.txt
+scriverse serve --data-dir ./scriverse-data
+```
+
+`serve` 默认监听 `http://127.0.0.1:13210`。启动本地服务不是使用其他 CLI 命令的前置条件；可以保存远程服务作为默认目标：
+
+```bash
+scriverse connect https://your-scriverse.example.com
+scriverse auth login --api-key-file ./api-key.txt
 scriverse work list
 ```
 
-使用 `scriverse --help` 查看认证、作品、正文、资源、历史版本和搜索等全部命令。CLI 要求 Node.js `>= 22.5.0`。
+CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可以使用 `--server <url>` 临时覆盖默认服务器，例如 `scriverse work list --server https://another.example.com`；使用前需先通过 `auth login --server <url>` 登录该服务器。执行 `scriverse connect` 可查看当前默认服务器。
+
+使用 `scriverse --help` 查看本地服务、默认服务器、认证、作品、正文、资源、历史版本和搜索等全部命令。CLI 要求 Node.js `>= 22.5.0`。
 
 ## 环境变量
 
