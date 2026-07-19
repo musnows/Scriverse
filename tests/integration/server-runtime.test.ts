@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveRuntimeSecurity } from "../../src/security.js";
 import { startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
 
 const roots: string[] = [];
@@ -13,6 +14,13 @@ afterEach(async () => {
 });
 
 describe("本地服务运行时", () => {
+  it("仅在 APP_ALLOW_REGISTRATION 明确为 true 时开放注册", () => {
+    expect(resolveRuntimeSecurity({}).allowRegistration).toBe(false);
+    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "false" }).allowRegistration).toBe(false);
+    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "TRUE" }).allowRegistration).toBe(false);
+    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "true" }).allowRegistration).toBe(true);
+  });
+
   it("使用隔离数据目录启动 API 和完整网页", async () => {
     const root = mkdtempSync(join(tmpdir(), "scriverse-serve-"));
     roots.push(root);

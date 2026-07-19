@@ -106,7 +106,7 @@ Run `scriverse --help` for all local server, default server, authentication, wor
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
-| `APP_ALLOW_REGISTRATION` | `true` | Set to `false` to disable open registration (first-admin setup remains allowed); recommended behind a public nginx reverse proxy |
+| `APP_ALLOW_REGISTRATION` | `false` | Registration is enabled only when explicitly set to `true`; unset and all other values stay closed, including first-admin setup |
 
 Custom configuration example:
 
@@ -124,7 +124,7 @@ APP_AUTH_PASSWORD='replace-with-a-long-random-password' \
 npm start
 ```
 
-Production deployments must use HTTPS at a trusted reverse proxy. On first launch, the first registered user becomes the system administrator; later registrations are normal users. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
+Production deployments must use HTTPS at a trusted reverse proxy. For first-time setup, set `APP_ALLOW_REGISTRATION=true`; the first registered user becomes the system administrator. Afterwards, remove the variable or set it to `false` and restart the service. Explicitly enable it again only when more users need to register. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
 
 ## AI Provider Setup
 

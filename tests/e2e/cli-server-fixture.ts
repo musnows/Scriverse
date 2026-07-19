@@ -7,7 +7,8 @@ const runtime = createRuntime({
   databasePath,
   masterSecret: "cli-e2e-master-secret-with-at-least-32-characters",
   serveUi: false,
-  revealCaptchaAnswer: true
+  revealCaptchaAnswer: true,
+  security: { allowRegistration: true }
 });
 const server = runtime.app.listen(0, "127.0.0.1", () => {
   const address = server.address();

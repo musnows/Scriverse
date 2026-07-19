@@ -41,7 +41,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       databasePath: ":memory:",
       masterSecret: "user-auth-test-master-secret-with-enough-length",
       serveUi: false,
-      revealCaptchaAnswer: true
+      revealCaptchaAnswer: true,
+      security: { allowRegistration: true, enforceSameOrigin: true }
     });
   });
   afterEach(() => runtime.close());
@@ -49,7 +50,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("首个用户成为管理员，并完成作品邀请、共同编辑与越权拦截", async () => {
     await request(runtime.app).get("/api/works").expect(401);
     const initialSession = await request(runtime.app).get("/api/auth/session").expect(200);
-    expect(initialSession.body.data).toMatchObject({ authenticated: false, setupRequired: true });
+    expect(initialSession.body.data).toMatchObject({ authenticated: false, setupRequired: true, registrationOpen: true });
 
     const admin = await register(runtime, "admin");
     const writer = await register(runtime, "writer");
@@ -415,7 +416,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
-  it("可通过 APP_ALLOW_REGISTRATION=false 关闭开放注册", async () => {
+  it("未显式开启注册时连首位管理员注册也会被拒绝", async () => {
     runtime.close();
     runtime = createRuntime({
       databasePath: ":memory:",
@@ -424,14 +425,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       revealCaptchaAnswer: true,
       security: { allowRegistration: false, enforceSameOrigin: true }
     });
-    const openSession = await request(runtime.app).get("/api/auth/session").expect(200);
-    expect(openSession.body.data).toMatchObject({ setupRequired: true, registrationOpen: true });
-    await register(runtime, "only_admin");
     const closedSession = await request(runtime.app).get("/api/auth/session").expect(200);
-    expect(closedSession.body.data.registrationOpen).toBe(false);
+    expect(closedSession.body.data).toMatchObject({ setupRequired: true, registrationOpen: false });
     const captcha = await solveCaptcha(runtime.app);
     const rejected = await request(runtime.app).post("/api/auth/register").send({
-      username: "blocked_user",
+      username: "blocked_first_admin",
       password: "secure-password-123",
       passwordConfirmation: "secure-password-123",
       ...captcha
