@@ -424,7 +424,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
   cursor: not-allowed;
   opacity: .46;
 }
-.member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0; }
+.member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, .3fr) auto; align-items: end; gap: 10px; margin: 0; }
 .member-invite-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .member-invite-form select {
   width: 100%;
@@ -437,6 +437,47 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
   font-size: 13px;
 }
 .member-invite-form .primary-button { min-height: 38px; white-space: nowrap; }
+.app-shell.view-only-mode:not(.shelf-mode) { grid-template-columns: var(--left-panel-width) minmax(480px, 1fr); }
+.app-shell.view-only-mode:not(.shelf-mode) .ai-panel { display: none; }
+.app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
+.app-shell.view-only-mode:not(.shelf-mode) #new-volume-button,
+.app-shell.view-only-mode:not(.shelf-mode) #new-chapter-button,
+.app-shell.view-only-mode:not(.shelf-mode) #module-create-button,
+.app-shell.view-only-mode:not(.shelf-mode) [data-work-settings],
+.app-shell.view-only-mode:not(.shelf-mode) [data-module="tasks"],
+.app-shell.view-only-mode:not(.shelf-mode) [data-module="ai-settings"],
+.app-shell.view-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
+.app-shell.view-only-mode:not(.shelf-mode) #save-button { display: none !important; }
+.app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
+.app-shell.view-only-mode:not(.shelf-mode) #chapter-title[readonly],
+.app-shell.view-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
+body.work-viewer-mode [data-setting-status],
+body.work-viewer-mode [data-edit-setting],
+body.work-viewer-mode [data-edit-character],
+body.work-viewer-mode [data-edit-race],
+body.work-viewer-mode [data-edit-organization],
+body.work-viewer-mode [data-edit-timeline-track],
+body.work-viewer-mode [data-add-event-track],
+body.work-viewer-mode [data-edit-event],
+body.work-viewer-mode [data-split-event],
+body.work-viewer-mode [data-event-select],
+body.work-viewer-mode #create-timeline-track,
+body.work-viewer-mode #merge-events,
+body.work-viewer-mode [data-edit-foreshadow],
+body.work-viewer-mode [data-edit-outline],
+body.work-viewer-mode [data-edit-relationship],
+body.work-viewer-mode [data-review-id],
+body.work-viewer-mode .task-auto-run-panel,
+body.work-viewer-mode [data-run-task],
+body.work-viewer-mode [data-cancel-task],
+body.work-viewer-mode [data-restore-version],
+body.work-viewer-mode [data-entity-version-restore],
+body.work-viewer-mode [data-character-restore],
+body.work-viewer-mode [data-item-list-add],
+body.work-viewer-mode [data-item-list-remove],
+body.work-viewer-mode [data-structured-list-add],
+body.work-viewer-mode [data-structured-list-remove],
+body.work-viewer-mode .character-editor-actions { display: none !important; }
 .search-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0; }
 .search-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .search-form input {
@@ -1348,6 +1389,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-table .relationship-actions button + button { margin-left: 5px; }
 
 @media (max-width: 540px) {
+  .member-invite-form { grid-template-columns: minmax(0, 1fr); }
   .onboarding-popover { width: calc(100vw - 24px); }
   .onboarding-popover-header { padding-inline: 15px; }
   .onboarding-popover-body { padding: 16px 17px 18px; }

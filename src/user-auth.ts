@@ -443,7 +443,7 @@ export class UserAuthService {
     return this.database.all(
       `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
        FROM work_memberships membership JOIN users user ON user.id = membership.user_id
-       WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 ELSE 1 END, user.username`,
+       WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user.username`,
       workId
     ).map((row) => ({
       userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
@@ -454,17 +454,32 @@ export class UserAuthService {
     }));
   }
 
-  addMember(workId: string, userId: string, invitedByUserId: string): Record<string, unknown>[] {
+  addMember(workId: string, userId: string, role: "editor" | "viewer", invitedByUserId: string): Record<string, unknown>[] {
     const user = this.getUser(userId);
     if (user.status !== "active") throw new AppError(409, "USER_DISABLED", "不能邀请已停用用户");
     this.database.run(
       `INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at)
-       VALUES (?, ?, 'editor', ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET role = 'editor', invited_by_user_id = excluded.invited_by_user_id`,
+       VALUES (?, ?, ?, ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET role = excluded.role, invited_by_user_id = excluded.invited_by_user_id`,
       workId,
       userId,
+      role,
       invitedByUserId,
       new Date().toISOString()
     );
+    return this.listMembers(workId);
+  }
+
+  updateMemberRole(workId: string, userId: string, role: "editor" | "viewer"): Record<string, unknown>[] {
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    if (!work) throw notFound("作品");
+    if (String(work.owner_user_id ?? "") === userId) throw new AppError(409, "OWNER_REQUIRED", "不能修改作品创建者权限");
+    const result = this.database.run(
+      "UPDATE work_memberships SET role = ? WHERE work_id = ? AND user_id = ? AND role <> 'owner'",
+      role,
+      workId,
+      userId
+    );
+    if (result.changes === 0) throw notFound("作品成员");
     return this.listMembers(workId);
   }
 
@@ -476,13 +491,14 @@ export class UserAuthService {
     return this.listMembers(workId);
   }
 
-  workRole(user: AuthUser, workId: string, allowAdminAccess = true): "admin" | "owner" | "editor" | null {
+  workRole(user: AuthUser, workId: string, allowAdminAccess = true): "admin" | "owner" | "editor" | "viewer" | null {
     if (allowAdminAccess && user.role === "admin") return "admin";
     const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return "owner";
     const membership = this.database.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
-    return String(membership?.role ?? "") === "editor" ? "editor" : null;
+    const role = String(membership?.role ?? "");
+    return role === "editor" || role === "viewer" ? role : null;
   }
 
   assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false, allowAdminAccess = true): void {
