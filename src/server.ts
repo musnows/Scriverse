@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { installServerShutdownHandlers, startLocalServer } from "./server-runtime.js";
 import { logger, resolveLogLevel } from "./logger.js";
+import { APP_VERSION } from "./version.js";
 
 const port = Number(process.env.PORT ?? 13210);
 const host = process.env.HOST ?? "127.0.0.1";
@@ -17,6 +18,7 @@ const running = await startLocalServer({
 });
 
 logger.info("server.listening", {
+  version: APP_VERSION,
   url: running.url,
   host: running.host,
   port: running.port,

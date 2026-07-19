@@ -1407,19 +1407,23 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
-function showAuth(setupRequired, registrationOpen = true) {
+function showAuth(setupRequired, registrationOpen = false) {
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
-  $("#auth-title").textContent = setupRequired ? "创建首个管理员账户" : "登录后继续创作";
+  const canRegister = registrationOpen === true;
+  $("#auth-title").textContent = setupRequired
+    ? canRegister ? "创建首个管理员账户" : "注册已禁用"
+    : "登录后继续创作";
   $("#auth-description").textContent = setupRequired
-    ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
+    ? canRegister
+      ? "这是首次启动。首个注册用户会成为系统管理员，并接管现有作品。"
+      : "请将 APP_ALLOW_REGISTRATION 设置为 true 后创建首个管理员账户。"
     : "你的作品、协作权限和每一次修改都会绑定到账户。";
-  const canRegister = setupRequired || registrationOpen;
   const registerTab = $("#auth-register-tab");
   registerTab.disabled = !canRegister;
   registerTab.setAttribute("aria-disabled", String(!canRegister));
   registerTab.textContent = canRegister ? "注册" : "注册已禁用";
-  selectAuthMode(setupRequired ? "register" : "login");
+  selectAuthMode(setupRequired && canRegister ? "register" : "login");
 }
 
 function applyAuthenticatedUser(session) {
@@ -1451,7 +1455,7 @@ async function initializeAuthentication() {
   if (!response.ok) throw new Error("无法读取登录状态");
   const session = (await response.json()).data;
   if (!session.authenticated) {
-    showAuth(session.setupRequired, session.registrationOpen !== false);
+    showAuth(session.setupRequired, session.registrationOpen === true);
     return false;
   }
   applyAuthenticatedUser(session);
