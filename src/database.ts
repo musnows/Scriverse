@@ -1240,6 +1240,15 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (28, ?)", new Date().toISOString());
       });
     }
+    if (!applied.has(29)) {
+      this.transaction(() => {
+        const userColumns = new Set(this.all("PRAGMA table_info(users)").map((row) => String(row.name)));
+        if (!userColumns.has("onboarding_completed_at")) {
+          this.run("ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (29, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {

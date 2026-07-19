@@ -90,6 +90,30 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("按用户在数据库中记录新手引导完成状态", async () => {
+    const firstUser = await register(runtime, "onboarding_first");
+    const secondUser = await register(runtime, "onboarding_second");
+    expect(firstUser.user).toMatchObject({ onboardingCompleted: false });
+    expect(secondUser.user).toMatchObject({ onboardingCompleted: false });
+
+    await firstUser.agent.post("/api/auth/onboarding/complete").send({}).expect(403);
+    const completed = await firstUser.agent
+      .post("/api/auth/onboarding/complete")
+      .set("X-CSRF-Token", firstUser.csrfToken)
+      .send({})
+      .expect(200);
+    expect(completed.body.data).toMatchObject({ userId: firstUser.user.userId, onboardingCompleted: true });
+    expect(runtime.database.get(
+      "SELECT onboarding_completed_at IS NOT NULL AS completed FROM users WHERE id = ?",
+      firstUser.user.userId
+    )).toEqual({ completed: 1 });
+
+    const session = await firstUser.agent.get("/api/auth/session").expect(200);
+    expect(session.body.data.user.onboardingCompleted).toBe(true);
+    const otherSession = await secondUser.agent.get("/api/auth/session").expect(200);
+    expect(otherSession.body.data.user.onboardingCompleted).toBe(false);
+  });
+
   it("仅查看成员可读取正文和设定，但所有作品写操作都会被拒绝", async () => {
     const owner = await register(runtime, "viewer_owner");
     const viewer = await register(runtime, "readonly_guest");

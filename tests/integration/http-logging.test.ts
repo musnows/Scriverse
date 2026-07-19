@@ -19,7 +19,8 @@ describe("HTTP 请求日志", () => {
         role: "user",
         status: "active",
         createdAt: "2026-07-19T00:00:00.000Z",
-        avatarUrl: null
+        avatarUrl: null,
+        onboardingCompleted: false
       };
       response.status(200).json({ data: { ok: true } });
     });
