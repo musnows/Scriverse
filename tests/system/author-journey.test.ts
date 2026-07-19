@@ -424,7 +424,9 @@ describe("作者完整创作流程", () => {
     const imported = await request(runtime.app).post(`/api/works/${workId}/import`)
       .attach("file", Buffer.from("第一卷 启航\n第一章 北港\n飞船停在北港。林舟检查跃迁引擎。林舟想起沈星的警告。\n第二章 旧信\n沈星仍保存着林舟的旧信。"), "星际纪元.txt")
       .expect(201);
-    const chapterId = imported.body.data.tree.volumes[0].chapters[0].id;
+    expect(JSON.stringify(imported.body)).not.toContain("飞船停在北港。");
+    const directory = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    const chapterId = directory.body.data.volumes[0].chapters[0].id;
 
     await request(runtime.app).post(`/api/works/${workId}/settings`).send({
       title: "跃迁冷却规则",
