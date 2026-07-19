@@ -385,7 +385,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: "0.3.1", protocol: "openai-chat-completions" });
+    data(response, { status: "ok", version: "0.3.2", protocol: "openai-chat-completions" });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
@@ -436,6 +436,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (request.authSession) auth.revoke(request.authSession.id);
     clearSessionCookie(response, request.secure);
     noContent(response);
+  });
+  app.post("/api/auth/onboarding/complete", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话完成新手引导");
+    parse(z.object({}).strict(), request.body ?? {});
+    const updated = auth.completeOnboarding(request.authUser.userId);
+    store.audit(null, "user.onboarding-completed", "user", updated.userId);
+    data(response, updated);
   });
   app.patch("/api/auth/profile", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");

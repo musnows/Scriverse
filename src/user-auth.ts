@@ -10,6 +10,7 @@ export type AuthUser = RequestActor & {
   status: "active" | "disabled";
   createdAt: string;
   avatarUrl: string | null;
+  onboardingCompleted: boolean;
 };
 
 export type UserAvatar = {
@@ -106,7 +107,8 @@ function mapUser(row: Row): AuthUser {
     createdAt: String(row.created_at),
     avatarUrl: avatarSha256
       ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(avatarSha256)}`
-      : null
+      : null,
+    onboardingCompleted: row.onboarding_completed_at !== null && row.onboarding_completed_at !== undefined
   };
 }
 
@@ -382,6 +384,18 @@ export class UserAuthService {
 
   updateProfile(userId: string, displayName: string): AuthUser {
     this.database.run("UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?", displayName.trim(), new Date().toISOString(), userId);
+    return this.getUser(userId);
+  }
+
+  completeOnboarding(userId: string): AuthUser {
+    this.getUser(userId);
+    const timestamp = new Date().toISOString();
+    this.database.run(
+      "UPDATE users SET onboarding_completed_at = COALESCE(onboarding_completed_at, ?), updated_at = ? WHERE id = ?",
+      timestamp,
+      timestamp,
+      userId
+    );
     return this.getUser(userId);
   }
 

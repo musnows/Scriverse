@@ -158,14 +158,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="onboarding-spotlight"');
     expect(page.text).toContain('id="onboarding-popover"');
     expect(page.text).not.toContain("data-onboarding-step");
-    expect(application.text).toContain('const onboardingStoragePrefix = "scriverse-onboarding-v2"');
     expect(application.text).toContain("const shelfOnboardingSteps = [");
     expect(application.text).toContain("const workspaceOnboardingSteps = [");
     expect(application.text).toContain("function positionOnboardingElements()");
     expect(application.text).toContain('selector: "#new-chapter-button"');
     expect(application.text).toContain('selector: ".quick-actions button[data-task=\\"continue\\"]"');
     expect(application.text).toContain("function scheduleFirstUseOnboarding()");
-    expect(application.text).toContain('localStorage.setItem(onboardingStorageKey(), "completed")');
+    expect(application.text).toContain('api("/api/auth/onboarding/complete", { method: "POST", body: {} })');
     expect(application.text).toContain('addEventListener("cancel"');
     expect(application.text).toContain('event.key === "Escape"');
     expect(styles.text).toContain(".onboarding-dialog {");
@@ -206,8 +205,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260719-ai-grep-lazy-viewer-toast');
-    expect(page.text).toContain('/styles.css?v=20260719-viewer-toast-layer');
+    expect(page.text).toContain('/app.js?v=20260719-registration-disabled');
+    expect(page.text).toContain('/styles.css?v=20260719-registration-disabled');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');

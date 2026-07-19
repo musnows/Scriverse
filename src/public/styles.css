@@ -75,7 +75,12 @@
   background: var(--line);
   content: "";
 }
-.auth-tabs button:not([aria-selected="true"]):hover { background: color-mix(in srgb, var(--surface) 62%, transparent); color: var(--ink); }
+.auth-tabs button:not([aria-selected="true"]):not(:disabled):hover { background: color-mix(in srgb, var(--surface) 62%, transparent); color: var(--ink); }
+.auth-tabs button:disabled {
+  cursor: not-allowed;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  opacity: .78;
+}
 .auth-tabs button[aria-selected="true"] {
   z-index: 1;
   background: color-mix(in srgb, var(--accent) 18%, var(--surface));
