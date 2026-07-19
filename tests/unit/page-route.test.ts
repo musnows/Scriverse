@@ -25,6 +25,11 @@ describe("页面刷新路由", () => {
     });
   });
 
+  it("往返保存登录页路由", () => {
+    expect(serializePageRoute({ view: "login" })).toBe("#view=login");
+    expect(parsePageRoute("#view=login")).toEqual({ view: "login" });
+  });
+
   it("拒绝未知模块和不完整作品地址", () => {
     expect(parsePageRoute("#view=module&work=work-1&module=unknown")).toEqual({ view: "shelf" });
     expect(parsePageRoute("#view=editor&chapter=chapter-1")).toEqual({ view: "shelf" });

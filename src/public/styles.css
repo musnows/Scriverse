@@ -31,7 +31,26 @@
   background: var(--paper);
 }
 
-.auth-pending .app-shell { visibility: hidden; }
+.auth-pending .app-shell { pointer-events: none; user-select: none; }
+.auth-loading { display: none; }
+.auth-pending .auth-loading { position: fixed; inset: 0; z-index: 900; display: grid; place-items: center; pointer-events: none; }
+.auth-loading::before { content: ""; width: 32px; height: 32px; border: 3px solid color-mix(in srgb, var(--accent) 25%, transparent); border-top-color: var(--accent); border-radius: 50%; animation: auth-loading-spin .8s linear infinite; }
+@keyframes auth-loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .auth-loading::before { animation-duration: 2s; } }
+.login-route .auth-view.hidden { display: grid !important; }
+.login-route .auth-loading { display: none; }
+/* 会话恢复期间按 data-pending-view 预显示目标视图的骨架（自然 display 与各视图定义一致） */
+[data-pending-view="shelf"] .auth-pending #shelf-view.hidden,
+[data-pending-view="settings"] .auth-pending #settings-hub-view.hidden,
+[data-pending-view="platform-ai"] .auth-pending #platform-ai-view.hidden,
+[data-pending-view="module"] .auth-pending #module-view.hidden { display: block !important; }
+[data-pending-view="welcome"] .auth-pending #welcome-view.hidden,
+[data-pending-view="editor"] .auth-pending #editor-view.hidden { display: grid !important; }
+/* 书架/设置/平台 AI 路由的骨架使用整宽布局，与 shelf-mode 一致 */
+.pending-shelf-mode .auth-pending .app-shell { grid-template-columns: 1fr; }
+.pending-shelf-mode .auth-pending .topbar { grid-template-columns: 280px 1fr auto; }
+.pending-shelf-mode .auth-pending .left-panel, .pending-shelf-mode .auth-pending .ai-panel { display: none; }
+.pending-shelf-mode .auth-pending .main-panel { grid-column: 1 / -1; }
 .auth-view { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; align-content: safe center; padding: 24px; overflow-y: auto; overscroll-behavior: contain; background: radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%), var(--paper); }
 .auth-view.hidden { display: none; }
 .auth-card { box-sizing: border-box; width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }

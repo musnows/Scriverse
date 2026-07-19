@@ -2,6 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import multer from "multer";
 import mammoth from "mammoth";
 import { extname, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { z, ZodError } from "zod";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
@@ -1075,14 +1076,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
+    // index.html 按登录态动态下发：未登录时注入 login-route 类，首帧直接渲染登录页；
+    // 已登录时保持骨架屏，由前端恢复会话后进入工作台，避免两种闪烁。
+    const sendIndexHtml = (request: Request, response: Response) => {
+      const authenticated = options.disableUserAuth === true || auth.authenticate(request) !== null;
+      let html = readFileSync(join(publicPath, "index.html"), "utf8");
+      if (!authenticated) html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="login-route">');
+      response.setHeader("Cache-Control", "no-store");
+      response.type("text/html").send(html);
+    };
+    app.get(["/", "/index.html"], sendIndexHtml);
     app.use(express.static(publicPath, {
-      index: "index.html",
+      index: false,
       maxAge: 0,
       setHeaders: (response) => response.setHeader("Cache-Control", "no-store")
     }));
     app.get("/{*path}", (request, response, next) => {
       if (request.path.startsWith("/api/")) return next();
-      response.sendFile(join(publicPath, "index.html"));
+      sendIndexHtml(request, response);
     });
   }
 
