@@ -188,10 +188,11 @@ const organizationSchema = z.object({
 
 const raceSchema = z.object({
   name: nonEmpty.max(200),
+  parentRaceId: identifier.nullable().optional(),
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
   memberIds: z.array(identifier).max(1000).optional()
-});
+}).strict();
 
 const chapterOutlineSchema = z.object({
   goal: z.string().max(100_000).optional(),

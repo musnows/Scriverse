@@ -179,6 +179,111 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     ]));
   });
 
+  it("维护任意层级种族并按祖先顺序继承共同设定", async () => {
+    const { workId } = await seedWork(runtime);
+    const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "泰坦",
+      settings: ["体型巨大"]
+    }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "原生泰坦",
+      parentRaceId: titan.body.data.id,
+      settings: ["源自远古"]
+    }).expect(201);
+    const alpha = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "阿尔法泰坦",
+      parentRaceId: original.body.data.id,
+      settings: ["能够号令同族"]
+    }).expect(201);
+
+    expect(alpha.body.data).toMatchObject({
+      parentRaceId: original.body.data.id,
+      lineage: [
+        { id: titan.body.data.id, name: "泰坦" },
+        { id: original.body.data.id, name: "原生泰坦" },
+        { id: alpha.body.data.id, name: "阿尔法泰坦" }
+      ],
+      effectiveSettings: [
+        { value: "体型巨大", sourceRaceId: titan.body.data.id, sourceRaceName: "泰坦", inherited: true },
+        { value: "源自远古", sourceRaceId: original.body.data.id, sourceRaceName: "原生泰坦", inherited: true },
+        { value: "能够号令同族", sourceRaceId: alpha.body.data.id, sourceRaceName: "阿尔法泰坦", inherited: false }
+      ]
+    });
+
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "哥斯拉",
+      raceId: original.body.data.id
+    }).expect(201);
+    expect(character.body.data).toMatchObject({
+      species: "原生泰坦",
+      race: {
+        id: original.body.data.id,
+        lineage: [{ name: "泰坦" }, { name: "原生泰坦" }],
+        effectiveSettings: [
+          { value: "体型巨大", inherited: true },
+          { value: "源自远古", inherited: false }
+        ]
+      }
+    });
+
+    await request(runtime.app).patch(`/api/races/${titan.body.data.id}`).send({ settings: ["维持生态平衡"] }).expect(200);
+    const refreshed = await request(runtime.app).get(`/api/characters/${character.body.data.id}`).expect(200);
+    expect(refreshed.body.data.race.effectiveSettings).toEqual([
+      expect.objectContaining({ value: "维持生态平衡", sourceRaceName: "泰坦", inherited: true }),
+      expect.objectContaining({ value: "源自远古", sourceRaceName: "原生泰坦", inherited: false })
+    ]);
+
+    const other = await request(runtime.app).post("/api/works").send({ title: "另一作品" }).expect(201);
+    const human = await request(runtime.app).post(`/api/works/${other.body.data.id}/races`).send({ name: "人类" }).expect(201);
+    const crossWork = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "错误子种族",
+      parentRaceId: human.body.data.id
+    }).expect(400);
+    expect(crossWork.body.error.code).toBe("RACE_PARENT_WORK_MISMATCH");
+
+    const cycle = await request(runtime.app).patch(`/api/races/${titan.body.data.id}`).send({
+      parentRaceId: alpha.body.data.id
+    }).expect(409);
+    expect(cycle.body.error.code).toBe("RACE_HIERARCHY_CYCLE");
+    const blockedDelete = await request(runtime.app).delete(`/api/races/${titan.body.data.id}`).expect(409);
+    expect(blockedDelete.body.error.code).toBe("RACE_HAS_CHILDREN");
+  });
+
+  it("记录并恢复种族父级，且兼容缺少父级字段的旧快照", async () => {
+    const { workId } = await seedWork(runtime);
+    const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "泰坦" }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "原生泰坦",
+      parentRaceId: titan.body.data.id
+    }).expect(201);
+
+    await request(runtime.app).patch(`/api/races/${original.body.data.id}`).send({ parentRaceId: null }).expect(200);
+    const versions = await request(runtime.app).get(`/api/entity-versions/race/${original.body.data.id}`).expect(200);
+    expect(versions.body.data[0].snapshot.parentRaceId).toBeNull();
+    expect(versions.body.data[1].snapshot.parentRaceId).toBe(titan.body.data.id);
+
+    const restored = await request(runtime.app)
+      .post(`/api/entity-versions/race/${original.body.data.id}/restore`)
+      .send({ versionNo: 1 })
+      .expect(200);
+    expect(restored.body.data.parentRaceId).toBe(titan.body.data.id);
+
+    const latest = await request(runtime.app).get(`/api/entity-versions/race/${original.body.data.id}`).expect(200);
+    const legacySnapshot = { ...latest.body.data.at(-1).snapshot };
+    delete legacySnapshot.parentRaceId;
+    runtime.database.run(
+      "UPDATE entity_versions SET snapshot_json = ? WHERE entity_type = 'race' AND entity_id = ? AND version_no = 1",
+      JSON.stringify(legacySnapshot),
+      original.body.data.id
+    );
+    await request(runtime.app).patch(`/api/races/${original.body.data.id}`).send({ parentRaceId: null }).expect(200);
+    const legacyRestored = await request(runtime.app)
+      .post(`/api/entity-versions/race/${original.body.data.id}/restore`)
+      .send({ versionNo: 1 })
+      .expect(200);
+    expect(legacyRestored.body.data.parentRaceId).toBeNull();
+  });
+
   it("为人物编辑保存完整版本历史并通过新版本回滚", async () => {
     const { workId } = await seedWork(runtime);
     const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);
