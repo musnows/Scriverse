@@ -705,12 +705,17 @@ export class Store {
     return this.getWork(workId);
   }
 
-  deleteWork(workId: string): void {
+  deleteWork(workId: string): string[] {
     const work = this.getWork(workId);
+    const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
+      .map((row) => requiredString(row, "storage_key"));
     this.db.transaction(() => {
       this.audit(null, "work.deleted", "work", workId, { title: work.title });
       this.db.run("DELETE FROM works WHERE id = ?", workId);
     });
+    return storageKeys.filter((storageKey) => Number(
+      this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0
+    ) === 0);
   }
 
   setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer): Record<string, unknown> {

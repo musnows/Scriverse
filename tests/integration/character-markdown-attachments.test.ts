@@ -41,6 +41,21 @@ describe("人物 Markdown 章节与附件", () => {
     expect(runtime.store.listAttachments(String(work.id))).toHaveLength(1);
   });
 
+  it("删除作品时清理不再被其他作品使用的附件文件", async () => {
+    const work = await createWork(runtime);
+    const png = await sharp({
+      create: { width: 96, height: 96, channels: 3, background: { r: 60, g: 120, b: 180 } }
+    }).png().toBuffer();
+    const upload = await request(runtime.app)
+      .post(`/api/works/${String(work.id)}/attachments`)
+      .attach("file", png, { filename: "待清理.png", contentType: "image/png" });
+    const storagePath = runtime.attachmentStorage.path(String(upload.body.data.storageKey));
+    expect(existsSync(storagePath)).toBe(true);
+
+    await request(runtime.app).delete(`/api/works/${String(work.id)}`).expect(204);
+    expect(existsSync(storagePath)).toBe(false);
+  });
+
   it("维护 Markdown 附件引用、章节版本和删除保护", async () => {
     const work = await createWork(runtime);
     const character = runtime.store.createCharacter(String(work.id), { name: "魔克拉·姆边贝" });

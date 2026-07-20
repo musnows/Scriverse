@@ -592,8 +592,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, members);
   });
   app.patch("/api/works/:workId", (request, response) => data(response, store.updateWork(request.params.workId, parse(workSchema.partial(), request.body))));
-  app.delete("/api/works/:workId", (request, response) => {
-    store.deleteWork(request.params.workId);
+  app.delete("/api/works/:workId", async (request, response) => {
+    const removableStorageKeys = store.deleteWork(request.params.workId);
+    await Promise.all(removableStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey)));
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
