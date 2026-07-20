@@ -247,6 +247,21 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(cycle.body.error.code).toBe("RACE_HIERARCHY_CYCLE");
     const blockedDelete = await request(runtime.app).delete(`/api/races/${titan.body.data.id}`).expect(409);
     expect(blockedDelete.body.error.code).toBe("RACE_HAS_CHILDREN");
+
+    const search = await request(runtime.app).get(`/api/works/${workId}/search?q=${encodeURIComponent("泰坦")}`).expect(200);
+    expect(search.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", title: "哥斯拉", snippet: "泰坦 / 原生泰坦", racePath: "泰坦 / 原生泰坦" }),
+      expect.objectContaining({
+        type: "race",
+        title: "原生泰坦",
+        lineage: [{ id: titan.body.data.id, name: "泰坦" }, { id: original.body.data.id, name: "原生泰坦" }]
+      })
+    ]));
+    const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
+    expect(exported.body.data).toMatchObject({
+      schemaVersion: 7,
+      races: expect.arrayContaining([expect.objectContaining({ id: original.body.data.id, parentRaceId: titan.body.data.id })])
+    });
   });
 
   it("记录并恢复种族父级，且兼容缺少父级字段的旧快照", async () => {
@@ -406,7 +421,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const outlines = await request(runtime.app).get(`/api/works/${workId}/outlines`).expect(200);
     expect(outlines.body.data[0]).toMatchObject({ goal: "建立旧友关系", volumeTitle: "第一卷" });
     const exported = await request(runtime.app).get(`/api/works/${workId}/export?format=json`).expect(200);
-    expect(exported.body.data).toMatchObject({ schemaVersion: 6, races: [] });
+    expect(exported.body.data).toMatchObject({ schemaVersion: 7, races: [] });
     expect(exported.body.data.foreshadows[0].occurrences).toHaveLength(2);
   });
 });

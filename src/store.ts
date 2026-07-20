@@ -3831,13 +3831,18 @@ export class Store {
       pattern,
       pattern
     );
-    const races = this.db.all(
-      "SELECT id, name, description, settings_json FROM races WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern,
-      pattern
-    );
+    const normalizedQuery = query.toLocaleLowerCase("zh-CN");
+    const races = this.listRaces(workId).filter((race) => {
+      const lineage = race.lineage as Array<{ name: string }>;
+      const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
+      return [
+        race.name,
+        race.description,
+        ...(race.settings as string[]),
+        ...lineage.map((item) => item.name),
+        ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
+      ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+    }).slice(0, 50);
     const settings = this.db.all(
       "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
@@ -3845,8 +3850,26 @@ export class Store {
       pattern
     );
     const characters = this.db.all(
-      "SELECT id, name, aliases_json, species FROM characters WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR aliases_json LIKE ? ESCAPE '\\' OR species LIKE ? ESCAPE '\\') LIMIT 50",
+      `WITH RECURSIVE character_race_lineage(character_id, race_id, parent_race_id, name, path) AS (
+         SELECT character.id, race.id, race.parent_race_id, race.name, race.name
+         FROM characters character JOIN races race ON race.id = character.race_id
+         WHERE character.work_id = ?
+         UNION ALL
+         SELECT lineage.character_id, parent.id, parent.parent_race_id, parent.name, parent.name || ' / ' || lineage.path
+         FROM character_race_lineage lineage JOIN races parent ON parent.id = lineage.parent_race_id
+       ), character_race_paths AS (
+         SELECT character_id, path FROM character_race_lineage WHERE parent_race_id IS NULL
+       )
+       SELECT character.id, character.name, character.aliases_json, character.species,
+              COALESCE(path.path, character.species) AS race_path
+       FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
+       WHERE character.work_id = ? AND (
+         character.name LIKE ? ESCAPE '\\' OR character.aliases_json LIKE ? ESCAPE '\\' OR character.species LIKE ? ESCAPE '\\'
+         OR EXISTS (SELECT 1 FROM character_race_lineage lineage WHERE lineage.character_id = character.id AND lineage.name LIKE ? ESCAPE '\\')
+       ) LIMIT 50`,
       workId,
+      workId,
+      pattern,
       pattern,
       pattern,
       pattern
@@ -3864,9 +3887,26 @@ export class Store {
       return content.slice(start, start + 120);
     };
     return [
-      ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: [requiredString(row, "species"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、") })),
+      ...characters.map((row) => ({
+        type: "character",
+        id: requiredString(row, "id"),
+        title: requiredString(row, "name"),
+        snippet: [requiredString(row, "race_path"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、"),
+        racePath: requiredString(row, "race_path")
+      })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
-      ...races.map((row) => ({ type: "race", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
+      ...races.map((race) => {
+        const lineage = race.lineage as Array<{ id: string; name: string }>;
+        const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceId: string; sourceRaceName: string; inherited: boolean }>;
+        return {
+          type: "race",
+          id: String(race.id),
+          title: String(race.name),
+          snippet: snippet(`${lineage.map((item) => item.name).join(" / ")}\n${String(race.description)}\n${effectiveSettings.map((item) => `${item.sourceRaceName}：${item.value}`).join("\n")}`),
+          lineage,
+          effectiveSettings
+        };
+      }),
       ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
       ...chapters.map((row) => ({ type: "chapter", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), volumeId: requiredString(row, "volume_id") }))
     ];
@@ -3875,7 +3915,7 @@ export class Store {
   exportWork(workId: string): Record<string, unknown> {
     const tree = this.getWorkTree(workId);
     return {
-      schemaVersion: 6,
+      schemaVersion: 7,
       exportedAt: now(),
       work: tree,
       settings: this.listSettings(workId),
