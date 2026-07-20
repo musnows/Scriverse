@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -20,6 +20,27 @@ describe("人物关系图数据与布局", () => {
       keywords: ["王权效忠", "兄弟情谊", "长期并肩", "舍命相救", "相互调侃", "互相关怀"]
     })).toBe("君臣 · 王权效忠 · 兄弟情谊 · 长期并肩 · 舍命相救 · 相互调侃 · 互相关怀");
     expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
+  });
+
+  it("为同一人物对的多条关系分配独立弧线", () => {
+    const offsets = assignRelationshipEdgeCurves([
+      { id: "friend", source: "a", target: "b", directed: false },
+      { id: "admire", source: "a", target: "b", directed: true }
+    ]);
+
+    expect(offsets.get("admire")).toBe(-12);
+    expect(offsets.get("friend")).toBe(12);
+    expect(getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, offsets.get("admire")).path)
+      .not.toBe(getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, offsets.get("friend")).path);
+  });
+
+  it("关系连线避开节点中心并为弧线提供标签位置", () => {
+    const straight = getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, 0);
+    const curved = getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, 12);
+
+    expect(straight.path).toBe("M 12.0 0.0 L 88.0 0.0");
+    expect(curved.path).toContain(" Q ");
+    expect(curved.labelY).toBeGreaterThan(0);
   });
 
   it("银河图角色详情按关联角色名称合并多条关系", () => {

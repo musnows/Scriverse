@@ -955,6 +955,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 .relationship-network .mind-edge,
 .relationship-network .obsidian-edge { stroke: rgba(255,255,255,.26); stroke-width: 1px; opacity: 1; transition: opacity .12s ease, stroke .12s ease; }
+.relationship-network .mind-edge.is-directed { stroke: rgba(214,218,232,.5); }
+.relationship-network .relationship-edge-arrow { pointer-events: none; }
 .relationship-network .mind-edge.family,
 .relationship-network .mind-edge.social,
 .relationship-network .mind-edge.emotional,

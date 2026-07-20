@@ -21,6 +21,8 @@ const NETWORK_LAYOUTS = Object.freeze({
   standard: Object.freeze({ width: 1200, height: 640, marginX: 48, marginY: 42, desiredEdgeLength: 196, repulsionStrength: 16800 }),
   expanded: Object.freeze({ width: 1600, height: 900, marginX: 64, marginY: 56, desiredEdgeLength: 236, repulsionStrength: 22800 })
 });
+const RELATIONSHIP_EDGE_GAP = 24;
+let relationshipRendererSequence = 0;
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   minimumRadius: 165,
@@ -56,9 +58,74 @@ export function getRelationshipEdgeSelection(graph, edgeId) {
   if (!edge) return null;
   return {
     edgeId: edge.id,
+    directed: edge.directed,
     endpointIds: [edge.source, edge.target],
     endpointNames: [graph.nodeById.get(edge.source)?.name ?? "未知角色", graph.nodeById.get(edge.target)?.name ?? "未知角色"],
     label: formatRelationshipLabel(edge)
+  };
+}
+
+export function assignRelationshipEdgeCurves(edges, gap = RELATIONSHIP_EDGE_GAP) {
+  const groups = new Map();
+  for (const edge of edges) {
+    const endpoints = [String(edge.source), String(edge.target)].sort((left, right) => left.localeCompare(right));
+    const key = endpoints.join("\u0000");
+    const group = groups.get(key) ?? [];
+    group.push(edge);
+    groups.set(key, group);
+  }
+  const offsets = new Map();
+  for (const group of groups.values()) {
+    const ordered = [...group].sort((left, right) => String(left.id).localeCompare(String(right.id)));
+    ordered.forEach((edge, index) => {
+      const canonicalOffset = (index - (ordered.length - 1) / 2) * gap;
+      const followsCanonicalDirection = String(edge.source).localeCompare(String(edge.target)) <= 0;
+      offsets.set(String(edge.id), canonicalOffset * (followsCanonicalDirection ? 1 : -1));
+    });
+  }
+  return offsets;
+}
+
+export function getRelationshipEdgeGeometry(from, to, sourceRadius = 0, targetRadius = 0, curveOffset = 0) {
+  const dx = Number(to?.x ?? 0) - Number(from?.x ?? 0);
+  const dy = Number(to?.y ?? 0) - Number(from?.y ?? 0);
+  const distance = Math.max(1, Math.hypot(dx, dy));
+  const normalX = -dy / distance;
+  const normalY = dx / distance;
+  const control = {
+    x: Number(from?.x ?? 0) + dx / 2 + normalX * curveOffset * 2,
+    y: Number(from?.y ?? 0) + dy / 2 + normalY * curveOffset * 2
+  };
+  const sourceTangentX = control.x - Number(from?.x ?? 0);
+  const sourceTangentY = control.y - Number(from?.y ?? 0);
+  const sourceTangentLength = Math.max(1, Math.hypot(sourceTangentX, sourceTangentY));
+  const targetTangentX = Number(to?.x ?? 0) - control.x;
+  const targetTangentY = Number(to?.y ?? 0) - control.y;
+  const targetTangentLength = Math.max(1, Math.hypot(targetTangentX, targetTangentY));
+  const startClearance = Math.max(0, Number(sourceRadius) || 0) + 2;
+  const endClearance = Math.max(0, Number(targetRadius) || 0) + 2;
+  const start = {
+    x: Number(from?.x ?? 0) + sourceTangentX / sourceTangentLength * startClearance,
+    y: Number(from?.y ?? 0) + sourceTangentY / sourceTangentLength * startClearance
+  };
+  const end = {
+    x: Number(to?.x ?? 0) - targetTangentX / targetTangentLength * endClearance,
+    y: Number(to?.y ?? 0) - targetTangentY / targetTangentLength * endClearance
+  };
+  const curved = Math.abs(curveOffset) > 0.01;
+  const labelPoint = curved
+    ? {
+        x: (start.x + end.x) / 4 + control.x / 2,
+        y: (start.y + end.y) / 4 + control.y / 2
+      }
+    : { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  return {
+    path: curved
+      ? `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} Q ${control.x.toFixed(1)} ${control.y.toFixed(1)} ${end.x.toFixed(1)} ${end.y.toFixed(1)}`
+      : `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} L ${end.x.toFixed(1)} ${end.y.toFixed(1)}`,
+    labelX: labelPoint.x,
+    labelY: labelPoint.y,
+    angle: Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI
   };
 }
 
@@ -673,15 +740,41 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-label", "人物关系连线");
+  const arrowMarkerId = `relationship-edge-arrow-${++relationshipRendererSequence}`;
+  const definitions = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const arrowMarker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
+  arrowMarker.id = arrowMarkerId;
+  arrowMarker.setAttribute("viewBox", "0 0 8 8");
+  arrowMarker.setAttribute("markerWidth", "8");
+  arrowMarker.setAttribute("markerHeight", "8");
+  arrowMarker.setAttribute("refX", "7");
+  arrowMarker.setAttribute("refY", "4");
+  arrowMarker.setAttribute("markerUnits", "userSpaceOnUse");
+  arrowMarker.setAttribute("orient", "auto");
+  const arrowHead = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  arrowHead.classList.add("relationship-edge-arrow");
+  arrowHead.setAttribute("d", "M 0 0 L 8 4 L 0 8 Z");
+  arrowHead.setAttribute("fill", "context-stroke");
+  arrowMarker.append(arrowHead);
+  definitions.append(arrowMarker);
+  svg.append(definitions);
   const edgeElements = [];
   const edgeElementsByNode = new Map(graph.nodes.map((node) => [node.id, []]));
+  const edgeCurveOffsets = assignRelationshipEdgeCurves(graph.edges);
+  const nodeVisualRadii = new Map(graph.nodes.map((node) => [node.id, Math.max(4, Number(node.nodeSize) / 2 || 4)]));
   const updateEdgeGeometry = ({ edge, hitPath, path }, { includeHit = true } = {}) => {
     const from = positions.get(edge.source);
     const to = positions.get(edge.target);
     if (!from || !to) return;
-    const geometry = `M ${from.x.toFixed(1)} ${from.y.toFixed(1)} L ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
-    path.setAttribute("d", geometry);
-    if (includeHit) hitPath.setAttribute("d", geometry);
+    const geometry = getRelationshipEdgeGeometry(
+      from,
+      to,
+      nodeVisualRadii.get(edge.source),
+      nodeVisualRadii.get(edge.target),
+      edgeCurveOffsets.get(edge.id)
+    );
+    path.setAttribute("d", geometry.path);
+    if (includeHit) hitPath.setAttribute("d", geometry.path);
   };
   const updateLabelGeometry = (edge) => {
     const from = positions.get(edge.source);
@@ -690,9 +783,16 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const distance = Math.max(1, Math.hypot(dx, dy));
-    const middleX = (from.x + to.x) / 2;
-    const middleY = (from.y + to.y) / 2 - 4;
-    let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+    const geometry = getRelationshipEdgeGeometry(
+      from,
+      to,
+      nodeVisualRadii.get(edge.source),
+      nodeVisualRadii.get(edge.target),
+      edgeCurveOffsets.get(edge.id)
+    );
+    const middleX = geometry.labelX;
+    const middleY = geometry.labelY - 4;
+    let angle = geometry.angle;
     if (angle > 90 || angle < -90) angle += 180;
     const fullLabel = label.dataset.fullLabel || label.textContent || "";
     // 按连线长度截断，短边只显示极短摘要，完整内容在底部详情
@@ -719,6 +819,13 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     path.style.setProperty("--edge-opacity", "0.24");
     path.style.setProperty("--edge-width", "1");
     if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
+    if (edge.directed) {
+      path.classList.add("is-directed");
+      path.setAttribute("marker-end", `url(#${arrowMarkerId})`);
+    }
+    const sourceName = graph.nodeById.get(edge.source)?.name ?? "未知角色";
+    const targetName = graph.nodeById.get(edge.target)?.name ?? "未知角色";
+    hitPath.setAttribute("aria-label", `选择 ${sourceName}${edge.directed ? " 指向 " : " 与 "}${targetName} 的关系：${formatRelationshipLabel(edge)}`);
     svg.append(hitPath, path);
     const edgeElement = { edge, hitPath, path };
     edgeElements.push(edgeElement);
@@ -1023,9 +1130,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     label.dataset.fullLabel = fullLabel;
     label.classList.remove("hidden");
     updateLabelGeometry(edgeElement.edge);
-    focusText.textContent = `关系：${selection.endpointNames[0]} ↔ ${selection.endpointNames[1]}`;
+    const direction = selection.directed ? "→" : "↔";
+    focusText.textContent = `关系：${selection.endpointNames[0]} ${direction} ${selection.endpointNames[1]}`;
     const heading = document.createElement("b");
-    heading.textContent = `${selection.endpointNames[0]}与${selection.endpointNames[1]}`;
+    heading.textContent = `${selection.endpointNames[0]} ${direction} ${selection.endpointNames[1]}`;
     const detailText = document.createElement("span");
     detailText.textContent = selection.label;
     edgeDetail.replaceChildren(heading, detailText);
