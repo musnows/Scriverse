@@ -39,6 +39,17 @@ export function formatRelationshipLabel(edge, separator = " · ") {
   return [subtype, ...keywords].filter(Boolean).join(separator) || "关系";
 }
 
+export function formatRelationshipStatusNote(edge) {
+  const statuses = [];
+  if (String(edge?.confirmationStatus ?? "pending") === "pending") statuses.push("待确认");
+  if (String(edge?.category ?? "") === "uncertain") statuses.push("关系类型未确定");
+  return statuses.length ? `（${statuses.join(" · ")}）` : "";
+}
+
+export function formatRelationshipDetailLabel(edge) {
+  return `${formatRelationshipLabel(edge)}${formatRelationshipStatusNote(edge)}`;
+}
+
 export function groupRelationshipDetailsByCharacterName(graph, nodeId) {
   const groups = new Map();
   for (const edge of graph.edges) {
@@ -1135,7 +1146,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     const heading = document.createElement("b");
     heading.textContent = `${selection.endpointNames[0]} ${direction} ${selection.endpointNames[1]}`;
     const detailText = document.createElement("span");
-    detailText.textContent = selection.label;
+    detailText.textContent = formatRelationshipDetailLabel(edgeElement.edge);
     edgeDetail.replaceChildren(heading, detailText);
     edgeDetail.classList.remove("hidden");
   };
@@ -1881,7 +1892,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         category.className = edge.category;
         return category;
       });
-      const labels = [...new Set(group.edges.map((edge) => formatRelationshipLabel(edge)))];
+      const labels = [...new Set(group.edges.map((edge) => formatRelationshipDetailLabel(edge)))];
       item.append(...categories, document.createTextNode(`${group.name} · ${labels.join("；")}`));
       list.append(item);
     }
@@ -1894,11 +1905,11 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     detail.classList.remove("hidden");
     detail.replaceChildren();
     const heading = document.createElement("strong");
-    heading.textContent = selection.endpointNames.join(" ↔ ");
+    heading.textContent = selection.endpointNames.join(selection.directed ? " → " : " ↔ ");
     const category = document.createElement("small");
     category.textContent = RELATION_STYLE[edge.category].label;
     const description = document.createElement("p");
-    description.textContent = selection.label;
+    description.textContent = formatRelationshipDetailLabel(edge);
     detail.append(heading, category, description);
     shell.dataset.selectedEdgeSource = selection.endpointIds[0];
     shell.dataset.selectedEdgeTarget = selection.endpointIds[1];

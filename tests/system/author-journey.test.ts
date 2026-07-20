@@ -216,9 +216,11 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
     expect(page.text).toContain('/app.js?v=20260720-nav-icons');
     expect(page.text).toContain('/styles.css?v=20260720-direction-edges');
-    expect(application.text).toContain('/relationship-graph.js?v=20260720-direction-edges');
+    expect(application.text).toContain('/relationship-graph.js?v=20260720-relationship-status-note');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
+    expect(graph.text).toContain('statuses.push("待确认")');
+    expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');

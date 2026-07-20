@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -20,6 +20,17 @@ describe("人物关系图数据与布局", () => {
       keywords: ["王权效忠", "兄弟情谊", "长期并肩", "舍命相救", "相互调侃", "互相关怀"]
     })).toBe("君臣 · 王权效忠 · 兄弟情谊 · 长期并肩 · 舍命相救 · 相互调侃 · 互相关怀");
     expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
+  });
+
+  it("在关系详情中用括号解释虚线状态", () => {
+    expect(formatRelationshipStatusNote({ category: "conflict", confirmationStatus: "pending" })).toBe("（待确认）");
+    expect(formatRelationshipStatusNote({ category: "uncertain", confirmationStatus: "confirmed" })).toBe("（关系类型未确定）");
+    expect(formatRelationshipDetailLabel({
+      category: "uncertain",
+      subtype: "身份关联",
+      confirmationStatus: "pending"
+    })).toBe("身份关联（待确认 · 关系类型未确定）");
+    expect(formatRelationshipStatusNote({ category: "social", confirmationStatus: "confirmed" })).toBe("");
   });
 
   it("为同一人物对的多条关系分配独立弧线", () => {
