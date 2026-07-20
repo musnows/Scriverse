@@ -697,7 +697,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 .file-button input { display: none; }
 .module-nav { display: grid; grid-template-columns: repeat(2, 1fr); gap: 3px; padding: 8px 0 14px; border-bottom: 1px solid var(--line); }
-.module-nav button { border: 0; background: transparent; text-align: left; padding: 7px 9px; color: var(--muted); font-size: 12px; border-radius: 3px; }
+.module-nav button { display: flex; align-items: center; gap: 6px; border: 0; background: transparent; text-align: left; padding: 7px 9px; color: var(--muted); font-size: 12px; border-radius: 3px; }
+.module-nav .nav-icon { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+#module-more-button[aria-expanded="true"] .nav-icon { transform: rotate(180deg); }
 .module-nav button.active, .module-nav button:hover { background: var(--paper-deep); color: var(--ink); }
 .module-nav .ai-analysis-entry { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-weight: 650; }
 #module-more-button { grid-column: 1 / -1; color: var(--accent-dark); text-align: center; }

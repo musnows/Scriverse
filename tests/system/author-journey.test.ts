@@ -214,8 +214,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-captcha-lazy-load');
-    expect(page.text).toContain('/styles.css?v=20260720-captcha-lazy-load');
+    expect(page.text).toContain('/app.js?v=20260720-nav-icons');
+    expect(page.text).toContain('/styles.css?v=20260720-nav-icons');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
@@ -301,11 +301,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
     expect(application.text).toContain("updateDocumentTitle(state.work)");
     expect(page.text).toContain('data-module="outlines"');
-    expect(page.text).toContain('<button type="button" data-module="outlines">大纲与伏笔</button>');
-    expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">AI 分析</button>');
+    expect(page.text).toContain('<span class="nav-label">大纲与伏笔</span>');
+    expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">');
+    expect(page.text).toContain('</svg>AI 分析</button>');
     expect(page.text).toContain('id="module-more-button"');
+    expect(page.text).toContain('<span class="nav-label">更多</span>');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
-    expect(page.text).toContain('<button class="module-nav-secondary hidden" type="button" data-module="races">种族</button>');
+    expect(page.text).toContain('</svg>种族</button>');
+    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(13);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
     expect(page.text).toContain(">作品设置</button>");
