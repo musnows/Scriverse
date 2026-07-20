@@ -52,6 +52,31 @@ type CharacterInput = {
   firstChapterId?: string | null;
 };
 
+export type CharacterProfileSectionInput = {
+  sectionType?: string;
+  title: string;
+  contentMarkdown?: string;
+  summary?: string;
+  sortOrder?: number;
+  sourcePath?: string | null;
+  sourceHash?: string | null;
+};
+
+export type AttachmentInput = {
+  originalName: string;
+  originalMimeType: string;
+  storedMimeType: string;
+  originalByteLength: number;
+  storedByteLength: number;
+  originalSha256: string;
+  storedSha256: string;
+  storageKey: string;
+  width: number;
+  height: number;
+  pageCount: number;
+  animated: boolean;
+};
+
 type CharacterSnapshot = {
   name: string;
   aliases: string[];
@@ -2424,6 +2449,386 @@ export class Store {
     return this.db.all("SELECT * FROM characters WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapCharacter(row));
   }
 
+  private mapCharacterProfileSection(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      sectionType: requiredString(row, "section_type"),
+      title: requiredString(row, "title"),
+      contentMarkdown: requiredString(row, "content_markdown"),
+      summary: requiredString(row, "summary"),
+      sortOrder: numberValue(row, "sort_order"),
+      sourcePath: optionalString(row, "source_path"),
+      sourceHash: optionalString(row, "source_hash"),
+      versionNo: numberValue(row, "version_no"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  listCharacterProfileSections(characterId: string): Record<string, unknown>[] {
+    this.getCharacter(characterId);
+    return this.db.all(
+      "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
+      characterId
+    ).map((row) => this.mapCharacterProfileSection(row));
+  }
+
+  getCharacterProfileSection(sectionId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM character_profile_sections WHERE id = ?", sectionId);
+    if (!row) throw notFound("人物档案章节");
+    return this.mapCharacterProfileSection(row);
+  }
+
+  private characterProfileSectionSnapshot(section: Record<string, unknown>): Record<string, unknown> {
+    return {
+      sectionType: String(section.sectionType),
+      title: String(section.title),
+      contentMarkdown: String(section.contentMarkdown),
+      summary: String(section.summary),
+      sortOrder: Number(section.sortOrder),
+      sourcePath: section.sourcePath ?? null,
+      sourceHash: section.sourceHash ?? null
+    };
+  }
+
+  private recordCharacterProfileSectionVersion(
+    section: Record<string, unknown>,
+    source: string,
+    sourceRef: string | null,
+    changeNote: string,
+    timestamp = now()
+  ): void {
+    this.db.run(
+      `INSERT INTO character_profile_section_versions
+       (id, work_id, character_id, section_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("characterSectionVersion"),
+      String(section.workId),
+      String(section.characterId),
+      String(section.id),
+      Number(section.versionNo),
+      JSON.stringify(this.characterProfileSectionSnapshot(section)),
+      source,
+      sourceRef,
+      changeNote.trim(),
+      timestamp,
+      currentRequestActor()?.userId ?? null
+    );
+  }
+
+  private syncCharacterProfileSectionSearch(section: Record<string, unknown>): void {
+    const searchContent = normalizeDocumentSearchText(
+      `${String(section.title)}\n${String(section.summary)}\n${String(section.contentMarkdown)}`
+    );
+    this.db.run(
+      `INSERT INTO character_profile_section_search (work_id, character_id, section_id, search_content)
+       VALUES (?, ?, ?, ?) ON CONFLICT(section_id) DO UPDATE SET search_content = excluded.search_content`,
+      String(section.workId),
+      String(section.characterId),
+      String(section.id),
+      searchContent
+    );
+    const search = this.db.get("SELECT id FROM character_profile_section_search WHERE section_id = ?", String(section.id));
+    const searchId = numberValue(search ?? {}, "id");
+    this.db.run("DELETE FROM character_profile_section_short_terms WHERE search_id = ?", searchId);
+    for (const term of documentShortSearchTerms(searchContent)) {
+      this.db.run("INSERT INTO character_profile_section_short_terms (search_id, term) VALUES (?, ?)", searchId, term);
+    }
+  }
+
+  private attachmentIdsInMarkdown(contentMarkdown: string): string[] {
+    return [...new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]{1,300})/gu)].map((match) => String(match[1])))];
+  }
+
+  private syncCharacterProfileSectionAttachments(section: Record<string, unknown>): void {
+    const sectionId = String(section.id);
+    const workId = String(section.workId);
+    const attachmentIds = this.attachmentIdsInMarkdown(String(section.contentMarkdown));
+    for (const attachmentId of attachmentIds) {
+      const attachment = this.getAttachment(attachmentId);
+      if (attachment.workId !== workId) throw new AppError(400, "ATTACHMENT_WORK_MISMATCH", "附件不属于当前作品");
+    }
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+    for (const attachmentId of attachmentIds) {
+      this.db.run(
+        `INSERT INTO attachment_references (attachment_id, work_id, entity_type, entity_id, created_at)
+         VALUES (?, ?, 'character-section', ?, ?)`,
+        attachmentId,
+        workId,
+        sectionId,
+        now()
+      );
+    }
+  }
+
+  createCharacterProfileSection(
+    characterId: string,
+    input: CharacterProfileSectionInput,
+    source = "create",
+    sourceRef: string | null = null
+  ): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    const sectionId = id("characterSection");
+    const timestamp = now();
+    const sortOrder = input.sortOrder ?? Number(this.db.get(
+      "SELECT COALESCE(MAX(sort_order), -1) + 1 AS sort_order FROM character_profile_sections WHERE character_id = ?",
+      characterId
+    )?.sort_order ?? 0);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO character_profile_sections
+         (id, work_id, character_id, section_type, title, content_markdown, summary, sort_order, source_path, source_hash, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sectionId,
+        String(character.workId),
+        characterId,
+        input.sectionType ?? "custom",
+        input.title,
+        input.contentMarkdown ?? "",
+        input.summary ?? "",
+        sortOrder,
+        input.sourcePath ?? null,
+        input.sourceHash ?? null,
+        timestamp,
+        timestamp
+      );
+      const section = this.getCharacterProfileSection(sectionId);
+      this.syncCharacterProfileSectionSearch(section);
+      this.syncCharacterProfileSectionAttachments(section);
+      this.recordCharacterProfileSectionVersion(section, source, sourceRef, "建立人物 Markdown 章节", timestamp);
+      this.audit(String(character.workId), "character-section.created", "character-section", sectionId, { characterId, source, sourceRef });
+    });
+    return this.getCharacterProfileSection(sectionId);
+  }
+
+  updateCharacterProfileSection(
+    sectionId: string,
+    input: Partial<CharacterProfileSectionInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
+    const current = this.getCharacterProfileSection(sectionId);
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE character_profile_sections SET section_type = ?, title = ?, content_markdown = ?, summary = ?, sort_order = ?,
+         source_path = ?, source_hash = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?`,
+        input.sectionType ?? String(current.sectionType),
+        input.title ?? String(current.title),
+        input.contentMarkdown ?? String(current.contentMarkdown),
+        input.summary ?? String(current.summary),
+        input.sortOrder ?? Number(current.sortOrder),
+        input.sourcePath === undefined ? current.sourcePath as string | null : input.sourcePath,
+        input.sourceHash === undefined ? current.sourceHash as string | null : input.sourceHash,
+        timestamp,
+        sectionId
+      );
+      const section = this.getCharacterProfileSection(sectionId);
+      this.syncCharacterProfileSectionSearch(section);
+      this.syncCharacterProfileSectionAttachments(section);
+      this.recordCharacterProfileSectionVersion(section, source, sourceRef, changeNote || "更新人物 Markdown 章节", timestamp);
+      this.audit(String(current.workId), "character-section.updated", "character-section", sectionId, { fields: Object.keys(input), source, sourceRef });
+    });
+    return this.getCharacterProfileSection(sectionId);
+  }
+
+  deleteCharacterProfileSection(sectionId: string): void {
+    const current = this.getCharacterProfileSection(sectionId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE character_profile_sections SET version_no = version_no + 1 WHERE id = ?", sectionId);
+      const deleting = this.getCharacterProfileSection(sectionId);
+      this.recordCharacterProfileSectionVersion(deleting, "delete", null, "删除人物 Markdown 章节");
+      this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+      this.db.run("DELETE FROM character_profile_sections WHERE id = ?", sectionId);
+      this.audit(String(current.workId), "character-section.deleted", "character-section", sectionId, { characterId: current.characterId });
+    });
+  }
+
+  listCharacterProfileSectionVersions(sectionId: string): Record<string, unknown>[] {
+    const rows = this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM character_profile_section_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.section_id = ? ORDER BY version.version_no DESC`,
+      sectionId
+    );
+    if (!rows.length) this.getCharacterProfileSection(sectionId);
+    return rows.map((row) => ({
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      sectionId: requiredString(row, "section_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    }));
+  }
+
+  restoreCharacterProfileSection(sectionId: string, versionNo: number): Record<string, unknown> {
+    const version = this.db.get(
+      "SELECT * FROM character_profile_section_versions WHERE section_id = ? AND version_no = ?",
+      sectionId,
+      versionNo
+    );
+    if (!version) throw notFound("人物档案章节版本");
+    const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
+    const existing = this.db.get("SELECT id FROM character_profile_sections WHERE id = ?", sectionId);
+    if (existing) {
+      return this.updateCharacterProfileSection(sectionId, snapshot as Partial<CharacterProfileSectionInput>, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`);
+    }
+    const characterId = requiredString(version, "character_id");
+    const character = this.getCharacter(characterId);
+    const timestamp = now();
+    const nextVersionNo = Number(this.db.get(
+      "SELECT COALESCE(MAX(version_no), 0) + 1 AS version_no FROM character_profile_section_versions WHERE section_id = ?",
+      sectionId
+    )?.version_no ?? 1);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO character_profile_sections
+         (id, work_id, character_id, section_type, title, content_markdown, summary, sort_order, source_path, source_hash, version_no, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sectionId,
+        String(character.workId),
+        characterId,
+        String(snapshot.sectionType ?? "custom"),
+        String(snapshot.title ?? "恢复的章节"),
+        String(snapshot.contentMarkdown ?? ""),
+        String(snapshot.summary ?? ""),
+        Number(snapshot.sortOrder ?? 0),
+        snapshot.sourcePath as string | null ?? null,
+        snapshot.sourceHash as string | null ?? null,
+        nextVersionNo,
+        timestamp,
+        timestamp
+      );
+      const restored = this.getCharacterProfileSection(sectionId);
+      this.syncCharacterProfileSectionSearch(restored);
+      this.syncCharacterProfileSectionAttachments(restored);
+      this.recordCharacterProfileSectionVersion(restored, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`, timestamp);
+      this.audit(String(character.workId), "character-section.restored", "character-section", sectionId, { versionNo });
+    });
+    return this.getCharacterProfileSection(sectionId);
+  }
+
+  searchCharacterProfileSections(workId: string, query: string, limit = 20): Record<string, unknown>[] {
+    this.getWork(workId);
+    const normalized = normalizeDocumentSearchText(query);
+    const columns = `SELECT section.*, character.name AS character_name
+      FROM character_profile_section_search search
+      JOIN character_profile_sections section ON section.id = search.section_id
+      JOIN characters character ON character.id = search.character_id`;
+    const rows = [...normalized].length <= 2
+      ? this.db.all(
+        `${columns} JOIN character_profile_section_short_terms term ON term.search_id = search.id
+         WHERE search.work_id = ? AND term.term = ? ORDER BY character.name, section.sort_order LIMIT ?`,
+        workId,
+        normalized,
+        limit
+      )
+      : this.db.all(
+        `${columns} JOIN character_profile_section_search_fts fts ON fts.rowid = search.id
+         WHERE search.work_id = ? AND character_profile_section_search_fts MATCH ?
+         ORDER BY bm25(character_profile_section_search_fts), character.name, section.sort_order LIMIT ?`,
+        workId,
+        `"${normalized.replaceAll('"', '""')}"`,
+        limit
+      );
+    return rows.map((row) => ({ ...this.mapCharacterProfileSection(row), characterName: requiredString(row, "character_name") }));
+  }
+
+  private mapAttachment(row: Row): Record<string, unknown> {
+    const attachmentId = requiredString(row, "id");
+    return {
+      id: attachmentId,
+      workId: requiredString(row, "work_id"),
+      originalName: requiredString(row, "original_name"),
+      originalMimeType: requiredString(row, "original_mime_type"),
+      storedMimeType: requiredString(row, "stored_mime_type"),
+      originalByteLength: numberValue(row, "original_byte_length"),
+      storedByteLength: numberValue(row, "stored_byte_length"),
+      originalSha256: requiredString(row, "original_sha256"),
+      storedSha256: requiredString(row, "stored_sha256"),
+      storageKey: requiredString(row, "storage_key"),
+      width: numberValue(row, "width"),
+      height: numberValue(row, "height"),
+      pageCount: numberValue(row, "page_count"),
+      animated: booleanValue(row, "animated"),
+      contentUrl: `/api/attachments/${encodeURIComponent(attachmentId)}/content`,
+      createdAt: requiredString(row, "created_at")
+    };
+  }
+
+  createAttachment(workId: string, input: AttachmentInput): { attachment: Record<string, unknown>; created: boolean } {
+    this.getWork(workId);
+    const existing = this.db.get("SELECT * FROM attachments WHERE work_id = ? AND stored_sha256 = ?", workId, input.storedSha256);
+    if (existing) return { attachment: this.mapAttachment(existing), created: false };
+    const attachmentId = id("attachment");
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO attachments
+         (id, work_id, original_name, original_mime_type, stored_mime_type, original_byte_length, stored_byte_length,
+          original_sha256, stored_sha256, storage_key, width, height, page_count, animated, created_at, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        attachmentId,
+        workId,
+        input.originalName,
+        input.originalMimeType,
+        input.storedMimeType,
+        input.originalByteLength,
+        input.storedByteLength,
+        input.originalSha256,
+        input.storedSha256,
+        input.storageKey,
+        input.width,
+        input.height,
+        input.pageCount,
+        input.animated ? 1 : 0,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.audit(workId, "attachment.created", "attachment", attachmentId, {
+        originalMimeType: input.originalMimeType,
+        storedMimeType: input.storedMimeType,
+        originalByteLength: input.originalByteLength,
+        storedByteLength: input.storedByteLength,
+        animated: input.animated
+      });
+    });
+    return { attachment: this.getAttachment(attachmentId), created: true };
+  }
+
+  listAttachments(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all("SELECT * FROM attachments WHERE work_id = ? ORDER BY created_at DESC", workId).map((row) => this.mapAttachment(row));
+  }
+
+  getAttachment(attachmentId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM attachments WHERE id = ?", attachmentId);
+    if (!row) throw notFound("附件");
+    return this.mapAttachment(row);
+  }
+
+  deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
+    const attachment = this.getAttachment(attachmentId);
+    const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
+    if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被人物档案章节引用，无法删除");
+    const storageKey = String(attachment.storageKey);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
+      this.audit(String(attachment.workId), "attachment.deleted", "attachment", attachmentId, { storageKey });
+    });
+    const remaining = Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0);
+    return { storageKey, removeStoredFile: remaining === 0 };
+  }
+
   getCharacter(characterId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM characters WHERE id = ?", characterId);
     if (!row) throw notFound("角色");
@@ -2583,6 +2988,11 @@ export class Store {
     const timestamp = now();
     const versionNo = Number(current.versionNo) + 1;
     this.db.transaction(() => {
+      const sectionIds = this.db.all("SELECT id FROM character_profile_sections WHERE character_id = ?", characterId)
+        .map((row) => requiredString(row, "id"));
+      for (const sectionId of sectionIds) {
+        this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+      }
       this.db.run("UPDATE characters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, characterId);
       this.insertCharacterVersion(characterId, versionNo, "delete", null, "删除人物", timestamp);
       this.db.run("DELETE FROM characters WHERE id = ?", characterId);
@@ -2610,6 +3020,23 @@ export class Store {
     const raceId = optionalString(row, "race_id");
     const race = raceId ? this.db.get("SELECT id, name FROM races WHERE id = ?", raceId) : undefined;
     const species = race ? requiredString(race, "name") : requiredString(row, "species");
+    const profile = json<Record<string, unknown>>(requiredString(row, "profile_json"), {});
+    const markdownSections = this.db.all(
+      "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
+      requiredString(row, "id")
+    ).map((section) => this.mapCharacterProfileSection(section));
+    if (markdownSections.length > 0) {
+      profile.sections = markdownSections.map((section) => ({
+        id: section.id,
+        sectionType: section.sectionType,
+        title: section.title,
+        content: section.contentMarkdown,
+        contentMarkdown: section.contentMarkdown,
+        summary: section.summary,
+        sortOrder: section.sortOrder,
+        versionNo: section.versionNo
+      }));
+    }
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
@@ -2621,7 +3048,8 @@ export class Store {
       organizationIds: organizations.map((organization) => organization.organizationId),
       organizations,
       attributes: json(requiredString(row, "attributes_json"), {}),
-      profile: json(requiredString(row, "profile_json"), {}),
+      profile,
+      profileSectionCount: markdownSections.length,
       currentState: json(requiredString(row, "current_state_json"), {}),
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       visibility: requiredString(row, "visibility"),

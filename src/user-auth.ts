@@ -127,6 +127,8 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     chapters: "chapters",
     settings: "settings",
     characters: "characters",
+    "character-sections": "character_profile_sections",
+    attachments: "attachments",
     races: "races",
     organizations: "organizations",
     "timeline-tracks": "timeline_tracks",
@@ -152,6 +154,13 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     if (table === "characters") {
       const version = database.get<{ work_id: string }>(
         "SELECT work_id FROM character_versions WHERE character_id = ? LIMIT 1",
+        decoded[3]
+      );
+      if (version) return version.work_id;
+    }
+    if (table === "character_profile_sections") {
+      const version = database.get<{ work_id: string }>(
+        "SELECT work_id FROM character_profile_section_versions WHERE section_id = ? LIMIT 1",
         decoded[3]
       );
       if (version) return version.work_id;
