@@ -46,6 +46,7 @@ describe("人物关系图数据与布局", () => {
       identity: "将军"
     })).toMatchObject({ type: "organization", label: "北境联盟" });
     expect(resolveRelationshipNodeGroup({ species: "精灵", identity: "学者" })).toMatchObject({ type: "species", label: "精灵" });
+    expect(resolveRelationshipNodeGroup({ species: "原生泰坦", rootSpecies: "泰坦" })).toMatchObject({ type: "species", label: "泰坦" });
     expect(resolveRelationshipNodeGroup({ identity: "流浪商人" })).toMatchObject({ type: "identity", label: "流浪商人" });
 
     const hub = getObsidianNodeAppearance({ degree: 12, groupKey: "species:人类", species: "人类" }, 12);
@@ -69,6 +70,15 @@ describe("人物关系图数据与布局", () => {
     expect(graph.nodeById.get("a")?.groupType).toBe("organization");
     expect(graph.nodeById.get("a")?.nodeSize).toBeGreaterThan(graph.nodeById.get("b")?.nodeSize ?? 0);
     expect(graph.nodeById.get("a")?.color).toBeTruthy();
+  });
+
+  it("构建图谱时按角色种族路径的根种族分组", () => {
+    const graph = buildRelationshipGraph([
+      { id: "a", name: "甲", species: "原生泰坦", race: { lineage: [{ name: "泰坦" }, { name: "原生泰坦" }] } },
+      { id: "b", name: "乙", species: "进化泰坦", race: { lineage: [{ name: "泰坦" }, { name: "进化泰坦" }] } }
+    ], []);
+    expect(graph.nodeById.get("a")?.groupKey).toBe("species:泰坦");
+    expect(graph.nodeById.get("b")?.groupKey).toBe("species:泰坦");
   });
 
   it("普通关系网络使用稳定的力导向布局并容纳全部角色", () => {

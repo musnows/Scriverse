@@ -802,6 +802,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .pill { display: inline-block; padding: 3px 7px; margin: 0 4px 4px 0; border-radius: 12px; background: var(--paper-deep); color: var(--muted); font-size: 9px; }
 .organization-links { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 8px 0 6px; }.organization-links b { color: var(--muted); font-size: 9px; font-weight: 500; }.organization-links .pill { margin: 0; }.organization-empty { color: var(--muted); font-size: 9px; }.organization-pill { color: var(--accent-dark); background: rgba(139,61,44,.1); }.organization-settings { margin: 10px 0 6px; }.organization-members { margin-top: 9px !important; }.relationship-keyword { white-space: nowrap; }
 .race-settings { display: flex; flex-wrap: wrap; gap: 5px; margin: 10px 0 6px; }.race-settings .pill { margin: 0; }.race-members { margin-top: 9px !important; }
+.race-tree { display: grid; gap: 12px; }
+.race-tree-node { min-width: 0; }
+.race-tree-node > summary { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); cursor: pointer; }
+.race-tree-node > summary::marker { color: var(--accent); }
+.race-tree-node > summary span { font-size: 14px; font-weight: 600; }
+.race-tree-node > summary small { margin-left: auto; color: var(--muted); }
+.race-tree-branch { display: grid; gap: 10px; margin: 8px 0 0 14px; padding-left: 14px; border-left: 1px solid var(--line); }
+.race-tree-children { display: grid; gap: 10px; }
+.race-card { min-height: 0; }
+.race-path { margin: 2px 0 10px; color: var(--accent); font-family: var(--font-latin), monospace; font-size: 11px; }
+.race-settings .pill { display: inline-flex; align-items: center; gap: 5px; }
+.race-settings .pill small { color: inherit; font-size: 8px; letter-spacing: 0; text-transform: none; opacity: .72; }
+.race-settings .pill.inherited { border-style: dashed; }
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .platform-system-prompt-section { margin-bottom: 36px; }

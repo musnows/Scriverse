@@ -214,9 +214,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-nav-icons');
-    expect(page.text).toContain('/styles.css?v=20260720-nav-icons');
-    expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
+    expect(page.text).toContain('/app.js?v=20260721-race-hierarchy');
+    expect(page.text).toContain('/styles.css?v=20260721-race-hierarchy');
+    expect(application.text).toContain('/relationship-graph.js?v=20260721-race-hierarchy');
+    expect(application.text).toContain('/race-hierarchy.js?v=20260721-race-hierarchy');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
@@ -357,6 +358,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-module="races"');
     expect(application.text).toContain("async function renderRaces()");
     expect(application.text).toContain("async function openRaceDialog(item)");
+    expect(application.text).toContain('field("parentRaceId", "父种族", "select"');
+    expect(application.text).toContain('class="race-tree-node" open');
     expect(application.text).toContain('field("raceId", "种族", "select"');
     expect(application.text).not.toContain('field("species", "种族", "text"');
     expect(application.text).toContain('field("memberIds", "属于该种族的角色（可多选）", "chips"');
