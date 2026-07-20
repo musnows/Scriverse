@@ -316,7 +316,7 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge"])).max(4).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"])).max(5).optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -729,7 +729,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/characters", (request, response) => data(response, store.listCharacters(request.params.workId)));
+  app.get("/api/works/:workId/characters", (request, response) => {
+    const { includeSections } = parse(z.object({ includeSections: z.enum(["true", "false"]).default("false") }), request.query);
+    data(response, store.listCharacters(request.params.workId, includeSections === "true"));
+  });
   app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
   app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
   app.patch("/api/characters/:characterId", (request, response) => {

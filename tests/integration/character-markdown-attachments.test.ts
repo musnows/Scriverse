@@ -63,6 +63,12 @@ describe("人物 Markdown 章节与附件", () => {
     expect(created.status).toBe(201);
     const sectionId = String(created.body.data.id);
 
+    const compactCharacters = await request(runtime.app).get(`/api/works/${String(work.id)}/characters`);
+    expect(compactCharacters.body.data[0]).toMatchObject({ profileSectionCount: 1 });
+    expect(compactCharacters.body.data[0].profile.sections).toBeUndefined();
+    const expandedCharacters = await request(runtime.app).get(`/api/works/${String(work.id)}/characters?includeSections=true`);
+    expect(expandedCharacters.body.data[0].profile.sections[0]).toMatchObject({ id: sectionId, title: "背景故事" });
+
     const content = await request(runtime.app).get(`/api/attachments/${attachmentId}/content`);
     expect(content.status).toBe(200);
     expect(content.headers["content-type"]).toMatch(/^image\/webp/u);

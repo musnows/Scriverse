@@ -368,7 +368,7 @@ export class Database {
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge","grep"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]',
         updated_at TEXT NOT NULL
       );
 
@@ -1419,6 +1419,18 @@ export class Database {
           }
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?)", timestamp);
+      });
+    }
+    if (!applied.has(31)) {
+      this.transaction(() => {
+        this.run(`UPDATE work_ai_settings
+          SET agent_tools_json = CASE
+            WHEN json_valid(agent_tools_json) THEN json_insert(agent_tools_json, '$[#]', 'read_character_sections')
+            ELSE '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]'
+          END
+          WHERE NOT json_valid(agent_tools_json)
+             OR NOT EXISTS (SELECT 1 FROM json_each(agent_tools_json) WHERE value = 'read_character_sections')`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (31, ?)", new Date().toISOString());
       });
     }
   }

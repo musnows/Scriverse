@@ -94,7 +94,7 @@ type GenerateResult = {
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge"] as const;
+const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
@@ -140,6 +140,10 @@ const queryStoryKnowledgeArguments = z.object({
   query: z.string().trim().min(1).max(200),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([])
 }).strict();
+const readCharacterSectionsArguments = z.object({
+  sectionIds: z.array(z.string().min(1).max(300)).min(1).max(3),
+  include: z.enum(["summary", "content", "both"]).default("both")
+}).strict();
 
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
   story_index: {
@@ -170,8 +174,16 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "query_story_knowledge",
-      description: "按关键词查询作品知识：设定、人物、种族、组织、时间线、关系、大纲和伏笔。结果为简要匹配项；需要正文时再调用 read_chapters。",
+      description: "按关键词查询作品知识：设定、人物及其 Markdown 档案章节、种族、组织、时间线、关系、大纲和伏笔。结果为简要匹配项；人物结果包含 sectionId 时可调用 read_character_sections 精读。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
+    }
+  },
+  read_character_sections: {
+    type: "function",
+    function: {
+      name: "read_character_sections",
+      description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 query_story_knowledge 获取 sectionId；每次最多读取 3 个章节。",
+      parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["sectionIds"], additionalProperties: false }
     }
   }
 };
@@ -589,7 +601,10 @@ export class ContextBuilder {
         `选定角色：\n${characters
           .map((item) => {
             const attributes = item.attributes as Record<string, unknown>;
-            return `- ${String(item.name)}；种族=${String(item.species || attributes.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`;
+            const profile = { ...(item.profile as Record<string, unknown>) };
+            delete profile.sections;
+            const sectionCatalog = this.store.listCharacterProfileSectionCatalog(String(item.id));
+            return `- ${String(item.name)}；种族=${String(item.species || attributes.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(profile)}；Markdown 档案目录=${JSON.stringify(sectionCatalog)}`;
           })
           .join("\n")}`
       );
@@ -1586,7 +1601,7 @@ export class AiManager {
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -1680,6 +1695,7 @@ export class AiManager {
       : name === "read_chapters" ? readChaptersArguments
       : name === "grep" ? grepArguments
       : name === "query_story_knowledge" ? queryStoryKnowledgeArguments
+      : name === "read_character_sections" ? readCharacterSectionsArguments
       : null;
     if (!schema) {
       return {
@@ -1781,6 +1797,33 @@ export class AiManager {
         ...this.store.listForeshadows(workId).map((item) => ({ type: "foreshadow", id: item.id, title: item.title, snippet: `${item.description} ${item.resolutionNote}` }))
       ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
       return { id: toolCall.id, name, calledAt, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
+    }
+    if (name === "read_character_sections") {
+      const { sectionIds, include } = args as z.infer<typeof readCharacterSectionsArguments>;
+      let remainingChars = 48_000;
+      const sections = sectionIds.map((sectionId) => {
+        try {
+          const section = this.store.getCharacterProfileSection(sectionId);
+          if (section.workId !== workId) return { sectionId, error: { code: "CHARACTER_SECTION_WORK_MISMATCH", message: "The requested character section belongs to a different work." } };
+          const content = String(section.contentMarkdown);
+          const excerpt = content.slice(0, Math.max(0, remainingChars));
+          remainingChars -= excerpt.length;
+          const character = this.store.getCharacter(String(section.characterId));
+          return {
+            sectionId,
+            characterId: section.characterId,
+            characterName: character.name,
+            title: section.title,
+            sectionType: section.sectionType,
+            versionNo: section.versionNo,
+            ...(include !== "content" ? { summary: section.summary } : {}),
+            ...(include !== "summary" ? { contentMarkdown: excerpt, contentTruncated: excerpt.length < content.length } : {})
+          };
+        } catch {
+          return { sectionId, error: { code: "CHARACTER_SECTION_NOT_FOUND", message: "The requested character section was not found." } };
+        }
+      });
+      return { id: toolCall.id, name, calledAt, arguments: { sectionIds, include }, status: "completed", result: { ok: true, data: { sections, contentLimitChars: 48_000 } } };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
   }

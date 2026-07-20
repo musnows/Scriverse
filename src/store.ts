@@ -627,7 +627,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep"]),
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep", "read_character_sections"]),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -2335,6 +2335,8 @@ export class Store {
   }
 
   private characterSnapshot(character: Record<string, unknown>): CharacterSnapshot {
+    const profile = { ...(character.profile as Record<string, unknown>) };
+    delete profile.sections;
     return {
       name: String(character.name),
       aliases: [...(character.aliases as string[])],
@@ -2342,7 +2344,7 @@ export class Store {
       species: String(character.species),
       organizationIds: [...(character.organizationIds as string[])].sort(),
       attributes: character.attributes as Record<string, unknown>,
-      profile: character.profile as Record<string, unknown>,
+      profile,
       currentState: character.currentState as Record<string, unknown>,
       lockedFields: [...(character.lockedFields as string[])],
       visibility: String(character.visibility),
@@ -2444,9 +2446,10 @@ export class Store {
     return this.getCharacter(characterId);
   }
 
-  listCharacters(workId: string): Record<string, unknown>[] {
+  listCharacters(workId: string, includeProfileSections = false): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM characters WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapCharacter(row));
+    return this.db.all("SELECT * FROM characters WHERE work_id = ? ORDER BY name", workId)
+      .map((row) => this.mapCharacter(row, includeProfileSections));
   }
 
   private mapCharacterProfileSection(row: Row): Record<string, unknown> {
@@ -2473,6 +2476,23 @@ export class Store {
       "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
       characterId
     ).map((row) => this.mapCharacterProfileSection(row));
+  }
+
+  listCharacterProfileSectionCatalog(characterId: string): Record<string, unknown>[] {
+    this.getCharacter(characterId);
+    return this.db.all(
+      `SELECT id, character_id, section_type, title, summary, sort_order, version_no
+       FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at`,
+      characterId
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      characterId: requiredString(row, "character_id"),
+      sectionType: requiredString(row, "section_type"),
+      title: requiredString(row, "title"),
+      summary: requiredString(row, "summary"),
+      sortOrder: numberValue(row, "sort_order"),
+      versionNo: numberValue(row, "version_no")
+    }));
   }
 
   getCharacterProfileSection(sectionId: string): Record<string, unknown> {
@@ -3000,7 +3020,7 @@ export class Store {
     });
   }
 
-  private mapCharacter(row: Row): Record<string, unknown> {
+  private mapCharacter(row: Row, includeProfileSections = true): Record<string, unknown> {
     const indexedAliases = this.db.all(
       "SELECT display_name FROM character_names WHERE character_id = ? AND kind = 'alias' ORDER BY sort_order",
       requiredString(row, "id")
@@ -3021,10 +3041,17 @@ export class Store {
     const race = raceId ? this.db.get("SELECT id, name FROM races WHERE id = ?", raceId) : undefined;
     const species = race ? requiredString(race, "name") : requiredString(row, "species");
     const profile = json<Record<string, unknown>>(requiredString(row, "profile_json"), {});
-    const markdownSections = this.db.all(
-      "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
-      requiredString(row, "id")
-    ).map((section) => this.mapCharacterProfileSection(section));
+    const characterId = requiredString(row, "id");
+    const profileSectionCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM character_profile_sections WHERE character_id = ?",
+      characterId
+    )?.count ?? 0);
+    const markdownSections = includeProfileSections
+      ? this.db.all(
+        "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
+        characterId
+      ).map((section) => this.mapCharacterProfileSection(section))
+      : [];
     if (markdownSections.length > 0) {
       profile.sections = markdownSections.map((section) => ({
         id: section.id,
@@ -3038,7 +3065,7 @@ export class Store {
       }));
     }
     return {
-      id: requiredString(row, "id"),
+      id: characterId,
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
@@ -3049,7 +3076,7 @@ export class Store {
       organizations,
       attributes: json(requiredString(row, "attributes_json"), {}),
       profile,
-      profileSectionCount: markdownSections.length,
+      profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       visibility: requiredString(row, "visibility"),
@@ -4214,6 +4241,7 @@ export class Store {
       pattern,
       pattern
     );
+    const characterSections = this.searchCharacterProfileSections(workId, query, 30);
     const snippet = (content: string): string => {
       const index = content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
       const start = Math.max(0, index - 40);
@@ -4221,6 +4249,14 @@ export class Store {
     };
     return [
       ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: [requiredString(row, "species"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、") })),
+      ...characterSections.map((section) => ({
+        type: "character",
+        id: String(section.characterId),
+        sectionId: String(section.id),
+        title: `${String(section.characterName)} / ${String(section.title)}`,
+        snippet: snippet(String(section.contentMarkdown)),
+        sectionType: String(section.sectionType)
+      })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
       ...races.map((row) => ({ type: "race", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
       ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
@@ -4235,7 +4271,7 @@ export class Store {
       exportedAt: now(),
       work: tree,
       settings: this.listSettings(workId),
-      characters: this.listCharacters(workId),
+      characters: this.listCharacters(workId, true),
       races: this.listRaces(workId),
       organizations: this.listOrganizations(workId),
       timelineTracks: this.listTimelineTracks(workId),
