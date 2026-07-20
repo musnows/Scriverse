@@ -214,8 +214,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-galaxy-tooltip');
-    expect(page.text).toContain('/styles.css?v=20260720-galaxy-worlds');
+    expect(page.text).toContain('/app.js?v=20260721-character-identity');
+    expect(page.text).toContain('/styles.css?v=20260721-character-identity');
     expect(application.text).toContain('/relationship-graph.js?v=20260720-galaxy-tooltip');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -431,6 +431,10 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("--node-color");
     expect(styles.text).toContain("--node-brightness");
     expect(styles.text).toContain('[data-celestial-type="ringed"]');
+    expect(application.text).toContain('id="create-character-audit-task"');
+    expect(application.text).toContain("data-merge-review");
+    expect(application.text).toContain("data-keep-characters-separate");
+    expect(styles.text).toContain(".character-duplicate-pair");
   });
 
   it("从导入作品到采纳续写、抽取时间轴并安全导出", async () => {

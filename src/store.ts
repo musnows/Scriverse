@@ -2269,6 +2269,7 @@ export class Store {
     for (const characterId of characterIds) {
       const character = this.getCharacter(characterId);
       if (character.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "组织成员不属于当前作品");
+      if (character.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能继续被引用");
     }
   }
 
@@ -2419,9 +2420,12 @@ export class Store {
     return this.getCharacter(characterId);
   }
 
-  listCharacters(workId: string): Record<string, unknown>[] {
+  listCharacters(workId: string, includeMerged = false): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM characters WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapCharacter(row));
+    return this.db.all(
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name`,
+      workId
+    ).map((row) => this.mapCharacter(row));
   }
 
   getCharacter(characterId: string): Record<string, unknown> {
@@ -2438,6 +2442,7 @@ export class Store {
     changeNote = ""
   ): Record<string, unknown> {
     const current = this.getCharacter(characterId);
+    if (current.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能直接编辑");
     const before = this.characterSnapshot(current);
     const workId = String(current.workId);
     const names = this.prepareCharacterNames(input.name ?? String(current.name), input.aliases ?? current.aliases as string[]);
@@ -2626,6 +2631,8 @@ export class Store {
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       visibility: requiredString(row, "visibility"),
       firstChapterId: optionalString(row, "first_chapter_id"),
+      mergedIntoCharacterId: optionalString(row, "merged_into_character_id"),
+      mergedAt: optionalString(row, "merged_at"),
       versionNo: numberValue(row, "version_no"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
@@ -2641,6 +2648,176 @@ export class Store {
       normalizedName
     );
     return row ? requiredString(row, "character_id") : null;
+  }
+
+  mergeCharacters(input: {
+    reviewId: string;
+    targetCharacterId: string;
+    sourceCharacterId: string;
+    expectedTargetVersionNo: number;
+    expectedSourceVersionNo: number;
+  }): Record<string, unknown> {
+    if (input.targetCharacterId === input.sourceCharacterId) {
+      throw new AppError(400, "CHARACTER_MERGE_SELF", "不能把角色合并到自身");
+    }
+    const review = this.getReviewItem(input.reviewId);
+    if (review.itemType !== "character-duplicate" || review.status !== "pending") {
+      throw new AppError(409, "CHARACTER_REVIEW_DECIDED", "该角色查重项已经处理");
+    }
+    const reviewCharacterIds = (review.entityRefs as unknown[]).flatMap((reference) => {
+      if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
+      const characterId = (reference as Record<string, unknown>).id;
+      return typeof characterId === "string" ? [characterId] : [];
+    });
+    if (!reviewCharacterIds.includes(input.targetCharacterId) || !reviewCharacterIds.includes(input.sourceCharacterId)) {
+      throw new AppError(400, "CHARACTER_REVIEW_MISMATCH", "待合并角色与审核项不一致");
+    }
+    const target = this.getCharacter(input.targetCharacterId);
+    const source = this.getCharacter(input.sourceCharacterId);
+    if (target.workId !== source.workId || target.workId !== review.workId) {
+      throw new AppError(400, "CHARACTER_WORK_MISMATCH", "待合并角色不属于同一作品");
+    }
+    if (target.mergedIntoCharacterId || source.mergedIntoCharacterId) {
+      throw new AppError(409, "CHARACTER_ALREADY_MERGED", "待合并角色中已有角色被合并");
+    }
+    if (Number(target.versionNo) !== input.expectedTargetVersionNo || Number(source.versionNo) !== input.expectedSourceVersionNo) {
+      throw new AppError(409, "CHARACTER_VERSION_CHANGED", "角色在审核后已发生变化，请重新运行查重");
+    }
+
+    const workId = String(target.workId);
+    const targetId = String(target.id);
+    const sourceId = String(source.id);
+    const mergeId = id("characterMerge");
+    const timestamp = now();
+    const sourceRelationships = this.listRelationships(workId).filter(
+      (relationship) => relationship.fromCharacterId === sourceId || relationship.toCharacterId === sourceId
+    );
+    const timelineEvents = this.listTimelineEvents(workId).filter(
+      (event) => (event.participantIds as string[]).includes(sourceId)
+    );
+    const sourceMemberships = this.db.all(
+      "SELECT * FROM character_organization_memberships WHERE character_id = ? ORDER BY organization_id",
+      sourceId
+    );
+    const referenceSnapshot = { relationships: sourceRelationships, timelineEvents, memberships: sourceMemberships };
+
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM character_names WHERE character_id = ?", sourceId);
+      const aliases = [...(target.aliases as string[]), String(source.name), ...(source.aliases as string[])];
+      const uniqueAliases = [...new Map(aliases
+        .map((alias) => alias.normalize("NFKC").trim().replace(/\s+/gu, " "))
+        .filter(Boolean)
+        .filter((alias) => normalizeCharacterName(alias) !== normalizeCharacterName(String(target.name)))
+        .map((alias) => [normalizeCharacterName(alias), alias])).values()];
+      this.updateCharacter(targetId, {
+        aliases: uniqueAliases,
+        raceId: (target.raceId as string | null) ?? (source.raceId as string | null),
+        organizationIds: [...new Set([...(target.organizationIds as string[]), ...(source.organizationIds as string[])])],
+        attributes: { ...(source.attributes as Record<string, unknown>), ...(target.attributes as Record<string, unknown>) },
+        profile: { ...(source.profile as Record<string, unknown>), ...(target.profile as Record<string, unknown>) },
+        currentState: { ...(source.currentState as Record<string, unknown>), ...(target.currentState as Record<string, unknown>) },
+        lockedFields: [...new Set([...(target.lockedFields as string[]), ...(source.lockedFields as string[])])],
+        firstChapterId: (target.firstChapterId as string | null) ?? (source.firstChapterId as string | null)
+      }, "merge", mergeId, `合并角色“${String(source.name)}”`);
+
+      for (const event of timelineEvents) {
+        const participantIds = [...new Set((event.participantIds as string[]).map(
+          (characterId) => characterId === sourceId ? targetId : characterId
+        ))];
+        this.updateTimelineEvent(String(event.id), { participantIds }, "merge", mergeId, `合并角色“${String(source.name)}”`);
+      }
+
+      for (const relationship of sourceRelationships) {
+        let fromCharacterId = relationship.fromCharacterId === sourceId ? targetId : String(relationship.fromCharacterId);
+        let toCharacterId = relationship.toCharacterId === sourceId ? targetId : String(relationship.toCharacterId);
+        if (fromCharacterId === toCharacterId) {
+          this.deleteRelationship(String(relationship.id));
+          continue;
+        }
+        if (!relationship.directed && fromCharacterId.localeCompare(toCharacterId) > 0) {
+          [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
+        }
+        const duplicate = this.listRelationships(workId).find((candidate) => candidate.id !== relationship.id
+          && candidate.fromCharacterId === fromCharacterId
+          && candidate.toCharacterId === toCharacterId
+          && Boolean(candidate.directed) === Boolean(relationship.directed)
+          && candidate.category === relationship.category
+          && normalizeCharacterName(String(candidate.subtype)) === normalizeCharacterName(String(relationship.subtype))
+          && candidate.confirmationStatus !== "rejected");
+        if (duplicate) {
+          const keywords = [...new Set([...(duplicate.keywords as string[]), ...(relationship.keywords as string[])])];
+          const evidence = [...new Map([...(duplicate.evidence as unknown[]), ...(relationship.evidence as unknown[])]
+            .map((item) => [JSON.stringify(item), item])).values()];
+          this.updateRelationship(String(duplicate.id), {
+            keywords,
+            evidence,
+            confidence: Math.max(Number(duplicate.confidence), Number(relationship.confidence)),
+            locked: Boolean(duplicate.locked) || Boolean(relationship.locked),
+            confirmationStatus: duplicate.confirmationStatus === "confirmed" || relationship.confirmationStatus === "confirmed"
+              ? "confirmed"
+              : String(duplicate.confirmationStatus)
+          }, "merge", mergeId, `合并角色“${String(source.name)}”的重复关系`);
+          this.deleteRelationship(String(relationship.id));
+        } else {
+          this.updateRelationship(String(relationship.id), { fromCharacterId, toCharacterId }, "merge", mergeId, `迁移角色“${String(source.name)}”的关系`);
+        }
+      }
+
+      this.db.run("DELETE FROM character_organization_memberships WHERE character_id = ?", sourceId);
+      const sourceVersionNo = Number(source.versionNo) + 1;
+      this.db.run(
+        "UPDATE characters SET merged_into_character_id = ?, merged_at = ?, version_no = ?, updated_at = ? WHERE id = ?",
+        targetId,
+        timestamp,
+        sourceVersionNo,
+        timestamp,
+        sourceId
+      );
+      this.insertCharacterVersion(sourceId, sourceVersionNo, "merge", mergeId, `合并至角色“${String(target.name)}”`, timestamp);
+      this.db.run(
+        `INSERT INTO character_merges (id, work_id, source_character_id, target_character_id, review_id,
+         source_snapshot_json, target_snapshot_json, reference_snapshot_json, created_at, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        mergeId,
+        workId,
+        sourceId,
+        targetId,
+        input.reviewId,
+        JSON.stringify(source),
+        JSON.stringify(target),
+        JSON.stringify(referenceSnapshot),
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.db.run(
+        "UPDATE review_items SET status = 'fixed', resolution_note = ?, updated_at = ? WHERE id = ?",
+        `已将“${String(source.name)}”合并到“${String(target.name)}”`,
+        timestamp,
+        input.reviewId
+      );
+      this.audit(workId, "character.merged", "character", targetId, {
+        mergeId,
+        sourceCharacterId: sourceId,
+        reviewId: input.reviewId
+      });
+    });
+    return {
+      mergeId,
+      target: this.getCharacter(targetId),
+      source: this.getCharacter(sourceId),
+      review: this.getReviewItem(input.reviewId)
+    };
+  }
+
+  resolveCharacterDuplicateReview(reviewId: string): Record<string, unknown> {
+    const review = this.getReviewItem(reviewId);
+    if (review.itemType !== "character-duplicate" || review.status !== "pending") {
+      throw new AppError(409, "CHARACTER_REVIEW_DECIDED", "该角色查重项已经处理");
+    }
+    return this.updateReviewItem(reviewId, {
+      status: "exception",
+      resolutionNote: "作者确认是不同角色"
+    });
   }
 
   private prepareCharacterNames(name: string, aliases: string[]): {
@@ -3026,6 +3203,7 @@ export class Store {
     const from = this.getCharacter(fromCharacterId);
     const to = this.getCharacter(toCharacterId);
     if (from.workId !== workId || to.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "关系人物不属于当前作品");
+    if (from.mergedIntoCharacterId || to.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能继续被引用");
     if (!input.directed && fromCharacterId.localeCompare(toCharacterId) > 0) [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
     this.assertRelationshipUnique(workId, fromCharacterId, toCharacterId, input.category, input.subtype ?? "", Boolean(input.directed));
     const timestamp = now();
@@ -3092,6 +3270,7 @@ export class Store {
     const from = this.getCharacter(fromCharacterId);
     const to = this.getCharacter(toCharacterId);
     if (from.workId !== current.workId || to.workId !== current.workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "关系人物不属于当前作品");
+    if (from.mergedIntoCharacterId || to.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能继续被引用");
     const directed = input.directed ?? Boolean(current.directed);
     if (!directed && fromCharacterId.localeCompare(toCharacterId) > 0) [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
     this.assertRelationshipUnique(

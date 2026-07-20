@@ -78,6 +78,7 @@ type GenerateInput = {
   conversationId?: string;
   excludeConversationMessageId?: string;
   disableTools?: boolean;
+  agentToolIds?: AgentToolId[];
 };
 
 type GenerateResult = {
@@ -1385,6 +1386,8 @@ export class AiManager {
         result = await this.runChapterAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "character-extraction" || taskType === "character-summary") {
         result = await this.runCharacterExtraction(workId, scope, modelId, taskId);
+      } else if (taskType === "character-identity-audit") {
+        result = await this.runCharacterIdentityAudit(workId, scope, modelId, taskId);
       } else if (taskType === "timeline-analysis") {
         result = await this.runTimelineAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "relationship-analysis") {
@@ -1578,10 +1581,10 @@ export class AiManager {
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
+  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): AiMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
-    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType);
+    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds);
     const toolGuidance = enabledToolIds.length > 0
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
@@ -1644,15 +1647,16 @@ export class AiManager {
     return this.buildContextPlan(input, model).context;
   }
 
-  private enabledAgentToolIds(workId: string, taskType: TaskType): AgentToolId[] {
-    if (taskType !== "chat") return [];
+  private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): AgentToolId[] {
+    if (taskType !== "chat" && requestedToolIds === undefined) return [];
     const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
-    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+    const requested = requestedToolIds ? new Set(requestedToolIds) : null;
+    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId) && (!requested || requested.has(toolId)));
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
@@ -1812,7 +1816,7 @@ export class AiManager {
     const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
-    const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType);
+    const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(model, messages, {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
@@ -2556,6 +2560,141 @@ export class AiManager {
       reviewIds.push(String(review.id));
     }
     return { reviewIds, issueCount: reviewIds.length, callId: generated.callId };
+  }
+
+  private async runCharacterIdentityAudit(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
+    const characters = this.store.listCharacters(workId);
+    if (characters.length < 2) return { characterCount: characters.length, candidateCount: 0, reviewIds: [], skipped: [] };
+    const requiredTools: AgentToolId[] = ["query_story_knowledge", "grep", "read_chapters"];
+    const enabledTools = new Set(this.enabledAgentToolIds(workId, "book-analysis", requiredTools));
+    if (!enabledTools.has("query_story_knowledge") || !enabledTools.has("grep")) {
+      throw new AppError(409, "AI_TOOLS_REQUIRED", "角色查重需要启用“查询作品知识”和“正文搜索”工具");
+    }
+    const roster = characters.map((character) => {
+      const attributes = character.attributes as Record<string, unknown>;
+      const profile = character.profile as Record<string, unknown>;
+      const organizations = (character.organizations as Array<Record<string, unknown>>).map((item) => String(item.name)).join("、");
+      return [
+        `ID=${String(character.id)}`,
+        `主名=${String(character.name)}`,
+        `别名=${(character.aliases as string[]).join("、") || "无"}`,
+        `种族=${String(character.species || "未知")}`,
+        `身份=${String(attributes.identity ?? "未知")}`,
+        `组织=${organizations || "无"}`,
+        `简介=${String(profile.summary ?? "无")}`,
+        `首次章节=${String(character.firstChapterId ?? "未知")}`
+      ].join(" | ");
+    }).join("\n");
+    const generated = await this.generateTaggedJson({
+      workId,
+      taskType: "book-analysis",
+      signal: this.taskSignal(taskId),
+      scope: scope.type === "none" ? scope : { type: "none" },
+      ...(modelId ? { modelId } : {}),
+      parameters: { temperature: 0.1 },
+      agentToolIds: requiredTools,
+      instruction: [
+        "审核角色规范表，找出可能把同一个角色误建成两个档案的组合，最多输出 12 组。",
+        "角色规范表：",
+        roster,
+        "你必须主动使用 query_story_knowledge 查询角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。",
+        "不能仅凭名字相似判断同一人。角色彼此对话、互相提及、同时出现、身份或种族冲突，都是不同角色的强反证。",
+        "只把有原文连续引文支持的 same 或 uncertain 组合放入结果；确认是不同角色的组合无需输出。",
+        "输出 JSON 数组。每项字段：leftCharacterId、rightCharacterId、verdict（same/uncertain）、confidence（0到1）、reason、evidence（数组，每项含 chapterId、quote、supports）、contradictions（字符串数组）。",
+        "quote 必须是原文连续引文且不超过 80 字；不得创造角色 ID、章节 ID 或证据。没有疑似重复角色时输出 []。"
+      ].join("\n"),
+      extraSystemPrompt: "你是谨慎的角色身份消歧审核器。任何结论都只是待作者确认的建议，禁止自动合并角色。"
+    });
+    const toolNames = new Set(generated.toolCalls.filter((call) => call.status === "completed").map((call) => call.name));
+    if (!toolNames.has("query_story_knowledge") || !toolNames.has("grep")) {
+      throw new AppError(502, "CHARACTER_AUDIT_INCOMPLETE", "AI 未完成角色资料查询和正文搜索，本次查重结果未保存");
+    }
+    const extracted = extractJson<unknown>(generated.content);
+    if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "角色查重结果必须是数组");
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callId: generated.callId };
+
+    const characterById = new Map(characters.map((character) => [String(character.id), character]));
+    const existingReviews = this.store.listReviewItems(workId).filter((review) => review.itemType === "character-duplicate");
+    const reviewedPairVersions = new Set(existingReviews.flatMap((review) => {
+      const refs = (review.entityRefs as unknown[]).flatMap((reference) => {
+        if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
+        const value = reference as Record<string, unknown>;
+        return typeof value.id === "string" && typeof value.versionNo === "number" ? [{ id: value.id, versionNo: value.versionNo }] : [];
+      }).sort((left, right) => left.id.localeCompare(right.id));
+      return refs.length === 2 ? [`${refs[0]?.id}@${refs[0]?.versionNo}|${refs[1]?.id}@${refs[1]?.versionNo}`] : [];
+    }));
+    const seenPairs = new Set<string>();
+    const reviewIds: string[] = [];
+    const skipped: Array<{ pair: string; reason: string }> = [];
+    for (const item of extracted) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const candidate = item as Record<string, unknown>;
+      const leftId = typeof candidate.leftCharacterId === "string" ? candidate.leftCharacterId : "";
+      const rightId = typeof candidate.rightCharacterId === "string" ? candidate.rightCharacterId : "";
+      const left = characterById.get(leftId);
+      const right = characterById.get(rightId);
+      if (!left || !right || leftId === rightId) {
+        skipped.push({ pair: `${leftId}/${rightId}`, reason: "角色引用无效" });
+        continue;
+      }
+      const ordered = [left, right].sort((first, second) => String(first.id).localeCompare(String(second.id)));
+      const pairKey = `${String(ordered[0]?.id)}@${Number(ordered[0]?.versionNo)}|${String(ordered[1]?.id)}@${Number(ordered[1]?.versionNo)}`;
+      if (seenPairs.has(pairKey) || reviewedPairVersions.has(pairKey)) {
+        skipped.push({ pair: pairKey, reason: "当前角色版本已经审核" });
+        continue;
+      }
+      seenPairs.add(pairKey);
+      const verdict = candidate.verdict === "same" || candidate.verdict === "uncertain" ? candidate.verdict : null;
+      const confidence = clamp(typeof candidate.confidence === "number" ? candidate.confidence : 0, 0, 1);
+      if (!verdict || confidence < 0.6) {
+        skipped.push({ pair: pairKey, reason: "结论或置信度不足" });
+        continue;
+      }
+      const evidence = (Array.isArray(candidate.evidence) ? candidate.evidence : []).flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+        const value = entry as Record<string, unknown>;
+        const chapterId = typeof value.chapterId === "string" ? value.chapterId : "";
+        const quote = typeof value.quote === "string" ? value.quote.trim() : "";
+        const supports = typeof value.supports === "string" ? value.supports.trim() : "";
+        if (!chapterId || !quote || quote.length > 80) return [];
+        try {
+          const chapter = this.store.getChapter(chapterId);
+          if (chapter.workId !== workId || !this.quoteExists(String(chapter.content), quote)) return [];
+          return [{ chapterId, chapterTitle: chapter.title, quote, supports }];
+        } catch {
+          return [];
+        }
+      });
+      if (evidence.length === 0) {
+        skipped.push({ pair: pairKey, reason: "缺少有效原文证据" });
+        continue;
+      }
+      const reason = typeof candidate.reason === "string" ? candidate.reason.trim() : "AI 发现角色身份可能重复";
+      const contradictions = (Array.isArray(candidate.contradictions) ? candidate.contradictions : [])
+        .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+        .map((value) => value.trim())
+        .slice(0, 12);
+      const review = this.store.createReviewItem(workId, {
+        itemType: "character-duplicate",
+        severity: verdict === "same" && confidence >= 0.85 ? "high" : "medium",
+        title: `疑似重复角色：${String(left.name)} / ${String(right.name)}`,
+        description: [reason, contradictions.length ? `反证或疑点：${contradictions.join("；")}` : ""].filter(Boolean).join("\n"),
+        entityRefs: [left, right].map((character) => ({ type: "character", id: character.id, versionNo: character.versionNo })),
+        evidence,
+        suggestion: `${verdict === "same" ? "AI 倾向同一角色" : "AI 无法完全确认"}，置信度 ${Math.round(confidence * 100)}%；请由作者决定是否合并。`,
+        status: "pending"
+      });
+      reviewIds.push(String(review.id));
+    }
+    return {
+      characterCount: characters.length,
+      candidateCount: extracted.length,
+      reviewIds,
+      reviewCount: reviewIds.length,
+      skipped,
+      callId: generated.callId,
+      toolCallCount: generated.toolCalls.length
+    };
   }
 
   private async runCharacterExtraction(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {

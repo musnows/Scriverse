@@ -699,7 +699,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/characters", (request, response) => data(response, store.listCharacters(request.params.workId)));
+  app.get("/api/works/:workId/characters", (request, response) => {
+    data(response, store.listCharacters(request.params.workId, request.query.includeMerged === "1"));
+  });
   app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
   app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
   app.patch("/api/characters/:characterId", (request, response) => {
@@ -821,10 +823,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/reviews", (request, response) => data(response, store.createReviewItem(request.params.workId, parse(reviewSchema, request.body)), 201));
   app.patch("/api/reviews/:reviewId", (request, response) => data(response, store.updateReviewItem(request.params.reviewId, parse(reviewSchema.partial(), request.body))));
+  app.post("/api/reviews/:reviewId/character-resolution", (request, response) => {
+    const input = parse(z.discriminatedUnion("action", [
+      z.object({ action: z.literal("keep-separate") }).strict(),
+      z.object({
+        action: z.literal("merge"),
+        targetCharacterId: identifier,
+        sourceCharacterId: identifier,
+        expectedTargetVersionNo: z.number().int().positive(),
+        expectedSourceVersionNo: z.number().int().positive()
+      }).strict()
+    ]), request.body);
+    if (input.action === "keep-separate") {
+      data(response, store.resolveCharacterDuplicateReview(request.params.reviewId));
+      return;
+    }
+    data(response, store.mergeCharacters({ reviewId: request.params.reviewId, ...input }));
+  });
 
   app.get("/api/works/:workId/tasks", (request, response) => data(response, store.listTasks(request.params.workId)));
   app.post("/api/works/:workId/tasks", (request, response) => {
-    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
+    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
     data(response, store.createTask(request.params.workId, input), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
