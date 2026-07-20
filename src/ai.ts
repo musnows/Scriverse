@@ -79,6 +79,7 @@ type GenerateInput = {
   excludeConversationMessageId?: string;
   disableTools?: boolean;
   agentToolIds?: AgentToolId[];
+  agentToolCallLimit?: number;
 };
 
 type GenerateResult = {
@@ -125,6 +126,7 @@ export type AiProcessStep = {
 
 const MAX_AGENT_TOOL_ROUNDS = 6;
 const MAX_AGENT_TOOL_CALLS = 12;
+const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
 const storyIndexArguments = z.object({
   offset: z.number().int().min(0).max(10_000).default(0),
   limit: z.number().int().min(1).max(50).default(20)
@@ -1880,7 +1882,12 @@ export class AiManager {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
                   headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-                  body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: toolChoice } : {}) }),
+                  body: JSON.stringify({
+                    model: stringValue(model, "model_id"),
+                    messages: completionMessages,
+                    ...parameters,
+                    ...(tools.length && toolChoice === "auto" ? { tools, tool_choice: "auto" } : {})
+                  }),
                   signal: controller.signal
                 });
                 return { ok: response.ok, status: response.status, body: await response.text() };
@@ -1928,6 +1935,7 @@ export class AiManager {
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
       const processSteps: AiProcessStep[] = [];
+      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? MAX_AGENT_TOOL_CALLS, 1, MAX_CONFIGURED_AGENT_TOOL_CALLS));
       const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
         const reasoning = currentChoice?.message?.reasoning_content;
         if (reasoning?.trim()) {
@@ -1947,8 +1955,8 @@ export class AiManager {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
-        if (executedToolCalls.length + toolCalls.length > MAX_AGENT_TOOL_CALLS) {
-          throw new Error(`AI requested more than ${MAX_AGENT_TOOL_CALLS} tool calls in one response cycle.`);
+        if (executedToolCalls.length + toolCalls.length > agentToolCallLimit) {
+          throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
         }
         const normalizedToolCalls = toolCalls.map((toolCall) => ({
           ...toolCall,
@@ -1973,6 +1981,12 @@ export class AiManager {
         }
         toolRound += 1;
         const forceFinalAnswer = toolRound >= MAX_AGENT_TOOL_ROUNDS;
+        if (forceFinalAnswer) {
+          completionMessages.push({
+            role: "user",
+            content: "工具调用阶段已经结束，不得再请求任何工具。请立即根据已有工具结果生成最终答案，并严格遵守最初用户消息要求的输出格式。"
+          });
+        }
         payload = await requestCompletion(forceFinalAnswer ? "none" : "auto");
         choice = payload.choices?.[0];
         if (forceFinalAnswer && choice?.message?.tool_calls?.length) {
@@ -2593,11 +2607,12 @@ export class AiManager {
       ...(modelId ? { modelId } : {}),
       parameters: { temperature: 0.1 },
       agentToolIds: requiredTools,
+      agentToolCallLimit: 48,
       instruction: [
         "审核角色规范表，找出可能把同一个角色误建成两个档案的组合，最多输出 12 组。",
         "角色规范表：",
         roster,
-        "你必须主动使用 query_story_knowledge 查询角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。",
+        "你必须主动使用 query_story_knowledge 查询角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。工具调用总数不得超过 48 次。",
         "不能仅凭名字相似判断同一人。角色彼此对话、互相提及、同时出现、身份或种族冲突，都是不同角色的强反证。",
         "只把有原文连续引文支持的 same 或 uncertain 组合放入结果；确认是不同角色的组合无需输出。",
         "输出 JSON 数组。每项字段：leftCharacterId、rightCharacterId、verdict（same/uncertain）、confidence（0到1）、reason、evidence（数组，每项含 chapterId、quote、supports）、contradictions（字符串数组）。",

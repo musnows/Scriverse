@@ -37,7 +37,12 @@ describe("AI 角色身份审核与安全合并", () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "knowledge", type: "function", function: { name: "query_story_knowledge", arguments: JSON.stringify({ query: "安吉拉斯", categories: ["character", "relationship"] }) } },
           { id: "grep-left", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "安吉拉斯", limit: 20 }) } },
-          { id: "grep-right", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "安基拉斯", limit: 20 }) } }
+          { id: "grep-right", type: "function", function: { name: "grep", arguments: JSON.stringify({ keyword: "安基拉斯", limit: 20 }) } },
+          ...Array.from({ length: 10 }, (_, index) => ({
+            id: `extra-grep-${index}`,
+            type: "function",
+            function: { name: "grep", arguments: JSON.stringify({ keyword: "魔斯拉", limit: 1 }) }
+          }))
         ] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const chapterId = String(seeded.chapter.id);
@@ -104,7 +109,7 @@ describe("AI 角色身份审核与安全合并", () => {
       scope: { type: "book" }
     }).expect(201);
     const completed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(completed.body.data).toMatchObject({ status: "review", result: { reviewCount: 1, toolCallCount: 3 } });
+    expect(completed.body.data).toMatchObject({ status: "review", result: { reviewCount: 1, toolCallCount: 13 } });
     const reviews = await request(runtime.app).get(`/api/works/${workId}/reviews`).expect(200);
     expect(reviews.body.data).toHaveLength(1);
     expect(reviews.body.data[0]).toMatchObject({ itemType: "character-duplicate", status: "pending", severity: "high" });
