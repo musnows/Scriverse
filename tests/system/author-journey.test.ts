@@ -214,9 +214,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-nav-icons');
+    expect(page.text).toContain('/app.js?v=20260720-galaxy-tooltip');
     expect(page.text).toContain('/styles.css?v=20260720-galaxy-worlds');
-    expect(application.text).toContain('/relationship-graph.js?v=20260720-galaxy-worlds');
+    expect(application.text).toContain('/relationship-graph.js?v=20260720-galaxy-tooltip');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
     expect(graph.text).toContain('statuses.push("待确认")');
@@ -420,6 +420,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("export function getGalaxyNodeAppearance");
     expect(graph.text).toContain('button.dataset.relationshipTier = appearance.tier');
     expect(graph.text).toContain('button.dataset.celestialType = appearance.celestialType');
+    expect(graph.text).not.toContain('button.title = `${node.degree} 条关系');
     expect(graph.text).toContain('button.style.setProperty("--node-color", appearance.color)');
     expect(graph.text).toContain("getGalaxyNodeDepthOpacity(point.depth)");
     expect(graph.text).toContain("initialNodePositions");

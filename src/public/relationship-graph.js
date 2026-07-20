@@ -1987,7 +1987,6 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const label = document.createElement("span");
       label.textContent = node.name;
       button.append(marker, label);
-      button.title = `${node.degree} 条关系 · ${appearance.tier === "core" ? "核心高亮" : appearance.tier === "active" ? "活跃连接" : "外围连接"}`;
       button.setAttribute("aria-label", `${node.name}，${node.degree} 条关系，${appearance.tier === "core" ? "核心高亮" : appearance.tier === "active" ? "活跃连接" : "外围连接"}${node.aliases.length ? `，别名 ${node.aliases.join("、")}` : ""}`);
       button.setAttribute("aria-grabbed", "false");
       let nodeDrag = null;
