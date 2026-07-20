@@ -21,6 +21,8 @@ describe("作品、导入和章节版本 API", () => {
     expect(imported.body.data.tree.volumes).toHaveLength(2);
     const chapter = imported.body.data.tree.volumes[0].chapters[0];
     expect(chapter.versionNo).toBe(1);
+    expect(chapter).not.toHaveProperty("content");
+    expect(JSON.stringify(imported.body)).not.toContain("林舟收到信号。");
 
     const saved = await request(runtime.app)
       .patch(`/api/chapters/${chapter.id}`)
@@ -54,6 +56,7 @@ describe("作品、导入和章节版本 API", () => {
       .expect(201);
     expect(imported.body.data.tree.volumes).toHaveLength(1);
     expect(imported.body.data.tree.volumes[0]).toMatchObject({ title: "正文", source: "default" });
+    expect(imported.body.data.tree.volumes[0].chapters[0]).not.toHaveProperty("content");
     expect(imported.body.data.warnings[0]).toContain("默认卷");
 
     await request(runtime.app)
@@ -180,7 +183,12 @@ describe("作品、导入和章节版本 API", () => {
       .expect(201);
 
     expect(imported.body.data.tree.volumes[0]).toMatchObject({ title: "第一卷 星港", source: "explicit" });
-    expect(imported.body.data.tree.volumes[0].chapters[0]).toMatchObject({ title: "第一章 抵达", content: "林舟抵达星港。" });
+    const chapter = imported.body.data.tree.volumes[0].chapters[0];
+    expect(chapter).toMatchObject({ title: "第一章 抵达" });
+    expect(chapter).not.toHaveProperty("content");
+    expect(JSON.stringify(imported.body)).not.toContain("林舟抵达星港。");
+    const loadedChapter = await request(runtime.app).get(`/api/chapters/${chapter.id}`).expect(200);
+    expect(loadedChapter.body.data.content).toBe("林舟抵达星港。");
   });
 
   it("正确解码 multipart 中文文件名并应用含前传提示", async () => {
@@ -299,7 +307,11 @@ describe("作品、导入和章节版本 API", () => {
       .post(`/api/works/${workId}/file-versions/${v2VersionId}/restore`)
       .expect(200);
     expect(restored.body.data.restoredFrom).toBe(v2VersionId);
-    expect(restored.body.data.tree.volumes[0].chapters[0].content).toBe("初版正文。");
+    const restoredChapter = restored.body.data.tree.volumes[0].chapters[0];
+    expect(restoredChapter).not.toHaveProperty("content");
+    expect(JSON.stringify(restored.body)).not.toContain("初版正文。");
+    const restoredChapterDetails = await request(runtime.app).get(`/api/chapters/${restoredChapter.id}`).expect(200);
+    expect(restoredChapterDetails.body.data.content).toBe("初版正文。");
 
     const fileVersionsAfter = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     expect(fileVersionsAfter.body.data[0].fileType).toBe("snapshot");

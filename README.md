@@ -78,6 +78,10 @@ npm run build
 npm start
 ```
 
+### Docker 部署
+
+官方镜像为 `musnows/scriverse`，支持 `linux/amd64` 和 `linux/arm64`。完整的 Compose 配置、首次管理员初始化、持久化、升级、备份、日志、健康检查和 HTTPS 反向代理说明见 [Docker 部署指南](docs/docker-deployment.md)。
+
 ### 命令行工具
 
 CLI 既可以启动本地 Scriverse，也可以连接任意已运行的服务来查询或编辑作品数据。全局安装后可直接使用 `scriverse` 命令：
@@ -147,7 +151,7 @@ npm start
 - 数据默认保存在 `.data/novel.db`。
 - AI 供应商密钥经加密后存储，主密钥默认位于 `.data/master.key`。
 - 备份或迁移时，请同时保存数据库和主密钥；丢失主密钥后无法解密已保存的供应商密钥。
-- 项目不包含用户系统；服务器部署使用环境变量配置的单实例 HTTP Basic Auth。生产环境缺少凭据时会拒绝启动。
+- 项目包含应用内多用户系统；首个注册用户自动成为管理员。HTTP Basic Auth 是可选的额外部署网关，不代替应用内登录。
 - 服务默认只监听 `127.0.0.1`。非本机监听同样强制要求鉴权，公网入口必须使用 HTTPS、可信反向代理和防火墙访问控制。
 - 应用默认启用 CSP、防点击劫持、MIME 嗅探防护、同源写请求校验、认证失败限速、API 限速、JSON/上传大小限制和 AI 供应商 SSRF 防护。
 - SQLite 查询通过 prepared statements 绑定参数；动态 SQL 片段只来自服务端受控枚举，不拼接用户输入。
@@ -218,6 +222,10 @@ curl http://127.0.0.1:13210/api/health
 ## 项目状态
 
 当前为 MVP 版本，接口和数据结构仍可能调整。升级前请备份 `.data` 目录。
+
+## 参与贡献
+
+提交代码或文档前，请阅读 [协作开发规范](docs/CONTRIBUTING.md)。所有日常变更均从最新 `develop` 派生，并通过以 `develop` 为目标分支的 Pull Request 合入。
 
 ## 🌟 Special Thanks
 
