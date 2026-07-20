@@ -23,12 +23,27 @@ const NETWORK_LAYOUTS = Object.freeze({
 });
 const RELATIONSHIP_EDGE_GAP = 24;
 let relationshipRendererSequence = 0;
+const GALAXY_CELESTIAL_PALETTES = Object.freeze([
+  Object.freeze({ key: "solar", hue: 42, saturation: 96, lightness: 68, color: "#ffc95f", core: "#fff8d4", rim: "#9f3c18", atmosphere: "rgba(255,184,72,.58)", ring: "rgba(255,222,151,.72)" }),
+  Object.freeze({ key: "azure", hue: 211, saturation: 94, lightness: 68, color: "#61b8ff", core: "#effaff", rim: "#173b85", atmosphere: "rgba(79,156,255,.56)", ring: "rgba(164,214,255,.68)" }),
+  Object.freeze({ key: "violet", hue: 263, saturation: 82, lightness: 72, color: "#b58cff", core: "#f7edff", rim: "#4d237c", atmosphere: "rgba(151,92,255,.54)", ring: "rgba(219,190,255,.7)" }),
+  Object.freeze({ key: "rose", hue: 342, saturation: 91, lightness: 70, color: "#ff739d", core: "#fff0f5", rim: "#7f1e42", atmosphere: "rgba(255,91,139,.52)", ring: "rgba(255,190,210,.68)" }),
+  Object.freeze({ key: "emerald", hue: 158, saturation: 67, lightness: 58, color: "#4ed49e", core: "#e7fff5", rim: "#145f4b", atmosphere: "rgba(50,211,154,.5)", ring: "rgba(166,244,214,.66)" }),
+  Object.freeze({ key: "ice", hue: 190, saturation: 88, lightness: 76, color: "#9beaff", core: "#f4fdff", rim: "#26627c", atmosphere: "rgba(116,224,255,.52)", ring: "rgba(206,246,255,.7)" }),
+  Object.freeze({ key: "copper", hue: 22, saturation: 74, lightness: 61, color: "#df8851", core: "#ffe8cf", rim: "#672b1c", atmosphere: "rgba(226,103,55,.48)", ring: "rgba(239,179,125,.66)" }),
+  Object.freeze({ key: "pearl", hue: 47, saturation: 31, lightness: 84, color: "#e7dfc7", core: "#ffffff", rim: "#6c6b78", atmosphere: "rgba(207,217,240,.46)", ring: "rgba(237,231,216,.72)" })
+]);
+const GALAXY_CELESTIAL_TYPES = Object.freeze({
+  core: Object.freeze(["star", "star", "gas-giant", "ringed"]),
+  active: Object.freeze(["gas-giant", "ringed", "ocean", "ice", "volcanic"]),
+  outer: Object.freeze(["rocky", "ocean", "ice", "volcanic", "dwarf", "ringed"])
+});
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
-  minimumRadius: 165,
-  radialSpan: 690,
-  repulsionStrength: 5200,
-  desiredEdgeLength: 210
+  minimumRadius: 220,
+  radialSpan: 830,
+  repulsionStrength: 9200,
+  desiredEdgeLength: 285
 });
 
 export function formatRelationshipLabel(edge, separator = " · ") {
@@ -176,6 +191,15 @@ function hashString(value) {
     hash = Math.imul(hash, 16777619);
   }
   return hash >>> 0;
+}
+
+function mixHash(value) {
+  let mixed = Number(value) >>> 0;
+  mixed ^= mixed >>> 16;
+  mixed = Math.imul(mixed, 0x7feb352d);
+  mixed ^= mixed >>> 15;
+  mixed = Math.imul(mixed, 0x846ca68b);
+  return (mixed ^ (mixed >>> 16)) >>> 0;
 }
 
 function seededRandom(seed) {
@@ -1467,17 +1491,19 @@ export function createGalaxyStarfield(seed, count = 3600) {
   const stars = [];
   const armCount = 4;
   for (let index = 0; index < count; index += 1) {
-    const radius = 55 + Math.pow(random(), 0.62) * 1120;
+    const radius = 55 + Math.pow(random(), 0.62) * 1380;
     const arm = index % armCount;
     const armAngle = arm / armCount * Math.PI * 2;
     const angle = armAngle + radius * 0.0065 + (random() - 0.5) * (0.42 + radius / 1100);
     const thickness = 22 + radius * 0.105;
+    const temperature = random();
     stars.push({
       x: Math.cos(angle) * radius + (random() - 0.5) * 62,
       y: (random() + random() + random() - 1.5) * thickness,
       z: Math.sin(angle) * radius + (random() - 0.5) * 62,
       size: random() > 0.965 ? 1.7 + random() * 1.4 : 0.45 + random() * 0.85,
-      brightness: 0.22 + random() * 0.78
+      brightness: 0.22 + random() * 0.78,
+      color: temperature < 0.2 ? "255,218,176" : temperature > 0.78 ? "174,211,255" : "226,237,255"
     });
   }
   return stars;
@@ -1523,27 +1549,46 @@ export function getGalaxyNodeAppearance(node, maxDegree) {
   const weightedDegree = Math.max(0, Number(node?.weightedDegree) || 0);
   const confidenceBoost = clamp(weightedDegree / Math.max(1, degree) / 1.35, 0, 1);
   const intensity = clamp(normalizedDegree * 0.8 + confidenceBoost * 0.2, 0, 1);
-  const hue = Math.round(218 - intensity * 166);
-  const saturation = Math.round(58 + intensity * 35);
-  const lightness = Math.round(47 + intensity * 27);
   const brightness = (0.7 + intensity * 0.68).toFixed(3);
   const glow = (0.26 + intensity * 0.74).toFixed(3);
   const tier = intensity >= 0.7 ? "core" : intensity >= 0.34 ? "active" : "outer";
+  const appearanceSeed = mixHash(hashString([
+    String(node?.id ?? ""),
+    String(node?.name ?? ""),
+    String(node?.groupKey ?? ""),
+    String(node?.species ?? ""),
+    String(node?.identity ?? "")
+  ].join("|")));
+  const palette = GALAXY_CELESTIAL_PALETTES[appearanceSeed % GALAXY_CELESTIAL_PALETTES.length];
+  const celestialTypes = GALAXY_CELESTIAL_TYPES[tier];
+  const celestialType = celestialTypes[Math.floor(appearanceSeed / GALAXY_CELESTIAL_PALETTES.length) % celestialTypes.length];
+  const sizeScale = ({ star: 1.18, "gas-giant": 1.12, ringed: 1.08, ocean: 1, ice: 0.96, volcanic: 1.02, rocky: 0.92, dwarf: 0.76 })[celestialType] ?? 1;
   return {
     degree,
     intensity,
-    hue,
-    saturation,
-    lightness,
+    hue: palette.hue,
+    saturation: palette.saturation,
+    lightness: palette.lightness,
     brightness,
     glow,
     tier,
-    color: `hsl(${hue} ${saturation}% ${lightness}%)`
+    palette: palette.key,
+    celestialType,
+    sizeScale,
+    color: palette.color,
+    coreColor: palette.core,
+    rimColor: palette.rim,
+    atmosphereColor: palette.atmosphere,
+    ringColor: palette.ring
   };
 }
 
 export function getGalaxyNodeMarkerCenterOffset(nodeSize) {
   return 8 + Math.max(0, Number(nodeSize) || 0) / 2;
+}
+
+export function getGalaxyNodeDepthOpacity(depth) {
+  return clamp(1.28 - Math.max(0, Number(depth) || 0) / 4800, 0.72, 1);
 }
 
 export function distanceToGalaxyEdge(point, from, to) {
@@ -1576,7 +1621,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const layout = layoutGalaxy(graph, seed);
   const stars = createGalaxyStarfield(`${seed}|stars`);
   const initialNodePositions = new Map(layout.nodes.map((node) => [node.id, { x: node.x, y: node.y, z: node.z }]));
-  const initialCamera = Object.freeze({ yaw: -0.38, pitch: 0.72, distance: 1420, focalRatio: 1.72, zoom: 1, targetX: 0, targetY: 0, targetZ: 0 });
+  const initialCamera = Object.freeze({ yaw: -0.38, pitch: 0.72, distance: 1560, focalRatio: 1.72, zoom: 1, targetX: 0, targetY: 0, targetZ: 0 });
   const camera = { ...initialCamera };
   const nodeElements = new Map();
   const cleanups = [];
@@ -1675,7 +1720,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       const radius = star.size * perspective;
       const twinkle = 0.82 + Math.sin(index * 12.9898 + camera.yaw * 5) * 0.18;
       const alpha = clamp(star.brightness * twinkle * perspective, 0.08, 0.92);
-      context.fillStyle = `rgba(216,235,255,${alpha})`;
+      context.fillStyle = `rgba(${star.color},${alpha})`;
       context.beginPath();
       context.arc(point.x, point.y, Math.max(0.28, radius), 0, Math.PI * 2);
       context.fill();
@@ -1781,7 +1826,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       element.style.transformOrigin = `50% ${markerCenterOffset}px`;
       element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -${markerCenterOffset}px) scale(${perspective * selectedScale})`;
       element.style.zIndex = String(10000 - Math.round(point.depth));
-      element.style.setProperty("--depth-opacity", String(clamp(1.45 - point.depth / 2300, 0.38, 1)));
+      element.style.setProperty("--depth-opacity", String(getGalaxyNodeDepthOpacity(point.depth)));
       element.dataset.worldX = node.x.toFixed(2);
       element.dataset.worldY = node.y.toFixed(2);
       element.dataset.worldZ = node.z.toFixed(2);
@@ -1926,10 +1971,16 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       button.className = "galaxy-node";
       button.dataset.galaxyNode = node.id;
       button.dataset.relationshipTier = appearance.tier;
-      const nodeSize = 10 + Math.sqrt(node.degree / maxDegree) * 28;
+      button.dataset.celestialType = appearance.celestialType;
+      button.dataset.celestialPalette = appearance.palette;
+      const nodeSize = clamp((10 + Math.sqrt(node.degree / maxDegree) * 28) * appearance.sizeScale, 8, 48);
       button.style.setProperty("--node-size", `${nodeSize}px`);
       button.dataset.nodeSize = nodeSize.toFixed(3);
       button.style.setProperty("--node-color", appearance.color);
+      button.style.setProperty("--node-core", appearance.coreColor);
+      button.style.setProperty("--node-rim", appearance.rimColor);
+      button.style.setProperty("--node-atmosphere", appearance.atmosphereColor);
+      button.style.setProperty("--node-ring", appearance.ringColor);
       button.style.setProperty("--node-brightness", appearance.brightness);
       button.style.setProperty("--node-glow", appearance.glow);
       const marker = document.createElement("i");

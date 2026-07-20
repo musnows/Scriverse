@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -209,6 +209,7 @@ describe("人物关系图数据与布局", () => {
     expect(stars).toHaveLength(120);
     expect(stars.every((star: { x: number; y: number; z: number }) => Number.isFinite(star.x) && Number.isFinite(star.y) && Number.isFinite(star.z))).toBe(true);
     expect(new Set(stars.map((star: { z: number }) => Math.round(star.z))).size).toBeGreaterThan(80);
+    expect(new Set(stars.map((star: { color: string }) => star.color)).size).toBe(3);
 
     const camera = { yaw: 0, pitch: 0, distance: 1500, focalRatio: 1.6, zoom: 1 };
     const viewport = { width: 1200, height: 800 };
@@ -216,6 +217,8 @@ describe("人物关系图数据与布局", () => {
     const far = projectGalaxyPoint({ x: 100, y: 0, z: 300 }, camera, viewport);
     expect(near.scale).toBeGreaterThan(far.scale);
     expect(near.x - viewport.width / 2).toBeGreaterThan(far.x - viewport.width / 2);
+    expect(getGalaxyNodeDepthOpacity(800)).toBe(1);
+    expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
   it("点击节点后把三维相机聚焦并放大到该节点", () => {
@@ -231,15 +234,23 @@ describe("人物关系图数据与布局", () => {
   });
 
   it("银河图按关系数量区分行星颜色与亮度", () => {
-    const outer = getGalaxyNodeAppearance({ degree: 1, weightedDegree: 0.65 }, 20);
-    const core = getGalaxyNodeAppearance({ degree: 20, weightedDegree: 27 }, 20);
+    const outer = getGalaxyNodeAppearance({ id: "outer", name: "外围", degree: 1, weightedDegree: 0.65 }, 20);
+    const core = getGalaxyNodeAppearance({ id: "core", name: "核心", degree: 20, weightedDegree: 27 }, 20);
+    const appearances = Array.from({ length: 32 }, (_, index) => getGalaxyNodeAppearance({
+      id: `node-${index}`,
+      name: `角色-${index}`,
+      degree: 2 + index % 8,
+      weightedDegree: 1.8 + index % 8
+    }, 20));
 
     expect(outer.tier).toBe("outer");
     expect(core.tier).toBe("core");
-    expect(core.hue).toBeLessThan(outer.hue);
     expect(Number(core.brightness)).toBeGreaterThan(Number(outer.brightness));
     expect(Number(core.glow)).toBeGreaterThan(Number(outer.glow));
-    expect(core.color).not.toBe(outer.color);
+    expect(new Set(appearances.map((appearance: { palette: string }) => appearance.palette)).size).toBeGreaterThanOrEqual(6);
+    expect(new Set(appearances.map((appearance: { celestialType: string }) => appearance.celestialType)).size).toBeGreaterThanOrEqual(5);
+    expect(GALAXY_LAYOUT_CONFIG.minimumRadius).toBeGreaterThanOrEqual(220);
+    expect(GALAXY_LAYOUT_CONFIG.desiredEdgeLength).toBeGreaterThanOrEqual(280);
   });
 
   it("松手惯性滑行只靠速度衰减，不会被弹簧持续拉动", () => {
