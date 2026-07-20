@@ -466,7 +466,7 @@ let entityHistoryContext = null;
 
 function setModuleNavExpanded(expanded) {
   moduleNavExpanded = expanded;
-  $("#module-more-button").textContent = expanded ? "收起" : "更多";
+  $("#module-more-button .nav-label").textContent = expanded ? "收起" : "更多";
   $("#module-more-button").setAttribute("aria-expanded", String(expanded));
   $("#module-nav").querySelectorAll(".module-nav-secondary").forEach((button) => button.classList.toggle("hidden", !expanded));
 }
@@ -2433,8 +2433,8 @@ async function renderOutlines() {
   ]);
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
-  const navButton = $("#module-nav [data-module=outlines]");
-  navButton.textContent = unresolved.length ? `大纲与伏笔 · ${unresolved.length}` : "大纲与伏笔";
+  const navButton = $("#module-nav [data-module=outlines] .nav-label");
+  if (navButton) navButton.textContent = unresolved.length ? `大纲与伏笔 · ${unresolved.length}` : "大纲与伏笔";
   const foreshadowHtml = foreshadows.length ? `<div class="card-grid foreshadow-grid">${foreshadows.map((item) => `
     <article class="record-card foreshadow-card ${item.overdue ? "is-overdue" : ""}">
       <small>${esc(item.importance)} · ${esc(item.status)}${item.overdue ? " · 已逾期" : ""}</small>
