@@ -223,6 +223,10 @@ curl http://127.0.0.1:13210/api/health
 
 当前为 MVP 版本，接口和数据结构仍可能调整。升级前请备份 `.data` 目录。
 
+## 参与贡献
+
+提交代码或文档前，请阅读 [协作开发规范](docs/CONTRIBUTING.md)。所有日常变更均从最新 `develop` 派生，并通过以 `develop` 为目标分支的 Pull Request 合入。
+
 ## 🌟 Special Thanks
 
 <p align="center">

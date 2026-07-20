@@ -217,6 +217,10 @@ Expected response:
 
 Scriverse is currently an MVP. APIs and data structures may still change. Back up the `.data` directory before upgrading.
 
+## Contributing
+
+Read the [contribution guide](docs/CONTRIBUTING.md) before submitting code or documentation. Start everyday changes from the latest `develop` branch and merge them through a Pull Request targeting `develop`.
+
 ## 🌟 Special Thanks
 
 <p align="center">
