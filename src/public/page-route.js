@@ -31,7 +31,9 @@ export function serializePageRoute(route = {}) {
   const view = String(route.view ?? "shelf");
   const workId = String(route.workId ?? "").trim();
 
-  if (view === "editor" && workId) {
+  if (view === "login") {
+    params.set("view", "login");
+  } else if (view === "editor" && workId) {
     params.set("view", "editor");
     params.set("work", workId);
     if (route.chapterId) params.set("chapter", String(route.chapterId));
@@ -57,6 +59,8 @@ export function parsePageRoute(hash = "") {
   const params = new URLSearchParams(String(hash).replace(/^#/, ""));
   const view = value(params, "view");
   const workId = value(params, "work");
+
+  if (view === "login") return { view: "login" };
 
   if (view === "editor" && workId) {
     const chapterId = value(params, "chapter");

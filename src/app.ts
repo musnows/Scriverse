@@ -2,6 +2,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import multer from "multer";
 import mammoth from "mammoth";
 import { extname, join } from "node:path";
+import { readFileSync } from "node:fs";
 import { z, ZodError } from "zod";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
@@ -19,6 +20,7 @@ import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metada
 import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
+import { APP_VERSION } from "./version.js";
 import {
   clearSessionCookie,
   createCliApiScopeMiddleware,
@@ -385,7 +387,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: "0.3.1", protocol: "openai-chat-completions" });
+    data(response, { status: "ok", version: APP_VERSION, protocol: "openai-chat-completions" });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
@@ -396,7 +398,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/auth/session", (request, response) => {
     const session = auth.authenticate(request);
-    const registrationOpen = !auth.hasUsers() || options.security?.allowRegistration !== false;
+    const registrationOpen = options.security?.allowRegistration === true;
     data(response, session
       ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
       : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
@@ -405,7 +407,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, captcha.create());
   });
   app.post("/api/auth/register", (request, response) => {
-    if (auth.hasUsers() && options.security?.allowRegistration === false) {
+    if (options.security?.allowRegistration !== true) {
       throw new AppError(403, "REGISTRATION_DISABLED", "当前部署已关闭新用户注册");
     }
     const input = parse(registrationSchema, request.body);
@@ -436,6 +438,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (request.authSession) auth.revoke(request.authSession.id);
     clearSessionCookie(response, request.secure);
     noContent(response);
+  });
+  app.post("/api/auth/onboarding/complete", (request, response) => {
+    if (!request.authUser || request.authMethod !== "session") throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话完成新手引导");
+    parse(z.object({}).strict(), request.body ?? {});
+    const updated = auth.completeOnboarding(request.authUser.userId);
+    store.audit(null, "user.onboarding-completed", "user", updated.userId);
+    data(response, updated);
   });
   app.patch("/api/auth/profile", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
@@ -1075,14 +1084,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");
+    // index.html 按登录态动态下发：未登录时注入 login-route 类，首帧直接渲染登录页；
+    // 已登录时保持骨架屏，由前端恢复会话后进入工作台，避免两种闪烁。
+    const sendIndexHtml = (request: Request, response: Response) => {
+      const authenticated = options.disableUserAuth === true || auth.authenticate(request) !== null;
+      let html = readFileSync(join(publicPath, "index.html"), "utf8");
+      if (!authenticated) html = html.replace('<html lang="zh-CN">', '<html lang="zh-CN" class="login-route">');
+      response.setHeader("Cache-Control", "no-store");
+      response.type("text/html").send(html);
+    };
+    app.get(["/", "/index.html"], sendIndexHtml);
     app.use(express.static(publicPath, {
-      index: "index.html",
+      index: false,
       maxAge: 0,
       setHeaders: (response) => response.setHeader("Cache-Control", "no-store")
     }));
     app.get("/{*path}", (request, response, next) => {
       if (request.path.startsWith("/api/")) return next();
-      response.sendFile(join(publicPath, "index.html"));
+      sendIndexHtml(request, response);
     });
   }
 

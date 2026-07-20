@@ -158,14 +158,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="onboarding-spotlight"');
     expect(page.text).toContain('id="onboarding-popover"');
     expect(page.text).not.toContain("data-onboarding-step");
-    expect(application.text).toContain('const onboardingStoragePrefix = "scriverse-onboarding-v2"');
     expect(application.text).toContain("const shelfOnboardingSteps = [");
     expect(application.text).toContain("const workspaceOnboardingSteps = [");
     expect(application.text).toContain("function positionOnboardingElements()");
     expect(application.text).toContain('selector: "#new-chapter-button"');
     expect(application.text).toContain('selector: ".quick-actions button[data-task=\\"continue\\"]"');
     expect(application.text).toContain("function scheduleFirstUseOnboarding()");
-    expect(application.text).toContain('localStorage.setItem(onboardingStorageKey(), "completed")');
+    expect(application.text).toContain('api("/api/auth/onboarding/complete", { method: "POST", body: {} })');
     expect(application.text).toContain('addEventListener("cancel"');
     expect(application.text).toContain('event.key === "Escape"');
     expect(styles.text).toContain(".onboarding-dialog {");
@@ -181,14 +180,23 @@ describe("作者完整创作流程", () => {
     await request(runtime.app).get("/character-version.js").expect(200);
     expect(page.text).toContain('id="character-editor-dialog"');
     expect(page.text).toContain('id="character-history-button"');
-    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(4);
+    expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
+    expect(page.text).toContain('data-character-editor-tab="relationships"');
     expect(page.text).toContain("保存新版本");
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
+    expect(application.text).toContain("function renderCharacterEditorRelationships()");
+    expect(application.text).toContain("refreshRelationshipSurfaces");
+    expect(application.text).toContain("data-character-relationship-edit");
+    expect(application.text).toContain('field("keywords", "关系关键词", "keyword-chips"');
+    expect(application.text).toContain("splitRelationshipKeywordInput");
+    expect(application.text).toContain('form.getAll("keywords")');
     expect(application.text).toContain("function renderCharacterHistory()");
     expect(application.text).toContain("/versions`");
     expect(application.text).toContain("/restore`");
     expect(application.text).toContain("buildCharacterState(form.getAll");
     expect(styles.text).toContain(".character-editor-workspace");
+    expect(styles.text).toContain(".character-relationship-row");
+    expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
   });
 
@@ -206,8 +214,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-captcha-lazy-load');
-    expect(page.text).toContain('/styles.css?v=20260720-captcha-lazy-load');
+    expect(page.text).toContain('/app.js?v=20260720-nav-icons');
+    expect(page.text).toContain('/styles.css?v=20260720-nav-icons');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
@@ -293,11 +301,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
     expect(application.text).toContain("updateDocumentTitle(state.work)");
     expect(page.text).toContain('data-module="outlines"');
-    expect(page.text).toContain('<button type="button" data-module="outlines">大纲与伏笔</button>');
-    expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">AI 分析</button>');
+    expect(page.text).toContain('<span class="nav-label">大纲与伏笔</span>');
+    expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">');
+    expect(page.text).toContain('</svg>AI 分析</button>');
     expect(page.text).toContain('id="module-more-button"');
+    expect(page.text).toContain('<span class="nav-label">更多</span>');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(4);
-    expect(page.text).toContain('<button class="module-nav-secondary hidden" type="button" data-module="races">种族</button>');
+    expect(page.text).toContain('</svg>种族</button>');
+    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(13);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
     expect(page.text).toContain(">作品设置</button>");
@@ -425,7 +436,9 @@ describe("作者完整创作流程", () => {
     const imported = await request(runtime.app).post(`/api/works/${workId}/import`)
       .attach("file", Buffer.from("第一卷 启航\n第一章 北港\n飞船停在北港。林舟检查跃迁引擎。林舟想起沈星的警告。\n第二章 旧信\n沈星仍保存着林舟的旧信。"), "星际纪元.txt")
       .expect(201);
-    const chapterId = imported.body.data.tree.volumes[0].chapters[0].id;
+    expect(JSON.stringify(imported.body)).not.toContain("飞船停在北港。");
+    const directory = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    const chapterId = directory.body.data.volumes[0].chapters[0].id;
 
     await request(runtime.app).post(`/api/works/${workId}/settings`).send({
       title: "跃迁冷却规则",

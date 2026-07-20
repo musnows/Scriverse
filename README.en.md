@@ -72,6 +72,10 @@ npm run build
 npm start
 ```
 
+### Docker deployment
+
+The official `musnows/scriverse` image supports `linux/amd64` and `linux/arm64`. See the [Docker deployment guide](docs/docker-deployment.en.md) for a complete Compose configuration, first-administrator setup, persistence, upgrades, backups, logs, health checks, and HTTPS reverse proxy guidance.
+
 ### Command-line client
 
 The CLI can start Scriverse locally or connect to any running server to query and edit work data. Install it globally to use the `scriverse` command:
@@ -106,7 +110,7 @@ Run `scriverse --help` for all local server, default server, authentication, wor
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
-| `APP_ALLOW_REGISTRATION` | `true` | Set to `false` to disable open registration (first-admin setup remains allowed); recommended behind a public nginx reverse proxy |
+| `APP_ALLOW_REGISTRATION` | `false` | Registration is enabled only when explicitly set to `true`; unset and all other values stay closed, including first-admin setup |
 
 Custom configuration example:
 
@@ -124,7 +128,7 @@ APP_AUTH_PASSWORD='replace-with-a-long-random-password' \
 npm start
 ```
 
-Production deployments must use HTTPS at a trusted reverse proxy. On first launch, the first registered user becomes the system administrator; later registrations are normal users. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
+Production deployments must use HTTPS at a trusted reverse proxy. For first-time setup, set `APP_ALLOW_REGISTRATION=true`; the first registered user becomes the system administrator. Afterwards, remove the variable or set it to `false` and restart the service. Explicitly enable it again only when more users need to register. Optional HTTP Basic Auth is only an additional deployment gateway, and its credentials are merely Base64 encoded. `/api/health` remains public for health checks, while business APIs require an in-app login.
 
 ## AI Provider Setup
 
@@ -141,7 +145,7 @@ New providers default to `10` concurrent requests, `10` RPM, and `32000` maximum
 - Application data is stored in `.data/novel.db` by default.
 - AI provider credentials are encrypted. The default master key is `.data/master.key`.
 - Back up both the database and the master key. Existing provider credentials cannot be decrypted if the master key is lost.
-- Scriverse does not include a user system. Server deployments use single-instance HTTP Basic Auth configured through environment variables, and production startup fails when credentials are missing.
+- Scriverse includes an in-app multi-user system, and the first registered user becomes an administrator. HTTP Basic Auth is an optional additional deployment gateway and does not replace application login.
 - The server listens on `127.0.0.1` by default. Non-loopback listening also requires authentication. Public entry points must use HTTPS, a trusted reverse proxy, and firewall access controls.
 - CSP, clickjacking protection, MIME sniffing protection, same-origin write validation, authentication and API rate limits, body/upload limits, and AI-provider SSRF protection are enabled by default.
 - SQLite values are bound through prepared statements. Dynamic SQL fragments are limited to server-controlled branches and never contain request input.
@@ -203,7 +207,7 @@ Expected response:
 {
   "data": {
     "status": "ok",
-    "version": "0.3.1",
+    "version": "0.3.3",
     "protocol": "openai-chat-completions"
   }
 }
@@ -212,6 +216,10 @@ Expected response:
 ## Project Status
 
 Scriverse is currently an MVP. APIs and data structures may still change. Back up the `.data` directory before upgrading.
+
+## Contributing
+
+Read the [contribution guide](docs/CONTRIBUTING.md) before submitting code or documentation. Start everyday changes from the latest `develop` branch and merge them through a Pull Request targeting `develop`.
 
 ## 🌟 Special Thanks
 
