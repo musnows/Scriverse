@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260720-login-firstpaint">
+    <link rel="stylesheet" href="/styles.css?v=20260720-captcha-lazy-load">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -28,11 +28,12 @@
           <div class="auth-captcha">
             <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="login-captcha-hint"></label>
             <button id="login-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">
-              <img id="login-captcha-image" alt="验证码图片">
+              <img id="login-captcha-image" alt="验证码图片" hidden>
+              <span id="login-captcha-placeholder" class="auth-captcha-placeholder">点击显示验证码</span>
             </button>
             <input id="login-captcha-id" name="captchaId" type="hidden" required>
           </div>
-          <p id="login-captcha-hint" class="auth-captcha-hint">点击图片可刷新</p>
+          <p id="login-captcha-hint" class="auth-captcha-hint">点击按钮显示验证码，显示后点击图片可刷新</p>
           <button class="primary-button" type="submit">登录</button>
         </form>
         <form id="register-form" class="auth-form hidden">
@@ -42,11 +43,12 @@
           <div class="auth-captcha">
             <label>验证码<input name="captchaAnswer" autocomplete="off" inputmode="text" maxlength="8" spellcheck="false" required aria-describedby="register-captcha-hint"></label>
             <button id="register-captcha-refresh" class="auth-captcha-image" type="button" aria-label="刷新验证码" title="刷新验证码">
-              <img id="register-captcha-image" alt="验证码图片">
+              <img id="register-captcha-image" alt="验证码图片" hidden>
+              <span id="register-captcha-placeholder" class="auth-captcha-placeholder">点击显示验证码</span>
             </button>
             <input id="register-captcha-id" name="captchaId" type="hidden" required>
           </div>
-          <p id="register-captcha-hint" class="auth-captcha-hint">点击图片可刷新</p>
+          <p id="register-captcha-hint" class="auth-captcha-hint">点击按钮显示验证码，显示后点击图片可刷新</p>
           <small>至少 10 个字符。系统中的第一个注册用户会自动成为管理员。</small>
           <button class="primary-button" type="submit">创建账户</button>
         </form>
@@ -544,6 +546,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260720-pending-until-route"></script>
+    <script type="module" src="/app.js?v=20260720-captcha-lazy-load"></script>
   </body>
 </html>
