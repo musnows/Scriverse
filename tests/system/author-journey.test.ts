@@ -214,9 +214,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-nav-icons');
-    expect(page.text).toContain('/styles.css?v=20260720-nav-icons');
-    expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
+    expect(page.text).toContain('/app.js?v=20260721-character-identity');
+    expect(page.text).toContain('/styles.css?v=20260721-character-identity');
+    expect(application.text).toContain('/relationship-graph.js?v=20260720-galaxy-tooltip');
+    expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
+    expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
+    expect(graph.text).toContain('statuses.push("待确认")');
+    expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
@@ -415,7 +419,10 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("Math.sqrt(node.degree / maxDegree)");
     expect(graph.text).toContain("export function getGalaxyNodeAppearance");
     expect(graph.text).toContain('button.dataset.relationshipTier = appearance.tier');
+    expect(graph.text).toContain('button.dataset.celestialType = appearance.celestialType');
+    expect(graph.text).not.toContain('button.title = `${node.degree} 条关系');
     expect(graph.text).toContain('button.style.setProperty("--node-color", appearance.color)');
+    expect(graph.text).toContain("getGalaxyNodeDepthOpacity(point.depth)");
     expect(graph.text).toContain("initialNodePositions");
     expect(styles.text).toContain(".book-shelf");
     expect(styles.text).toContain(".galaxy-dialog");
@@ -423,6 +430,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("grid-template-rows: var(--node-size) auto");
     expect(styles.text).toContain("--node-color");
     expect(styles.text).toContain("--node-brightness");
+    expect(styles.text).toContain('[data-celestial-type="ringed"]');
+    expect(application.text).toContain('id="create-character-audit-task"');
+    expect(application.text).toContain("data-merge-review");
+    expect(application.text).toContain("data-keep-characters-separate");
+    expect(styles.text).toContain(".character-duplicate-pair");
   });
 
   it("从导入作品到采纳续写、抽取时间轴并安全导出", async () => {

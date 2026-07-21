@@ -415,8 +415,10 @@ describe("AI 供应商、模型与建议 API", () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { tool_choice?: string };
-      if (body.tool_choice === "none") {
+      const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }>; tools?: unknown[]; tool_choice?: string };
+      if (!body.tools) {
+        expect(body.tool_choice).toBeUndefined();
+        expect(body.messages?.at(-1)?.content).toContain("严格遵守最初用户消息要求的输出格式");
         return new Response(JSON.stringify({ choices: [{ message: { content: "已基于六轮工具结果回答。" } }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: `round-${completionCount}`, type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });
