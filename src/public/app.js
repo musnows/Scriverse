@@ -18,6 +18,7 @@ import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-re
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
+import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 
 const state = {
   user: null,
@@ -3988,10 +3989,17 @@ function openReviewDialog() {
 
 function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
-  openDialog("开始 AI 分析", field("taskType", "分析类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["character-identity-audit", "AI 角色查重"], ["timeline-analysis", "时间轴与事件抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书综合分析"]]) + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+  const defaultTaskType = ANALYSIS_TYPES[0].value;
+  const taskTypeField = `<div class="form-field analysis-type-field"><label>分析类型<select name="taskType" aria-describedby="analysis-type-description">${ANALYSIS_TYPES.map(({ value, label }) => `<option value="${esc(value)}" ${value === defaultTaskType ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label><p id="analysis-type-description" class="analysis-type-description" aria-live="polite">${esc(analysisTypeDescription(defaultTaskType))}</p></div>`;
+  openDialog("开始 AI 分析", taskTypeField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
     const scope = form.get("taskType") === "character-identity-audit" || form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
+  });
+  const taskTypeSelect = $("#dialog-fields").querySelector('select[name="taskType"]');
+  const description = $("#analysis-type-description");
+  taskTypeSelect.addEventListener("change", () => {
+    description.textContent = analysisTypeDescription(taskTypeSelect.value);
   });
 }
 
