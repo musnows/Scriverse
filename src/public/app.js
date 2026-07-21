@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260720-galaxy-tooltip";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260721-release-0.3.6";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260717-markdown-table-scrollbar";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -17,6 +17,7 @@ import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSou
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
+import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 
 const state = {
   user: null,
@@ -2346,7 +2347,7 @@ async function renderCharacters() {
     return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
     <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
-    ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(item.species)}</span></div>` : ""}
+    ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
@@ -2384,13 +2385,20 @@ async function renderRaces() {
     api(`/api/works/${state.work.id}/races`),
     api(`/api/works/${state.work.id}/characters`)
   ]);
-  $("#module-content").innerHTML = state.races.length ? `<div class="card-grid race-grid">${state.races.map((item) => `
-    <article class="record-card race-card"><small>${item.memberIds.length} 位角色 · ${item.settings.length} 条共同设定</small>
-      <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写种族简介")}</p>
-      <div class="race-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无共同设定</span>'}</div>
-      <p class="race-members">角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
-    </article>`).join("")}</div>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
+  const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
+    <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
+    <div class="race-tree-branch">
+      <article class="record-card race-card"><small>${item.memberIds.length} 位直接角色 · ${item.settings.length} 条自身设定</small>
+        <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
+        <p>${esc(item.description || "尚未填写种族简介")}</p>
+        <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<span class="pill${setting.inherited ? " inherited" : ""}" title="${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}">${esc(setting.value)}<small>${esc(setting.sourceRaceName)}</small></span>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
+        <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
+        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+      </article>
+      ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
+    </div>
+  </details>`;
+  $("#module-content").innerHTML = state.races.length ? `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
@@ -3412,7 +3420,7 @@ async function refreshRelationshipSurfaces(characterId = null) {
 }
 
 function renderCharacterEditorFields(item) {
-  const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, race.name])];
+  const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, racePathLabel(race)])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
   const chapterOptions = [["", "未指定"], ...(state.work?.volumes ?? []).flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]))];
   const stateEntries = characterStateEntries(item?.currentState ?? {});
@@ -3611,14 +3619,18 @@ async function openCharacterDialog(item) {
 async function openRaceDialog(item) {
   state.characters = await api(`/api/works/${state.work.id}/characters`);
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
+  const parentOptions = [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
+    .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
+    .map((race) => [race.id, racePathLabel(race)])];
   openDialog(item ? "编辑种族" : "新建种族",
     field("name", "种族名称", "text", item?.name) +
+    field("parentRaceId", "父种族", "select", item?.parentRaceId ?? "", parentOptions) +
     field("description", "种族简介", "textarea", item?.description) +
     field("settings", "种族共同设定（逐条填写）", "item-list", item?.settings ?? []) +
     (memberOptions.length ? field("memberIds", "属于该种族的角色（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
     async (form) => {
       const settings = form.getAll("settings").map((value) => String(value).trim()).filter(Boolean);
-      const body = { name: form.get("name"), description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };
+      const body = { name: form.get("name"), parentRaceId: form.get("parentRaceId") || null, description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };
       await api(item ? `/api/races/${item.id}` : `/api/works/${state.work.id}/races`, { method: item ? "PATCH" : "POST", body });
       await renderRaces();
       await loadAiReferences();

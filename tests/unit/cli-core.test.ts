@@ -48,6 +48,8 @@ describe("Scriverse CLI 核心", () => {
       expect(cliResourceDefinitions[type].create.example).toBeTruthy();
       expect(cliResourceDefinitions[type].update.example).toBeTruthy();
     }
+    expect(cliResourceDefinitions.race.create.properties.parentRaceId).toBe("父种族 ID 或 null");
+    expect(cliResourceDefinitions.race.update.properties.parentRaceId).toBe("新父种族 ID 或 null");
   });
 
   it("登录仅在校验 API Key 后写入 0600 配置，并可查询与退出", async () => {

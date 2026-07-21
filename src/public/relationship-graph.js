@@ -161,9 +161,13 @@ export function resolveRelationshipNodeGroup(node) {
     .map((item) => String(item?.name ?? item ?? "").trim())
     .find(Boolean);
   const species = String(node?.species ?? "").trim();
+  const rootSpecies = String(node?.rootSpecies ?? "").trim();
   const identity = String(node?.identity ?? "").trim();
   if (orgName) return { type: "organization", key: `org:${orgName}`, label: orgName };
-  if (species) return { type: "species", key: `species:${species}`, label: species };
+  if (rootSpecies || species) {
+    const groupSpecies = rootSpecies || species;
+    return { type: "species", key: `species:${groupSpecies}`, label: groupSpecies };
+  }
   if (identity) return { type: "identity", key: `identity:${identity}`, label: identity };
   return { type: "default", key: "default", label: "未分组" };
 }
@@ -228,6 +232,7 @@ export function buildRelationshipGraph(characters, relationships) {
       name: String(character.name),
       aliases: Array.isArray(character.aliases) ? character.aliases : [],
       species: String(character.species ?? ""),
+      rootSpecies: String(character.race?.lineage?.[0]?.name ?? character.species ?? ""),
       identity: String(character.attributes?.identity ?? ""),
       organizations,
       locked: Array.isArray(character.lockedFields) && character.lockedFields.length > 0,

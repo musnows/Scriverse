@@ -112,6 +112,7 @@ type OrganizationInput = {
 
 type RaceInput = {
   name: string;
+  parentRaceId?: string | null;
   description?: string;
   settings?: string[];
   memberIds?: string[];
@@ -244,7 +245,14 @@ export class Store {
       scope: entity.scope,
       authorNote: entity.authorNote
     };
-    if (type === "race" || type === "organization") return {
+    if (type === "race") return {
+      name: entity.name,
+      parentRaceId: entity.parentRaceId,
+      description: entity.description,
+      settings: entity.settings,
+      memberIds: entity.memberIds
+    };
+    if (type === "organization") return {
       name: entity.name,
       description: entity.description,
       settings: entity.settings,
@@ -1992,16 +2000,19 @@ export class Store {
     const normalizedName = normalizeCharacterName(name);
     if (!normalizedName) throw new AppError(400, "RACE_NAME_REQUIRED", "种族名称不能为空");
     this.assertRaceNameAvailable(workId, normalizedName);
+    const parentRaceId = input.parentRaceId ?? null;
+    this.assertRaceParent(workId, parentRaceId, raceId);
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO races (id, work_id, name, normalized_name, description, settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         raceId,
         workId,
+        parentRaceId,
         name,
         normalizedName,
         input.description ?? "",
@@ -2043,6 +2054,10 @@ export class Store {
     const normalizedName = normalizeCharacterName(name);
     if (!normalizedName) throw new AppError(400, "RACE_NAME_REQUIRED", "种族名称不能为空");
     this.assertRaceNameAvailable(workId, normalizedName, raceId);
+    const parentRaceId = input.parentRaceId === undefined
+      ? current.parentRaceId as string | null
+      : input.parentRaceId;
+    this.assertRaceParent(workId, parentRaceId, raceId);
     const memberIds = input.memberIds === undefined ? null : [...new Set(input.memberIds)];
     if (memberIds) this.assertCharactersInWork(workId, memberIds);
     const nameChanged = name !== current.name;
@@ -2052,7 +2067,8 @@ export class Store {
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
     this.db.transaction(() => {
       this.db.run(
-        `UPDATE races SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        parentRaceId,
         name,
         normalizedName,
         input.description ?? String(current.description),
@@ -2071,6 +2087,10 @@ export class Store {
 
   deleteRace(raceId: string): void {
     const current = this.getRace(raceId);
+    const child = this.db.get("SELECT id FROM races WHERE parent_race_id = ? LIMIT 1", raceId);
+    if (child) {
+      throw new AppError(409, "RACE_HAS_CHILDREN", "该种族仍有子种族，请先迁移或删除子种族", { raceId: requiredString(child, "id") });
+    }
     const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
     this.db.transaction(() => {
       this.recordEntityVersion("race", raceId, "delete", null, "删除种族档案");
@@ -2089,6 +2109,8 @@ export class Store {
   }
 
   private mapRace(row: Row): Record<string, unknown> {
+    const raceId = requiredString(row, "id");
+    const lineage = this.raceLineage(raceId);
     const members = this.db.all("SELECT id, name FROM characters WHERE race_id = ? ORDER BY name", requiredString(row, "id")).map((member) => ({
       characterId: requiredString(member, "id"),
       name: requiredString(member, "name")
@@ -2096,9 +2118,17 @@ export class Store {
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
+      parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       settings: json(requiredString(row, "settings_json"), []),
+      lineage: lineage.map((item) => ({ id: item.id, name: item.name })),
+      effectiveSettings: lineage.flatMap((item, index) => item.settings.map((value) => ({
+        value,
+        sourceRaceId: item.id,
+        sourceRaceName: item.name,
+        inherited: index < lineage.length - 1
+      }))),
       memberIds: members.map((member) => member.characterId),
       members,
       createdAt: requiredString(row, "created_at"),
@@ -2118,6 +2148,43 @@ export class Store {
     const race = this.getRace(raceId);
     if (race.workId !== workId) throw new AppError(400, "RACE_WORK_MISMATCH", "角色绑定的种族不属于当前作品");
     return race;
+  }
+
+  private assertRaceParent(workId: string, parentRaceId: string | null, raceId: string): void {
+    if (!parentRaceId) return;
+    const seen = new Set<string>();
+    let currentId: string | null = parentRaceId;
+    while (currentId) {
+      if (currentId === raceId || seen.has(currentId)) {
+        throw new AppError(409, "RACE_HIERARCHY_CYCLE", "父种族不能是当前种族或其后代");
+      }
+      seen.add(currentId);
+      const row = this.db.get("SELECT id, work_id, parent_race_id FROM races WHERE id = ?", currentId);
+      if (!row) throw notFound("父种族");
+      if (requiredString(row, "work_id") !== workId) {
+        throw new AppError(400, "RACE_PARENT_WORK_MISMATCH", "父种族不属于当前作品");
+      }
+      currentId = optionalString(row, "parent_race_id");
+    }
+  }
+
+  private raceLineage(raceId: string): Array<{ id: string; name: string; settings: string[] }> {
+    const lineage: Array<{ id: string; name: string; settings: string[] }> = [];
+    const seen = new Set<string>();
+    let currentId: string | null = raceId;
+    while (currentId) {
+      if (seen.has(currentId)) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级存在循环");
+      seen.add(currentId);
+      const row = this.db.get("SELECT id, name, settings_json, parent_race_id FROM races WHERE id = ?", currentId);
+      if (!row) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级引用了不存在的父种族");
+      lineage.push({
+        id: requiredString(row, "id"),
+        name: requiredString(row, "name"),
+        settings: json<string[]>(requiredString(row, "settings_json"), [])
+      });
+      currentId = optionalString(row, "parent_race_id");
+    }
+    return lineage.reverse();
   }
 
   private replaceRaceMembers(raceId: string, raceName: string, memberIds: string[]): void {
@@ -2613,15 +2680,20 @@ export class Store {
       note: requiredString(item, "note")
     }));
     const raceId = optionalString(row, "race_id");
-    const race = raceId ? this.db.get("SELECT id, name FROM races WHERE id = ?", raceId) : undefined;
-    const species = race ? requiredString(race, "name") : requiredString(row, "species");
+    const race = raceId ? this.getRace(raceId) : undefined;
+    const species = race ? String(race.name) : requiredString(row, "species");
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
-      raceId: race ? requiredString(race, "id") : null,
-      race: race ? { id: requiredString(race, "id"), name: species } : null,
+      raceId: race ? String(race.id) : null,
+      race: race ? {
+        id: String(race.id),
+        name: species,
+        lineage: race.lineage,
+        effectiveSettings: race.effectiveSettings
+      } : null,
       species,
       organizationIds: organizations.map((organization) => organization.organizationId),
       organizations,
@@ -3938,13 +4010,18 @@ export class Store {
       pattern,
       pattern
     );
-    const races = this.db.all(
-      "SELECT id, name, description, settings_json FROM races WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern,
-      pattern
-    );
+    const normalizedQuery = query.toLocaleLowerCase("zh-CN");
+    const races = this.listRaces(workId).filter((race) => {
+      const lineage = race.lineage as Array<{ name: string }>;
+      const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
+      return [
+        race.name,
+        race.description,
+        ...(race.settings as string[]),
+        ...lineage.map((item) => item.name),
+        ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
+      ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+    }).slice(0, 50);
     const settings = this.db.all(
       "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
@@ -3952,8 +4029,26 @@ export class Store {
       pattern
     );
     const characters = this.db.all(
-      "SELECT id, name, aliases_json, species FROM characters WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR aliases_json LIKE ? ESCAPE '\\' OR species LIKE ? ESCAPE '\\') LIMIT 50",
+      `WITH RECURSIVE character_race_lineage(character_id, race_id, parent_race_id, name, path) AS (
+         SELECT character.id, race.id, race.parent_race_id, race.name, race.name
+         FROM characters character JOIN races race ON race.id = character.race_id
+         WHERE character.work_id = ?
+         UNION ALL
+         SELECT lineage.character_id, parent.id, parent.parent_race_id, parent.name, parent.name || ' / ' || lineage.path
+         FROM character_race_lineage lineage JOIN races parent ON parent.id = lineage.parent_race_id
+       ), character_race_paths AS (
+         SELECT character_id, path FROM character_race_lineage WHERE parent_race_id IS NULL
+       )
+       SELECT character.id, character.name, character.aliases_json, character.species,
+              COALESCE(path.path, character.species) AS race_path
+       FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
+       WHERE character.work_id = ? AND (
+         character.name LIKE ? ESCAPE '\\' OR character.aliases_json LIKE ? ESCAPE '\\' OR character.species LIKE ? ESCAPE '\\'
+         OR EXISTS (SELECT 1 FROM character_race_lineage lineage WHERE lineage.character_id = character.id AND lineage.name LIKE ? ESCAPE '\\')
+       ) LIMIT 50`,
       workId,
+      workId,
+      pattern,
       pattern,
       pattern,
       pattern
@@ -3971,9 +4066,26 @@ export class Store {
       return content.slice(start, start + 120);
     };
     return [
-      ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: [requiredString(row, "species"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、") })),
+      ...characters.map((row) => ({
+        type: "character",
+        id: requiredString(row, "id"),
+        title: requiredString(row, "name"),
+        snippet: [requiredString(row, "race_path"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、"),
+        racePath: requiredString(row, "race_path")
+      })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
-      ...races.map((row) => ({ type: "race", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
+      ...races.map((race) => {
+        const lineage = race.lineage as Array<{ id: string; name: string }>;
+        const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceId: string; sourceRaceName: string; inherited: boolean }>;
+        return {
+          type: "race",
+          id: String(race.id),
+          title: String(race.name),
+          snippet: snippet(`${lineage.map((item) => item.name).join(" / ")}\n${String(race.description)}\n${effectiveSettings.map((item) => `${item.sourceRaceName}：${item.value}`).join("\n")}`),
+          lineage,
+          effectiveSettings
+        };
+      }),
       ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
       ...chapters.map((row) => ({ type: "chapter", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), volumeId: requiredString(row, "volume_id") }))
     ];
@@ -3982,7 +4094,7 @@ export class Store {
   exportWork(workId: string): Record<string, unknown> {
     const tree = this.getWorkTree(workId);
     return {
-      schemaVersion: 6,
+      schemaVersion: 7,
       exportedAt: now(),
       work: tree,
       settings: this.listSettings(workId),

@@ -81,6 +81,28 @@ describe("AI 上下文组装", () => {
     expect(() => builder.build(String(first.work.id), { type: "chapter", chapterId: String(second.chapter.id) })).toThrow("章节不属于当前作品");
   });
 
+  it("为主动引用角色带入完整种族路径和继承设定来源", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work } = await seedChapter(runtime);
+    const titan = runtime.store.createRace(String(work.id), { name: "泰坦", settings: ["体型巨大"] });
+    const original = runtime.store.createRace(String(work.id), {
+      name: "原生泰坦",
+      parentRaceId: String(titan.id),
+      settings: ["源自远古"]
+    });
+    const character = runtime.store.createCharacter(String(work.id), { name: "哥斯拉", raceId: String(original.id) });
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "entities",
+      characterIds: [String(character.id)]
+    });
+
+    expect(context).toContain("种族路径=泰坦 / 原生泰坦");
+    expect(context).toContain('"source":"泰坦","value":"体型巨大"');
+    expect(context).toContain('"source":"原生泰坦","value":"源自远古"');
+  });
+
   it("无上下文范围不隐式引用作品内容，但保留主动添加的引用", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);
