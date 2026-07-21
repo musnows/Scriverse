@@ -3458,9 +3458,24 @@ function scheduleCharacterSectionPreview() {
   }, 260);
 }
 
+async function closeCharacterSectionEditor() {
+  if (characterSectionPreviewTimer !== null) {
+    clearTimeout(characterSectionPreviewTimer);
+    characterSectionPreviewTimer = null;
+  }
+  await discardPendingCharacterAttachments();
+  const dialog = $("#character-section-editor-dialog");
+  if (dialog.open) dialog.close();
+}
+
 function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
-  return `<section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
+  return `<div class="character-section-editor-shell">
+    <header class="character-section-editor-header">
+      <div><span class="eyebrow">人物 Markdown 档案</span><h2 id="character-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建档案章节"}</h2></div>
+      <button class="dialog-close" type="button" data-character-section-edit-close aria-label="关闭 Markdown 章节编辑器">×</button>
+    </header>
+    <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
     <div class="character-markdown-editor-meta">
       <label>章节类型<select id="character-section-type">${options}</select></label>
       <label>章节标题<input id="character-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：背景故事" required></label>
@@ -3475,16 +3490,24 @@ function characterSectionEditorHtml(section = null) {
       <label>Markdown 原文<textarea id="character-section-markdown" maxlength="500000" spellcheck="true" placeholder="支持标题、列表、引用、表格、链接和图片">${esc(section?.contentMarkdown ?? "")}</textarea></label>
       <div><span class="character-markdown-preview-label">安全预览</span><article id="character-section-preview" class="character-markdown-document message-body">${renderMarkdown(section?.contentMarkdown ?? "") || '<p class="character-markdown-empty">预览区域暂无内容。</p>'}</article></div>
     </div>
-    <label class="character-markdown-change-note">版本说明<input id="character-section-change-note" maxlength="500" placeholder="可选，例如：补充远古时期经历"></label>
-    <div class="character-markdown-editor-actions"><button type="button" data-character-section-edit-cancel>取消</button><button type="button" class="primary-button" data-character-section-edit-save>${section ? "保存章节版本" : "创建章节"}</button></div>
-  </section>`;
+    <div class="character-markdown-editor-footer">
+      <label class="character-markdown-change-note">版本说明<input id="character-section-change-note" maxlength="500" placeholder="可选，例如：补充远古时期经历"></label>
+      <div class="character-markdown-editor-actions"><button type="button" data-character-section-edit-cancel>取消</button><button type="button" class="primary-button" data-character-section-edit-save>${section ? "保存章节版本" : "创建章节"}</button></div>
+    </div>
+    </section>
+  </div>`;
 }
 
 async function openCharacterSectionEditor(section = null) {
   await discardPendingCharacterAttachments();
-  const host = $("#character-markdown-sections");
-  if (!host) return;
+  const dialog = $("#character-section-editor-dialog");
+  const host = $("#character-section-editor-host");
   host.innerHTML = characterSectionEditorHtml(section);
+  dialog.showModal();
+  dialog.oncancel = (event) => {
+    event.preventDefault();
+    void closeCharacterSectionEditor();
+  };
   const textarea = $("#character-section-markdown");
   textarea.addEventListener("input", scheduleCharacterSectionPreview);
   $("#character-section-attachment").addEventListener("change", async (event) => {
@@ -3514,10 +3537,8 @@ async function openCharacterSectionEditor(section = null) {
       input.value = "";
     }
   });
-  host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", async () => {
-    await discardPendingCharacterAttachments();
-    renderCharacterMarkdownSections();
-  });
+  host.querySelector("[data-character-section-edit-close]").addEventListener("click", () => void closeCharacterSectionEditor());
+  host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-save]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const title = $("#character-section-title").value.trim();
@@ -3544,6 +3565,7 @@ async function openCharacterSectionEditor(section = null) {
       characterSectionPendingAttachments = [];
       await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
       characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
+      dialog.close();
       renderCharacterMarkdownSections();
       await Promise.all([renderCharacters(), loadAiReferences()]);
       toast(section ? `“${saved.title}”已保存为 v${saved.versionNo}` : `已创建“${saved.title}”`);
