@@ -97,7 +97,7 @@ describe("分析任务自动运行", () => {
       autoRunBatchLimit: 20,
       bookSummaryContextPercent: 50,
       contextCompactThreshold: 85,
-      agentTools: ["story_index", "read_chapters", "query_story_knowledge", "grep"]
+      agentTools: ["story_index", "read_chapters", "query_story_knowledge", "grep", "read_character_sections"]
     });
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({

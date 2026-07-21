@@ -44,4 +44,13 @@ describe("侧边栏 Markdown 渲染", () => {
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(html).not.toContain("<img");
   });
+
+  it("渲染内部附件图片并拒绝不安全图片地址", () => {
+    const html = renderMarkdown("###### 档案图\n\n![魔克拉](attachment://attachment_safe-1)\n\n![危险](javascript:alert(1))");
+
+    expect(html).toContain("<h6>档案图</h6>");
+    expect(html).toContain('src="/api/attachments/attachment_safe-1/content"');
+    expect(html).toContain('alt="魔克拉"');
+    expect(html).not.toContain('src="javascript:');
+  });
 });
