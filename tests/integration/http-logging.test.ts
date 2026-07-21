@@ -7,7 +7,7 @@ import { accountReference, createLogger, type LogRecord } from "../../src/logger
 describe("HTTP 请求日志", () => {
   it("记录请求进入和完成状态，同时隐藏账户路径、查询令牌和认证头", async () => {
     const records: LogRecord[] = [];
-    const log = createLogger({ level: "info", write: (_level, record) => records.push(record) });
+    const log = createLogger({ level: "debug", write: (_level, record) => records.push(record) });
     const app = express();
     app.use(createRequestLoggingMiddleware(log));
     app.get("/api/users/:userId", (incoming, response) => {
@@ -51,7 +51,7 @@ describe("HTTP 请求日志", () => {
 
   it("隐藏作品成员路由中的账户 ID", async () => {
     const records: LogRecord[] = [];
-    const log = createLogger({ level: "info", write: (_level, record) => records.push(record) });
+    const log = createLogger({ level: "debug", write: (_level, record) => records.push(record) });
     const app = express();
     app.use(createRequestLoggingMiddleware(log));
     app.delete("/api/works/:workId/members/:userId", (_request, response) => response.status(204).end());
@@ -60,5 +60,17 @@ describe("HTTP 请求日志", () => {
 
     expect(records[0]).toMatchObject({ path: "/api/works/work-1/members/[REDACTED]" });
     expect(JSON.stringify(records)).not.toContain("private-member-id");
+  });
+
+  it("默认 info 级别不记录正常请求生命周期", async () => {
+    const records: LogRecord[] = [];
+    const log = createLogger({ level: "info", write: (_level, record) => records.push(record) });
+    const app = express();
+    app.use(createRequestLoggingMiddleware(log));
+    app.get("/api/health", (_request, response) => response.status(200).json({ data: { ok: true } }));
+
+    await request(app).get("/api/health").expect(200);
+
+    expect(records).toEqual([]);
   });
 });
