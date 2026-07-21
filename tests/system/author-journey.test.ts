@@ -214,7 +214,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260720-nav-icons');
+    expect(page.text).toContain('/app.js?v=20260721-character-markdown');
     expect(page.text).toContain('/styles.css?v=20260720-nav-icons');
     expect(application.text).toContain('/relationship-graph.js?v=20260719-group-relation-list');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
@@ -263,8 +263,12 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("export function renderMarkdown");
     expect(markdown.text).toContain("safeLinkTarget");
     expect(markdown.text).toContain("renderMarkdownTable");
-    expect(application.text).toContain('/markdown.js?v=20260717-markdown-table-scrollbar');
+    expect(application.text).toContain('/markdown.js?v=20260721-character-attachments');
+    expect(application.text).toContain('id="character-section-markdown"');
+    expect(application.text).toContain("attachment://${attachment.id}");
+    expect(application.text).toContain("read_character_sections");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(styles.text).toContain(".character-markdown-compose");
     expect(styles.text).toContain("scrollbar-gutter: stable");
     expect(styles.text).toContain("white-space: nowrap");
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");

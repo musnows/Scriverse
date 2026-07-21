@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260719-group-relation-list";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260717-markdown-table-scrollbar";
+import { renderMarkdown } from "/markdown.js?v=20260721-character-attachments";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
@@ -11,7 +11,7 @@ import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-ti
 import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
-import { buildCharacterDetails, buildCharacterSections, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
+import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
@@ -462,6 +462,9 @@ let characterEditorItem = null;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
+let characterEditorSections = [];
+let characterSectionPreviewTimer = null;
+let characterSectionPendingAttachments = [];
 let entityHistoryContext = null;
 
 function setModuleNavExpanded(expanded) {
@@ -827,14 +830,16 @@ const AI_TOOL_DISPLAY_NAMES = {
   story_index: "作品目录与章节概要",
   read_chapters: "读取章节",
   grep: "查询正文关键字",
-  query_story_knowledge: "查询作品知识"
+  query_story_knowledge: "查询作品知识",
+  read_character_sections: "读取人物 Markdown 章节"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
   story_index: "分页读取当前作品的卷章目录和章节概要。",
   read_chapters: "读取指定章节的概要、正文或两者。",
   grep: "查询正文关键字所在的完整段落及章节信息。",
-  query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。"
+  query_story_knowledge: "按关键词查询设定、人物、组织、时间线等作品知识。",
+  read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。"
 };
 
 let aiFeedScrollFrame = null;
@@ -2340,7 +2345,6 @@ async function renderCharacters() {
   ]);
   $("#module-content").innerHTML = state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
-    const sections = normalizeCharacterSections(item.profile?.sections);
     return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
     <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
@@ -2349,7 +2353,7 @@ async function renderCharacters() {
     ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
-    ${sections.length ? `<small class="character-section-count">${sections.length} 个设定章节</small>` : ""}
+    ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
     <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`;
   }).join("")}</div>`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。");
@@ -2716,11 +2720,15 @@ async function renderBookAiSettings() {
     api(`/api/works/${state.work.id}/task-defaults`)
   ]);
   const host = $("#module-content");
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "query_story_knowledge"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"]);
   host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="primary-button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="field-label"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label></div><div class="card-actions"><button id="save-book-summary-context-percent" class="primary-button">保存概要配额</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话长期记忆</h2><p>对话历史使用独立预算；达到阈值时先提醒，继续发送会把较早消息整理成带来源的结构化长期记忆，并尽量保留最近八条原文。</p></div></div><div class="field-label"><label class="context-compact-threshold-field">整理提醒阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话长期记忆整理提醒阈值"></label></div><div class="card-actions"><button id="save-context-compact-threshold" class="primary-button">保存整理阈值</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="query_story_knowledge" ${agentTools.has("query_story_knowledge") ? "checked" : ""}><span><strong>查询作品知识</strong><small>按关键词查询设定、人物、组织、时间线、关系、大纲和伏笔。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="primary-button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
   host.querySelector('input[name="agent-tool"][value="query_story_knowledge"]').closest("label").insertAdjacentHTML(
     "beforebegin",
     `<label><input name="agent-tool" type="checkbox" value="grep" ${agentTools.has("grep") ? "checked" : ""}><span><strong>查询正文关键字</strong><small>从段落索引查询关键字，默认返回前 20 条完整段落和章节信息。</small></span></label>`
+  );
+  host.querySelector('input[name="agent-tool"][value="query_story_knowledge"]').closest("label").insertAdjacentHTML(
+    "afterend",
+    `<label><input name="agent-tool" type="checkbox" value="read_character_sections" ${agentTools.has("read_character_sections") ? "checked" : ""}><span><strong>读取人物 Markdown 章节</strong><small>根据知识查询返回的章节 ID 精读人物背景、能力与经历原文。</small></span></label>`
   );
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
@@ -3349,6 +3357,216 @@ async function refreshRelationshipSurfaces(characterId = null) {
   await Promise.all(tasks);
 }
 
+const characterSectionTypeLabels = {
+  overview: "基本档案",
+  appearance: "外貌与生理",
+  abilities: "能力与弱点",
+  personality: "性格与行为",
+  ecology: "生态",
+  background: "背景故事",
+  history: "经历记录",
+  legends: "相关传说",
+  research: "研究记录",
+  notes: "作者备注",
+  custom: "自定义章节"
+};
+
+async function discardPendingCharacterAttachments() {
+  const pending = characterSectionPendingAttachments.splice(0);
+  await Promise.all(pending.map(async (attachmentId) => {
+    try { await api(`/api/attachments/${attachmentId}`, { method: "DELETE" }); } catch { /* 已被引用的附件由正常引用生命周期管理。 */ }
+  }));
+}
+
+function scheduleCharacterSectionPreview() {
+  if (characterSectionPreviewTimer !== null) clearTimeout(characterSectionPreviewTimer);
+  characterSectionPreviewTimer = window.setTimeout(() => {
+    characterSectionPreviewTimer = null;
+    const preview = $("#character-section-preview");
+    const content = $("#character-section-markdown");
+    if (preview && content) preview.innerHTML = renderMarkdown(content.value) || '<p class="character-markdown-empty">预览区域暂无内容。</p>';
+  }, 260);
+}
+
+function characterSectionEditorHtml(section = null) {
+  const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
+  return `<section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
+    <div class="character-markdown-editor-meta">
+      <label>章节类型<select id="character-section-type">${options}</select></label>
+      <label>章节标题<input id="character-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：背景故事" required></label>
+      <label class="character-markdown-summary-field">章节摘要<textarea id="character-section-summary" maxlength="20000" placeholder="用于角色列表和 AI 快速定位，不会替代正文">${esc(section?.summary ?? "")}</textarea></label>
+    </div>
+    <div class="character-markdown-toolbar">
+      <label class="ghost-button" for="character-section-attachment">上传并插入图片</label>
+      <input id="character-section-attachment" class="hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif">
+      <span>图片会优先转换为体积更小的无损 WebP</span>
+    </div>
+    <div class="character-markdown-compose">
+      <label>Markdown 原文<textarea id="character-section-markdown" maxlength="500000" spellcheck="true" placeholder="支持标题、列表、引用、表格、链接和图片">${esc(section?.contentMarkdown ?? "")}</textarea></label>
+      <div><span class="character-markdown-preview-label">安全预览</span><article id="character-section-preview" class="character-markdown-document message-body">${renderMarkdown(section?.contentMarkdown ?? "") || '<p class="character-markdown-empty">预览区域暂无内容。</p>'}</article></div>
+    </div>
+    <label class="character-markdown-change-note">版本说明<input id="character-section-change-note" maxlength="500" placeholder="可选，例如：补充远古时期经历"></label>
+    <div class="character-markdown-editor-actions"><button type="button" data-character-section-edit-cancel>取消</button><button type="button" class="primary-button" data-character-section-edit-save>${section ? "保存章节版本" : "创建章节"}</button></div>
+  </section>`;
+}
+
+async function openCharacterSectionEditor(section = null) {
+  await discardPendingCharacterAttachments();
+  const host = $("#character-markdown-sections");
+  if (!host) return;
+  host.innerHTML = characterSectionEditorHtml(section);
+  const textarea = $("#character-section-markdown");
+  textarea.addEventListener("input", scheduleCharacterSectionPreview);
+  $("#character-section-attachment").addEventListener("change", async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const input = event.currentTarget;
+    input.disabled = true;
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
+      if (!attachment.deduplicated) characterSectionPendingAttachments.push(String(attachment.id));
+      const imageLabel = file.name.replace(/[\]\r\n]/gu, "").trim() || "图片附件";
+      const insertion = `![${imageLabel}](attachment://${attachment.id})`;
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? start;
+      const prefix = start > 0 && !textarea.value.slice(0, start).endsWith("\n") ? "\n\n" : "";
+      const suffix = end < textarea.value.length && !textarea.value.slice(end).startsWith("\n") ? "\n\n" : "";
+      textarea.setRangeText(`${prefix}${insertion}${suffix}`, start, end, "end");
+      textarea.focus();
+      scheduleCharacterSectionPreview();
+      toast(attachment.storedMimeType === "image/webp" ? "图片已转换为无损 WebP 并插入" : "图片已插入；转换后未变小，因此保留原格式");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      input.disabled = false;
+      input.value = "";
+    }
+  });
+  host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", async () => {
+    await discardPendingCharacterAttachments();
+    renderCharacterMarkdownSections();
+  });
+  host.querySelector("[data-character-section-edit-save]").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const title = $("#character-section-title").value.trim();
+    if (!title) {
+      toast("请填写章节标题", "error");
+      $("#character-section-title").focus();
+      return;
+    }
+    button.disabled = true;
+    const contentMarkdown = textarea.value;
+    try {
+      const saved = await api(section ? `/api/character-sections/${section.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
+        method: section ? "PATCH" : "POST",
+        body: {
+          sectionType: $("#character-section-type").value,
+          title,
+          summary: $("#character-section-summary").value.trim(),
+          contentMarkdown,
+          ...(section ? { changeNote: $("#character-section-change-note").value.trim() } : {})
+        }
+      });
+      const referenced = new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]+)/gu)].map((match) => String(match[1])));
+      const unused = characterSectionPendingAttachments.filter((attachmentId) => !referenced.has(attachmentId));
+      characterSectionPendingAttachments = [];
+      await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
+      characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
+      renderCharacterMarkdownSections();
+      await Promise.all([renderCharacters(), loadAiReferences()]);
+      toast(section ? `“${saved.title}”已保存为 v${saved.versionNo}` : `已创建“${saved.title}”`);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
+}
+
+async function showCharacterSectionVersions(sectionId) {
+  const host = document.querySelector(`[data-character-section-versions-host="${CSS.escape(sectionId)}"]`);
+  if (!host) return;
+  host.innerHTML = '<p class="character-markdown-status">正在读取章节版本……</p>';
+  try {
+    const versions = await api(`/api/character-sections/${sectionId}/versions`);
+    host.innerHTML = `<div class="character-markdown-version-list">${versions.map((version) => `<article><div><strong>v${version.versionNo}</strong><time>${esc(formatDateTime(version.createdAt))}</time></div><p>${esc(version.changeNote || "未填写版本说明")}</p>${version.versionNo === characterEditorSections.find((item) => item.id === sectionId)?.versionNo ? '<button type="button" disabled>当前版本</button>' : `<button type="button" data-character-section-restore="${version.versionNo}">恢复此版本</button>`}</article>`).join("")}</div>`;
+    host.querySelectorAll("[data-character-section-restore]").forEach((button) => button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        await api(`/api/character-sections/${sectionId}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.characterSectionRestore) } });
+        characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
+        renderCharacterMarkdownSections();
+        await Promise.all([renderCharacters(), loadAiReferences()]);
+        toast("人物 Markdown 章节已恢复");
+      } catch (error) {
+        button.disabled = false;
+        toast(error.message, "error");
+      }
+    }));
+  } catch (error) {
+    host.innerHTML = `<p class="character-markdown-status">版本载入失败：${esc(error.message)}</p>`;
+  }
+}
+
+function renderCharacterMarkdownSections() {
+  const host = $("#character-markdown-sections");
+  if (!host) return;
+  if (!characterEditorItem?.id) {
+    host.innerHTML = '<div class="character-editor-empty-field"><b>Markdown 档案章节</b><span>创建人物档案后即可添加背景故事、能力、经历和研究记录。</span></div>';
+    return;
+  }
+  const toolbar = `<div class="character-markdown-list-toolbar"><div><b>Markdown 档案章节</b><span>长篇内容独立保存、渲染、检索和版本管理。</span></div>${canEditWork() ? '<button type="button" class="primary-button" data-character-section-create>新建章节</button>' : ""}</div>`;
+  const sections = characterEditorSections.map((section) => `<article class="character-markdown-section">
+    <header><div><span>${esc(characterSectionTypeLabels[section.sectionType] ?? section.sectionType)}</span><h4>${esc(section.title)}</h4>${section.summary ? `<p>${esc(section.summary)}</p>` : ""}</div><div>${canEditWork() ? `<button type="button" data-character-section-edit="${esc(section.id)}">编辑</button>` : ""}<button type="button" data-character-section-versions="${esc(section.id)}">版本</button>${canEditWork() ? `<button type="button" data-character-section-delete="${esc(section.id)}">删除</button>` : ""}</div></header>
+    <div class="character-markdown-document message-body">${renderMarkdown(section.contentMarkdown) || '<p class="character-markdown-empty">本章节暂无正文。</p>'}</div>
+    <div data-character-section-versions-host="${esc(section.id)}"></div>
+  </article>`).join("");
+  host.innerHTML = `${toolbar}${sections || '<p class="character-markdown-status">还没有 Markdown 档案章节。</p>'}`;
+  host.querySelector("[data-character-section-create]")?.addEventListener("click", () => void openCharacterSectionEditor());
+  host.querySelectorAll("[data-character-section-edit]").forEach((button) => button.addEventListener("click", () => {
+    const section = characterEditorSections.find((item) => item.id === button.dataset.characterSectionEdit);
+    if (section) void openCharacterSectionEditor(section);
+  }));
+  host.querySelectorAll("[data-character-section-versions]").forEach((button) => button.addEventListener("click", () => void showCharacterSectionVersions(button.dataset.characterSectionVersions)));
+  host.querySelectorAll("[data-character-section-delete]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.dataset.confirmed !== "true") {
+      button.dataset.confirmed = "true";
+      button.textContent = "确认删除";
+      window.setTimeout(() => {
+        if (button.isConnected && button.dataset.confirmed === "true") {
+          button.dataset.confirmed = "false";
+          button.textContent = "删除";
+        }
+      }, 5000);
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/character-sections/${button.dataset.characterSectionDelete}`, { method: "DELETE" });
+      characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
+      renderCharacterMarkdownSections();
+      await Promise.all([renderCharacters(), loadAiReferences()]);
+      toast("人物 Markdown 章节已删除");
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function loadCharacterMarkdownSections(characterId) {
+  characterEditorSections = [];
+  renderCharacterMarkdownSections();
+  try {
+    characterEditorSections = await api(`/api/characters/${characterId}/sections`);
+    if (characterEditorItem?.id === characterId) renderCharacterMarkdownSections();
+  } catch (error) {
+    const host = $("#character-markdown-sections");
+    if (host && characterEditorItem?.id === characterId) host.innerHTML = `<p class="character-markdown-status">章节载入失败：${esc(error.message)}</p>`;
+  }
+}
+
 function renderCharacterEditorFields(item) {
   const raceOptions = [["", "未指定"], ...state.races.map((race) => [race.id, race.name])];
   const organizationOptions = state.organizations.map((organization) => [organization.id, organization.name]);
@@ -3372,7 +3590,7 @@ function renderCharacterEditorFields(item) {
       field("summary", "人物简介", "textarea", item?.profile?.summary)),
     characterEditorSection("settings", "扩展设定", "可用短属性和 Markdown 长章节承载形态、能力、生态、经历与研究记录。",
       field("details", "扩展属性", "key-value-list", item?.attributes?.details) +
-      field("sections", "设定章节", "section-list", item?.profile?.sections)),
+      '<div id="character-markdown-sections" class="character-markdown-sections"></div>'),
     characterEditorSection("state", "状态与约束", "维护任意当前状态，并明确禁止 AI 自行覆盖的字段。",
       field("currentState", "当前状态", "key-value-list", stateEntries, {
         keyName: "stateKey",
@@ -3393,11 +3611,14 @@ function renderCharacterEditorFields(item) {
   if (name) name.required = true;
   bindDynamicListControls($("#character-editor-fields"));
   renderCharacterEditorRelationships();
+  renderCharacterMarkdownSections();
   activateCharacterEditorTab("basic");
 }
 
 function collectCharacterBody(form) {
   const item = characterEditorItem;
+  const profile = { ...(item?.profile ?? {}) };
+  delete profile.sections;
   return {
     name: String(form.get("name") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
@@ -3409,10 +3630,9 @@ function collectCharacterBody(form) {
       details: buildCharacterDetails(form.getAll("detailLabel"), form.getAll("detailValue"))
     },
     profile: {
-      ...(item?.profile ?? {}),
+      ...profile,
       motivation: String(form.get("motivation") ?? "").trim(),
-      summary: String(form.get("summary") ?? "").trim(),
-      sections: buildCharacterSections(form.getAll("sectionTitle"), form.getAll("sectionContent"))
+      summary: String(form.get("summary") ?? "").trim()
     },
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
@@ -3498,6 +3718,7 @@ async function openCharacterDialog(item) {
   characterEditorVersions = [];
   characterEditorRelationships = [];
   characterEditorRelationshipsLoading = Boolean(item);
+  characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
   $("#character-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
@@ -3543,7 +3764,10 @@ async function openCharacterDialog(item) {
     }
   };
   dialog.showModal();
-  if (item) void loadCharacterEditorRelationships(item.id);
+  if (item) {
+    void loadCharacterEditorRelationships(item.id);
+    void loadCharacterMarkdownSections(item.id);
+  }
 }
 
 async function openRaceDialog(item) {
@@ -4292,6 +4516,7 @@ $("#entity-history-close").addEventListener("click", () => $("#entity-history-di
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#character-editor-close").addEventListener("click", () => $("#character-editor-dialog").close());
 $("#character-editor-cancel").addEventListener("click", () => $("#character-editor-dialog").close());
+$("#character-editor-dialog").addEventListener("close", () => { void discardPendingCharacterAttachments(); });
 $("#character-history-button").addEventListener("click", () => {
   if ($("#character-history-panel").classList.contains("hidden")) void showCharacterHistory();
   else setCharacterHistoryVisible(false);
