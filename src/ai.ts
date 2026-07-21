@@ -815,7 +815,7 @@ export class AiManager {
     private readonly store: Store,
     private readonly vault: CredentialVault,
     private readonly fetchImpl: typeof fetch = fetch,
-    private readonly validateOutboundUrl?: (url: string) => Promise<void>
+    private readonly validateOutboundUrl?: (url: string) => Promise<readonly { address: string; family: 4 | 6 }[] | void>
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));

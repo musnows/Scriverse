@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
 import { AppError } from "../../src/errors.js";
 import { assertSafeAiEndpoint, fetchSafeAiEndpoint } from "../../src/security.js";
+
+const safePublicAddress = { address: "93.184.216.34", family: 4 as const };
+const validateTestEndpoint = async (candidate: string) => {
+  if (new URL(candidate).hostname === "127.0.0.1") return assertSafeAiEndpoint(candidate, false);
+  return [safePublicAddress];
+};
 
 describe("assertSafeAiEndpoint", () => {
   it("拒绝指向环回地址的供应商 URL", async () => {
@@ -10,7 +17,9 @@ describe("assertSafeAiEndpoint", () => {
   });
 
   it("允许公网 HTTPS 地址", async () => {
-    await expect(assertSafeAiEndpoint("https://example.com/v1")).resolves.toBeUndefined();
+    await expect(assertSafeAiEndpoint("https://example.com/v1")).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ family: expect.any(Number) })
+    ]));
   });
 });
 
@@ -31,7 +40,7 @@ describe("fetchSafeAiEndpoint", () => {
         fetchImpl,
         "https://evil.example/v1/models",
         { headers: { Authorization: "Bearer secret-key" } },
-        (candidate) => assertSafeAiEndpoint(candidate, false)
+        validateTestEndpoint
       )
     ).rejects.toBeInstanceOf(AppError);
 
@@ -59,7 +68,7 @@ describe("fetchSafeAiEndpoint", () => {
       fetchImpl,
       "https://example.com/start",
       { headers: { Authorization: "Bearer secret-key" } },
-      (candidate) => assertSafeAiEndpoint(candidate, false)
+      validateTestEndpoint
     );
 
     expect(response.status).toBe(200);
@@ -85,10 +94,29 @@ describe("fetchSafeAiEndpoint", () => {
       fetchImpl,
       "https://provider.example/v1/models",
       { headers: { Authorization: "Bearer secret-key" } },
-      (candidate) => assertSafeAiEndpoint(candidate, false)
+      validateTestEndpoint
     );
 
     expect(response.status).toBe(200);
     expect(seenAuth).toEqual(["Bearer secret-key", null]);
+  });
+
+  it("使用通过校验的地址建立实际连接", async () => {
+    const server = createServer((_request, response) => response.end("pinned"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("测试服务器未监听端口");
+
+    try {
+      const response = await fetchSafeAiEndpoint(
+        fetch,
+        `http://localhost:${address.port}/models`,
+        {},
+        async () => [{ address: "127.0.0.1", family: 4 }]
+      );
+      expect(await response.text()).toBe("pinned");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });
