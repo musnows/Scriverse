@@ -13,6 +13,7 @@ export const RESTORABLE_MODULES = Object.freeze([
 
 const moduleSet = new Set(RESTORABLE_MODULES);
 const returnViewSet = new Set(["shelf", "editor", "module", "welcome"]);
+const entityEditorSet = new Set(["setting", "character"]);
 
 function value(params, key) {
   return String(params.get(key) ?? "").trim();
@@ -41,6 +42,11 @@ export function serializePageRoute(route = {}) {
     params.set("view", "module");
     params.set("work", workId);
     params.set("module", route.module);
+  } else if (view === "entity-editor" && workId && entityEditorSet.has(route.entity)) {
+    params.set("view", "entity-editor");
+    params.set("work", workId);
+    params.set("entity", route.entity);
+    if (route.entityId) params.set("id", String(route.entityId));
   } else if (view === "welcome" && workId) {
     params.set("view", "welcome");
     params.set("work", workId);
@@ -69,6 +75,12 @@ export function parsePageRoute(hash = "") {
   if (view === "module" && workId) {
     const module = value(params, "module");
     return moduleSet.has(module) ? { view, workId, module } : { view: "shelf" };
+  }
+  if (view === "entity-editor" && workId) {
+    const entity = value(params, "entity");
+    if (!entityEditorSet.has(entity)) return { view: "shelf" };
+    const entityId = value(params, "id");
+    return { view, workId, entity, entityId: entityId || null };
   }
   if (view === "welcome" && workId) return { view, workId };
   if (view === "settings" || view === "platform-ai") {
