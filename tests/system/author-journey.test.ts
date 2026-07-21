@@ -203,6 +203,7 @@ describe("作者完整创作流程", () => {
   it("首屏书架、大纲伏笔、续写守卫和关系银河图资源完整可达", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
+    const analysisTypes = await request(runtime.app).get("/analysis-types.js").expect(200);
     const modelConfig = await request(runtime.app).get("/model-config.js").expect(200);
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
@@ -214,8 +215,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260721-release-0.3.6');
-    expect(page.text).toContain('/styles.css?v=20260721-release-0.3.6');
+    expect(page.text).toContain('/app.js?v=20260721-analysis-descriptions');
+    expect(page.text).toContain('/styles.css?v=20260721-analysis-descriptions');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -237,8 +238,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="api-key-reset-button"');
     expect(page.text).toContain("新 Key 仅显示一次");
     expect(application.text).toContain('api("/api/auth/api-key/reset"');
-    expect(application.text).toContain('["worldview-analysis", "世界观分析"]');
-    expect(application.text).toContain('["setting-extraction", "设定抽取"]');
+    expect(application.text).toContain('/analysis-types.js?v=20260721-analysis-descriptions');
+    expect(analysisTypes.text).toContain('label: "世界观分析"');
+    expect(analysisTypes.text).toContain('desc: "归纳正文中的自然、社会、历史、科技、文化等世界观维度，同时标出冲突和证据不足之处。"');
+    expect(styles.text).toContain(".analysis-type-description");
     expect(application.text).toContain('data-setting-status="confirmed"');
     expect(application.text).toContain('review: "已完成"');
     expect(application.text).not.toContain('review: "待审核"');
