@@ -46,6 +46,12 @@ describe("AI 上下文组装", () => {
       settings: ["成员以星图为信物"],
       memberIds: [String(character.id)]
     });
+    const profileSection = runtime.store.createCharacterProfileSection(String(character.id), {
+      sectionType: "background",
+      title: "远古背景",
+      summary: "角色曾守护旧航道。",
+      contentMarkdown: "不应自动载入的长篇正文标记 CHARACTER_SECTION_FULL_CONTENT"
+    });
 
     const context = new ContextBuilder(runtime.store).build(String(work.id), {
       type: "chapter",
@@ -59,6 +65,9 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("location=北港");
     expect(context).toContain("北港守望会");
     expect(context).toContain("成员以星图为信物");
+    expect(context).toContain(String(profileSection.id));
+    expect(context).toContain("远古背景");
+    expect(context).not.toContain("CHARACTER_SECTION_FULL_CONTENT");
     expect(context).toMatch(/(?:林舟 — 沈星|沈星 — 林舟)/u);
     expect(context).toContain("长期信任、失联重逢");
     expect(context).not.toContain("未经作者确认");

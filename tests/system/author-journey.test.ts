@@ -268,8 +268,12 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("export function renderMarkdown");
     expect(markdown.text).toContain("safeLinkTarget");
     expect(markdown.text).toContain("renderMarkdownTable");
-    expect(application.text).toContain('/markdown.js?v=20260717-markdown-table-scrollbar');
+    expect(application.text).toContain('/markdown.js?v=20260721-character-attachments');
+    expect(application.text).toContain('id="character-section-markdown"');
+    expect(application.text).toContain("attachment://${attachment.id}");
+    expect(application.text).toContain("read_character_sections");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
+    expect(styles.text).toContain(".character-markdown-compose");
     expect(styles.text).toContain("scrollbar-gutter: stable");
     expect(styles.text).toContain("white-space: nowrap");
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");

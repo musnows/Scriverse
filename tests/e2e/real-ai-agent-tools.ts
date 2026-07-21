@@ -16,6 +16,7 @@ type CompletionBody = {
 const checks: Array<{ feature: string; detail: string }> = [];
 let chapterIds: string[] = [];
 let otherWorkChapterId = "";
+let characterSectionId = "";
 let matrixVerified = false;
 let failureFeedbackVerified = false;
 let multiTurnVerified = false;
@@ -83,7 +84,7 @@ const mockAi = createServer(async (incoming, outgoing) => {
     const results = toolResults(body);
     if (joined.includes("E2E_TOOL_MATRIX")) {
       if (results.size === 0) {
-        assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "query_story_knowledge"]);
+        assert.deepEqual(body.tools?.map((tool) => tool.function?.name), ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"]);
         toolCalls(outgoing, [
           { id: "index-default", name: "story_index", arguments: {} },
           { id: "index-boundary", name: "story_index", arguments: JSON.stringify({ offset: 1, limit: 50 }) },
@@ -92,11 +93,12 @@ const mockAi = createServer(async (incoming, outgoing) => {
           { id: "chapter-both", name: "read_chapters", arguments: { chapterIds, include: "both" } },
           { id: "chapter-errors", name: "read_chapters", arguments: { chapterIds: [chapterIds[0], "missing-chapter", otherWorkChapterId] } },
           { id: "knowledge-default", name: "query_story_knowledge", arguments: { query: "跃迁" } },
-          { id: "knowledge-all", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } }
+          { id: "knowledge-all", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+          { id: "character-section", name: "read_character_sections", arguments: { sectionIds: [characterSectionId], include: "both" } }
         ]);
         return;
       }
-      assert.equal(results.size, 8);
+      assert.equal(results.size, 9);
       assert.deepEqual(object(object(results.get("index-default")).data).offset, 0);
       assert.equal(array(object(object(results.get("index-boundary")).data).chapters).length, 2);
       const summaryChapter = object(array(object(object(results.get("chapter-summary")).data).chapters)[0]);
@@ -113,8 +115,11 @@ const mockAi = createServer(async (incoming, outgoing) => {
       assert.equal(object(errorChapters[2]?.error).message, "The requested chapter belongs to a different work.");
       assert.deepEqual(object(results.get("knowledge-default")).ok, true);
       assert.equal(array(object(object(results.get("knowledge-all")).data).matches).length >= 1, true);
+      const characterSection = object(array(object(object(results.get("character-section")).data).sections)[0]);
+      assert.equal(characterSection.characterName, "哥斯拉");
+      assert.match(String(characterSection.contentMarkdown), /守护地球生态/u);
       matrixVerified = true;
-      completion(outgoing, { content: "模型已读取并正确处理全部八组工具结果。" });
+      completion(outgoing, { content: "模型已读取并正确处理全部九组工具结果。" });
       return;
     }
     if (joined.includes("E2E_TOOL_ERRORS")) {
@@ -235,6 +240,14 @@ try {
     chapterIds.push(String(chapter.id));
   }
   await api("POST", `/works/${workId}/settings`, { title: "跃迁冷却", category: "世界规则", content: "跃迁后必须冷却十二小时。", locked: true, status: "confirmed" });
+  const character = await api<JsonObject>("POST", `/works/${workId}/characters`, { name: "哥斯拉" });
+  const characterSection = await api<JsonObject>("POST", `/characters/${String(character.id)}/sections`, {
+    sectionType: "background",
+    title: "背景故事",
+    summary: "哥斯拉的远古经历",
+    contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。"
+  });
+  characterSectionId = String(characterSection.id);
   const otherWork = await api<JsonObject>("POST", "/works", { title: "隔离作品" });
   const otherVolume = await api<JsonObject>("POST", `/works/${String(otherWork.id)}/volumes`, { title: "外卷" });
   const otherChapter = await api<JsonObject>("POST", `/works/${String(otherWork.id)}/chapters`, { volumeId: String(otherVolume.id), title: "外章", content: "不得越权读取。" });
@@ -261,8 +274,8 @@ try {
     scope: { type: "chapter", chapterId: chapterIds[0] },
     modelId
   });
-  assert.equal(matrix.content, "模型已读取并正确处理全部八组工具结果。");
-  assert.equal(array(matrix.toolCalls).length, 8);
+  assert.equal(matrix.content, "模型已读取并正确处理全部九组工具结果。");
+  assert.equal(array(matrix.toolCalls).length, 9);
   assert.equal(matrixVerified, true);
   checked("tool-arguments", "all optional/default/boundary parameter combinations reached the model as structured results");
 
