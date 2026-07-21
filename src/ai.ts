@@ -78,6 +78,8 @@ type GenerateInput = {
   conversationId?: string;
   excludeConversationMessageId?: string;
   disableTools?: boolean;
+  agentToolIds?: AgentToolId[];
+  agentToolCallLimit?: number;
 };
 
 type GenerateResult = {
@@ -94,7 +96,7 @@ type GenerateResult = {
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
-const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge"] as const;
+const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 type CompletionMessage = AiMessage | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls: CompletionToolCall[] } | { role: "tool"; tool_call_id: string; content: string };
@@ -124,6 +126,7 @@ export type AiProcessStep = {
 
 const MAX_AGENT_TOOL_ROUNDS = 6;
 const MAX_AGENT_TOOL_CALLS = 12;
+const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
 const storyIndexArguments = z.object({
   offset: z.number().int().min(0).max(10_000).default(0),
   limit: z.number().int().min(1).max(50).default(20)
@@ -139,6 +142,10 @@ const grepArguments = z.object({
 const queryStoryKnowledgeArguments = z.object({
   query: z.string().trim().min(1).max(200),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([])
+}).strict();
+const readCharacterSectionsArguments = z.object({
+  sectionIds: z.array(z.string().min(1).max(300)).min(1).max(3),
+  include: z.enum(["summary", "content", "both"]).default("both")
 }).strict();
 
 const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
@@ -170,8 +177,16 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "query_story_knowledge",
-      description: "按关键词查询作品知识：设定、人物、种族、组织、时间线、关系、大纲和伏笔。结果为简要匹配项；需要正文时再调用 read_chapters。",
+      description: "按关键词查询作品知识：设定、人物及其 Markdown 档案章节、种族、组织、时间线、关系、大纲和伏笔。结果为简要匹配项；人物结果包含 sectionId 时可调用 read_character_sections 精读。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 } }, required: ["query"], additionalProperties: false }
+    }
+  },
+  read_character_sections: {
+    type: "function",
+    function: {
+      name: "read_character_sections",
+      description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 query_story_knowledge 获取 sectionId；每次最多读取 3 个章节。",
+      parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] } }, required: ["sectionIds"], additionalProperties: false }
     }
   }
 };
@@ -589,7 +604,13 @@ export class ContextBuilder {
         `选定角色：\n${characters
           .map((item) => {
             const attributes = item.attributes as Record<string, unknown>;
-            return `- ${String(item.name)}；种族=${String(item.species || attributes.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`;
+            const race = item.race as { lineage?: Array<{ name?: unknown }>; effectiveSettings?: Array<{ value?: unknown; sourceRaceName?: unknown }> } | null;
+            const racePath = race?.lineage?.map((entry) => String(entry.name ?? "")).filter(Boolean).join(" / ") || String(item.species || attributes.species) || "未填写";
+            const raceSettings = race?.effectiveSettings?.map((setting) => ({ source: String(setting.sourceRaceName ?? ""), value: String(setting.value ?? "") })) ?? [];
+            const profile = { ...(item.profile as Record<string, unknown>) };
+            delete profile.sections;
+            const sectionCatalog = this.store.listCharacterProfileSectionCatalog(String(item.id));
+            return `- ${String(item.name)}；种族路径=${racePath}；种族共同设定=${JSON.stringify(raceSettings)}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(profile)}；Markdown 档案目录=${JSON.stringify(sectionCatalog)}`;
           })
           .join("\n")}`
       );
@@ -1385,6 +1406,8 @@ export class AiManager {
         result = await this.runChapterAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "character-extraction" || taskType === "character-summary") {
         result = await this.runCharacterExtraction(workId, scope, modelId, taskId);
+      } else if (taskType === "character-identity-audit") {
+        result = await this.runCharacterIdentityAudit(workId, scope, modelId, taskId);
       } else if (taskType === "timeline-analysis") {
         result = await this.runTimelineAnalysis(workId, scope, modelId, taskId);
       } else if (taskType === "relationship-analysis") {
@@ -1578,15 +1601,15 @@ export class AiManager {
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId">, context: string): AiMessage[] {
+  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): AiMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
-    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType);
+    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds);
     const toolGuidance = enabledToolIds.length > 0
       ? [
           `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
-          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge。",
+          "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查询设定、人物、组织、时间线、关系、大纲或伏笔时调用 query_story_knowledge；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
         ].join("\n")
       : "";
@@ -1644,15 +1667,16 @@ export class AiManager {
     return this.buildContextPlan(input, model).context;
   }
 
-  private enabledAgentToolIds(workId: string, taskType: TaskType): AgentToolId[] {
-    if (taskType !== "chat") return [];
+  private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): AgentToolId[] {
+    if (taskType !== "chat" && requestedToolIds === undefined) return [];
     const enabled = new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
       .filter((item): item is AgentToolId => typeof item === "string" && AGENT_TOOL_IDS.includes(item as AgentToolId)));
-    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
+    const requested = requestedToolIds ? new Set(requestedToolIds) : null;
+    return AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId) && (!requested || requested.has(toolId)));
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[]): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType, requestedToolIds).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private executeAgentTool(workId: string, toolCall: CompletionToolCall): AgentToolCallResult {
@@ -1680,6 +1704,7 @@ export class AiManager {
       : name === "read_chapters" ? readChaptersArguments
       : name === "grep" ? grepArguments
       : name === "query_story_knowledge" ? queryStoryKnowledgeArguments
+      : name === "read_character_sections" ? readCharacterSectionsArguments
       : null;
     if (!schema) {
       return {
@@ -1782,6 +1807,33 @@ export class AiManager {
       ].filter((item) => allowed.has(item.type) && (!categories.size || categories.has(item.type)) && `${item.title} ${item.snippet}`.toLocaleLowerCase("zh-CN").includes(query.toLocaleLowerCase("zh-CN"))).slice(0, 20);
       return { id: toolCall.id, name, calledAt, arguments: { query, categories: categoryList }, status: "completed", result: { ok: true, data: { query, matches: [...matches, ...extra].slice(0, 30) } } };
     }
+    if (name === "read_character_sections") {
+      const { sectionIds, include } = args as z.infer<typeof readCharacterSectionsArguments>;
+      let remainingChars = 48_000;
+      const sections = sectionIds.map((sectionId) => {
+        try {
+          const section = this.store.getCharacterProfileSection(sectionId);
+          if (section.workId !== workId) return { sectionId, error: { code: "CHARACTER_SECTION_WORK_MISMATCH", message: "The requested character section belongs to a different work." } };
+          const content = String(section.contentMarkdown);
+          const excerpt = content.slice(0, Math.max(0, remainingChars));
+          remainingChars -= excerpt.length;
+          const character = this.store.getCharacter(String(section.characterId));
+          return {
+            sectionId,
+            characterId: section.characterId,
+            characterName: character.name,
+            title: section.title,
+            sectionType: section.sectionType,
+            versionNo: section.versionNo,
+            ...(include !== "content" ? { summary: section.summary } : {}),
+            ...(include !== "summary" ? { contentMarkdown: excerpt, contentTruncated: excerpt.length < content.length } : {})
+          };
+        } catch {
+          return { sectionId, error: { code: "CHARACTER_SECTION_NOT_FOUND", message: "The requested character section was not found." } };
+        }
+      });
+      return { id: toolCall.id, name, calledAt, arguments: { sectionIds, include }, status: "completed", result: { ok: true, data: { sections, contentLimitChars: 48_000 } } };
+    }
     throw new Error(`Unhandled agent tool: ${name}`);
   }
 
@@ -1812,7 +1864,7 @@ export class AiManager {
     const context = this.buildContext(input, model);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
-    const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType);
+    const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(model, messages, {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
@@ -1876,7 +1928,12 @@ export class AiManager {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
                   headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" },
-                  body: JSON.stringify({ model: stringValue(model, "model_id"), messages: completionMessages, ...parameters, ...(tools.length ? { tools, tool_choice: toolChoice } : {}) }),
+                  body: JSON.stringify({
+                    model: stringValue(model, "model_id"),
+                    messages: completionMessages,
+                    ...parameters,
+                    ...(tools.length && toolChoice === "auto" ? { tools, tool_choice: "auto" } : {})
+                  }),
                   signal: controller.signal
                 });
                 return { ok: response.ok, status: response.status, body: await response.text() };
@@ -1924,6 +1981,7 @@ export class AiManager {
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
       const processSteps: AiProcessStep[] = [];
+      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? MAX_AGENT_TOOL_CALLS, 1, MAX_CONFIGURED_AGENT_TOOL_CALLS));
       const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
         const reasoning = currentChoice?.message?.reasoning_content;
         if (reasoning?.trim()) {
@@ -1943,8 +2001,8 @@ export class AiManager {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
         const toolCalls = choice.message.tool_calls;
-        if (executedToolCalls.length + toolCalls.length > MAX_AGENT_TOOL_CALLS) {
-          throw new Error(`AI requested more than ${MAX_AGENT_TOOL_CALLS} tool calls in one response cycle.`);
+        if (executedToolCalls.length + toolCalls.length > agentToolCallLimit) {
+          throw new Error(`AI requested more than ${agentToolCallLimit} tool calls in one response cycle.`);
         }
         const normalizedToolCalls = toolCalls.map((toolCall) => ({
           ...toolCall,
@@ -1969,6 +2027,12 @@ export class AiManager {
         }
         toolRound += 1;
         const forceFinalAnswer = toolRound >= MAX_AGENT_TOOL_ROUNDS;
+        if (forceFinalAnswer) {
+          completionMessages.push({
+            role: "user",
+            content: "工具调用阶段已经结束，不得再请求任何工具。请立即根据已有工具结果生成最终答案，并严格遵守最初用户消息要求的输出格式。"
+          });
+        }
         payload = await requestCompletion(forceFinalAnswer ? "none" : "auto");
         choice = payload.choices?.[0];
         if (forceFinalAnswer && choice?.message?.tool_calls?.length) {
@@ -2556,6 +2620,142 @@ export class AiManager {
       reviewIds.push(String(review.id));
     }
     return { reviewIds, issueCount: reviewIds.length, callId: generated.callId };
+  }
+
+  private async runCharacterIdentityAudit(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
+    const characters = this.store.listCharacters(workId);
+    if (characters.length < 2) return { characterCount: characters.length, candidateCount: 0, reviewIds: [], skipped: [] };
+    const requiredTools: AgentToolId[] = ["query_story_knowledge", "grep", "read_chapters"];
+    const enabledTools = new Set(this.enabledAgentToolIds(workId, "book-analysis", requiredTools));
+    if (!enabledTools.has("query_story_knowledge") || !enabledTools.has("grep")) {
+      throw new AppError(409, "AI_TOOLS_REQUIRED", "角色查重需要启用“查询作品知识”和“正文搜索”工具");
+    }
+    const roster = characters.map((character) => {
+      const attributes = character.attributes as Record<string, unknown>;
+      const profile = character.profile as Record<string, unknown>;
+      const organizations = (character.organizations as Array<Record<string, unknown>>).map((item) => String(item.name)).join("、");
+      return [
+        `ID=${String(character.id)}`,
+        `主名=${String(character.name)}`,
+        `别名=${(character.aliases as string[]).join("、") || "无"}`,
+        `种族=${String(character.species || "未知")}`,
+        `身份=${String(attributes.identity ?? "未知")}`,
+        `组织=${organizations || "无"}`,
+        `简介=${String(profile.summary ?? "无")}`,
+        `首次章节=${String(character.firstChapterId ?? "未知")}`
+      ].join(" | ");
+    }).join("\n");
+    const generated = await this.generateTaggedJson({
+      workId,
+      taskType: "book-analysis",
+      signal: this.taskSignal(taskId),
+      scope: scope.type === "none" ? scope : { type: "none" },
+      ...(modelId ? { modelId } : {}),
+      parameters: { temperature: 0.1 },
+      agentToolIds: requiredTools,
+      agentToolCallLimit: 48,
+      instruction: [
+        "审核角色规范表，找出可能把同一个角色误建成两个档案的组合，最多输出 12 组。",
+        "角色规范表：",
+        roster,
+        "你必须主动使用 query_story_knowledge 查询角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。工具调用总数不得超过 48 次。",
+        "不能仅凭名字相似判断同一人。角色彼此对话、互相提及、同时出现、身份或种族冲突，都是不同角色的强反证。",
+        "只把有原文连续引文支持的 same 或 uncertain 组合放入结果；确认是不同角色的组合无需输出。",
+        "输出 JSON 数组。每项字段：leftCharacterId、rightCharacterId、verdict（same/uncertain）、confidence（0到1）、reason、evidence（数组，每项含 chapterId、quote、supports）、contradictions（字符串数组）。",
+        "quote 必须是原文连续引文且不超过 80 字；不得创造角色 ID、章节 ID 或证据。没有疑似重复角色时输出 []。"
+      ].join("\n"),
+      extraSystemPrompt: "你是谨慎的角色身份消歧审核器。任何结论都只是待作者确认的建议，禁止自动合并角色。"
+    });
+    const toolNames = new Set(generated.toolCalls.filter((call) => call.status === "completed").map((call) => call.name));
+    if (!toolNames.has("query_story_knowledge") || !toolNames.has("grep")) {
+      throw new AppError(502, "CHARACTER_AUDIT_INCOMPLETE", "AI 未完成角色资料查询和正文搜索，本次查重结果未保存");
+    }
+    const extracted = extractJson<unknown>(generated.content);
+    if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "角色查重结果必须是数组");
+    if (!this.taskCanCommit(taskId)) return { interrupted: true, callId: generated.callId };
+
+    const characterById = new Map(characters.map((character) => [String(character.id), character]));
+    const existingReviews = this.store.listReviewItems(workId).filter((review) => review.itemType === "character-duplicate");
+    const reviewedPairVersions = new Set(existingReviews.flatMap((review) => {
+      const refs = (review.entityRefs as unknown[]).flatMap((reference) => {
+        if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
+        const value = reference as Record<string, unknown>;
+        return typeof value.id === "string" && typeof value.versionNo === "number" ? [{ id: value.id, versionNo: value.versionNo }] : [];
+      }).sort((left, right) => left.id.localeCompare(right.id));
+      return refs.length === 2 ? [`${refs[0]?.id}@${refs[0]?.versionNo}|${refs[1]?.id}@${refs[1]?.versionNo}`] : [];
+    }));
+    const seenPairs = new Set<string>();
+    const reviewIds: string[] = [];
+    const skipped: Array<{ pair: string; reason: string }> = [];
+    for (const item of extracted) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const candidate = item as Record<string, unknown>;
+      const leftId = typeof candidate.leftCharacterId === "string" ? candidate.leftCharacterId : "";
+      const rightId = typeof candidate.rightCharacterId === "string" ? candidate.rightCharacterId : "";
+      const left = characterById.get(leftId);
+      const right = characterById.get(rightId);
+      if (!left || !right || leftId === rightId) {
+        skipped.push({ pair: `${leftId}/${rightId}`, reason: "角色引用无效" });
+        continue;
+      }
+      const ordered = [left, right].sort((first, second) => String(first.id).localeCompare(String(second.id)));
+      const pairKey = `${String(ordered[0]?.id)}@${Number(ordered[0]?.versionNo)}|${String(ordered[1]?.id)}@${Number(ordered[1]?.versionNo)}`;
+      if (seenPairs.has(pairKey) || reviewedPairVersions.has(pairKey)) {
+        skipped.push({ pair: pairKey, reason: "当前角色版本已经审核" });
+        continue;
+      }
+      seenPairs.add(pairKey);
+      const verdict = candidate.verdict === "same" || candidate.verdict === "uncertain" ? candidate.verdict : null;
+      const confidence = clamp(typeof candidate.confidence === "number" ? candidate.confidence : 0, 0, 1);
+      if (!verdict || confidence < 0.6) {
+        skipped.push({ pair: pairKey, reason: "结论或置信度不足" });
+        continue;
+      }
+      const evidence = (Array.isArray(candidate.evidence) ? candidate.evidence : []).flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+        const value = entry as Record<string, unknown>;
+        const chapterId = typeof value.chapterId === "string" ? value.chapterId : "";
+        const quote = typeof value.quote === "string" ? value.quote.trim() : "";
+        const supports = typeof value.supports === "string" ? value.supports.trim() : "";
+        if (!chapterId || !quote || quote.length > 80) return [];
+        try {
+          const chapter = this.store.getChapter(chapterId);
+          if (chapter.workId !== workId || !this.quoteExists(String(chapter.content), quote)) return [];
+          return [{ chapterId, chapterTitle: chapter.title, quote, supports }];
+        } catch {
+          return [];
+        }
+      });
+      if (evidence.length === 0) {
+        skipped.push({ pair: pairKey, reason: "缺少有效原文证据" });
+        continue;
+      }
+      const reason = typeof candidate.reason === "string" ? candidate.reason.trim() : "AI 发现角色身份可能重复";
+      const contradictions = (Array.isArray(candidate.contradictions) ? candidate.contradictions : [])
+        .filter((value): value is string => typeof value === "string" && Boolean(value.trim()))
+        .map((value) => value.trim())
+        .slice(0, 12);
+      const review = this.store.createReviewItem(workId, {
+        itemType: "character-duplicate",
+        severity: verdict === "same" && confidence >= 0.85 ? "high" : "medium",
+        title: `疑似重复角色：${String(left.name)} / ${String(right.name)}`,
+        description: [reason, contradictions.length ? `反证或疑点：${contradictions.join("；")}` : ""].filter(Boolean).join("\n"),
+        entityRefs: [left, right].map((character) => ({ type: "character", id: character.id, versionNo: character.versionNo })),
+        evidence,
+        suggestion: `${verdict === "same" ? "AI 倾向同一角色" : "AI 无法完全确认"}，置信度 ${Math.round(confidence * 100)}%；请由作者决定是否合并。`,
+        status: "pending"
+      });
+      reviewIds.push(String(review.id));
+    }
+    return {
+      characterCount: characters.length,
+      candidateCount: extracted.length,
+      reviewIds,
+      reviewCount: reviewIds.length,
+      skipped,
+      callId: generated.callId,
+      toolCallCount: generated.toolCalls.length
+    };
   }
 
   private async runCharacterExtraction(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {

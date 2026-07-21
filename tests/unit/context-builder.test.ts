@@ -46,6 +46,12 @@ describe("AI 上下文组装", () => {
       settings: ["成员以星图为信物"],
       memberIds: [String(character.id)]
     });
+    const profileSection = runtime.store.createCharacterProfileSection(String(character.id), {
+      sectionType: "background",
+      title: "远古背景",
+      summary: "角色曾守护旧航道。",
+      contentMarkdown: "不应自动载入的长篇正文标记 CHARACTER_SECTION_FULL_CONTENT"
+    });
 
     const context = new ContextBuilder(runtime.store).build(String(work.id), {
       type: "chapter",
@@ -59,6 +65,9 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("location=北港");
     expect(context).toContain("北港守望会");
     expect(context).toContain("成员以星图为信物");
+    expect(context).toContain(String(profileSection.id));
+    expect(context).toContain("远古背景");
+    expect(context).not.toContain("CHARACTER_SECTION_FULL_CONTENT");
     expect(context).toMatch(/(?:林舟 — 沈星|沈星 — 林舟)/u);
     expect(context).toContain("长期信任、失联重逢");
     expect(context).not.toContain("未经作者确认");
@@ -79,6 +88,28 @@ describe("AI 上下文组装", () => {
     });
     expect(context).toContain("当前选中文本（本次修改目标）");
     expect(() => builder.build(String(first.work.id), { type: "chapter", chapterId: String(second.chapter.id) })).toThrow("章节不属于当前作品");
+  });
+
+  it("为主动引用角色带入完整种族路径和继承设定来源", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work } = await seedChapter(runtime);
+    const titan = runtime.store.createRace(String(work.id), { name: "泰坦", settings: ["体型巨大"] });
+    const original = runtime.store.createRace(String(work.id), {
+      name: "原生泰坦",
+      parentRaceId: String(titan.id),
+      settings: ["源自远古"]
+    });
+    const character = runtime.store.createCharacter(String(work.id), { name: "哥斯拉", raceId: String(original.id) });
+
+    const context = new ContextBuilder(runtime.store).build(String(work.id), {
+      type: "entities",
+      characterIds: [String(character.id)]
+    });
+
+    expect(context).toContain("种族路径=泰坦 / 原生泰坦");
+    expect(context).toContain('"source":"泰坦","value":"体型巨大"');
+    expect(context).toContain('"source":"原生泰坦","value":"源自远古"');
   });
 
   it("无上下文范围不隐式引用作品内容，但保留主动添加的引用", async () => {

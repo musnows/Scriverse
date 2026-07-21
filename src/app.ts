@@ -1,9 +1,13 @@
 import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import multer from "multer";
 import mammoth from "mammoth";
-import { extname, join } from "node:path";
-import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { dirname, extname, join } from "node:path";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { z, ZodError } from "zod";
+import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
@@ -118,6 +122,16 @@ const characterUpdateSchema = characterSchema.partial().extend({
   changeNote: z.string().trim().max(500).optional()
 });
 
+const characterProfileSectionSchema = z.object({
+  sectionType: z.enum(["overview", "appearance", "abilities", "personality", "ecology", "background", "history", "legends", "research", "notes", "custom"]).optional(),
+  title: nonEmpty.max(200),
+  contentMarkdown: z.string().max(500_000).optional(),
+  summary: z.string().max(20_000).optional(),
+  sortOrder: z.number().int().min(0).max(100_000).optional(),
+  sourcePath: z.string().max(2_000).nullable().optional(),
+  sourceHash: z.string().regex(/^[a-f0-9]{64}$/u).nullable().optional()
+}).strict();
+
 const timelineSchema = z.object({
   name: nonEmpty.max(300),
   trackId: identifier.nullable().optional(),
@@ -188,10 +202,11 @@ const organizationSchema = z.object({
 
 const raceSchema = z.object({
   name: nonEmpty.max(200),
+  parentRaceId: identifier.nullable().optional(),
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
   memberIds: z.array(identifier).max(1000).optional()
-});
+}).strict();
 
 const chapterOutlineSchema = z.object({
   goal: z.string().max(100_000).optional(),
@@ -302,7 +317,7 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge"])).max(4).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"])).max(5).optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -319,6 +334,7 @@ const contextSchema = z.object({
 export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
+  attachmentDirectory?: string;
   fetchImpl?: typeof fetch;
   serveUi?: boolean;
   publicPath?: string;
@@ -334,6 +350,7 @@ export type Runtime = {
   store: Store;
   ai: AiManager;
   auth: UserAuthService;
+  attachmentStorage: AttachmentStorage;
   close: () => void;
 };
 
@@ -358,6 +375,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     sameOriginEnforced: options.security?.enforceSameOrigin ?? true
   });
   const database = new Database(options.databasePath);
+  const temporaryAttachmentRoot = options.databasePath === ":memory:" && !options.attachmentDirectory
+    ? mkdtempSync(join(tmpdir(), "scriverse-attachments-"))
+    : null;
+  const attachmentStorage = new AttachmentStorage(
+    options.attachmentDirectory ?? temporaryAttachmentRoot ?? join(dirname(options.databasePath), "attachments")
+  );
+  mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
   const store = new Store(database);
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
@@ -379,6 +403,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const avatarUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
+  });
+  const attachmentUpload = multer({
+    storage: multer.diskStorage({
+      destination: attachmentStorage.temporaryDirectory,
+      filename: (_request, _file, callback) => callback(null, randomUUID())
+    }),
+    limits: { fileSize: 30 * 1024 * 1024, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
 
   app.disable("x-powered-by");
@@ -562,8 +593,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, members);
   });
   app.patch("/api/works/:workId", (request, response) => data(response, store.updateWork(request.params.workId, parse(workSchema.partial(), request.body))));
-  app.delete("/api/works/:workId", (request, response) => {
-    store.deleteWork(request.params.workId);
+  app.delete("/api/works/:workId", async (request, response) => {
+    const removableStorageKeys = store.deleteWork(request.params.workId);
+    await Promise.all(removableStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey)));
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
@@ -699,7 +731,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/characters", (request, response) => data(response, store.listCharacters(request.params.workId)));
+  app.get("/api/works/:workId/characters", (request, response) => {
+    const { includeSections, includeMerged } = parse(z.object({
+      includeSections: z.enum(["true", "false"]).default("false"),
+      includeMerged: z.enum(["0", "1"]).default("0")
+    }), request.query);
+    data(response, store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1"));
+  });
   app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
   app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
   app.patch("/api/characters/:characterId", (request, response) => {
@@ -713,6 +751,76 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/characters/:characterId", (request, response) => {
     store.deleteCharacter(request.params.characterId);
+    noContent(response);
+  });
+  app.get("/api/characters/:characterId/sections", (request, response) => {
+    data(response, store.listCharacterProfileSections(request.params.characterId));
+  });
+  app.post("/api/characters/:characterId/sections", (request, response) => {
+    data(response, store.createCharacterProfileSection(
+      request.params.characterId,
+      parse(characterProfileSectionSchema, request.body)
+    ), 201);
+  });
+  app.get("/api/character-sections/:sectionId", (request, response) => {
+    data(response, store.getCharacterProfileSection(request.params.sectionId));
+  });
+  app.patch("/api/character-sections/:sectionId", (request, response) => {
+    const { changeNote, ...input } = parse(
+      characterProfileSectionSchema.partial().extend({ changeNote: changeNoteSchema }).strict(),
+      request.body
+    );
+    data(response, store.updateCharacterProfileSection(request.params.sectionId, input, "manual", null, changeNote));
+  });
+  app.delete("/api/character-sections/:sectionId", (request, response) => {
+    store.deleteCharacterProfileSection(request.params.sectionId);
+    noContent(response);
+  });
+  app.get("/api/character-sections/:sectionId/versions", (request, response) => {
+    data(response, store.listCharacterProfileSectionVersions(request.params.sectionId));
+  });
+  app.post("/api/character-sections/:sectionId/restore", (request, response) => {
+    const input = parse(z.object({ versionNo: z.number().int().positive() }).strict(), request.body);
+    data(response, store.restoreCharacterProfileSection(request.params.sectionId, input.versionNo));
+  });
+
+  app.get("/api/works/:workId/attachments", (request, response) => {
+    data(response, store.listAttachments(request.params.workId));
+  });
+  app.post("/api/works/:workId/attachments", attachmentUpload.single("file"), async (request, response) => {
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要上传的图片附件");
+    let storageKey: string | null = null;
+    try {
+      const stored = await attachmentStorage.ingest(request.file.path);
+      storageKey = stored.storageKey;
+      const result = store.createAttachment(String(request.params.workId), {
+        originalName: normalizeUploadFileName(request.file.originalname),
+        ...stored
+      });
+      data(response, { ...result.attachment, deduplicated: !result.created }, result.created ? 201 : 200);
+    } catch (error) {
+      if (storageKey) {
+        const inUse = Number(database.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0) > 0;
+        if (!inUse) await attachmentStorage.remove(storageKey);
+      }
+      throw error;
+    } finally {
+      await rm(request.file.path, { force: true });
+    }
+  });
+  app.get("/api/attachments/:attachmentId/content", async (request, response) => {
+    const attachment = store.getAttachment(request.params.attachmentId);
+    const content = await attachmentStorage.read(String(attachment.storageKey));
+    response.setHeader("Content-Type", String(attachment.storedMimeType));
+    response.setHeader("Content-Length", String(attachment.storedByteLength));
+    response.setHeader("ETag", `"${String(attachment.storedSha256)}"`);
+    response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+    response.setHeader("X-Content-Type-Options", "nosniff");
+    response.send(content);
+  });
+  app.delete("/api/attachments/:attachmentId", async (request, response) => {
+    const deleted = store.deleteAttachment(request.params.attachmentId);
+    if (deleted.removeStoredFile) await attachmentStorage.remove(deleted.storageKey);
     noContent(response);
   });
 
@@ -821,10 +929,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/reviews", (request, response) => data(response, store.createReviewItem(request.params.workId, parse(reviewSchema, request.body)), 201));
   app.patch("/api/reviews/:reviewId", (request, response) => data(response, store.updateReviewItem(request.params.reviewId, parse(reviewSchema.partial(), request.body))));
+  app.post("/api/reviews/:reviewId/character-resolution", (request, response) => {
+    const input = parse(z.discriminatedUnion("action", [
+      z.object({ action: z.literal("keep-separate") }).strict(),
+      z.object({
+        action: z.literal("merge"),
+        targetCharacterId: identifier,
+        sourceCharacterId: identifier,
+        expectedTargetVersionNo: z.number().int().positive(),
+        expectedSourceVersionNo: z.number().int().positive()
+      }).strict()
+    ]), request.body);
+    if (input.action === "keep-separate") {
+      data(response, store.resolveCharacterDuplicateReview(request.params.reviewId));
+      return;
+    }
+    data(response, store.mergeCharacters({ reviewId: request.params.reviewId, ...input }));
+  });
 
   app.get("/api/works/:workId/tasks", (request, response) => data(response, store.listTasks(request.params.workId)));
   app.post("/api/works/:workId/tasks", (request, response) => {
-    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
+    const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
     data(response, store.createTask(request.params.workId, input), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
@@ -1151,10 +1276,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
     database.close();
+    if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
     logger.info("runtime.closed");
   } };
 }

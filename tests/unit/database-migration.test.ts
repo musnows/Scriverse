@@ -46,6 +46,10 @@ function createLegacyDatabase(conflict = false): string {
   insert.run("character-a", "魔斯拉", JSON.stringify(["小魔", "Mothra"]));
   insert.run("character-b", conflict ? "小魔" : "拉顿", JSON.stringify([]));
   database.prepare("UPDATE characters SET attributes_json = ? WHERE id = 'character-a'").run(JSON.stringify({ species: "泰坦族" }));
+  database.prepare("UPDATE characters SET profile_json = ? WHERE id = 'character-a'").run(JSON.stringify({
+    summary: "星球守护者",
+    sections: [{ title: "背景故事", content: "## 远古时期\n\n守护地球生态。" }]
+  }));
   database.close();
   return filename;
 }
@@ -64,7 +68,9 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }]);
+    expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["merged_into_character_id", "merged_at"]));
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_merges'")?.name).toBe("character_merges");
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
@@ -80,6 +86,8 @@ describe("数据库版本化迁移", () => {
       { name: "魔斯拉", species: "泰坦族" }
     ]);
     expect(first.all("SELECT name, description FROM races")).toEqual([{ name: "泰坦族", description: "由旧人物种族字段迁移生成" }]);
+    expect(first.get("SELECT parent_race_id FROM races WHERE id = 'race_migration_1'")?.parent_race_id).toBeNull();
+    expect(first.all("PRAGMA index_list(races)").some((index) => index.name === "idx_races_parent")).toBe(true);
     expect(first.get("SELECT race_id FROM characters WHERE id = 'character-a'")?.race_id).toBe("race_migration_1");
     expect(first.get("SELECT race_id FROM characters WHERE id = 'character-b'")?.race_id).toBeNull();
     expect(first.all("SELECT character_id, version_no, source, change_note FROM character_versions ORDER BY character_id")).toEqual([
@@ -116,6 +124,12 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(user_avatars)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["user_id", "mime_type", "content", "byte_length", "sha256", "width", "height", "updated_at"])
     );
+    expect(first.get("SELECT character_id, section_type, title, content_markdown FROM character_profile_sections")).toEqual({
+      character_id: "character-a",
+      section_type: "custom",
+      title: "背景故事",
+      content_markdown: "## 远古时期\n\n守护地球生态。"
+    });
     first.run(
       `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, status, created_at)
        VALUES ('call-running', 'work-old', 'book-analysis', 'provider-old', 'model-old', '{}', 'running', '2025-01-01')`

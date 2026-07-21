@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipLabel, getGalaxyNodeAppearance, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -20,6 +20,38 @@ describe("人物关系图数据与布局", () => {
       keywords: ["王权效忠", "兄弟情谊", "长期并肩", "舍命相救", "相互调侃", "互相关怀"]
     })).toBe("君臣 · 王权效忠 · 兄弟情谊 · 长期并肩 · 舍命相救 · 相互调侃 · 互相关怀");
     expect(formatRelationshipLabel({ subtype: "", keywords: [] })).toBe("关系");
+  });
+
+  it("在关系详情中用括号解释虚线状态", () => {
+    expect(formatRelationshipStatusNote({ category: "conflict", confirmationStatus: "pending" })).toBe("（待确认）");
+    expect(formatRelationshipStatusNote({ category: "uncertain", confirmationStatus: "confirmed" })).toBe("（关系类型未确定）");
+    expect(formatRelationshipDetailLabel({
+      category: "uncertain",
+      subtype: "身份关联",
+      confirmationStatus: "pending"
+    })).toBe("身份关联（待确认 · 关系类型未确定）");
+    expect(formatRelationshipStatusNote({ category: "social", confirmationStatus: "confirmed" })).toBe("");
+  });
+
+  it("为同一人物对的多条关系分配独立弧线", () => {
+    const offsets = assignRelationshipEdgeCurves([
+      { id: "friend", source: "a", target: "b", directed: false },
+      { id: "admire", source: "a", target: "b", directed: true }
+    ]);
+
+    expect(offsets.get("admire")).toBe(-12);
+    expect(offsets.get("friend")).toBe(12);
+    expect(getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, offsets.get("admire")).path)
+      .not.toBe(getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, offsets.get("friend")).path);
+  });
+
+  it("关系连线避开节点中心并为弧线提供标签位置", () => {
+    const straight = getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, 0);
+    const curved = getRelationshipEdgeGeometry({ x: 0, y: 0 }, { x: 100, y: 0 }, 10, 10, 12);
+
+    expect(straight.path).toBe("M 12.0 0.0 L 88.0 0.0");
+    expect(curved.path).toContain(" Q ");
+    expect(curved.labelY).toBeGreaterThan(0);
   });
 
   it("银河图角色详情按关联角色名称合并多条关系", () => {
@@ -46,6 +78,7 @@ describe("人物关系图数据与布局", () => {
       identity: "将军"
     })).toMatchObject({ type: "organization", label: "北境联盟" });
     expect(resolveRelationshipNodeGroup({ species: "精灵", identity: "学者" })).toMatchObject({ type: "species", label: "精灵" });
+    expect(resolveRelationshipNodeGroup({ species: "原生泰坦", rootSpecies: "泰坦" })).toMatchObject({ type: "species", label: "泰坦" });
     expect(resolveRelationshipNodeGroup({ identity: "流浪商人" })).toMatchObject({ type: "identity", label: "流浪商人" });
 
     const hub = getObsidianNodeAppearance({ degree: 12, groupKey: "species:人类", species: "人类" }, 12);
@@ -69,6 +102,15 @@ describe("人物关系图数据与布局", () => {
     expect(graph.nodeById.get("a")?.groupType).toBe("organization");
     expect(graph.nodeById.get("a")?.nodeSize).toBeGreaterThan(graph.nodeById.get("b")?.nodeSize ?? 0);
     expect(graph.nodeById.get("a")?.color).toBeTruthy();
+  });
+
+  it("构建图谱时按角色种族路径的根种族分组", () => {
+    const graph = buildRelationshipGraph([
+      { id: "a", name: "甲", species: "原生泰坦", race: { lineage: [{ name: "泰坦" }, { name: "原生泰坦" }] } },
+      { id: "b", name: "乙", species: "进化泰坦", race: { lineage: [{ name: "泰坦" }, { name: "进化泰坦" }] } }
+    ], []);
+    expect(graph.nodeById.get("a")?.groupKey).toBe("species:泰坦");
+    expect(graph.nodeById.get("b")?.groupKey).toBe("species:泰坦");
   });
 
   it("普通关系网络使用稳定的力导向布局并容纳全部角色", () => {
@@ -177,6 +219,7 @@ describe("人物关系图数据与布局", () => {
     expect(stars).toHaveLength(120);
     expect(stars.every((star: { x: number; y: number; z: number }) => Number.isFinite(star.x) && Number.isFinite(star.y) && Number.isFinite(star.z))).toBe(true);
     expect(new Set(stars.map((star: { z: number }) => Math.round(star.z))).size).toBeGreaterThan(80);
+    expect(new Set(stars.map((star: { color: string }) => star.color)).size).toBe(3);
 
     const camera = { yaw: 0, pitch: 0, distance: 1500, focalRatio: 1.6, zoom: 1 };
     const viewport = { width: 1200, height: 800 };
@@ -184,6 +227,8 @@ describe("人物关系图数据与布局", () => {
     const far = projectGalaxyPoint({ x: 100, y: 0, z: 300 }, camera, viewport);
     expect(near.scale).toBeGreaterThan(far.scale);
     expect(near.x - viewport.width / 2).toBeGreaterThan(far.x - viewport.width / 2);
+    expect(getGalaxyNodeDepthOpacity(800)).toBe(1);
+    expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
   it("点击节点后把三维相机聚焦并放大到该节点", () => {
@@ -199,15 +244,23 @@ describe("人物关系图数据与布局", () => {
   });
 
   it("银河图按关系数量区分行星颜色与亮度", () => {
-    const outer = getGalaxyNodeAppearance({ degree: 1, weightedDegree: 0.65 }, 20);
-    const core = getGalaxyNodeAppearance({ degree: 20, weightedDegree: 27 }, 20);
+    const outer = getGalaxyNodeAppearance({ id: "outer", name: "外围", degree: 1, weightedDegree: 0.65 }, 20);
+    const core = getGalaxyNodeAppearance({ id: "core", name: "核心", degree: 20, weightedDegree: 27 }, 20);
+    const appearances = Array.from({ length: 32 }, (_, index) => getGalaxyNodeAppearance({
+      id: `node-${index}`,
+      name: `角色-${index}`,
+      degree: 2 + index % 8,
+      weightedDegree: 1.8 + index % 8
+    }, 20));
 
     expect(outer.tier).toBe("outer");
     expect(core.tier).toBe("core");
-    expect(core.hue).toBeLessThan(outer.hue);
     expect(Number(core.brightness)).toBeGreaterThan(Number(outer.brightness));
     expect(Number(core.glow)).toBeGreaterThan(Number(outer.glow));
-    expect(core.color).not.toBe(outer.color);
+    expect(new Set(appearances.map((appearance: { palette: string }) => appearance.palette)).size).toBeGreaterThanOrEqual(6);
+    expect(new Set(appearances.map((appearance: { celestialType: string }) => appearance.celestialType)).size).toBeGreaterThanOrEqual(5);
+    expect(GALAXY_LAYOUT_CONFIG.minimumRadius).toBeGreaterThanOrEqual(220);
+    expect(GALAXY_LAYOUT_CONFIG.desiredEdgeLength).toBeGreaterThanOrEqual(280);
   });
 
   it("松手惯性滑行只靠速度衰减，不会被弹簧持续拉动", () => {

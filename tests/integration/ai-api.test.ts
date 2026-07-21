@@ -279,7 +279,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "query_story_knowledge"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"]);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -302,9 +302,56 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
+  it("种族知识查询向模型返回层级与继承设定", async () => {
+    const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "泰坦", settings: ["体型巨大"] }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "原生泰坦",
+      parentRaceId: titan.body.data.id,
+      settings: ["源自远古"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", raceId: original.body.data.id }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "race-knowledge",
+          type: "function",
+          function: { name: "query_story_knowledge", arguments: { query: "泰坦", categories: ["race", "character"] } }
+        }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      expect(toolMessage?.content).toContain('"racePath":"泰坦 / 原生泰坦"');
+      expect(toolMessage?.content).toContain('"lineage":[{"id":"' + titan.body.data.id + '","name":"泰坦"}');
+      expect(toolMessage?.content).toContain('"value":"体型巨大"');
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取种族层级。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "查询泰坦种族层级。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已读取种族层级。");
+    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "query_story_knowledge", status: "completed" })]);
+  });
+
   it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const character = runtime.store.createCharacter(workId, { name: "哥斯拉" });
+    const section = runtime.store.createCharacterProfileSection(String(character.id), {
+      sectionType: "background",
+      title: "背景故事",
+      summary: "哥斯拉在远古时期守护地球生态。",
+      contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。"
+    });
     const calls = [
       { id: "index-default", name: "story_index", arguments: {} },
       { id: "index-page", name: "story_index", arguments: { offset: 0, limit: 1 } },
@@ -314,7 +361,10 @@ describe("AI 供应商、模型与建议 API", () => {
       { id: "grep-default", name: "grep", arguments: { keyword: "林舟" } },
       { id: "grep-limit", name: "grep", arguments: { keyword: "林舟", limit: 1 } },
       { id: "knowledge-default", name: "query_story_knowledge", arguments: { query: "跃迁" } },
-      { id: "knowledge-categories", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } }
+      { id: "knowledge-categories", name: "query_story_knowledge", arguments: { query: "跃迁", categories: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] } },
+      { id: "character-section-summary", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "summary" } },
+      { id: "character-section-content", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "content" } },
+      { id: "character-section-both", name: "read_character_sections", arguments: { sectionIds: [section.id], include: "both" } }
     ];
     let completionCount = 0;
     fetchMock.mockImplementation(async (input, init) => {
@@ -337,6 +387,11 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
       expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matches: expect.any(Array) } });
+      expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", summary: "哥斯拉在远古时期守护地球生态。" }] } });
+      expect(results.get("character-section-summary")).not.toHaveProperty("data.sections.0.contentMarkdown");
+      expect(results.get("character-section-content")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。" }] } });
+      expect(results.get("character-section-content")).not.toHaveProperty("data.sections.0.summary");
+      expect(results.get("character-section-both")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, summary: "哥斯拉在远古时期守护地球生态。", contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。" }] } });
       return new Response(JSON.stringify({ choices: [{ message: { content: "工具参数组合均已处理。" } }] }), { status: 200 });
     });
 
@@ -365,13 +420,14 @@ describe("AI 供应商、模型与建议 API", () => {
           { id: "bad-json", type: "function", function: { name: "story_index", arguments: "{" } },
           { id: "bad-index", type: "function", function: { name: "story_index", arguments: { limit: 0, extra: true } } },
           { id: "bad-read", type: "function", function: { name: "read_chapters", arguments: { chapterIds: [], include: "invalid" } } },
+          { id: "bad-character-section", type: "function", function: { name: "read_character_sections", arguments: { sectionIds: [], include: "invalid" } } },
           { id: "bad-grep", type: "function", function: { name: "grep", arguments: { keyword: "", limit: 0 } } },
           { id: "bad-query", type: "function", function: { name: "query_story_knowledge", arguments: { query: "", categories: ["unknown"] } } },
           { id: "unknown", type: "function", function: { name: "write_chapter", arguments: {} } }
         ] } }] }), { status: 200 });
       }
       const errors = body.messages.filter((message) => message.role === "tool").map((message) => JSON.parse(message.content ?? "{}") as { ok: boolean; error: { code: string; message: string } });
-      expect(errors).toHaveLength(6);
+      expect(errors).toHaveLength(7);
       expect(errors.every((result) => result.ok === false && /^[A-Z_]+$/u.test(result.error.code))).toBe(true);
       expect(errors.every((result) => /Invalid|not available/u.test(result.error.message))).toBe(true);
       return new Response(JSON.stringify({ choices: [{ message: { content: "工具失败信息已正确处理。" } }] }), { status: 200 });
@@ -384,7 +440,7 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
 
-    expect(response.body.data.toolCalls).toHaveLength(6);
+    expect(response.body.data.toolCalls).toHaveLength(7);
     expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "failed")).toBe(true);
     expect(response.body.data.content).toBe("工具失败信息已正确处理。");
   });
@@ -415,8 +471,10 @@ describe("AI 供应商、模型与建议 API", () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { tool_choice?: string };
-      if (body.tool_choice === "none") {
+      const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }>; tools?: unknown[]; tool_choice?: string };
+      if (!body.tools) {
+        expect(body.tool_choice).toBeUndefined();
+        expect(body.messages?.at(-1)?.content).toContain("严格遵守最初用户消息要求的输出格式");
         return new Response(JSON.stringify({ choices: [{ message: { content: "已基于六轮工具结果回答。" } }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: `round-${completionCount}`, type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200 });

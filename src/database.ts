@@ -179,6 +179,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS races (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        parent_race_id TEXT REFERENCES races(id) ON DELETE RESTRICT,
         name TEXT NOT NULL,
         normalized_name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
@@ -201,6 +202,8 @@ export class Database {
         locked_fields_json TEXT NOT NULL DEFAULT '[]',
         visibility TEXT NOT NULL DEFAULT 'author',
         first_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        merged_into_character_id TEXT,
+        merged_at TEXT,
         version_no INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -301,6 +304,19 @@ export class Database {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS character_merges (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        source_character_id TEXT NOT NULL UNIQUE,
+        target_character_id TEXT NOT NULL,
+        review_id TEXT REFERENCES review_items(id) ON DELETE SET NULL,
+        source_snapshot_json TEXT NOT NULL,
+        target_snapshot_json TEXT NOT NULL,
+        reference_snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by_user_id TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS providers (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -368,7 +384,7 @@ export class Database {
         auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge","grep"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]',
         updated_at TEXT NOT NULL
       );
 
@@ -549,6 +565,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_timeline_tracks_work ON timeline_tracks(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_relationships_work ON relationships(work_id);
       CREATE INDEX IF NOT EXISTS idx_reviews_work ON review_items(work_id, status);
+      CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tasks_work ON analysis_tasks(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_calls_work ON ai_calls(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
@@ -1247,6 +1264,227 @@ export class Database {
           this.run("ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (29, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(30)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("merged_into_character_id")) {
+          this.run("ALTER TABLE characters ADD COLUMN merged_into_character_id TEXT");
+        }
+        if (!characterColumns.has("merged_at")) {
+          this.run("ALTER TABLE characters ADD COLUMN merged_at TEXT");
+        }
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS character_merges (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            source_character_id TEXT NOT NULL UNIQUE,
+            target_character_id TEXT NOT NULL,
+            review_id TEXT REFERENCES review_items(id) ON DELETE SET NULL,
+            source_snapshot_json TEXT NOT NULL,
+            target_snapshot_json TEXT NOT NULL,
+            reference_snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT
+          );
+          CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
+        `);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(31)) {
+      this.transaction(() => {
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS character_profile_sections (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+            section_type TEXT NOT NULL DEFAULT 'custom',
+            title TEXT NOT NULL,
+            content_markdown TEXT NOT NULL DEFAULT '',
+            summary TEXT NOT NULL DEFAULT '',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            source_path TEXT,
+            source_hash TEXT,
+            version_no INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_character_profile_sections_character
+            ON character_profile_sections(character_id, sort_order, created_at);
+          CREATE INDEX IF NOT EXISTS idx_character_profile_sections_work
+            ON character_profile_sections(work_id, updated_at DESC);
+
+          CREATE TABLE IF NOT EXISTS character_profile_section_versions (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            character_id TEXT NOT NULL,
+            section_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_ref TEXT,
+            change_note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            UNIQUE(section_id, version_no)
+          );
+          CREATE INDEX IF NOT EXISTS idx_character_profile_section_versions_section
+            ON character_profile_section_versions(section_id, version_no DESC);
+
+          CREATE TABLE IF NOT EXISTS attachments (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            original_name TEXT NOT NULL,
+            original_mime_type TEXT NOT NULL,
+            stored_mime_type TEXT NOT NULL,
+            original_byte_length INTEGER NOT NULL,
+            stored_byte_length INTEGER NOT NULL,
+            original_sha256 TEXT NOT NULL,
+            stored_sha256 TEXT NOT NULL,
+            storage_key TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            page_count INTEGER NOT NULL DEFAULT 1,
+            animated INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            UNIQUE(work_id, stored_sha256)
+          );
+          CREATE INDEX IF NOT EXISTS idx_attachments_storage_key ON attachments(storage_key);
+
+          CREATE TABLE IF NOT EXISTS attachment_references (
+            attachment_id TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(attachment_id, entity_type, entity_id)
+          ) WITHOUT ROWID;
+          CREATE INDEX IF NOT EXISTS idx_attachment_references_entity
+            ON attachment_references(entity_type, entity_id);
+
+          CREATE TABLE IF NOT EXISTS character_profile_section_search (
+            id INTEGER PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+            section_id TEXT NOT NULL REFERENCES character_profile_sections(id) ON DELETE CASCADE,
+            search_content TEXT NOT NULL,
+            UNIQUE(section_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_character_profile_section_search_work
+            ON character_profile_section_search(work_id, character_id, section_id);
+          CREATE VIRTUAL TABLE IF NOT EXISTS character_profile_section_search_fts USING fts5(
+            search_content,
+            content='character_profile_section_search',
+            content_rowid='id',
+            tokenize='trigram'
+          );
+          CREATE TRIGGER IF NOT EXISTS character_profile_section_search_ai AFTER INSERT ON character_profile_section_search BEGIN
+            INSERT INTO character_profile_section_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS character_profile_section_search_ad AFTER DELETE ON character_profile_section_search BEGIN
+            INSERT INTO character_profile_section_search_fts(character_profile_section_search_fts, rowid, search_content)
+              VALUES ('delete', old.id, old.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS character_profile_section_search_au AFTER UPDATE ON character_profile_section_search BEGIN
+            INSERT INTO character_profile_section_search_fts(character_profile_section_search_fts, rowid, search_content)
+              VALUES ('delete', old.id, old.search_content);
+            INSERT INTO character_profile_section_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TABLE IF NOT EXISTS character_profile_section_short_terms (
+            search_id INTEGER NOT NULL REFERENCES character_profile_section_search(id) ON DELETE CASCADE,
+            term TEXT NOT NULL,
+            PRIMARY KEY(term, search_id)
+          ) WITHOUT ROWID;
+        `);
+
+        const timestamp = new Date().toISOString();
+        const characters = this.all("SELECT id, work_id, profile_json, created_at, updated_at FROM characters");
+        for (const character of characters) {
+          let profile: Record<string, unknown> = {};
+          try {
+            const parsed = JSON.parse(String(character.profile_json ?? "{}")) as unknown;
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) profile = parsed as Record<string, unknown>;
+          } catch {
+            profile = {};
+          }
+          if (!Array.isArray(profile.sections)) continue;
+          for (const [index, candidate] of profile.sections.entries()) {
+            if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+            const section = candidate as Record<string, unknown>;
+            const title = String(section.title ?? "").trim();
+            const content = String(section.content ?? "").trim();
+            if (!title || !content) continue;
+            const sectionId = `characterSection_${String(character.id)}_${index + 1}`;
+            const createdAt = String(character.created_at ?? timestamp);
+            const updatedAt = String(character.updated_at ?? createdAt);
+            this.run(
+              `INSERT INTO character_profile_sections
+               (id, work_id, character_id, section_type, title, content_markdown, summary, sort_order, created_at, updated_at)
+               VALUES (?, ?, ?, 'custom', ?, ?, '', ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+              sectionId,
+              String(character.work_id),
+              String(character.id),
+              title,
+              content,
+              index,
+              createdAt,
+              updatedAt
+            );
+            const snapshot = JSON.stringify({ sectionType: "custom", title, contentMarkdown: content, summary: "", sortOrder: index, sourcePath: null, sourceHash: null });
+            this.run(
+              `INSERT INTO character_profile_section_versions
+               (id, work_id, character_id, section_id, version_no, snapshot_json, source, change_note, created_at)
+               VALUES (?, ?, ?, ?, 1, ?, 'migration', '迁移人物 Markdown 章节', ?) ON CONFLICT(section_id, version_no) DO NOTHING`,
+              `characterSectionVersion_${String(character.id)}_${index + 1}`,
+              String(character.work_id),
+              String(character.id),
+              sectionId,
+              snapshot,
+              updatedAt
+            );
+            const searchContent = normalizeDocumentSearchText(`${title}\n${content}`);
+            const result = this.run(
+              `INSERT INTO character_profile_section_search (work_id, character_id, section_id, search_content)
+               VALUES (?, ?, ?, ?) ON CONFLICT(section_id) DO UPDATE SET search_content = excluded.search_content`,
+              String(character.work_id),
+              String(character.id),
+              sectionId,
+              searchContent
+            );
+            const searchRow = this.get("SELECT id FROM character_profile_section_search WHERE section_id = ?", sectionId);
+            const searchId = Number(searchRow?.id ?? result.lastInsertRowid);
+            this.run("DELETE FROM character_profile_section_short_terms WHERE search_id = ?", searchId);
+            for (const term of documentShortSearchTerms(searchContent)) {
+              this.run("INSERT INTO character_profile_section_short_terms (search_id, term) VALUES (?, ?)", searchId, term);
+            }
+          }
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (31, ?)", timestamp);
+      });
+    }
+    if (!applied.has(32)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(races)").map((row) => String(row.name)));
+        if (!columns.has("parent_race_id")) {
+          this.run("ALTER TABLE races ADD COLUMN parent_race_id TEXT REFERENCES races(id) ON DELETE RESTRICT");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_races_parent ON races(work_id, parent_race_id, name)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (32, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(33)) {
+      this.transaction(() => {
+        this.run(`UPDATE work_ai_settings
+          SET agent_tools_json = CASE
+            WHEN json_valid(agent_tools_json) THEN json_insert(agent_tools_json, '$[#]', 'read_character_sections')
+            ELSE '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]'
+          END
+          WHERE NOT json_valid(agent_tools_json)
+             OR NOT EXISTS (SELECT 1 FROM json_each(agent_tools_json) WHERE value = 'read_character_sections')`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (33, ?)", new Date().toISOString());
       });
     }
   }

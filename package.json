@@ -1,6 +1,6 @@
 {
   "name": "@musnows/scriverse",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Command-line client and local server for the Scriverse long-form fiction workspace",
   "license": "MIT",
   "author": "musnows",
@@ -53,6 +53,7 @@
     "express": "^5.1.0",
     "mammoth": "^1.10.0",
     "multer": "^2.0.2",
+    "sharp": "^0.35.3",
     "zod": "^4.1.12"
   },
   "devDependencies": {

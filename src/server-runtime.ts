@@ -36,6 +36,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     security = resolveRuntimeSecurity(options.env);
     runtime = createRuntime({
       databasePath: options.databasePath,
+      attachmentDirectory: join(options.dataDirectory, "attachments"),
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
       publicPath,
       security

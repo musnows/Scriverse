@@ -52,6 +52,31 @@ type CharacterInput = {
   firstChapterId?: string | null;
 };
 
+export type CharacterProfileSectionInput = {
+  sectionType?: string;
+  title: string;
+  contentMarkdown?: string;
+  summary?: string;
+  sortOrder?: number;
+  sourcePath?: string | null;
+  sourceHash?: string | null;
+};
+
+export type AttachmentInput = {
+  originalName: string;
+  originalMimeType: string;
+  storedMimeType: string;
+  originalByteLength: number;
+  storedByteLength: number;
+  originalSha256: string;
+  storedSha256: string;
+  storageKey: string;
+  width: number;
+  height: number;
+  pageCount: number;
+  animated: boolean;
+};
+
 type CharacterSnapshot = {
   name: string;
   aliases: string[];
@@ -112,6 +137,7 @@ type OrganizationInput = {
 
 type RaceInput = {
   name: string;
+  parentRaceId?: string | null;
   description?: string;
   settings?: string[];
   memberIds?: string[];
@@ -244,7 +270,14 @@ export class Store {
       scope: entity.scope,
       authorNote: entity.authorNote
     };
-    if (type === "race" || type === "organization") return {
+    if (type === "race") return {
+      name: entity.name,
+      parentRaceId: entity.parentRaceId,
+      description: entity.description,
+      settings: entity.settings,
+      memberIds: entity.memberIds
+    };
+    if (type === "organization") return {
       name: entity.name,
       description: entity.description,
       settings: entity.settings,
@@ -602,7 +635,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep"]),
+      agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","query_story_knowledge","grep","read_character_sections"]'), ["story_index", "read_chapters", "query_story_knowledge", "grep", "read_character_sections"]),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -680,12 +713,17 @@ export class Store {
     return this.getWork(workId);
   }
 
-  deleteWork(workId: string): void {
+  deleteWork(workId: string): string[] {
     const work = this.getWork(workId);
+    const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
+      .map((row) => requiredString(row, "storage_key"));
     this.db.transaction(() => {
       this.audit(null, "work.deleted", "work", workId, { title: work.title });
       this.db.run("DELETE FROM works WHERE id = ?", workId);
     });
+    return storageKeys.filter((storageKey) => Number(
+      this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0
+    ) === 0);
   }
 
   setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer): Record<string, unknown> {
@@ -1992,16 +2030,19 @@ export class Store {
     const normalizedName = normalizeCharacterName(name);
     if (!normalizedName) throw new AppError(400, "RACE_NAME_REQUIRED", "种族名称不能为空");
     this.assertRaceNameAvailable(workId, normalizedName);
+    const parentRaceId = input.parentRaceId ?? null;
+    this.assertRaceParent(workId, parentRaceId, raceId);
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO races (id, work_id, name, normalized_name, description, settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         raceId,
         workId,
+        parentRaceId,
         name,
         normalizedName,
         input.description ?? "",
@@ -2043,6 +2084,10 @@ export class Store {
     const normalizedName = normalizeCharacterName(name);
     if (!normalizedName) throw new AppError(400, "RACE_NAME_REQUIRED", "种族名称不能为空");
     this.assertRaceNameAvailable(workId, normalizedName, raceId);
+    const parentRaceId = input.parentRaceId === undefined
+      ? current.parentRaceId as string | null
+      : input.parentRaceId;
+    this.assertRaceParent(workId, parentRaceId, raceId);
     const memberIds = input.memberIds === undefined ? null : [...new Set(input.memberIds)];
     if (memberIds) this.assertCharactersInWork(workId, memberIds);
     const nameChanged = name !== current.name;
@@ -2052,7 +2097,8 @@ export class Store {
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
     this.db.transaction(() => {
       this.db.run(
-        `UPDATE races SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        parentRaceId,
         name,
         normalizedName,
         input.description ?? String(current.description),
@@ -2071,6 +2117,10 @@ export class Store {
 
   deleteRace(raceId: string): void {
     const current = this.getRace(raceId);
+    const child = this.db.get("SELECT id FROM races WHERE parent_race_id = ? LIMIT 1", raceId);
+    if (child) {
+      throw new AppError(409, "RACE_HAS_CHILDREN", "该种族仍有子种族，请先迁移或删除子种族", { raceId: requiredString(child, "id") });
+    }
     const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
     this.db.transaction(() => {
       this.recordEntityVersion("race", raceId, "delete", null, "删除种族档案");
@@ -2089,6 +2139,8 @@ export class Store {
   }
 
   private mapRace(row: Row): Record<string, unknown> {
+    const raceId = requiredString(row, "id");
+    const lineage = this.raceLineage(raceId);
     const members = this.db.all("SELECT id, name FROM characters WHERE race_id = ? ORDER BY name", requiredString(row, "id")).map((member) => ({
       characterId: requiredString(member, "id"),
       name: requiredString(member, "name")
@@ -2096,9 +2148,17 @@ export class Store {
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
+      parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       settings: json(requiredString(row, "settings_json"), []),
+      lineage: lineage.map((item) => ({ id: item.id, name: item.name })),
+      effectiveSettings: lineage.flatMap((item, index) => item.settings.map((value) => ({
+        value,
+        sourceRaceId: item.id,
+        sourceRaceName: item.name,
+        inherited: index < lineage.length - 1
+      }))),
       memberIds: members.map((member) => member.characterId),
       members,
       createdAt: requiredString(row, "created_at"),
@@ -2118,6 +2178,43 @@ export class Store {
     const race = this.getRace(raceId);
     if (race.workId !== workId) throw new AppError(400, "RACE_WORK_MISMATCH", "角色绑定的种族不属于当前作品");
     return race;
+  }
+
+  private assertRaceParent(workId: string, parentRaceId: string | null, raceId: string): void {
+    if (!parentRaceId) return;
+    const seen = new Set<string>();
+    let currentId: string | null = parentRaceId;
+    while (currentId) {
+      if (currentId === raceId || seen.has(currentId)) {
+        throw new AppError(409, "RACE_HIERARCHY_CYCLE", "父种族不能是当前种族或其后代");
+      }
+      seen.add(currentId);
+      const row = this.db.get("SELECT id, work_id, parent_race_id FROM races WHERE id = ?", currentId);
+      if (!row) throw notFound("父种族");
+      if (requiredString(row, "work_id") !== workId) {
+        throw new AppError(400, "RACE_PARENT_WORK_MISMATCH", "父种族不属于当前作品");
+      }
+      currentId = optionalString(row, "parent_race_id");
+    }
+  }
+
+  private raceLineage(raceId: string): Array<{ id: string; name: string; settings: string[] }> {
+    const lineage: Array<{ id: string; name: string; settings: string[] }> = [];
+    const seen = new Set<string>();
+    let currentId: string | null = raceId;
+    while (currentId) {
+      if (seen.has(currentId)) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级存在循环");
+      seen.add(currentId);
+      const row = this.db.get("SELECT id, name, settings_json, parent_race_id FROM races WHERE id = ?", currentId);
+      if (!row) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级引用了不存在的父种族");
+      lineage.push({
+        id: requiredString(row, "id"),
+        name: requiredString(row, "name"),
+        settings: json<string[]>(requiredString(row, "settings_json"), [])
+      });
+      currentId = optionalString(row, "parent_race_id");
+    }
+    return lineage.reverse();
   }
 
   private replaceRaceMembers(raceId: string, raceName: string, memberIds: string[]): void {
@@ -2269,6 +2366,7 @@ export class Store {
     for (const characterId of characterIds) {
       const character = this.getCharacter(characterId);
       if (character.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "组织成员不属于当前作品");
+      if (character.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能继续被引用");
     }
   }
 
@@ -2310,6 +2408,8 @@ export class Store {
   }
 
   private characterSnapshot(character: Record<string, unknown>): CharacterSnapshot {
+    const profile = { ...(character.profile as Record<string, unknown>) };
+    delete profile.sections;
     return {
       name: String(character.name),
       aliases: [...(character.aliases as string[])],
@@ -2317,7 +2417,7 @@ export class Store {
       species: String(character.species),
       organizationIds: [...(character.organizationIds as string[])].sort(),
       attributes: character.attributes as Record<string, unknown>,
-      profile: character.profile as Record<string, unknown>,
+      profile,
       currentState: character.currentState as Record<string, unknown>,
       lockedFields: [...(character.lockedFields as string[])],
       visibility: String(character.visibility),
@@ -2419,9 +2519,410 @@ export class Store {
     return this.getCharacter(characterId);
   }
 
-  listCharacters(workId: string): Record<string, unknown>[] {
+  listCharacters(workId: string, includeProfileSections = false, includeMerged = false): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM characters WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapCharacter(row));
+    return this.db.all(
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name`,
+      workId
+    )
+      .map((row) => this.mapCharacter(row, includeProfileSections));
+  }
+
+  private mapCharacterProfileSection(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      sectionType: requiredString(row, "section_type"),
+      title: requiredString(row, "title"),
+      contentMarkdown: requiredString(row, "content_markdown"),
+      summary: requiredString(row, "summary"),
+      sortOrder: numberValue(row, "sort_order"),
+      sourcePath: optionalString(row, "source_path"),
+      sourceHash: optionalString(row, "source_hash"),
+      versionNo: numberValue(row, "version_no"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  listCharacterProfileSections(characterId: string): Record<string, unknown>[] {
+    this.getCharacter(characterId);
+    return this.db.all(
+      "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
+      characterId
+    ).map((row) => this.mapCharacterProfileSection(row));
+  }
+
+  listCharacterProfileSectionCatalog(characterId: string): Record<string, unknown>[] {
+    this.getCharacter(characterId);
+    return this.db.all(
+      `SELECT id, character_id, section_type, title, summary, sort_order, version_no
+       FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at`,
+      characterId
+    ).map((row) => ({
+      id: requiredString(row, "id"),
+      characterId: requiredString(row, "character_id"),
+      sectionType: requiredString(row, "section_type"),
+      title: requiredString(row, "title"),
+      summary: requiredString(row, "summary"),
+      sortOrder: numberValue(row, "sort_order"),
+      versionNo: numberValue(row, "version_no")
+    }));
+  }
+
+  getCharacterProfileSection(sectionId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM character_profile_sections WHERE id = ?", sectionId);
+    if (!row) throw notFound("人物档案章节");
+    return this.mapCharacterProfileSection(row);
+  }
+
+  private characterProfileSectionSnapshot(section: Record<string, unknown>): Record<string, unknown> {
+    return {
+      sectionType: String(section.sectionType),
+      title: String(section.title),
+      contentMarkdown: String(section.contentMarkdown),
+      summary: String(section.summary),
+      sortOrder: Number(section.sortOrder),
+      sourcePath: section.sourcePath ?? null,
+      sourceHash: section.sourceHash ?? null
+    };
+  }
+
+  private recordCharacterProfileSectionVersion(
+    section: Record<string, unknown>,
+    source: string,
+    sourceRef: string | null,
+    changeNote: string,
+    timestamp = now()
+  ): void {
+    this.db.run(
+      `INSERT INTO character_profile_section_versions
+       (id, work_id, character_id, section_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id("characterSectionVersion"),
+      String(section.workId),
+      String(section.characterId),
+      String(section.id),
+      Number(section.versionNo),
+      JSON.stringify(this.characterProfileSectionSnapshot(section)),
+      source,
+      sourceRef,
+      changeNote.trim(),
+      timestamp,
+      currentRequestActor()?.userId ?? null
+    );
+  }
+
+  private syncCharacterProfileSectionSearch(section: Record<string, unknown>): void {
+    const searchContent = normalizeDocumentSearchText(
+      `${String(section.title)}\n${String(section.summary)}\n${String(section.contentMarkdown)}`
+    );
+    this.db.run(
+      `INSERT INTO character_profile_section_search (work_id, character_id, section_id, search_content)
+       VALUES (?, ?, ?, ?) ON CONFLICT(section_id) DO UPDATE SET search_content = excluded.search_content`,
+      String(section.workId),
+      String(section.characterId),
+      String(section.id),
+      searchContent
+    );
+    const search = this.db.get("SELECT id FROM character_profile_section_search WHERE section_id = ?", String(section.id));
+    const searchId = numberValue(search ?? {}, "id");
+    this.db.run("DELETE FROM character_profile_section_short_terms WHERE search_id = ?", searchId);
+    for (const term of documentShortSearchTerms(searchContent)) {
+      this.db.run("INSERT INTO character_profile_section_short_terms (search_id, term) VALUES (?, ?)", searchId, term);
+    }
+  }
+
+  private attachmentIdsInMarkdown(contentMarkdown: string): string[] {
+    return [...new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]{1,300})/gu)].map((match) => String(match[1])))];
+  }
+
+  private syncCharacterProfileSectionAttachments(section: Record<string, unknown>): void {
+    const sectionId = String(section.id);
+    const workId = String(section.workId);
+    const attachmentIds = this.attachmentIdsInMarkdown(String(section.contentMarkdown));
+    for (const attachmentId of attachmentIds) {
+      const attachment = this.getAttachment(attachmentId);
+      if (attachment.workId !== workId) throw new AppError(400, "ATTACHMENT_WORK_MISMATCH", "附件不属于当前作品");
+    }
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+    for (const attachmentId of attachmentIds) {
+      this.db.run(
+        `INSERT INTO attachment_references (attachment_id, work_id, entity_type, entity_id, created_at)
+         VALUES (?, ?, 'character-section', ?, ?)`,
+        attachmentId,
+        workId,
+        sectionId,
+        now()
+      );
+    }
+  }
+
+  createCharacterProfileSection(
+    characterId: string,
+    input: CharacterProfileSectionInput,
+    source = "create",
+    sourceRef: string | null = null
+  ): Record<string, unknown> {
+    const character = this.getCharacter(characterId);
+    const sectionId = id("characterSection");
+    const timestamp = now();
+    const sortOrder = input.sortOrder ?? Number(this.db.get(
+      "SELECT COALESCE(MAX(sort_order), -1) + 1 AS sort_order FROM character_profile_sections WHERE character_id = ?",
+      characterId
+    )?.sort_order ?? 0);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO character_profile_sections
+         (id, work_id, character_id, section_type, title, content_markdown, summary, sort_order, source_path, source_hash, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sectionId,
+        String(character.workId),
+        characterId,
+        input.sectionType ?? "custom",
+        input.title,
+        input.contentMarkdown ?? "",
+        input.summary ?? "",
+        sortOrder,
+        input.sourcePath ?? null,
+        input.sourceHash ?? null,
+        timestamp,
+        timestamp
+      );
+      const section = this.getCharacterProfileSection(sectionId);
+      this.syncCharacterProfileSectionSearch(section);
+      this.syncCharacterProfileSectionAttachments(section);
+      this.recordCharacterProfileSectionVersion(section, source, sourceRef, "建立人物 Markdown 章节", timestamp);
+      this.audit(String(character.workId), "character-section.created", "character-section", sectionId, { characterId, source, sourceRef });
+    });
+    return this.getCharacterProfileSection(sectionId);
+  }
+
+  updateCharacterProfileSection(
+    sectionId: string,
+    input: Partial<CharacterProfileSectionInput>,
+    source = "manual",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
+    const current = this.getCharacterProfileSection(sectionId);
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE character_profile_sections SET section_type = ?, title = ?, content_markdown = ?, summary = ?, sort_order = ?,
+         source_path = ?, source_hash = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?`,
+        input.sectionType ?? String(current.sectionType),
+        input.title ?? String(current.title),
+        input.contentMarkdown ?? String(current.contentMarkdown),
+        input.summary ?? String(current.summary),
+        input.sortOrder ?? Number(current.sortOrder),
+        input.sourcePath === undefined ? current.sourcePath as string | null : input.sourcePath,
+        input.sourceHash === undefined ? current.sourceHash as string | null : input.sourceHash,
+        timestamp,
+        sectionId
+      );
+      const section = this.getCharacterProfileSection(sectionId);
+      this.syncCharacterProfileSectionSearch(section);
+      this.syncCharacterProfileSectionAttachments(section);
+      this.recordCharacterProfileSectionVersion(section, source, sourceRef, changeNote || "更新人物 Markdown 章节", timestamp);
+      this.audit(String(current.workId), "character-section.updated", "character-section", sectionId, { fields: Object.keys(input), source, sourceRef });
+    });
+    return this.getCharacterProfileSection(sectionId);
+  }
+
+  deleteCharacterProfileSection(sectionId: string): void {
+    const current = this.getCharacterProfileSection(sectionId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE character_profile_sections SET version_no = version_no + 1 WHERE id = ?", sectionId);
+      const deleting = this.getCharacterProfileSection(sectionId);
+      this.recordCharacterProfileSectionVersion(deleting, "delete", null, "删除人物 Markdown 章节");
+      this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+      this.db.run("DELETE FROM character_profile_sections WHERE id = ?", sectionId);
+      this.audit(String(current.workId), "character-section.deleted", "character-section", sectionId, { characterId: current.characterId });
+    });
+  }
+
+  listCharacterProfileSectionVersions(sectionId: string): Record<string, unknown>[] {
+    const rows = this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM character_profile_section_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.section_id = ? ORDER BY version.version_no DESC`,
+      sectionId
+    );
+    if (!rows.length) this.getCharacterProfileSection(sectionId);
+    return rows.map((row) => ({
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      sectionId: requiredString(row, "section_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    }));
+  }
+
+  restoreCharacterProfileSection(sectionId: string, versionNo: number): Record<string, unknown> {
+    const version = this.db.get(
+      "SELECT * FROM character_profile_section_versions WHERE section_id = ? AND version_no = ?",
+      sectionId,
+      versionNo
+    );
+    if (!version) throw notFound("人物档案章节版本");
+    const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
+    const existing = this.db.get("SELECT id FROM character_profile_sections WHERE id = ?", sectionId);
+    if (existing) {
+      return this.updateCharacterProfileSection(sectionId, snapshot as Partial<CharacterProfileSectionInput>, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`);
+    }
+    const characterId = requiredString(version, "character_id");
+    const character = this.getCharacter(characterId);
+    const timestamp = now();
+    const nextVersionNo = Number(this.db.get(
+      "SELECT COALESCE(MAX(version_no), 0) + 1 AS version_no FROM character_profile_section_versions WHERE section_id = ?",
+      sectionId
+    )?.version_no ?? 1);
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO character_profile_sections
+         (id, work_id, character_id, section_type, title, content_markdown, summary, sort_order, source_path, source_hash, version_no, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sectionId,
+        String(character.workId),
+        characterId,
+        String(snapshot.sectionType ?? "custom"),
+        String(snapshot.title ?? "恢复的章节"),
+        String(snapshot.contentMarkdown ?? ""),
+        String(snapshot.summary ?? ""),
+        Number(snapshot.sortOrder ?? 0),
+        snapshot.sourcePath as string | null ?? null,
+        snapshot.sourceHash as string | null ?? null,
+        nextVersionNo,
+        timestamp,
+        timestamp
+      );
+      const restored = this.getCharacterProfileSection(sectionId);
+      this.syncCharacterProfileSectionSearch(restored);
+      this.syncCharacterProfileSectionAttachments(restored);
+      this.recordCharacterProfileSectionVersion(restored, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`, timestamp);
+      this.audit(String(character.workId), "character-section.restored", "character-section", sectionId, { versionNo });
+    });
+    return this.getCharacterProfileSection(sectionId);
+  }
+
+  searchCharacterProfileSections(workId: string, query: string, limit = 20): Record<string, unknown>[] {
+    this.getWork(workId);
+    const normalized = normalizeDocumentSearchText(query);
+    const columns = `SELECT section.*, character.name AS character_name
+      FROM character_profile_section_search search
+      JOIN character_profile_sections section ON section.id = search.section_id
+      JOIN characters character ON character.id = search.character_id`;
+    const rows = [...normalized].length <= 2
+      ? this.db.all(
+        `${columns} JOIN character_profile_section_short_terms term ON term.search_id = search.id
+         WHERE search.work_id = ? AND term.term = ? ORDER BY character.name, section.sort_order LIMIT ?`,
+        workId,
+        normalized,
+        limit
+      )
+      : this.db.all(
+        `${columns} JOIN character_profile_section_search_fts fts ON fts.rowid = search.id
+         WHERE search.work_id = ? AND character_profile_section_search_fts MATCH ?
+         ORDER BY bm25(character_profile_section_search_fts), character.name, section.sort_order LIMIT ?`,
+        workId,
+        `"${normalized.replaceAll('"', '""')}"`,
+        limit
+      );
+    return rows.map((row) => ({ ...this.mapCharacterProfileSection(row), characterName: requiredString(row, "character_name") }));
+  }
+
+  private mapAttachment(row: Row): Record<string, unknown> {
+    const attachmentId = requiredString(row, "id");
+    return {
+      id: attachmentId,
+      workId: requiredString(row, "work_id"),
+      originalName: requiredString(row, "original_name"),
+      originalMimeType: requiredString(row, "original_mime_type"),
+      storedMimeType: requiredString(row, "stored_mime_type"),
+      originalByteLength: numberValue(row, "original_byte_length"),
+      storedByteLength: numberValue(row, "stored_byte_length"),
+      originalSha256: requiredString(row, "original_sha256"),
+      storedSha256: requiredString(row, "stored_sha256"),
+      storageKey: requiredString(row, "storage_key"),
+      width: numberValue(row, "width"),
+      height: numberValue(row, "height"),
+      pageCount: numberValue(row, "page_count"),
+      animated: booleanValue(row, "animated"),
+      contentUrl: `/api/attachments/${encodeURIComponent(attachmentId)}/content`,
+      createdAt: requiredString(row, "created_at")
+    };
+  }
+
+  createAttachment(workId: string, input: AttachmentInput): { attachment: Record<string, unknown>; created: boolean } {
+    this.getWork(workId);
+    const existing = this.db.get("SELECT * FROM attachments WHERE work_id = ? AND stored_sha256 = ?", workId, input.storedSha256);
+    if (existing) return { attachment: this.mapAttachment(existing), created: false };
+    const attachmentId = id("attachment");
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO attachments
+         (id, work_id, original_name, original_mime_type, stored_mime_type, original_byte_length, stored_byte_length,
+          original_sha256, stored_sha256, storage_key, width, height, page_count, animated, created_at, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        attachmentId,
+        workId,
+        input.originalName,
+        input.originalMimeType,
+        input.storedMimeType,
+        input.originalByteLength,
+        input.storedByteLength,
+        input.originalSha256,
+        input.storedSha256,
+        input.storageKey,
+        input.width,
+        input.height,
+        input.pageCount,
+        input.animated ? 1 : 0,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.audit(workId, "attachment.created", "attachment", attachmentId, {
+        originalMimeType: input.originalMimeType,
+        storedMimeType: input.storedMimeType,
+        originalByteLength: input.originalByteLength,
+        storedByteLength: input.storedByteLength,
+        animated: input.animated
+      });
+    });
+    return { attachment: this.getAttachment(attachmentId), created: true };
+  }
+
+  listAttachments(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all("SELECT * FROM attachments WHERE work_id = ? ORDER BY created_at DESC", workId).map((row) => this.mapAttachment(row));
+  }
+
+  getAttachment(attachmentId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM attachments WHERE id = ?", attachmentId);
+    if (!row) throw notFound("附件");
+    return this.mapAttachment(row);
+  }
+
+  deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
+    const attachment = this.getAttachment(attachmentId);
+    const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
+    if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被人物档案章节引用，无法删除");
+    const storageKey = String(attachment.storageKey);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
+      this.audit(String(attachment.workId), "attachment.deleted", "attachment", attachmentId, { storageKey });
+    });
+    const remaining = Number(this.db.get("SELECT COUNT(*) AS count FROM attachments WHERE storage_key = ?", storageKey)?.count ?? 0);
+    return { storageKey, removeStoredFile: remaining === 0 };
   }
 
   getCharacter(characterId: string): Record<string, unknown> {
@@ -2438,6 +2939,7 @@ export class Store {
     changeNote = ""
   ): Record<string, unknown> {
     const current = this.getCharacter(characterId);
+    if (current.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能直接编辑");
     const before = this.characterSnapshot(current);
     const workId = String(current.workId);
     const names = this.prepareCharacterNames(input.name ?? String(current.name), input.aliases ?? current.aliases as string[]);
@@ -2583,6 +3085,11 @@ export class Store {
     const timestamp = now();
     const versionNo = Number(current.versionNo) + 1;
     this.db.transaction(() => {
+      const sectionIds = this.db.all("SELECT id FROM character_profile_sections WHERE character_id = ?", characterId)
+        .map((row) => requiredString(row, "id"));
+      for (const sectionId of sectionIds) {
+        this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+      }
       this.db.run("UPDATE characters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, characterId);
       this.insertCharacterVersion(characterId, versionNo, "delete", null, "删除人物", timestamp);
       this.db.run("DELETE FROM characters WHERE id = ?", characterId);
@@ -2590,7 +3097,7 @@ export class Store {
     });
   }
 
-  private mapCharacter(row: Row): Record<string, unknown> {
+  private mapCharacter(row: Row, includeProfileSections = true): Record<string, unknown> {
     const indexedAliases = this.db.all(
       "SELECT display_name FROM character_names WHERE character_id = ? AND kind = 'alias' ORDER BY sort_order",
       requiredString(row, "id")
@@ -2608,24 +3115,56 @@ export class Store {
       note: requiredString(item, "note")
     }));
     const raceId = optionalString(row, "race_id");
-    const race = raceId ? this.db.get("SELECT id, name FROM races WHERE id = ?", raceId) : undefined;
-    const species = race ? requiredString(race, "name") : requiredString(row, "species");
+    const race = raceId ? this.getRace(raceId) : undefined;
+    const species = race ? String(race.name) : requiredString(row, "species");
+    const profile = json<Record<string, unknown>>(requiredString(row, "profile_json"), {});
+    const characterId = requiredString(row, "id");
+    const profileSectionCount = Number(this.db.get(
+      "SELECT COUNT(*) AS count FROM character_profile_sections WHERE character_id = ?",
+      characterId
+    )?.count ?? 0);
+    const markdownSections = includeProfileSections
+      ? this.db.all(
+        "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
+        characterId
+      ).map((section) => this.mapCharacterProfileSection(section))
+      : [];
+    if (markdownSections.length > 0) {
+      profile.sections = markdownSections.map((section) => ({
+        id: section.id,
+        sectionType: section.sectionType,
+        title: section.title,
+        content: section.contentMarkdown,
+        contentMarkdown: section.contentMarkdown,
+        summary: section.summary,
+        sortOrder: section.sortOrder,
+        versionNo: section.versionNo
+      }));
+    }
     return {
-      id: requiredString(row, "id"),
+      id: characterId,
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
-      raceId: race ? requiredString(race, "id") : null,
-      race: race ? { id: requiredString(race, "id"), name: species } : null,
+      raceId: race ? String(race.id) : null,
+      race: race ? {
+        id: String(race.id),
+        name: species,
+        lineage: race.lineage,
+        effectiveSettings: race.effectiveSettings
+      } : null,
       species,
       organizationIds: organizations.map((organization) => organization.organizationId),
       organizations,
       attributes: json(requiredString(row, "attributes_json"), {}),
-      profile: json(requiredString(row, "profile_json"), {}),
+      profile,
+      profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       visibility: requiredString(row, "visibility"),
       firstChapterId: optionalString(row, "first_chapter_id"),
+      mergedIntoCharacterId: optionalString(row, "merged_into_character_id"),
+      mergedAt: optionalString(row, "merged_at"),
       versionNo: numberValue(row, "version_no"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
@@ -2641,6 +3180,176 @@ export class Store {
       normalizedName
     );
     return row ? requiredString(row, "character_id") : null;
+  }
+
+  mergeCharacters(input: {
+    reviewId: string;
+    targetCharacterId: string;
+    sourceCharacterId: string;
+    expectedTargetVersionNo: number;
+    expectedSourceVersionNo: number;
+  }): Record<string, unknown> {
+    if (input.targetCharacterId === input.sourceCharacterId) {
+      throw new AppError(400, "CHARACTER_MERGE_SELF", "不能把角色合并到自身");
+    }
+    const review = this.getReviewItem(input.reviewId);
+    if (review.itemType !== "character-duplicate" || review.status !== "pending") {
+      throw new AppError(409, "CHARACTER_REVIEW_DECIDED", "该角色查重项已经处理");
+    }
+    const reviewCharacterIds = (review.entityRefs as unknown[]).flatMap((reference) => {
+      if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
+      const characterId = (reference as Record<string, unknown>).id;
+      return typeof characterId === "string" ? [characterId] : [];
+    });
+    if (!reviewCharacterIds.includes(input.targetCharacterId) || !reviewCharacterIds.includes(input.sourceCharacterId)) {
+      throw new AppError(400, "CHARACTER_REVIEW_MISMATCH", "待合并角色与审核项不一致");
+    }
+    const target = this.getCharacter(input.targetCharacterId);
+    const source = this.getCharacter(input.sourceCharacterId);
+    if (target.workId !== source.workId || target.workId !== review.workId) {
+      throw new AppError(400, "CHARACTER_WORK_MISMATCH", "待合并角色不属于同一作品");
+    }
+    if (target.mergedIntoCharacterId || source.mergedIntoCharacterId) {
+      throw new AppError(409, "CHARACTER_ALREADY_MERGED", "待合并角色中已有角色被合并");
+    }
+    if (Number(target.versionNo) !== input.expectedTargetVersionNo || Number(source.versionNo) !== input.expectedSourceVersionNo) {
+      throw new AppError(409, "CHARACTER_VERSION_CHANGED", "角色在审核后已发生变化，请重新运行查重");
+    }
+
+    const workId = String(target.workId);
+    const targetId = String(target.id);
+    const sourceId = String(source.id);
+    const mergeId = id("characterMerge");
+    const timestamp = now();
+    const sourceRelationships = this.listRelationships(workId).filter(
+      (relationship) => relationship.fromCharacterId === sourceId || relationship.toCharacterId === sourceId
+    );
+    const timelineEvents = this.listTimelineEvents(workId).filter(
+      (event) => (event.participantIds as string[]).includes(sourceId)
+    );
+    const sourceMemberships = this.db.all(
+      "SELECT * FROM character_organization_memberships WHERE character_id = ? ORDER BY organization_id",
+      sourceId
+    );
+    const referenceSnapshot = { relationships: sourceRelationships, timelineEvents, memberships: sourceMemberships };
+
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM character_names WHERE character_id = ?", sourceId);
+      const aliases = [...(target.aliases as string[]), String(source.name), ...(source.aliases as string[])];
+      const uniqueAliases = [...new Map(aliases
+        .map((alias) => alias.normalize("NFKC").trim().replace(/\s+/gu, " "))
+        .filter(Boolean)
+        .filter((alias) => normalizeCharacterName(alias) !== normalizeCharacterName(String(target.name)))
+        .map((alias) => [normalizeCharacterName(alias), alias])).values()];
+      this.updateCharacter(targetId, {
+        aliases: uniqueAliases,
+        raceId: (target.raceId as string | null) ?? (source.raceId as string | null),
+        organizationIds: [...new Set([...(target.organizationIds as string[]), ...(source.organizationIds as string[])])],
+        attributes: { ...(source.attributes as Record<string, unknown>), ...(target.attributes as Record<string, unknown>) },
+        profile: { ...(source.profile as Record<string, unknown>), ...(target.profile as Record<string, unknown>) },
+        currentState: { ...(source.currentState as Record<string, unknown>), ...(target.currentState as Record<string, unknown>) },
+        lockedFields: [...new Set([...(target.lockedFields as string[]), ...(source.lockedFields as string[])])],
+        firstChapterId: (target.firstChapterId as string | null) ?? (source.firstChapterId as string | null)
+      }, "merge", mergeId, `合并角色“${String(source.name)}”`);
+
+      for (const event of timelineEvents) {
+        const participantIds = [...new Set((event.participantIds as string[]).map(
+          (characterId) => characterId === sourceId ? targetId : characterId
+        ))];
+        this.updateTimelineEvent(String(event.id), { participantIds }, "merge", mergeId, `合并角色“${String(source.name)}”`);
+      }
+
+      for (const relationship of sourceRelationships) {
+        let fromCharacterId = relationship.fromCharacterId === sourceId ? targetId : String(relationship.fromCharacterId);
+        let toCharacterId = relationship.toCharacterId === sourceId ? targetId : String(relationship.toCharacterId);
+        if (fromCharacterId === toCharacterId) {
+          this.deleteRelationship(String(relationship.id));
+          continue;
+        }
+        if (!relationship.directed && fromCharacterId.localeCompare(toCharacterId) > 0) {
+          [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
+        }
+        const duplicate = this.listRelationships(workId).find((candidate) => candidate.id !== relationship.id
+          && candidate.fromCharacterId === fromCharacterId
+          && candidate.toCharacterId === toCharacterId
+          && Boolean(candidate.directed) === Boolean(relationship.directed)
+          && candidate.category === relationship.category
+          && normalizeCharacterName(String(candidate.subtype)) === normalizeCharacterName(String(relationship.subtype))
+          && candidate.confirmationStatus !== "rejected");
+        if (duplicate) {
+          const keywords = [...new Set([...(duplicate.keywords as string[]), ...(relationship.keywords as string[])])];
+          const evidence = [...new Map([...(duplicate.evidence as unknown[]), ...(relationship.evidence as unknown[])]
+            .map((item) => [JSON.stringify(item), item])).values()];
+          this.updateRelationship(String(duplicate.id), {
+            keywords,
+            evidence,
+            confidence: Math.max(Number(duplicate.confidence), Number(relationship.confidence)),
+            locked: Boolean(duplicate.locked) || Boolean(relationship.locked),
+            confirmationStatus: duplicate.confirmationStatus === "confirmed" || relationship.confirmationStatus === "confirmed"
+              ? "confirmed"
+              : String(duplicate.confirmationStatus)
+          }, "merge", mergeId, `合并角色“${String(source.name)}”的重复关系`);
+          this.deleteRelationship(String(relationship.id));
+        } else {
+          this.updateRelationship(String(relationship.id), { fromCharacterId, toCharacterId }, "merge", mergeId, `迁移角色“${String(source.name)}”的关系`);
+        }
+      }
+
+      this.db.run("DELETE FROM character_organization_memberships WHERE character_id = ?", sourceId);
+      const sourceVersionNo = Number(source.versionNo) + 1;
+      this.db.run(
+        "UPDATE characters SET merged_into_character_id = ?, merged_at = ?, version_no = ?, updated_at = ? WHERE id = ?",
+        targetId,
+        timestamp,
+        sourceVersionNo,
+        timestamp,
+        sourceId
+      );
+      this.insertCharacterVersion(sourceId, sourceVersionNo, "merge", mergeId, `合并至角色“${String(target.name)}”`, timestamp);
+      this.db.run(
+        `INSERT INTO character_merges (id, work_id, source_character_id, target_character_id, review_id,
+         source_snapshot_json, target_snapshot_json, reference_snapshot_json, created_at, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        mergeId,
+        workId,
+        sourceId,
+        targetId,
+        input.reviewId,
+        JSON.stringify(source),
+        JSON.stringify(target),
+        JSON.stringify(referenceSnapshot),
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.db.run(
+        "UPDATE review_items SET status = 'fixed', resolution_note = ?, updated_at = ? WHERE id = ?",
+        `已将“${String(source.name)}”合并到“${String(target.name)}”`,
+        timestamp,
+        input.reviewId
+      );
+      this.audit(workId, "character.merged", "character", targetId, {
+        mergeId,
+        sourceCharacterId: sourceId,
+        reviewId: input.reviewId
+      });
+    });
+    return {
+      mergeId,
+      target: this.getCharacter(targetId),
+      source: this.getCharacter(sourceId),
+      review: this.getReviewItem(input.reviewId)
+    };
+  }
+
+  resolveCharacterDuplicateReview(reviewId: string): Record<string, unknown> {
+    const review = this.getReviewItem(reviewId);
+    if (review.itemType !== "character-duplicate" || review.status !== "pending") {
+      throw new AppError(409, "CHARACTER_REVIEW_DECIDED", "该角色查重项已经处理");
+    }
+    return this.updateReviewItem(reviewId, {
+      status: "exception",
+      resolutionNote: "作者确认是不同角色"
+    });
   }
 
   private prepareCharacterNames(name: string, aliases: string[]): {
@@ -3026,6 +3735,7 @@ export class Store {
     const from = this.getCharacter(fromCharacterId);
     const to = this.getCharacter(toCharacterId);
     if (from.workId !== workId || to.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "关系人物不属于当前作品");
+    if (from.mergedIntoCharacterId || to.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能继续被引用");
     if (!input.directed && fromCharacterId.localeCompare(toCharacterId) > 0) [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
     this.assertRelationshipUnique(workId, fromCharacterId, toCharacterId, input.category, input.subtype ?? "", Boolean(input.directed));
     const timestamp = now();
@@ -3092,6 +3802,7 @@ export class Store {
     const from = this.getCharacter(fromCharacterId);
     const to = this.getCharacter(toCharacterId);
     if (from.workId !== current.workId || to.workId !== current.workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "关系人物不属于当前作品");
+    if (from.mergedIntoCharacterId || to.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能继续被引用");
     const directed = input.directed ?? Boolean(current.directed);
     if (!directed && fromCharacterId.localeCompare(toCharacterId) > 0) [fromCharacterId, toCharacterId] = [toCharacterId, fromCharacterId];
     this.assertRelationshipUnique(
@@ -3759,13 +4470,18 @@ export class Store {
       pattern,
       pattern
     );
-    const races = this.db.all(
-      "SELECT id, name, description, settings_json FROM races WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern,
-      pattern
-    );
+    const normalizedQuery = query.toLocaleLowerCase("zh-CN");
+    const races = this.listRaces(workId).filter((race) => {
+      const lineage = race.lineage as Array<{ name: string }>;
+      const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
+      return [
+        race.name,
+        race.description,
+        ...(race.settings as string[]),
+        ...lineage.map((item) => item.name),
+        ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
+      ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+    }).slice(0, 50);
     const settings = this.db.all(
       "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
@@ -3773,8 +4489,26 @@ export class Store {
       pattern
     );
     const characters = this.db.all(
-      "SELECT id, name, aliases_json, species FROM characters WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR aliases_json LIKE ? ESCAPE '\\' OR species LIKE ? ESCAPE '\\') LIMIT 50",
+      `WITH RECURSIVE character_race_lineage(character_id, race_id, parent_race_id, name, path) AS (
+         SELECT character.id, race.id, race.parent_race_id, race.name, race.name
+         FROM characters character JOIN races race ON race.id = character.race_id
+         WHERE character.work_id = ?
+         UNION ALL
+         SELECT lineage.character_id, parent.id, parent.parent_race_id, parent.name, parent.name || ' / ' || lineage.path
+         FROM character_race_lineage lineage JOIN races parent ON parent.id = lineage.parent_race_id
+       ), character_race_paths AS (
+         SELECT character_id, path FROM character_race_lineage WHERE parent_race_id IS NULL
+       )
+       SELECT character.id, character.name, character.aliases_json, character.species,
+              COALESCE(path.path, character.species) AS race_path
+       FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
+       WHERE character.work_id = ? AND (
+         character.name LIKE ? ESCAPE '\\' OR character.aliases_json LIKE ? ESCAPE '\\' OR character.species LIKE ? ESCAPE '\\'
+         OR EXISTS (SELECT 1 FROM character_race_lineage lineage WHERE lineage.character_id = character.id AND lineage.name LIKE ? ESCAPE '\\')
+       ) LIMIT 50`,
       workId,
+      workId,
+      pattern,
       pattern,
       pattern,
       pattern
@@ -3786,15 +4520,41 @@ export class Store {
       pattern,
       pattern
     );
+    const characterSections = this.searchCharacterProfileSections(workId, query, 30);
     const snippet = (content: string): string => {
       const index = content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
       const start = Math.max(0, index - 40);
       return content.slice(start, start + 120);
     };
     return [
-      ...characters.map((row) => ({ type: "character", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: [requiredString(row, "species"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、") })),
+      ...characters.map((row) => ({
+        type: "character",
+        id: requiredString(row, "id"),
+        title: requiredString(row, "name"),
+        snippet: [requiredString(row, "race_path"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、"),
+        racePath: requiredString(row, "race_path")
+      })),
+      ...characterSections.map((section) => ({
+        type: "character",
+        id: String(section.characterId),
+        sectionId: String(section.id),
+        title: `${String(section.characterName)} / ${String(section.title)}`,
+        snippet: snippet(String(section.contentMarkdown)),
+        sectionType: String(section.sectionType)
+      })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
-      ...races.map((row) => ({ type: "race", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
+      ...races.map((race) => {
+        const lineage = race.lineage as Array<{ id: string; name: string }>;
+        const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceId: string; sourceRaceName: string; inherited: boolean }>;
+        return {
+          type: "race",
+          id: String(race.id),
+          title: String(race.name),
+          snippet: snippet(`${lineage.map((item) => item.name).join(" / ")}\n${String(race.description)}\n${effectiveSettings.map((item) => `${item.sourceRaceName}：${item.value}`).join("\n")}`),
+          lineage,
+          effectiveSettings
+        };
+      }),
       ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
       ...chapters.map((row) => ({ type: "chapter", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), volumeId: requiredString(row, "volume_id") }))
     ];
@@ -3803,11 +4563,11 @@ export class Store {
   exportWork(workId: string): Record<string, unknown> {
     const tree = this.getWorkTree(workId);
     return {
-      schemaVersion: 6,
+      schemaVersion: 7,
       exportedAt: now(),
       work: tree,
       settings: this.listSettings(workId),
-      characters: this.listCharacters(workId),
+      characters: this.listCharacters(workId, true, true),
       races: this.listRaces(workId),
       organizations: this.listOrganizations(workId),
       timelineTracks: this.listTimelineTracks(workId),

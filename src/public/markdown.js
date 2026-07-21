@@ -13,6 +13,15 @@ function safeLinkTarget(value) {
   return null;
 }
 
+function safeImageTarget(value) {
+  const target = String(value ?? "").trim();
+  const attachment = target.match(/^attachment:\/\/([A-Za-z0-9_-]{1,300})$/u);
+  if (attachment) return `/api/attachments/${encodeURIComponent(attachment[1])}/content`;
+  if (/^https:\/\//iu.test(target)) return target;
+  if (target.startsWith("/") && !target.startsWith("//")) return target;
+  return null;
+}
+
 function renderInlineMarkdown(value) {
   const tokens = [];
   const preserve = (html) => {
@@ -22,6 +31,12 @@ function renderInlineMarkdown(value) {
   };
   let source = String(value ?? "");
   source = source.replace(/`([^`\n]+)`/gu, (_match, code) => preserve(`<code>${escapeHtml(code)}</code>`));
+  source = source.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/gu, (_match, label, src) => {
+    const target = safeImageTarget(src);
+    if (!target) return `[图片：${label || src}]`;
+    const caption = String(label ?? "").trim();
+    return preserve(`<span class="markdown-image"><img src="${escapeHtml(target)}" alt="${escapeHtml(caption)}" loading="lazy" decoding="async">${caption ? `<small>${escapeHtml(caption)}</small>` : ""}</span>`);
+  });
   source = source.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu, (_match, label, href) => {
     const target = safeLinkTarget(href);
     if (!target) return `${label}（${href}）`;
@@ -153,7 +168,7 @@ export function renderMarkdown(value) {
       flushBlocks();
       continue;
     }
-    const heading = line.match(/^(#{1,4})\s+(.+)$/u);
+    const heading = line.match(/^(#{1,6})\s+(.+)$/u);
     if (heading) {
       flushBlocks();
       const level = heading[1].length;
