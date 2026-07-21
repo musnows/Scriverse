@@ -19,6 +19,15 @@ describe("侧边栏 Markdown 渲染", () => {
     expect(html).not.toContain('href="javascript:');
   });
 
+  it("渲染单反引号与双反引号行内代码", () => {
+    const html = renderMarkdown("`单反引号` 与 ``包含 ` 的代码``，以及 ``222222`` 我喜欢你");
+
+    expect(html).toContain("<code>单反引号</code>");
+    expect(html).toContain("<code>包含 ` 的代码</code>");
+    expect(html).toContain("<code>222222</code> 我喜欢你");
+    expect(html).not.toContain("``222222``");
+  });
+
   it("将连续引用行合并为一个引用块", () => {
     const html = renderMarkdown('> "第一句"\n>\n> "第二句"\n> "第三句"');
 
