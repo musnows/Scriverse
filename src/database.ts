@@ -201,6 +201,8 @@ export class Database {
         locked_fields_json TEXT NOT NULL DEFAULT '[]',
         visibility TEXT NOT NULL DEFAULT 'author',
         first_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
+        merged_into_character_id TEXT,
+        merged_at TEXT,
         version_no INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -299,6 +301,19 @@ export class Database {
         resolution_note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS character_merges (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        source_character_id TEXT NOT NULL UNIQUE,
+        target_character_id TEXT NOT NULL,
+        review_id TEXT REFERENCES review_items(id) ON DELETE SET NULL,
+        source_snapshot_json TEXT NOT NULL,
+        target_snapshot_json TEXT NOT NULL,
+        reference_snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by_user_id TEXT
       );
 
       CREATE TABLE IF NOT EXISTS providers (
@@ -549,6 +564,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_timeline_tracks_work ON timeline_tracks(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_relationships_work ON relationships(work_id);
       CREATE INDEX IF NOT EXISTS idx_reviews_work ON review_items(work_id, status);
+      CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tasks_work ON analysis_tasks(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_calls_work ON ai_calls(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
@@ -1247,6 +1263,33 @@ export class Database {
           this.run("ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (29, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(30)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("merged_into_character_id")) {
+          this.run("ALTER TABLE characters ADD COLUMN merged_into_character_id TEXT");
+        }
+        if (!characterColumns.has("merged_at")) {
+          this.run("ALTER TABLE characters ADD COLUMN merged_at TEXT");
+        }
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS character_merges (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            source_character_id TEXT NOT NULL UNIQUE,
+            target_character_id TEXT NOT NULL,
+            review_id TEXT REFERENCES review_items(id) ON DELETE SET NULL,
+            source_snapshot_json TEXT NOT NULL,
+            target_snapshot_json TEXT NOT NULL,
+            reference_snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT
+          );
+          CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
+        `);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?)", new Date().toISOString());
       });
     }
   }

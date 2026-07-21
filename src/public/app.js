@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260719-group-relation-list";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260720-galaxy-tooltip";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260717-markdown-table-scrollbar";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -55,6 +55,7 @@ const analysisTaskTypeLabels = new Map([
   ...MODEL_PURPOSE_OPTIONS,
   ["character-extraction", "全书角色抽取"],
   ["character-summary", "全书角色抽取"],
+  ["character-identity-audit", "AI 角色查重"],
   ["worldview-analysis", "世界观分析"],
   ["setting-extraction", "设定抽取"],
   ["structure", "结构分析"],
@@ -2338,7 +2339,8 @@ async function renderCharacters() {
     api(`/api/works/${state.work.id}/races`),
     api(`/api/works/${state.work.id}/organizations`)
   ]);
-  $("#module-content").innerHTML = state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
+  const auditPanel = `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>`;
+  $("#module-content").innerHTML = auditPanel + (state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     const sections = normalizeCharacterSections(item.profile?.sections);
     return `
@@ -2352,7 +2354,19 @@ async function renderCharacters() {
     ${sections.length ? `<small class="character-section-count">${sections.length} 个设定章节</small>` : ""}
     <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`;
   }).join("")}</div>`
-    : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。");
+    : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
+  $("#create-character-audit-task")?.addEventListener("click", async () => {
+    const button = $("#create-character-audit-task");
+    button.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: "character-identity-audit", scope: { type: "book" } } });
+      toast("角色查重任务已加入分析队列");
+      await showModule("tasks");
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  });
   $("#module-content").querySelectorAll("[data-open-character]").forEach((card) => {
     const open = () => openCharacterDialog(state.characters.find((item) => item.id === card.dataset.openCharacter));
     card.addEventListener("click", (event) => { if (!event.target.closest("button")) open(); });
@@ -2488,8 +2502,24 @@ async function renderRelationships() {
 }
 
 async function renderReviews() {
-  const reviews = await api(`/api/works/${state.work.id}/reviews`);
-  $("#module-content").innerHTML = reviews.length ? `<div class="card-grid">${reviews.map((item) => `
+  const [reviews, characters] = await Promise.all([
+    api(`/api/works/${state.work.id}/reviews`),
+    api(`/api/works/${state.work.id}/characters?includeMerged=1`)
+  ]);
+  const characterById = new Map(characters.map((character) => [character.id, character]));
+  const duplicateCard = (item) => {
+    const refs = (item.entityRefs ?? []).filter((reference) => reference?.type === "character" && characterById.has(reference.id));
+    const sides = refs.map((reference) => ({ reference, character: characterById.get(reference.id) }));
+    const sideHtml = sides.map(({ character }) => `<section><strong>${esc(character.name)}</strong><small>v${esc(String(character.versionNo))} · ${esc(character.species || "种族未知")}</small><div>${character.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("") || '<span class="organization-empty">无别名</span>'}</div><p>${esc(character.attributes?.identity || character.profile?.summary || "尚未记录身份说明")}</p></section>`).join("");
+    const evidenceHtml = (item.evidence ?? []).map((evidence) => `<li><strong>${esc(evidence.chapterTitle || evidence.chapterId || "原文")}</strong><q>${esc(evidence.quote || "")}</q>${evidence.supports ? `<small>${esc(evidence.supports)}</small>` : ""}</li>`).join("");
+    const actions = item.status === "pending" && sides.length === 2 ? `<div class="card-actions character-duplicate-actions">
+      <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[0].character.id)}" data-merge-source="${esc(sides[1].character.id)}" data-target-version="${esc(String(sides[0].reference.versionNo))}" data-source-version="${esc(String(sides[1].reference.versionNo))}">合并为 ${esc(sides[0].character.name)}</button>
+      <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[1].character.id)}" data-merge-source="${esc(sides[0].character.id)}" data-target-version="${esc(String(sides[1].reference.versionNo))}" data-source-version="${esc(String(sides[0].reference.versionNo))}">合并为 ${esc(sides[1].character.name)}</button>
+      <button data-keep-characters-separate="${esc(item.id)}">确认是不同角色</button>
+    </div>` : "";
+    return `<article class="record-card character-duplicate-review"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
+  };
+  $("#module-content").innerHTML = reviews.length ? `<div class="card-grid">${reviews.map((item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
     <article class="record-card"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
     <p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>
     ${item.status === "pending" ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`).join("")}</div>`
@@ -2497,6 +2527,38 @@ async function renderReviews() {
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
     await renderReviews();
+  }));
+  $("#module-content").querySelectorAll("[data-merge-review]").forEach((button) => button.addEventListener("click", async () => {
+    const target = characterById.get(button.dataset.mergeTarget);
+    const source = characterById.get(button.dataset.mergeSource);
+    if (!target || !source || !window.confirm(`确认把“${source.name}”合并到“${target.name}”？来源角色的别名、组织、时间线和关系会迁移到目标角色。`)) return;
+    button.disabled = true;
+    try {
+      await api(`/api/reviews/${button.dataset.mergeReview}/character-resolution`, { method: "POST", body: {
+        action: "merge",
+        targetCharacterId: target.id,
+        sourceCharacterId: source.id,
+        expectedTargetVersionNo: Number(button.dataset.targetVersion),
+        expectedSourceVersionNo: Number(button.dataset.sourceVersion)
+      } });
+      toast(`已将“${source.name}”合并到“${target.name}”`);
+      await renderReviews();
+      await loadAiReferences();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+  $("#module-content").querySelectorAll("[data-keep-characters-separate]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await api(`/api/reviews/${button.dataset.keepCharactersSeparate}/character-resolution`, { method: "POST", body: { action: "keep-separate" } });
+      toast("已确认这两个档案属于不同角色");
+      await renderReviews();
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
   }));
 }
 
@@ -3690,8 +3752,8 @@ function openReviewDialog() {
 
 function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => [chapter.id, `${volume.title} / ${chapter.title}`]));
-  openDialog("开始 AI 分析", field("taskType", "分析类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["timeline-analysis", "时间轴与事件抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书综合分析"]]) + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
-    const scope = form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
+  openDialog("开始 AI 分析", field("taskType", "分析类型", "select", "chapter-analysis", [["chapter-analysis", "章节理解"], ["character-extraction", "全书角色抽取"], ["character-identity-audit", "AI 角色查重"], ["timeline-analysis", "时间轴与事件抽取"], ["relationship-analysis", "全书人物关系分析"], ["worldview-analysis", "世界观分析"], ["setting-extraction", "设定抽取"], ["consistency-check", "一致性校对"], ["book-analysis", "全书综合分析"]]) + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + field("chapterId", "章节", "select", chapterOptions[0]?.[0] ?? "", chapterOptions), async (form) => {
+    const scope = form.get("taskType") === "character-identity-audit" || form.get("scopeType") === "book" ? { type: "book" } : { type: "chapter", chapterId: form.get("chapterId") };
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType: form.get("taskType"), scope } });
     await renderTasks();
   });
