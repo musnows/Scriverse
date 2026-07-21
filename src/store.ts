@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
+import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
   countWords,
@@ -423,6 +424,32 @@ export class Store {
     }));
   }
 
+  listEntityVersionsPage(type: VersionedEntityType, entityId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM entity_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.entity_type = ? AND version.entity_id = ? ORDER BY version.version_no DESC${page.sql}`,
+      type,
+      entityId,
+      ...page.params
+    );
+    if (!rows.length && pagination.page === 1) this.versionedEntity(type, entityId);
+    return paginated(rows.map((row) => ({
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      entityType: requiredString(row, "entity_type"),
+      entityId: requiredString(row, "entity_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    })), pagination);
+  }
+
   restoreEntityVersion(type: VersionedEntityType, entityId: string, versionNo: number): Record<string, unknown> {
     const version = this.db.get(
       "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? AND version_no = ?",
@@ -559,6 +586,22 @@ export class Store {
       actor.userId,
       actor.userId
     ).map((row) => this.mapWork(row));
+  }
+
+  listWorksPage(pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const actor = currentRequestActor();
+    const page = paginationSql(pagination);
+    const rows = !actor || (actor.role === "admin" && actor.authentication !== "api-key")
+      ? this.db.all(`SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC${page.sql}`, ...page.params)
+      : this.db.all(
+        `SELECT DISTINCT work.* FROM works work LEFT JOIN work_memberships membership ON membership.work_id = work.id
+         WHERE COALESCE(work.is_internal, 0) = 0 AND (work.owner_user_id = ? OR membership.user_id = ?)
+         ORDER BY work.updated_at DESC${page.sql}`,
+        actor.userId,
+        actor.userId,
+        ...page.params
+      );
+    return paginated(rows.map((row) => this.mapWork(row)), pagination);
   }
 
   getWork(workId: string): Record<string, unknown> {
@@ -810,6 +853,32 @@ export class Store {
     return { ...work, volumes };
   }
 
+  getWorkDirectoryPage(workId: string, pagination: Pagination): Record<string, unknown> {
+    const work = this.getWork(workId);
+    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const page = paginationSql(pagination);
+    const chapterRows = this.db.all(
+      `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
+        analysis_status, excluded_from_analysis, created_at, updated_at
+       FROM chapters WHERE work_id = ? ORDER BY sort_order, created_at${page.sql}`,
+      workId,
+      ...page.params
+    );
+    const chapters = chapterRows.map((row) => this.mapChapterDirectoryEntry(row));
+    const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
+    for (const chapter of chapters) {
+      const volumeId = String(chapter.volumeId);
+      const list = chaptersByVolume.get(volumeId) ?? [];
+      list.push(chapter);
+      chaptersByVolume.set(volumeId, list);
+    }
+    const volumes = volumeRows.map((row) => ({
+      ...this.mapVolume(row),
+      chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
+    }));
+    return { ...work, volumes, directoryPage: paginated(chapters, pagination) };
+  }
+
   listFileVersions(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db
@@ -828,6 +897,30 @@ export class Store {
         createdAt: requiredString(row, "created_at"),
         actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
       }));
+  }
+
+  listFileVersionsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT version.id, version.work_id, version.file_name, version.file_type, version.word_count, version.paragraph_count,
+        version.warnings_json, version.created_at, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM file_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.work_id = ? ORDER BY version.created_at DESC${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      fileName: requiredString(row, "file_name"),
+      fileType: requiredString(row, "file_type"),
+      wordCount: numberValue(row, "word_count"),
+      paragraphCount: numberValue(row, "paragraph_count"),
+      warnings: json(requiredString(row, "warnings_json"), []),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    })), pagination);
   }
 
   restoreFileVersion(workId: string, fileVersionId: string): Record<string, unknown> {
@@ -1122,6 +1215,22 @@ export class Store {
     return rows.map((row) => this.mapChapterVersionRow(row));
   }
 
+  listChapterVersionsPage(chapterId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+        FROM chapter_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+        WHERE version.chapter_id = ? ORDER BY version.version_no DESC${page.sql}`,
+      chapterId,
+      ...page.params
+    );
+    if (!rows.length) {
+      this.getChapter(chapterId);
+      return paginated([], pagination);
+    }
+    return paginated(rows.slice(pagination.offset, pagination.offset + pagination.limit + 1).map((row) => this.mapChapterVersionRow(row)), pagination);
+  }
+
   listChapterInsights(chapterId: string): Record<string, unknown>[] {
     this.getChapter(chapterId);
     return this.db
@@ -1139,6 +1248,29 @@ export class Store {
         status: requiredString(row, "status"),
         createdAt: requiredString(row, "created_at")
       }));
+  }
+
+  listChapterInsightsPage(chapterId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getChapter(chapterId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM chapter_insights WHERE chapter_id = ? ORDER BY chapter_version DESC, created_at DESC${page.sql}`,
+      chapterId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      id: requiredString(row, "id"),
+      chapterId: requiredString(row, "chapter_id"),
+      chapterVersion: numberValue(row, "chapter_version"),
+      summary: requiredString(row, "summary"),
+      events: json(requiredString(row, "events_json"), []),
+      characters: json(requiredString(row, "characters_json"), []),
+      settings: json(requiredString(row, "settings_json"), []),
+      evidence: json(requiredString(row, "evidence_json"), []),
+      uncertainties: json(requiredString(row, "uncertainties_json"), []),
+      status: requiredString(row, "status"),
+      createdAt: requiredString(row, "created_at")
+    })), pagination);
   }
 
   listCurrentChapterInsights(workId: string): Record<string, unknown>[] {
@@ -1616,6 +1748,40 @@ export class Store {
     }));
   }
 
+  listChapterOutlinesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT c.id AS chapter_id, c.title AS chapter_title, c.volume_id, c.sort_order AS chapter_order,
+       v.title AS volume_title, v.sort_order AS volume_order,
+       o.goal, o.conflict, o.turning_point, o.notes, o.status, o.created_at, o.updated_at,
+       (SELECT COUNT(DISTINCT fo.foreshadow_id) FROM foreshadow_occurrences fo
+        JOIN foreshadows f ON f.id = fo.foreshadow_id
+        WHERE fo.chapter_id = c.id AND f.status IN ('planned', 'planted')) AS unresolved_count
+       FROM chapters c
+       JOIN volumes v ON v.id = c.volume_id
+       LEFT JOIN chapter_outlines o ON o.chapter_id = c.id
+       WHERE c.work_id = ?
+       ORDER BY v.sort_order, c.sort_order, c.created_at${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      chapterId: requiredString(row, "chapter_id"),
+      chapterTitle: requiredString(row, "chapter_title"),
+      volumeId: requiredString(row, "volume_id"),
+      volumeTitle: requiredString(row, "volume_title"),
+      goal: optionalString(row, "goal") ?? "",
+      conflict: optionalString(row, "conflict") ?? "",
+      turningPoint: optionalString(row, "turning_point") ?? "",
+      notes: optionalString(row, "notes") ?? "",
+      status: optionalString(row, "status") ?? "draft",
+      unresolvedForeshadowCount: numberValue(row, "unresolved_count"),
+      createdAt: optionalString(row, "created_at"),
+      updatedAt: optionalString(row, "updated_at")
+    })), pagination);
+  }
+
   upsertChapterOutline(
     chapterId: string,
     input: ChapterOutlineInput,
@@ -1759,6 +1925,22 @@ export class Store {
        ORDER BY CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at`,
       workId
     ).map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId));
+  }
+
+  listForeshadowsPage(workId: string, pagination: Pagination, status: "all" | "unresolved" | "resolved" = "all", currentChapterId?: string): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    if (currentChapterId) this.assertChapterInWork(currentChapterId, workId);
+    const where = status === "unresolved"
+      ? "AND status IN ('planned', 'planted')"
+      : status === "resolved" ? "AND status IN ('resolved', 'abandoned')" : "";
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT id FROM foreshadows WHERE work_id = ? ${where}
+       ORDER BY CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId)), pagination);
   }
 
   updateForeshadow(
@@ -1950,6 +2132,13 @@ export class Store {
     return this.db.all("SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title", workId).map((row) => this.mapSetting(row));
   }
 
+  listSettingsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(`SELECT * FROM settings WHERE work_id = ? ORDER BY locked DESC, category, title${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapSetting(row)), pagination);
+  }
+
   getSetting(settingId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM settings WHERE id = ?", settingId);
     if (!row) throw notFound("设定");
@@ -2061,6 +2250,13 @@ export class Store {
   listRaces(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all("SELECT * FROM races WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapRace(row));
+  }
+
+  listRacesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(`SELECT * FROM races WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapRace(row)), pagination);
   }
 
   getRace(raceId: string): Record<string, unknown> {
@@ -2270,6 +2466,13 @@ export class Store {
   listOrganizations(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapOrganization(row));
+  }
+
+  listOrganizationsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapOrganization(row)), pagination);
   }
 
   getOrganization(organizationId: string): Record<string, unknown> {
@@ -2528,6 +2731,17 @@ export class Store {
       .map((row) => this.mapCharacter(row, includeProfileSections));
   }
 
+  listCharactersPage(workId: string, pagination: Pagination, includeProfileSections = false, includeMerged = false): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM characters WHERE work_id = ?${includeMerged ? "" : " AND merged_into_character_id IS NULL"} ORDER BY name${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapCharacter(row, includeProfileSections)), pagination);
+  }
+
   private mapCharacterProfileSection(row: Row): Record<string, unknown> {
     return {
       id: requiredString(row, "id"),
@@ -2552,6 +2766,17 @@ export class Store {
       "SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at",
       characterId
     ).map((row) => this.mapCharacterProfileSection(row));
+  }
+
+  listCharacterProfileSectionsPage(characterId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getCharacter(characterId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM character_profile_sections WHERE character_id = ? ORDER BY sort_order, created_at${page.sql}`,
+      characterId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapCharacterProfileSection(row)), pagination);
   }
 
   listCharacterProfileSectionCatalog(characterId: string): Record<string, unknown>[] {
@@ -2766,6 +2991,31 @@ export class Store {
     }));
   }
 
+  listCharacterProfileSectionVersionsPage(sectionId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM character_profile_section_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.section_id = ? ORDER BY version.version_no DESC${page.sql}`,
+      sectionId,
+      ...page.params
+    );
+    if (!rows.length && pagination.page === 1) this.getCharacterProfileSection(sectionId);
+    return paginated(rows.map((row) => ({
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      sectionId: requiredString(row, "section_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    })), pagination);
+  }
+
   restoreCharacterProfileSection(sectionId: string, versionNo: number): Record<string, unknown> {
     const version = this.db.get(
       "SELECT * FROM character_profile_section_versions WHERE section_id = ? AND version_no = ?",
@@ -2906,6 +3156,13 @@ export class Store {
     return this.db.all("SELECT * FROM attachments WHERE work_id = ? ORDER BY created_at DESC", workId).map((row) => this.mapAttachment(row));
   }
 
+  listAttachmentsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(`SELECT * FROM attachments WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapAttachment(row)), pagination);
+  }
+
   getAttachment(attachmentId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM attachments WHERE id = ?", attachmentId);
     if (!row) throw notFound("附件");
@@ -3010,6 +3267,30 @@ export class Store {
       createdAt: requiredString(row, "created_at"),
       actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
     }));
+  }
+
+  listCharacterVersionsPage(characterId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM character_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE version.character_id = ? ORDER BY version.version_no DESC${page.sql}`,
+      characterId,
+      ...page.params
+    );
+    if (!rows.length && pagination.page === 1) this.getCharacter(characterId);
+    return paginated(rows.map((row) => ({
+      id: requiredString(row, "id"),
+      workId: optionalString(row, "work_id"),
+      characterId: requiredString(row, "character_id"),
+      versionNo: numberValue(row, "version_no"),
+      snapshot: json(requiredString(row, "snapshot_json"), {}),
+      source: requiredString(row, "source"),
+      sourceRef: optionalString(row, "source_ref"),
+      changeNote: requiredString(row, "change_note"),
+      createdAt: requiredString(row, "created_at"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    })), pagination);
   }
 
   restoreCharacter(characterId: string, versionNo: number): Record<string, unknown> {
@@ -3454,6 +3735,13 @@ export class Store {
     return this.db.all("SELECT * FROM timeline_tracks WHERE work_id = ? ORDER BY sort_order, created_at", workId).map((row) => this.mapTimelineTrack(row));
   }
 
+  listTimelineTracksPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(`SELECT * FROM timeline_tracks WHERE work_id = ? ORDER BY sort_order, created_at${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapTimelineTrack(row)), pagination);
+  }
+
   getTimelineTrack(trackId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM timeline_tracks WHERE id = ?", trackId);
     if (!row) throw notFound("独立时间轴");
@@ -3555,6 +3843,17 @@ export class Store {
     return this.db
       .all("SELECT * FROM timeline_events WHERE work_id = ? ORDER BY time_sort IS NULL, time_sort, created_at", workId)
       .map((row) => this.mapTimelineEvent(row));
+  }
+
+  listTimelineEventsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM timeline_events WHERE work_id = ? ORDER BY time_sort IS NULL, time_sort, created_at${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapTimelineEvent(row)), pagination);
   }
 
   getTimelineEvent(eventId: string): Record<string, unknown> {
@@ -3782,6 +4081,18 @@ export class Store {
       .map((row) => this.mapRelationship(row));
   }
 
+  listRelationshipsPage(workId: string, pagination: Pagination, minimumConfidence = 0): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM relationships WHERE work_id = ? AND confidence >= ? ORDER BY confidence DESC, created_at${page.sql}`,
+      workId,
+      minimumConfidence,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapRelationship(row)), pagination);
+  }
+
   getRelationship(relationshipId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM relationships WHERE id = ?", relationshipId);
     if (!row) throw notFound("人物关系");
@@ -3931,6 +4242,15 @@ export class Store {
     return rows.map((row) => this.mapReviewItem(row));
   }
 
+  listReviewItemsPage(workId: string, pagination: Pagination, status?: string): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = status
+      ? this.db.all(`SELECT * FROM review_items WHERE work_id = ? AND status = ? ORDER BY created_at DESC${page.sql}`, workId, status, ...page.params)
+      : this.db.all(`SELECT * FROM review_items WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapReviewItem(row)), pagination);
+  }
+
   getReviewItem(reviewId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM review_items WHERE id = ?", reviewId);
     if (!row) throw notFound("审核项");
@@ -4028,6 +4348,18 @@ export class Store {
     ).map((row) => this.mapContinuationGuard(row));
   }
 
+  listContinuationGuardsPage(suggestionId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const suggestion = this.db.get("SELECT id FROM ai_suggestions WHERE id = ?", suggestionId);
+    if (!suggestion) throw notFound("AI 建议");
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM continuation_guard_runs WHERE suggestion_id = ? ORDER BY created_at DESC${page.sql}`,
+      suggestionId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapContinuationGuard(row)), pagination);
+  }
+
   getLatestContinuationGuard(suggestionId: string): Record<string, unknown> | null {
     const row = this.db.get(
       "SELECT * FROM continuation_guard_runs WHERE suggestion_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -4066,6 +4398,22 @@ export class Store {
     ).map((row) => this.mapAiConversation(row));
   }
 
+  listAiConversationsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT conversation.*,
+        (SELECT COUNT(*) FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id) AS message_count,
+        COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
+       FROM ai_conversations conversation
+       WHERE conversation.work_id = ?
+       ORDER BY conversation.updated_at DESC, conversation.created_at DESC${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.mapAiConversation(row)), pagination);
+  }
+
   getAiConversation(conversationId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!row) throw notFound("AI 对话");
@@ -4074,6 +4422,26 @@ export class Store {
       conversationId
     ).map((message) => this.mapAiConversationMessage(message));
     return { ...this.mapAiConversation(row), messageCount: messages.length, messages };
+  }
+
+  getAiConversationPage(conversationId: string, pagination: Pagination): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
+    if (!row) throw notFound("AI 对话");
+    const countRow = this.db.get("SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?", conversationId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC${page.sql}`,
+      conversationId,
+      ...page.params
+    );
+    const messagesPage = paginated(rows.map((message) => this.mapAiConversationMessage(message)), pagination);
+    messagesPage.items.reverse();
+    return {
+      ...this.mapAiConversation(row),
+      messageCount: Number(countRow?.count ?? 0),
+      messages: messagesPage.items,
+      messagesPage
+    };
   }
 
   getAiConversationContext(conversationId: string, workId: string, excludeMessageId?: string): AiConversationContext {
@@ -4279,6 +4647,13 @@ export class Store {
   listTasks(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db.all("SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC", workId).map((row) => this.mapTask(row));
+  }
+
+  listTasksPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(`SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapTask(row)), pagination);
   }
 
   getTask(taskId: string): Record<string, unknown> {
@@ -4609,5 +4984,27 @@ export class Store {
       detail: json(requiredString(row, "detail_json"), {}),
       createdAt: requiredString(row, "created_at")
     }));
+  }
+
+  listAuditLogsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT log.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM audit_logs log LEFT JOIN users user ON user.id = log.user_id
+       WHERE log.work_id = ? ORDER BY log.created_at DESC${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      id: requiredString(row, "id"),
+      action: requiredString(row, "action"),
+      entityType: requiredString(row, "entity_type"),
+      entityId: optionalString(row, "entity_id"),
+      actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? requiredString(row, "actor"),
+      userId: optionalString(row, "user_id"),
+      detail: json(requiredString(row, "detail_json"), {}),
+      createdAt: requiredString(row, "created_at")
+    })), pagination);
   }
 }

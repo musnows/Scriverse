@@ -3,6 +3,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { logger, sanitizeError } from "./logger.js";
+import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { Store, type AiConversationContext } from "./store.js";
@@ -951,6 +952,12 @@ export class AiManager {
     return this.store.db.all("SELECT * FROM providers WHERE work_id = ? ORDER BY created_at", PLATFORM_AI_WORK_ID).map((row) => this.mapProvider(row));
   }
 
+  listProvidersPage(pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(`SELECT * FROM providers WHERE work_id = ? ORDER BY created_at${page.sql}`, PLATFORM_AI_WORK_ID, ...page.params);
+    return paginated(rows.map((row) => this.mapProvider(row)), pagination);
+  }
+
   getProvider(providerId: string): Record<string, unknown> {
     return this.mapProvider(this.getProviderRow(providerId));
   }
@@ -1100,15 +1107,38 @@ export class AiManager {
     return this.store.db.all("SELECT * FROM models WHERE provider_id = ? ORDER BY created_at", providerId).map((row) => this.mapModel(row));
   }
 
+  listModelsPage(providerId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getProviderRow(providerId);
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(`SELECT * FROM models WHERE provider_id = ? ORDER BY created_at${page.sql}`, providerId, ...page.params);
+    return paginated(rows.map((row) => this.mapModel(row)), pagination);
+  }
+
   listPlatformModels(): Record<string, unknown>[] {
     return this.store.db
       .all("SELECT m.*, p.name AS provider_name FROM models m JOIN providers p ON p.id = m.provider_id WHERE p.work_id = ? ORDER BY p.created_at, m.created_at", PLATFORM_AI_WORK_ID)
       .map((row) => ({ ...this.mapModel(row), providerName: stringValue(row, "provider_name") }));
   }
 
+  listPlatformModelsPage(pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(
+      `SELECT m.*, p.name AS provider_name FROM models m JOIN providers p ON p.id = m.provider_id
+       WHERE p.work_id = ? ORDER BY p.created_at, m.created_at${page.sql}`,
+      PLATFORM_AI_WORK_ID,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({ ...this.mapModel(row), providerName: stringValue(row, "provider_name") })), pagination);
+  }
+
   listWorkModels(workId: string): Record<string, unknown>[] {
     this.store.getWork(workId);
     return this.listPlatformModels();
+  }
+
+  listWorkModelsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.store.getWork(workId);
+    return this.listPlatformModelsPage(pagination);
   }
 
   getModel(modelId: string): Record<string, unknown> {
@@ -1164,6 +1194,16 @@ export class AiManager {
       taskType: stringValue(row, "task_type"),
       model: this.getModel(stringValue(row, "model_id"))
     }));
+  }
+
+  listTaskDefaultsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.store.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(`SELECT * FROM task_defaults WHERE work_id = ? ORDER BY task_type${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => ({
+      taskType: stringValue(row, "task_type"),
+      model: this.getModel(stringValue(row, "model_id"))
+    })), pagination);
   }
 
   async createSuggestion(input: GenerateInput): Promise<Record<string, unknown>> {
@@ -1293,6 +1333,15 @@ export class AiManager {
     return rows.map((row) => this.mapSuggestion(row));
   }
 
+  listSuggestionsPage(workId: string, pagination: Pagination, status?: string): PaginatedResult<Record<string, unknown>> {
+    this.store.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = status
+      ? this.store.db.all(`SELECT * FROM ai_suggestions WHERE work_id = ? AND status = ? ORDER BY created_at DESC${page.sql}`, workId, status, ...page.params)
+      : this.store.db.all(`SELECT * FROM ai_suggestions WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => this.mapSuggestion(row)), pagination);
+  }
+
   getSuggestion(suggestionId: string): Record<string, unknown> {
     const row = this.store.db.get("SELECT * FROM ai_suggestions WHERE id = ?", suggestionId);
     if (!row) throw notFound("AI 建议");
@@ -1374,6 +1423,27 @@ export class AiManager {
       createdAt: stringValue(row, "created_at"),
       completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
     }));
+  }
+
+  listCallsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.store.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(`SELECT * FROM ai_calls WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    return paginated(rows.map((row) => ({
+      id: stringValue(row, "id"),
+      workId: stringValue(row, "work_id"),
+      taskType: stringValue(row, "task_type"),
+      provider: this.getProvider(stringValue(row, "provider_id")),
+      model: this.getModel(stringValue(row, "model_id")),
+      contextScope: json(stringValue(row, "context_scope_json"), {}),
+      parameters: json(stringValue(row, "parameters_json"), {}),
+      status: stringValue(row, "status"),
+      failure: row.failure === null ? null : stringValue(row, "failure"),
+      inputChars: numberValue(row, "input_chars"),
+      outputChars: numberValue(row, "output_chars"),
+      createdAt: stringValue(row, "created_at"),
+      completedAt: row.completed_at === null ? null : stringValue(row, "completed_at")
+    })), pagination);
   }
 
   async runTask(taskId: string, modelId?: string): Promise<Record<string, unknown>> {

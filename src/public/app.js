@@ -1016,7 +1016,7 @@ function renderAiConversationHistory() {
 async function loadAiConversations(openLatest = true) {
   const workId = state.work?.id;
   if (!workId) return;
-  const conversations = await api(`/api/works/${workId}/ai-conversations`);
+  const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
   if (state.work?.id !== workId) return;
   state.aiConversations = conversations;
   loadedAiConversationsWorkId = workId;
@@ -1045,7 +1045,7 @@ async function ensureAiConversationsLoaded() {
 }
 
 async function openAiConversation(conversationId, hideHistory = true) {
-  const conversation = await api(`/api/ai-conversations/${conversationId}`);
+  const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
   $("#ai-conversation-title").textContent = conversation.title;
@@ -1396,6 +1396,24 @@ async function api(path, options = {}) {
   return payload.data;
 }
 
+async function apiPage(path, page = 1, limit = 50) {
+  const separator = path.includes("?") ? "&" : "?";
+  const result = await api(`${path}${separator}page=${page}&limit=${limit}`);
+  if (Array.isArray(result)) return { items: result, page, limit, hasMore: false, nextPage: null };
+  return result;
+}
+
+async function apiAllPages(path, limit = 100) {
+  const items = [];
+  let page = 1;
+  while (true) {
+    const result = await apiPage(path, page, limit);
+    items.push(...(result.items ?? []));
+    if (!result.hasMore || !result.nextPage) return items;
+    page = result.nextPage;
+  }
+}
+
 function selectAuthMode(mode) {
   const registerTab = $("#auth-register-tab");
   const login = mode === "login" || registerTab.disabled;
@@ -1634,7 +1652,7 @@ function updateDocumentTitle(work = null) {
 }
 
 async function loadWorks(preferredId) {
-  state.works = await api("/api/works");
+  state.works = (await apiPage("/api/works")).items;
   if (preferredId) {
     await selectWork(preferredId);
     return;
@@ -1658,7 +1676,7 @@ async function initializePage() {
     return;
   }
   const route = parsePageRoute(window.location.hash);
-  state.works = await api("/api/works");
+  state.works = (await apiPage("/api/works")).items;
   try {
     if (route.view === "shelf") {
       showShelf();
@@ -1677,8 +1695,7 @@ async function initializePage() {
     }
 
     if (route.view === "editor") {
-      const chapterExists = state.work?.volumes.some((volume) => volume.chapters.some((chapter) => chapter.id === route.chapterId));
-      if (route.chapterId && chapterExists && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
+      if (route.chapterId && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
       return;
     }
     if (route.view === "module") return;
@@ -1784,7 +1801,7 @@ async function openUsersDialog() {
   }
   $("#users-list").innerHTML = '<p class="empty-state">正在读取用户……</p>';
   $("#users-dialog").showModal();
-  try { renderUsers(await api("/api/users")); }
+  try { renderUsers((await apiPage("/api/users")).items); }
   catch (error) { $("#users-dialog").close(); toast(error.message, "error"); }
 }
 
@@ -2026,7 +2043,7 @@ function renderShelf() {
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
-  const nextWork = await api(`/api/works/${workId}`);
+  const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
   if (state.work?.id !== nextWork.id) {
     loadedAiModelsWorkId = null;
     loadedAiReferencesWorkId = null;
@@ -2067,7 +2084,8 @@ async function selectWork(workId, preferredChapterId = null) {
   renderTree();
   const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
   const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
-  if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
+  if (state.module === "editor" && preferredChapterId) await selectChapter(preferredChapterId);
+  else if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
   else if (state.module === "editor") showWelcome(true);
   else await showModule(state.module);
   return true;
@@ -2324,7 +2342,7 @@ function bindEntityHistoryButtons(refresh) {
 }
 
 async function renderSettings() {
-  const records = await api(`/api/works/${state.work.id}/settings`);
+  const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
   $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
     <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
@@ -2342,9 +2360,9 @@ async function renderSettings() {
 
 async function renderCharacters() {
   [state.characters, state.races, state.organizations] = await Promise.all([
-    api(`/api/works/${state.work.id}/characters`),
-    api(`/api/works/${state.work.id}/races`),
-    api(`/api/works/${state.work.id}/organizations`)
+    apiPage(`/api/works/${state.work.id}/characters`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/races`),
+    apiAllPages(`/api/works/${state.work.id}/organizations`)
   ]);
   const auditPanel = `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>`;
   $("#module-content").innerHTML = auditPanel + (state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
@@ -2387,8 +2405,8 @@ async function renderCharacters() {
 
 async function renderRaces() {
   [state.races, state.characters] = await Promise.all([
-    api(`/api/works/${state.work.id}/races`),
-    api(`/api/works/${state.work.id}/characters`)
+    apiAllPages(`/api/works/${state.work.id}/races`),
+    apiAllPages(`/api/works/${state.work.id}/characters`)
   ]);
   const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
@@ -2410,8 +2428,8 @@ async function renderRaces() {
 
 async function renderOrganizations() {
   [state.organizations, state.characters] = await Promise.all([
-    api(`/api/works/${state.work.id}/organizations`),
-    api(`/api/works/${state.work.id}/characters`)
+    apiAllPages(`/api/works/${state.work.id}/organizations`),
+    apiAllPages(`/api/works/${state.work.id}/characters`)
   ]);
   $("#module-content").innerHTML = state.organizations.length ? `<div class="card-grid organization-grid">${state.organizations.map((item) => `
     <article class="record-card organization-card"><small>${item.memberIds.length} 位成员 · ${item.settings.length} 条设定</small>
@@ -2426,8 +2444,8 @@ async function renderOrganizations() {
 
 async function renderTimeline() {
   const [events, tracks] = await Promise.all([
-    api(`/api/works/${state.work.id}/timeline`),
-    api(`/api/works/${state.work.id}/timeline-tracks`)
+    apiPage(`/api/works/${state.work.id}/timeline`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
   state.timelineTracks = tracks;
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
@@ -2455,8 +2473,8 @@ async function renderTimeline() {
 async function renderOutlines() {
   const currentChapterId = state.chapter?.id;
   const [outlines, foreshadows] = await Promise.all([
-    api(`/api/works/${state.work.id}/outlines`),
-    api(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
+    apiPage(`/api/works/${state.work.id}/outlines`).then((result) => result.items),
+    apiPage(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`).then((result) => result.items)
   ]);
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
@@ -2484,8 +2502,8 @@ async function renderOutlines() {
 }
 
 async function renderRelationships() {
-  state.characters = await api(`/api/works/${state.work.id}/characters`);
-  const relationships = await api(`/api/works/${state.work.id}/relationships`);
+  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  const relationships = (await apiPage(`/api/works/${state.work.id}/relationships`)).items;
   const nameOf = (id) => state.characters.find((item) => item.id === id)?.name ?? "未知角色";
   state.galaxy?.destroy();
   state.relationshipExpandedMap?.destroy?.();
@@ -2516,8 +2534,8 @@ async function renderRelationships() {
 
 async function renderReviews() {
   const [reviews, characters] = await Promise.all([
-    api(`/api/works/${state.work.id}/reviews`),
-    api(`/api/works/${state.work.id}/characters?includeMerged=1`)
+    apiPage(`/api/works/${state.work.id}/reviews`).then((result) => result.items),
+    apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`)
   ]);
   const characterById = new Map(characters.map((character) => [character.id, character]));
   const duplicateCard = (item) => {
@@ -2577,7 +2595,7 @@ async function renderReviews() {
 
 async function renderTasks() {
   const [tasks, settings] = await Promise.all([
-    api(`/api/works/${state.work.id}/tasks`),
+    apiPage(`/api/works/${state.work.id}/tasks`).then((result) => result.items),
     api(`/api/works/${state.work.id}/ai-settings`)
   ]);
   const pendingCount = tasks.filter((item) => item.status === "pending").length;
@@ -3012,8 +3030,8 @@ async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
   const [characters, settings] = await Promise.all([
-    api(`/api/works/${workId}/characters`),
-    api(`/api/works/${workId}/settings`)
+    apiAllPages(`/api/works/${workId}/characters`),
+    apiAllPages(`/api/works/${workId}/settings`)
   ]);
   if (state.work?.id !== workId) return;
   state.characters = characters;
@@ -3230,7 +3248,7 @@ function bindWorkCoverControls(work) {
   $("#work-cover-remove")?.addEventListener("click", async () => {
     try {
       await api(`/api/works/${work.id}/cover`, { method: "DELETE" });
-      state.works = await api("/api/works");
+      state.works = (await apiPage("/api/works")).items;
       const updated = state.works.find((item) => item.id === work.id) ?? { ...work, coverUrl: null };
       Object.assign(work, updated);
       const coverField = $("#dialog-fields")?.querySelector(".work-cover-field");
@@ -3257,7 +3275,7 @@ function openWorkSettingsDialog(work) {
     workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
-      state.works = await api("/api/works");
+      state.works = (await apiPage("/api/works")).items;
       const updated = state.works.find((item) => item.id === work.id);
       if (updated) Object.assign(work, updated);
       if (state.work?.id === work.id) {
@@ -3400,8 +3418,8 @@ async function loadCharacterEditorRelationships(characterId) {
   let loaded = false;
   try {
     const [characters, relationships] = await Promise.all([
-      api(`/api/works/${workId}/characters`),
-      api(`/api/works/${workId}/relationships`)
+      apiAllPages(`/api/works/${workId}/characters`),
+      apiAllPages(`/api/works/${workId}/relationships`)
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
@@ -3782,8 +3800,8 @@ async function showCharacterHistory() {
 
 async function openCharacterDialog(item) {
   [state.races, state.organizations] = await Promise.all([
-    api(`/api/works/${state.work.id}/races`),
-    api(`/api/works/${state.work.id}/organizations`)
+    apiAllPages(`/api/works/${state.work.id}/races`),
+    apiAllPages(`/api/works/${state.work.id}/organizations`)
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
@@ -3842,7 +3860,7 @@ async function openCharacterDialog(item) {
 }
 
 async function openRaceDialog(item) {
-  state.characters = await api(`/api/works/${state.work.id}/characters`);
+  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const parentOptions = [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
     .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
@@ -3863,7 +3881,7 @@ async function openRaceDialog(item) {
 }
 
 async function openOrganizationDialog(item) {
-  state.characters = await api(`/api/works/${state.work.id}/characters`);
+  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   openDialog(item ? "编辑组织" : "新建组织",
     field("name", "组织名称", "text", item?.name) +
@@ -3968,7 +3986,7 @@ function openTimelineSplitDialog(item) {
 }
 
 async function openRelationshipDialog(item, options = {}) {
-  state.characters = await api(`/api/works/${state.work.id}/characters`);
+  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
@@ -4769,7 +4787,7 @@ $("#cover-file").addEventListener("change", async (event) => {
   body.append("file", file);
   try {
     await api(`/api/works/${workId}/cover`, { method: "PUT", body });
-    state.works = await api("/api/works");
+    state.works = (await apiPage("/api/works")).items;
     const updated = state.works.find((item) => item.id === workId);
     const coverField = $("#dialog-fields")?.querySelector(".work-cover-field");
     if (updated && coverField && $("#form-dialog")?.open) {
