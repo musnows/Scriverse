@@ -215,8 +215,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260721-analysis-descriptions');
-    expect(page.text).toContain('/styles.css?v=20260721-analysis-descriptions');
+    expect(page.text).toContain('/app.js?v=20260722-character-section-dialog');
+    expect(page.text).toContain('/styles.css?v=20260722-character-section-dialog');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -272,11 +272,13 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("safeLinkTarget");
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(application.text).toContain('/markdown.js?v=20260722-inline-code');
+    expect(page.text).toContain('id="character-section-editor-dialog"');
     expect(application.text).toContain('id="character-section-markdown"');
     expect(application.text).toContain("attachment://${attachment.id}");
     expect(application.text).toContain("read_character_sections");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
     expect(styles.text).toContain(".character-markdown-compose");
+    expect(styles.text).toContain(".character-section-editor-dialog");
     expect(styles.text).toContain("scrollbar-gutter: stable");
     expect(styles.text).toContain("white-space: nowrap");
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
