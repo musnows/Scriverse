@@ -169,12 +169,12 @@ export const cliResourceDefinitions = {
     actions: ["list", "get", "create", "update", "history", "restore"],
     create: {
       required: ["name"],
-      properties: { name: "种族名称", description: "说明", settings: "设定条目数组", memberIds: "人物 ID 数组" },
-      example: { name: "潮裔", description: "适应高盐雾环境的人类分支。", settings: ["夜间视力较强"], memberIds: [] }
+      properties: { name: "种族名称", parentRaceId: "父种族 ID 或 null", description: "说明", settings: "设定条目数组", memberIds: "人物 ID 数组" },
+      example: { name: "潮裔", parentRaceId: null, description: "适应高盐雾环境的人类分支。", settings: ["夜间视力较强"], memberIds: [] }
     },
     update: {
-      properties: { name: "新名称", description: "新说明", settings: "完整设定数组", memberIds: "完整成员数组", changeNote },
-      example: { settings: ["夜间视力较强", "需要周期性盐浴"], changeNote: "补充生理限制" }
+      properties: { name: "新名称", parentRaceId: "新父种族 ID 或 null", description: "新说明", settings: "完整设定数组", memberIds: "完整成员数组", changeNote },
+      example: { parentRaceId: null, settings: ["夜间视力较强", "需要周期性盐浴"], changeNote: "补充生理限制" }
     }
   },
   organization: {

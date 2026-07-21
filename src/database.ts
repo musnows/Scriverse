@@ -179,6 +179,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS races (
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        parent_race_id TEXT REFERENCES races(id) ON DELETE RESTRICT,
         name TEXT NOT NULL,
         normalized_name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
@@ -1290,6 +1291,16 @@ export class Database {
           CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
         `);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (30, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(31)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(races)").map((row) => String(row.name)));
+        if (!columns.has("parent_race_id")) {
+          this.run("ALTER TABLE races ADD COLUMN parent_race_id TEXT REFERENCES races(id) ON DELETE RESTRICT");
+        }
+        this.run("CREATE INDEX IF NOT EXISTS idx_races_parent ON races(work_id, parent_race_id, name)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (31, ?)", new Date().toISOString());
       });
     }
   }

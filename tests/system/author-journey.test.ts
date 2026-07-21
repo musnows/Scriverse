@@ -214,13 +214,14 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260721-character-identity');
-    expect(page.text).toContain('/styles.css?v=20260721-character-identity');
-    expect(application.text).toContain('/relationship-graph.js?v=20260720-galaxy-tooltip');
+    expect(page.text).toContain('/app.js?v=20260721-release-0.3.6');
+    expect(page.text).toContain('/styles.css?v=20260721-release-0.3.6');
+    expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
     expect(graph.text).toContain('statuses.push("待确认")');
     expect(graph.text).toContain('selection.endpointNames.join(selection.directed ? " → " : " ↔ ")');
+    expect(application.text).toContain('/race-hierarchy.js?v=20260721-race-hierarchy');
     expect(graph.text).toContain('fullscreen.className = "ghost-button relationship-galaxy-button"');
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
@@ -361,6 +362,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-module="races"');
     expect(application.text).toContain("async function renderRaces()");
     expect(application.text).toContain("async function openRaceDialog(item)");
+    expect(application.text).toContain('field("parentRaceId", "父种族", "select"');
+    expect(application.text).toContain('class="race-tree-node" open');
     expect(application.text).toContain('field("raceId", "种族", "select"');
     expect(application.text).not.toContain('field("species", "种族", "text"');
     expect(application.text).toContain('field("memberIds", "属于该种族的角色（可多选）", "chips"');

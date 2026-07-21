@@ -592,7 +592,10 @@ export class ContextBuilder {
         `选定角色：\n${characters
           .map((item) => {
             const attributes = item.attributes as Record<string, unknown>;
-            return `- ${String(item.name)}；种族=${String(item.species || attributes.species) || "未填写"}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`;
+            const race = item.race as { lineage?: Array<{ name?: unknown }>; effectiveSettings?: Array<{ value?: unknown; sourceRaceName?: unknown }> } | null;
+            const racePath = race?.lineage?.map((entry) => String(entry.name ?? "")).filter(Boolean).join(" / ") || String(item.species || attributes.species) || "未填写";
+            const raceSettings = race?.effectiveSettings?.map((setting) => ({ source: String(setting.sourceRaceName ?? ""), value: String(setting.value ?? "") })) ?? [];
+            return `- ${String(item.name)}；种族路径=${racePath}；种族共同设定=${JSON.stringify(raceSettings)}；别名=${JSON.stringify(item.aliases)}；属性=${JSON.stringify(item.attributes)}；当前状态=${JSON.stringify(item.currentState)}；设定=${JSON.stringify(item.profile)}`;
           })
           .join("\n")}`
       );

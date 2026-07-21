@@ -302,6 +302,46 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
   });
 
+  it("种族知识查询向模型返回层级与继承设定", async () => {
+    const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "泰坦", settings: ["体型巨大"] }).expect(201);
+    const original = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "原生泰坦",
+      parentRaceId: titan.body.data.id,
+      settings: ["源自远古"]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", raceId: original.body.data.id }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "race-knowledge",
+          type: "function",
+          function: { name: "query_story_knowledge", arguments: { query: "泰坦", categories: ["race", "character"] } }
+        }] } }] }), { status: 200 });
+      }
+      const toolMessage = body.messages.find((message) => message.role === "tool");
+      expect(toolMessage?.content).toContain('"racePath":"泰坦 / 原生泰坦"');
+      expect(toolMessage?.content).toContain('"lineage":[{"id":"' + titan.body.data.id + '","name":"泰坦"}');
+      expect(toolMessage?.content).toContain('"value":"体型巨大"');
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取种族层级。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "查询泰坦种族层级。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("已读取种族层级。");
+    expect(response.body.data.toolCalls).toEqual([expect.objectContaining({ name: "query_story_knowledge", status: "completed" })]);
+  });
+
   it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
