@@ -7,7 +7,7 @@ export type LogFields = Record<string, unknown>;
 export type LogRecord = {
   ts: string;
   level: Exclude<LogLevel, "silent">;
-  service: string;
+  svc: string;
   event: string;
   requestId?: string;
   actorRef?: string;
@@ -110,7 +110,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     const record: LogRecord = {
       ts: now().toISOString(),
       level,
-      service,
+      svc: service,
       ...sanitizeLogFields(fields),
       event,
       ...(context?.requestId ? { requestId: context.requestId } : {}),
