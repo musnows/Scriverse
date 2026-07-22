@@ -486,6 +486,55 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("成员变更保护作品创建者，并在审计失败时回滚", async () => {
+    const owner = await register(runtime, "member_owner");
+    const collaborator = await register(runtime, "member_transaction_target");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "成员事务作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+
+    const overwriteOwner = await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: owner.user.userId, role: "viewer" })
+      .expect(409);
+    expect(overwriteOwner.body.error.code).toBe("OWNER_REQUIRED");
+    expect(runtime.database.get(
+      "SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?",
+      workId,
+      owner.user.userId
+    )).toEqual({ role: "owner" });
+
+    runtime.database.raw.exec(`
+      CREATE TRIGGER reject_member_audit BEFORE INSERT ON audit_logs
+      WHEN NEW.action = 'work.member-added'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced member audit failure');
+      END
+    `);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, role: "viewer" })
+      .expect(500);
+    expect(runtime.database.get(
+      "SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?",
+      workId,
+      collaborator.user.userId
+    )).toBeUndefined();
+    runtime.database.raw.exec("DROP TRIGGER reject_member_audit");
+
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, role: "viewer" })
+      .expect(201);
+    expect(runtime.database.get(
+      "SELECT action FROM audit_logs WHERE work_id = ? AND action = 'work.member-added'",
+      workId
+    )).toEqual({ action: "work.member-added" });
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {
     const legacyWork = runtime.store.createWork({ title: "既有作品" });
     const admin = await register(runtime, "first_admin");

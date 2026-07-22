@@ -565,6 +565,9 @@ export class UserAuthService {
   }
 
   addMember(workId: string, userId: string, input: WorkMemberPermissionInput, invitedByUserId: string): Record<string, unknown>[] {
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    if (!work) throw notFound("作品");
+    if (String(work.owner_user_id ?? "") === userId) throw new AppError(409, "OWNER_REQUIRED", "不能修改作品创建者权限");
     const user = this.getUser(userId);
     if (user.status !== "active") throw new AppError(409, "USER_DISABLED", "不能邀请已停用用户");
     const stored = storedMembershipForPermissions(permissionsFromInput(input));

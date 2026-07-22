@@ -684,8 +684,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissionInput = "permissions" in input
       ? { permissions: input.permissions as WorkModulePermissions }
       : { role: input.role };
-    const members = auth.addMember(request.params.workId, input.userId, permissionInput, request.authUser.userId);
-    store.audit(request.params.workId, "work.member-added", "user", input.userId, permissionInput);
+    const members = database.transaction(() => {
+      const result = auth.addMember(request.params.workId, input.userId, permissionInput, request.authUser!.userId);
+      store.audit(request.params.workId, "work.member-added", "user", input.userId, permissionInput);
+      return result;
+    });
     data(response, members, 201);
   });
   app.patch("/api/works/:workId/members/:userId", (request, response) => {
@@ -693,13 +696,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissionInput = "permissions" in input
       ? { permissions: input.permissions as WorkModulePermissions }
       : { role: input.role };
-    const members = auth.updateMemberPermissions(request.params.workId, request.params.userId, permissionInput);
-    store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, permissionInput);
+    const members = database.transaction(() => {
+      const result = auth.updateMemberPermissions(request.params.workId, request.params.userId, permissionInput);
+      store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, permissionInput);
+      return result;
+    });
     data(response, members);
   });
   app.delete("/api/works/:workId/members/:userId", (request, response) => {
-    const members = auth.removeMember(request.params.workId, request.params.userId);
-    store.audit(request.params.workId, "work.member-removed", "user", request.params.userId);
+    const members = database.transaction(() => {
+      const result = auth.removeMember(request.params.workId, request.params.userId);
+      store.audit(request.params.workId, "work.member-removed", "user", request.params.userId);
+      return result;
+    });
     data(response, members);
   });
   app.patch("/api/works/:workId", (request, response) => {
