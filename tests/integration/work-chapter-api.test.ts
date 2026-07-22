@@ -71,16 +71,20 @@ describe("作品、导入和章节版本 API", () => {
     const initial = await request(runtime.app)
       .post(`/api/works/${workId}/import`)
       .field("mode", "overwrite")
+      .field("expectedVersionNo", "1")
       .attach("file", Buffer.from("第一卷 旧篇\n第一章 旧章\n旧正文。"), "old.txt")
       .expect(201);
+    expect(initial.body.data.tree.versionNo).toBe(2);
     const oldChapterId = initial.body.data.firstImportedChapterId;
 
     const appended = await request(runtime.app)
       .post(`/api/works/${workId}/import`)
       .field("mode", "append")
+      .field("expectedVersionNo", "2")
       .attach("file", Buffer.from("第二卷 新篇\n第二章 新章\n新正文。"), "append.txt")
       .expect(201);
     expect(appended.body.data).toMatchObject({ mode: "append" });
+    expect(appended.body.data.tree.versionNo).toBe(3);
     expect(appended.body.data.tree.volumes.map((volume: { title: string }) => volume.title)).toEqual(["第一卷 旧篇", "第二卷 新篇"]);
     await request(runtime.app).get(`/api/chapters/${oldChapterId}`).expect(200);
     const appendedChapter = await request(runtime.app).get(`/api/chapters/${appended.body.data.firstImportedChapterId}`).expect(200);
@@ -89,11 +93,22 @@ describe("作品、导入和章节版本 API", () => {
     const overwritten = await request(runtime.app)
       .post(`/api/works/${workId}/import`)
       .field("mode", "overwrite")
+      .field("expectedVersionNo", "3")
       .attach("file", Buffer.from("第三卷 终篇\n第三章 终章\n最终正文。"), "overwrite.txt")
       .expect(201);
     expect(overwritten.body.data).toMatchObject({ mode: "overwrite" });
+    expect(overwritten.body.data.tree.versionNo).toBe(4);
     expect(overwritten.body.data.tree.volumes.map((volume: { title: string }) => volume.title)).toEqual(["第三卷 终篇"]);
     await request(runtime.app).get(`/api/chapters/${oldChapterId}`).expect(404);
+
+    await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .field("mode", "append")
+      .field("expectedVersionNo", "3")
+      .attach("file", Buffer.from("第四卷 过期导入\n第四章 不应写入\n正文。"), "stale.txt")
+      .expect(409);
+    const unchanged = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(unchanged.body.data.volumes.map((volume: { title: string }) => volume.title)).toEqual(["第三卷 终篇"]);
   });
 
   it("拒绝未知的已有作品导入方式", async () => {

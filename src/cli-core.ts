@@ -406,14 +406,12 @@ function resourceUpdatePath(type: CliResourceType, id: string): { path: string; 
 function resourceHistoryPath(type: CliResourceType, id: string): string {
   if (type === "chapter") return `/api/chapters/${encoded(id)}/versions`;
   if (type === "character") return `/api/characters/${encoded(id)}/versions`;
-  if (type === "volume") throw new CliError("CLI_ACTION_UNSUPPORTED", "volume 不支持 history");
   return `/api/entity-versions/${encoded(type)}/${encoded(id)}`;
 }
 
 function resourceRestorePath(type: CliResourceType, id: string): string {
   if (type === "chapter") return `/api/chapters/${encoded(id)}/restore`;
   if (type === "character") return `/api/characters/${encoded(id)}/restore`;
-  if (type === "volume") throw new CliError("CLI_ACTION_UNSUPPORTED", "volume 不支持 restore");
   return `/api/entity-versions/${encoded(type)}/${encoded(id)}/restore`;
 }
 
@@ -459,6 +457,8 @@ function helpText(): string {
 查询：
   scriverse work list
   scriverse work get <workId>
+  scriverse work history <workId>
+  scriverse work restore <workId> --version <number>
   scriverse manuscript get <workId> [--format json|markdown|txt]
   scriverse search <workId> --query <text>
   scriverse audit <workId>
@@ -680,6 +680,30 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
       emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}`, { method: "PATCH", body }), compact);
       return;
     }
+    if (action === "history") {
+      assertAllowedOptions(parsed, []);
+      const workId = requiredPosition(parsed.positionals, 2, "workId");
+      assertPositionCount(parsed.positionals, 3);
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/entity-versions/work/${encoded(workId)}`), compact);
+      return;
+    }
+    if (action === "restore") {
+      assertAllowedOptions(parsed, ["version", "expected-version"]);
+      const workId = requiredPosition(parsed.positionals, 2, "workId");
+      assertPositionCount(parsed.positionals, 3);
+      const version = Number(option(parsed, "version"));
+      if (!Number.isInteger(version) || version <= 0) throw new CliError("CLI_VERSION_INVALID", "请使用 --version 提供正整数版本号");
+      const expectedVersion = option(parsed, "expected-version");
+      const expectedVersionNo = expectedVersion === undefined ? undefined : Number(expectedVersion);
+      if (expectedVersionNo !== undefined && (!Number.isInteger(expectedVersionNo) || expectedVersionNo <= 0)) {
+        throw new CliError("CLI_VERSION_INVALID", "请使用 --expected-version 提供正整数版本号");
+      }
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/entity-versions/work/${encoded(workId)}/restore`, {
+        method: "POST",
+        body: { versionNo: version, ...(expectedVersionNo === undefined ? {} : { expectedVersionNo }) }
+      }), compact);
+      return;
+    }
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知 work 命令");
   }
 
@@ -753,10 +777,18 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
       return;
     }
     if (action === "restore") {
-      assertAllowedOptions(parsed, ["version"]);
+      assertAllowedOptions(parsed, ["version", "expected-version"]);
       const version = Number(option(parsed, "version"));
       if (!Number.isInteger(version) || version <= 0) throw new CliError("CLI_VERSION_INVALID", "请使用 --version 提供正整数版本号");
-      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, resourceRestorePath(type, id), { method: "POST", body: { versionNo: version } }), compact);
+      const expectedVersion = option(parsed, "expected-version");
+      const expectedVersionNo = expectedVersion === undefined ? undefined : Number(expectedVersion);
+      if (expectedVersionNo !== undefined && (!Number.isInteger(expectedVersionNo) || expectedVersionNo <= 0)) {
+        throw new CliError("CLI_VERSION_INVALID", "请使用 --expected-version 提供正整数版本号");
+      }
+      emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, resourceRestorePath(type, id), {
+        method: "POST",
+        body: { versionNo: version, ...(expectedVersionNo === undefined ? {} : { expectedVersionNo }) }
+      }), compact);
       return;
     }
     throw new CliError("CLI_COMMAND_UNKNOWN", "未知 resource 命令");
