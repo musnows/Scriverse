@@ -1,10 +1,14 @@
 import { createServer, type Server } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 
 type SessionCredentials = {
   agent: ReturnType<typeof request.agent>;
+  cookie: string;
   csrfToken: string;
   user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
 };
@@ -33,7 +37,9 @@ async function register(runtime: Runtime, username: string): Promise<SessionCred
     ...captcha
   }).expect(201);
   expect(response.body.data.user.displayName).toBe(username);
-  return { agent, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
+  const cookie = response.headers["set-cookie"]?.[0]?.split(";", 1)[0] ?? "";
+  expect(cookie).toContain("scriverse_session=");
+  return { agent, cookie, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
 }
 
 function createUserAuthTestRuntime(allowRegistration = true): Runtime {
@@ -154,6 +160,51 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(session.body.data.user.onboardingCompleted).toBe(true);
     const otherSession = await secondUser.agent.get("/api/auth/session").expect(200);
     expect(otherSession.body.data.user.onboardingCompleted).toBe(false);
+  });
+
+  it("服务器重启后使旧网页会话失效并要求重新登录", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-auth-restart-"));
+    const databasePath = join(root, "novel.db");
+    let firstRuntime: Runtime | null = null;
+    let restartedRuntime: Runtime | null = null;
+    try {
+      firstRuntime = createRuntime({
+        databasePath,
+        masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
+        serveUi: false,
+        revealCaptchaAnswer: true,
+        security: { allowRegistration: true, enforceSameOrigin: true }
+      });
+      const user = await register(firstRuntime, "restart_user");
+      await user.agent.get("/api/auth/session").expect(200);
+      firstRuntime.close();
+      firstRuntime = null;
+
+      restartedRuntime = createRuntime({
+        databasePath,
+        masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
+        serveUi: false,
+        revealCaptchaAnswer: true,
+        security: { allowRegistration: true, enforceSameOrigin: true }
+      });
+      const expiredSession = await request(restartedRuntime.app)
+        .get("/api/auth/session")
+        .set("Cookie", user.cookie)
+        .expect(200);
+      expect(expiredSession.body.data).toMatchObject({ authenticated: false, user: null, csrfToken: null });
+      await request(restartedRuntime.app).get("/api/works").set("Cookie", user.cookie).expect(401);
+
+      const captcha = await solveCaptcha(restartedRuntime.app);
+      await request(restartedRuntime.app).post("/api/auth/login").send({
+        username: "restart_user",
+        password: "secure-password-123",
+        ...captcha
+      }).expect(200);
+    } finally {
+      restartedRuntime?.close();
+      firstRuntime?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("仅查看成员可读取正文和设定，但所有作品写操作都会被拒绝", async () => {
