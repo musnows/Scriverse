@@ -89,6 +89,12 @@ function canEditProse(work = state.work) {
   return canWriteUiModule(work, "editor");
 }
 
+function canReplaceProse(work = state.work) {
+  return WORK_PERMISSION_MODULES
+    .filter((item) => item.id !== "ai-settings")
+    .every((item) => canWriteUiModule(work, item.uiModule));
+}
+
 function canManageWork(work = state.work) {
   return ["admin", "owner"].includes(String(work?.accessRole));
 }
@@ -126,7 +132,7 @@ function applyWorkAccessMode() {
   $("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);
   $("#import-file-button").setAttribute("aria-hidden", String(proseReadOnly));
   $("#import-file").disabled = proseReadOnly;
-  $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canEditProse());
+  $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canReplaceProse());
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#chapter-title").readOnly = proseReadOnly;
   $("#chapter-content").readOnly = proseReadOnly;
@@ -1807,8 +1813,11 @@ function confirmDiscardChanges(message = "当前章节有未保存修改，继�
 
 function chooseExistingWorkImportMode(file) {
   const dialog = $("#import-mode-dialog");
+  const canOverwrite = canReplaceProse();
   $("#import-mode-file-summary").textContent = `文件：${file.name}；当前作品：《${state.work.title}》`;
   $("#import-mode-unsaved-warning").classList.toggle("hidden", !state.dirty);
+  $("#import-mode-overwrite").disabled = !canOverwrite;
+  $("#import-mode-overwrite-permission").classList.toggle("hidden", canOverwrite);
   dialog.returnValue = "cancel";
   dialog.showModal();
   return new Promise((resolve) => {
@@ -4792,7 +4801,7 @@ function renderImportHistory(versions, nextPage = null) {
     </article>`;
   }).join("") + (nextPage ? '<button class="import-history-load-more" type="button" data-import-history-load-more>加载更多记录</button>' : "");
   host.querySelectorAll("[data-file-version-restore]").forEach((button) => button.addEventListener("click", async () => {
-    if (!state.work || !canEditProse()) return;
+    if (!state.work || !canReplaceProse()) return;
     const defaultLabel = button.dataset.defaultLabel;
     if (button.dataset.confirmed !== "true") {
       host.querySelectorAll("[data-file-version-restore]").forEach((other) => {
@@ -4860,8 +4869,8 @@ async function loadImportHistoryPage(page) {
 }
 
 async function openImportHistory() {
-  if (!state.work || !canEditProse()) {
-    toast("需要正文编辑权限才能恢复导入历史", "error");
+  if (!state.work || !canReplaceProse()) {
+    toast("恢复整本正文需要所有受影响模块的编辑权限", "error");
     return;
   }
   importHistoryRecords = [];

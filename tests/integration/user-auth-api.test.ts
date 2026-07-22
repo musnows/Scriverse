@@ -407,10 +407,43 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ title: "只读后越权", category: "世界规则", content: "不应写入。" })
       .expect(403);
 
+    const versionCountBeforeDeniedReplacement = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count);
+    const limitedRestore = await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    expect(limitedRestore.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const limitedOverwrite = await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .field("mode", "overwrite")
+      .attach("file", Buffer.from("第一章\n\n不应覆盖。"), "limited-overwrite.txt")
+      .expect(403);
+    expect(limitedOverwrite.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const unchangedChapter = await collaborator.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
+    expect(unchangedChapter.body.data.content).toBe("已授权正文编辑。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count)).toBe(versionCountBeforeDeniedReplacement);
+    await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .field("mode", "append")
+      .attach("file", Buffer.from("第二章\n\n允许追加。"), "limited-append.txt")
+      .expect(201);
+
     await collaborator.agent
       .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
       .send({})
       .expect(403);
+    const fullPermissions = Object.fromEntries(Object.keys(updatedPermissions).map((module) => [module, "write"]));
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: fullPermissions })
+      .expect(200);
     const currentWork = await collaborator.agent.get(`/api/works/${workId}`).expect(200);
     const versionCountBeforeConflict = Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",

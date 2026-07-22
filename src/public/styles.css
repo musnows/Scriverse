@@ -1419,6 +1419,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .import-mode-options section { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .import-mode-options strong { color: var(--ink); font-size: 12px; }
 .import-mode-options span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.import-mode-permission { color: var(--accent-dark); font-size: 9px; line-height: 1.55; }
 @media (max-width: 560px) {
   .import-mode-options { grid-template-columns: 1fr; }
   .import-mode-dialog .dialog-actions { flex-wrap: wrap; }

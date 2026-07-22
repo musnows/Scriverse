@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-import-history-pagination">
+    <link rel="stylesheet" href="/styles.css?v=20260722-prose-replacement-permission">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -329,7 +329,7 @@
           <p id="import-mode-unsaved-warning" class="import-mode-unsaved-warning hidden" role="alert">当前章节有未保存修改，继续导入会丢失这些本地修改。</p>
           <div class="import-mode-options" aria-label="导入方式说明">
             <section><strong>追加正文</strong><span>保留现有卷章，把新文件解析出的卷章添加到目录末尾。</span></section>
-            <section><strong>覆盖正文</strong><span>删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span></section>
+            <section><strong>覆盖正文</strong><span>删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span><small id="import-mode-overwrite-permission" class="import-mode-permission hidden">覆盖会影响章节关联资料，需要所有受影响模块均为可编辑。</small></section>
           </div>
         </div>
         <div class="dialog-actions">
@@ -623,6 +623,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-import-history-pagination"></script>
+    <script type="module" src="/app.js?v=20260722-prose-replacement-permission"></script>
   </body>
 </html>

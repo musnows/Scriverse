@@ -37,11 +37,14 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="import-mode-append"');
     expect(page.text).toContain('id="import-mode-overwrite"');
     expect(page.text).toContain("把新文件解析出的卷章添加到目录末尾");
+    expect(page.text).toContain("覆盖会影响章节关联资料，需要所有受影响模块均为可编辑");
     expect(styles.text).toContain(".import-mode-options");
     expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(styles.text).toContain(".import-history-load-more");
     expect(application.text).toContain('$("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);');
     expect(application.text).toContain('$("#import-file").disabled = proseReadOnly;');
+    expect(application.text).toContain('$("#import-mode-overwrite").disabled = !canOverwrite;');
+    expect(application.text).toContain("function canReplaceProse(work = state.work)");
     expect(application.text).toContain("resetWorkScopedUiCaches();");
     expect(application.text).toContain("if (state.dirty) scheduleChapterAutoSave();");
     expect(application.text).toContain('apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25)');
