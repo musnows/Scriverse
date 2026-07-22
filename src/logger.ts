@@ -5,9 +5,9 @@ export type LogLevel = "debug" | "info" | "warn" | "error" | "silent";
 export type LogFields = Record<string, unknown>;
 
 export type LogRecord = {
-  timestamp: string;
+  ts: string;
   level: Exclude<LogLevel, "silent">;
-  service: string;
+  svc: string;
   event: string;
   requestId?: string;
   actorRef?: string;
@@ -108,9 +108,9 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     if (levelPriority[level] < levelPriority[configuredLevel]) return;
     const context = currentRequestContext();
     const record: LogRecord = {
-      timestamp: now().toISOString(),
+      ts: now().toISOString(),
       level,
-      service,
+      svc: service,
       ...sanitizeLogFields(fields),
       event,
       ...(context?.requestId ? { requestId: context.requestId } : {}),

@@ -4,6 +4,7 @@ import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import { sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger } from "./logger.js";
+import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 
 export type AuthUser = RequestActor & {
@@ -361,6 +362,12 @@ export class UserAuthService {
     return this.database.all("SELECT * FROM users ORDER BY created_at, username").map(mapUser);
   }
 
+  listUsersPage(pagination: Pagination): PaginatedResult<AuthUser> {
+    const page = paginationSql(pagination);
+    const rows = this.database.all(`SELECT * FROM users ORDER BY created_at, username${page.sql}`, ...page.params);
+    return paginated(rows.map(mapUser), pagination);
+  }
+
   directory(query: string): Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">[] {
     const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
     const pattern = `%${escapedQuery}%`;
@@ -373,6 +380,23 @@ export class UserAuthService {
       const user = mapUser(row);
       return { userId: user.userId, username: user.username, displayName: user.displayName, avatarUrl: user.avatarUrl };
     });
+  }
+
+  directoryPage(query: string, pagination: Pagination): PaginatedResult<Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">> {
+    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const pattern = `%${escapedQuery}%`;
+    const page = paginationSql(pagination);
+    const rows = this.database.all(
+      `SELECT * FROM users WHERE status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
+       ORDER BY username${page.sql}`,
+      pattern,
+      pattern,
+      ...page.params
+    );
+    return paginated(rows.map((row) => {
+      const user = mapUser(row);
+      return { userId: user.userId, username: user.username, displayName: user.displayName, avatarUrl: user.avatarUrl };
+    }), pagination);
   }
 
   updateUser(actor: AuthUser, userId: string, input: { role?: "admin" | "user"; status?: "active" | "disabled" }): AuthUser {
@@ -481,8 +505,26 @@ export class UserAuthService {
       role: String(row.role), status: String(row.status), createdAt: String(row.created_at),
       avatarUrl: row.avatar_sha256
         ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
-        : null
+      : null
     }));
+  }
+
+  listMembersPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    const page = paginationSql(pagination);
+    const rows = this.database.all(
+      `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
+       FROM work_memberships membership JOIN users user ON user.id = membership.user_id
+       WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user.username${page.sql}`,
+      workId,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
+      role: String(row.role), status: String(row.status), createdAt: String(row.created_at),
+      avatarUrl: row.avatar_sha256
+        ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
+        : null
+    })), pagination);
   }
 
   addMember(workId: string, userId: string, role: "editor" | "viewer", invitedByUserId: string): Record<string, unknown>[] {

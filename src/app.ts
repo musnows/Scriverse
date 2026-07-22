@@ -16,6 +16,7 @@ import { TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { Store, versionedEntityTypes } from "./store.js";
+import { parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
@@ -536,8 +537,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, result);
   });
 
-  app.get("/api/users", (_request, response) => data(response, auth.listUsers()));
-  app.get("/api/users/directory", (request, response) => data(response, auth.directory(String(request.query.q ?? ""))));
+  app.get("/api/users", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? auth.listUsersPage(pagination) : auth.listUsers());
+  });
+  app.get("/api/users/directory", (request, response) => {
+    const pagination = parsePagination(request.query);
+    const query = String(request.query.q ?? "");
+    data(response, pagination ? auth.directoryPage(query, pagination) : auth.directory(query));
+  });
   app.get("/api/user-avatars/:userId", (request, response) => {
     const avatar = auth.getAvatar(request.params.userId);
     response.setHeader("Content-Type", avatar.mimeType);
@@ -553,7 +561,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, updated);
   });
 
-  app.get("/api/works", (_request, response) => data(response, store.listWorks()));
+  app.get("/api/works", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listWorksPage(pagination) : store.listWorks());
+  });
   app.post("/api/works", (request, response) => data(response, store.createWork(parse(workSchema, request.body)), 201));
   app.post("/api/works/import", upload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要导入的 TXT 或 DOCX 文件");
@@ -572,8 +583,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     });
     data(response, store.createImportedWork(input, originalFileName, extension.slice(1), parsedNovel), 201);
   });
-  app.get("/api/works/:workId", (request, response) => data(response, store.getWorkDirectory(request.params.workId)));
-  app.get("/api/works/:workId/members", (request, response) => data(response, auth.listMembers(request.params.workId)));
+  app.get("/api/works/:workId", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.getWorkDirectoryPage(request.params.workId, pagination) : store.getWorkDirectory(request.params.workId));
+  });
+  app.get("/api/works/:workId/members", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? auth.listMembersPage(request.params.workId, pagination) : auth.listMembers(request.params.workId));
+  });
   app.post("/api/works/:workId/members", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(memberSchema, request.body);
@@ -621,7 +638,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/file-versions", (request, response) => data(response, store.listFileVersions(request.params.workId)));
+  app.get("/api/works/:workId/file-versions", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listFileVersionsPage(request.params.workId, pagination) : store.listFileVersions(request.params.workId));
+  });
   app.post("/api/works/:workId/file-versions/:fileVersionId/restore", (request, response) => {
     data(response, store.restoreFileVersion(request.params.workId, request.params.fileVersionId));
   });
@@ -667,8 +687,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.deleteChapter(request.params.chapterId);
     noContent(response);
   });
-  app.get("/api/chapters/:chapterId/versions", (request, response) => data(response, store.listChapterVersions(request.params.chapterId)));
-  app.get("/api/chapters/:chapterId/insights", (request, response) => data(response, store.listChapterInsights(request.params.chapterId)));
+  app.get("/api/chapters/:chapterId/versions", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listChapterVersionsPage(request.params.chapterId, pagination) : store.listChapterVersions(request.params.chapterId));
+  });
+  app.get("/api/chapters/:chapterId/insights", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
+  });
   app.post("/api/chapters/:chapterId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
     data(response, store.restoreChapter(request.params.chapterId, input.versionNo));
@@ -678,7 +704,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.moveChapter(request.params.chapterId, input));
   });
 
-  app.get("/api/works/:workId/outlines", (request, response) => data(response, store.listChapterOutlines(request.params.workId)));
+  app.get("/api/works/:workId/outlines", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listChapterOutlinesPage(request.params.workId, pagination) : store.listChapterOutlines(request.params.workId));
+  });
   app.get("/api/chapters/:chapterId/outline", (request, response) => data(response, store.getChapterOutline(request.params.chapterId)));
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
     const { changeNote, ...input } = parse(chapterOutlineSchema.extend({ changeNote: changeNoteSchema }), request.body);
@@ -694,7 +723,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       status: z.enum(["all", "unresolved", "resolved"]).default("all"),
       currentChapterId: identifier.optional()
     }), request.query);
-    data(response, store.listForeshadows(request.params.workId, query.status, query.currentChapterId));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listForeshadowsPage(request.params.workId, pagination, query.status, query.currentChapterId)
+      : store.listForeshadows(request.params.workId, query.status, query.currentChapterId));
   });
   app.post("/api/works/:workId/foreshadows", (request, response) => {
     data(response, store.createForeshadow(request.params.workId, parse(foreshadowSchema, request.body)), 201);
@@ -719,7 +751,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/settings", (request, response) => data(response, store.listSettings(request.params.workId)));
+  app.get("/api/works/:workId/settings", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listSettingsPage(request.params.workId, pagination) : store.listSettings(request.params.workId));
+  });
   app.post("/api/works/:workId/settings", (request, response) => data(response, store.createSetting(request.params.workId, parse(settingSchema, request.body)), 201));
   app.get("/api/settings/:settingId", (request, response) => data(response, store.getSetting(request.params.settingId)));
   app.patch("/api/settings/:settingId", (request, response) => {
@@ -736,7 +771,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       includeSections: z.enum(["true", "false"]).default("false"),
       includeMerged: z.enum(["0", "1"]).default("0")
     }), request.query);
-    data(response, store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1"));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listCharactersPage(request.params.workId, pagination, includeSections === "true", includeMerged === "1")
+      : store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1"));
   });
   app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
   app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
@@ -744,7 +782,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const { changeNote, ...input } = parse(characterUpdateSchema, request.body);
     data(response, store.updateCharacter(request.params.characterId, input, "manual", null, changeNote));
   });
-  app.get("/api/characters/:characterId/versions", (request, response) => data(response, store.listCharacterVersions(request.params.characterId)));
+  app.get("/api/characters/:characterId/versions", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listCharacterVersionsPage(request.params.characterId, pagination) : store.listCharacterVersions(request.params.characterId));
+  });
   app.post("/api/characters/:characterId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
     data(response, store.restoreCharacter(request.params.characterId, input.versionNo));
@@ -754,7 +795,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
   app.get("/api/characters/:characterId/sections", (request, response) => {
-    data(response, store.listCharacterProfileSections(request.params.characterId));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listCharacterProfileSectionsPage(request.params.characterId, pagination)
+      : store.listCharacterProfileSections(request.params.characterId));
   });
   app.post("/api/characters/:characterId/sections", (request, response) => {
     data(response, store.createCharacterProfileSection(
@@ -777,7 +821,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
   app.get("/api/character-sections/:sectionId/versions", (request, response) => {
-    data(response, store.listCharacterProfileSectionVersions(request.params.sectionId));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listCharacterProfileSectionVersionsPage(request.params.sectionId, pagination)
+      : store.listCharacterProfileSectionVersions(request.params.sectionId));
   });
   app.post("/api/character-sections/:sectionId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive() }).strict(), request.body);
@@ -785,7 +832,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   app.get("/api/works/:workId/attachments", (request, response) => {
-    data(response, store.listAttachments(request.params.workId));
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listAttachmentsPage(request.params.workId, pagination) : store.listAttachments(request.params.workId));
   });
   app.post("/api/works/:workId/attachments", attachmentUpload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要上传的图片附件");
@@ -824,7 +872,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/races", (request, response) => data(response, store.listRaces(request.params.workId)));
+  app.get("/api/works/:workId/races", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listRacesPage(request.params.workId, pagination) : store.listRaces(request.params.workId));
+  });
   app.post("/api/works/:workId/races", (request, response) => {
     data(response, store.createRace(request.params.workId, parse(raceSchema, request.body)), 201);
   });
@@ -838,7 +889,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/organizations", (request, response) => data(response, store.listOrganizations(request.params.workId)));
+  app.get("/api/works/:workId/organizations", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listOrganizationsPage(request.params.workId, pagination) : store.listOrganizations(request.params.workId));
+  });
   app.post("/api/works/:workId/organizations", (request, response) => {
     data(response, store.createOrganization(request.params.workId, parse(organizationSchema, request.body)), 201);
   });
@@ -852,7 +906,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.listTimelineTracks(request.params.workId)));
+  app.get("/api/works/:workId/timeline-tracks", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listTimelineTracksPage(request.params.workId, pagination) : store.listTimelineTracks(request.params.workId));
+  });
   app.post("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.createTimelineTrack(request.params.workId, parse(timelineTrackSchema, request.body)), 201));
   app.get("/api/timeline-tracks/:trackId", (request, response) => data(response, store.getTimelineTrack(request.params.trackId)));
   app.patch("/api/timeline-tracks/:trackId", (request, response) => {
@@ -864,7 +921,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
-  app.get("/api/works/:workId/timeline", (request, response) => data(response, store.listTimelineEvents(request.params.workId)));
+  app.get("/api/works/:workId/timeline", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listTimelineEventsPage(request.params.workId, pagination) : store.listTimelineEvents(request.params.workId));
+  });
   app.post("/api/works/:workId/timeline", (request, response) => data(response, store.createTimelineEvent(request.params.workId, parse(timelineSchema, request.body)), 201));
   app.post("/api/works/:workId/timeline/merge", (request, response) => {
     const input = parse(z.object({
@@ -900,7 +960,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/works/:workId/relationships", (request, response) => {
     const confidence = request.query.minimumConfidence ? Number(request.query.minimumConfidence) : 0;
     if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new AppError(400, "INVALID_CONFIDENCE", "置信度必须在 0 到 1 之间");
-    data(response, store.listRelationships(request.params.workId, confidence));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listRelationshipsPage(request.params.workId, pagination, confidence)
+      : store.listRelationships(request.params.workId, confidence));
   });
   app.post("/api/works/:workId/relationships", (request, response) => data(response, store.createRelationship(request.params.workId, parse(relationshipSchema, request.body)), 201));
   app.get("/api/relationships/:relationshipId", (request, response) => data(response, store.getRelationship(request.params.relationshipId)));
@@ -915,7 +978,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/entity-versions/:entityType/:entityId", (request, response) => {
     const input = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
-    data(response, store.listEntityVersions(input.entityType, input.entityId));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listEntityVersionsPage(input.entityType, input.entityId, pagination)
+      : store.listEntityVersions(input.entityType, input.entityId));
   });
   app.post("/api/entity-versions/:entityType/:entityId/restore", (request, response) => {
     const params = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
@@ -925,7 +991,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/reviews", (request, response) => {
     const status = typeof request.query.status === "string" ? request.query.status : undefined;
-    data(response, store.listReviewItems(request.params.workId, status));
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listReviewItemsPage(request.params.workId, pagination, status) : store.listReviewItems(request.params.workId, status));
   });
   app.post("/api/works/:workId/reviews", (request, response) => data(response, store.createReviewItem(request.params.workId, parse(reviewSchema, request.body)), 201));
   app.patch("/api/reviews/:reviewId", (request, response) => data(response, store.updateReviewItem(request.params.reviewId, parse(reviewSchema.partial(), request.body))));
@@ -947,7 +1014,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.mergeCharacters({ reviewId: request.params.reviewId, ...input }));
   });
 
-  app.get("/api/works/:workId/tasks", (request, response) => data(response, store.listTasks(request.params.workId)));
+  app.get("/api/works/:workId/tasks", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listTasksPage(request.params.workId, pagination) : store.listTasks(request.params.workId));
+  });
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
     data(response, store.createTask(request.params.workId, input), 201);
@@ -962,9 +1032,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/tasks/:taskId/cancel", (request, response) => data(response, ai.cancelTask(request.params.taskId)));
 
-  app.get("/api/platform/ai/providers", (_request, response) => data(response, ai.listProviders()));
+  app.get("/api/platform/ai/providers", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listProvidersPage(pagination) : ai.listProviders());
+  });
   app.post("/api/platform/ai/providers", (request, response) => data(response, ai.createProvider(parse(providerSchema, request.body)), 201));
-  app.get("/api/platform/ai/models", (_request, response) => data(response, ai.listPlatformModels()));
+  app.get("/api/platform/ai/models", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listPlatformModelsPage(pagination) : ai.listPlatformModels());
+  });
   app.get("/api/platform/ai/settings", (_request, response) => data(response, store.getPlatformAiSettings()));
   app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
   app.get("/api/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
@@ -984,12 +1060,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     data(response, updated);
   });
-  app.get("/api/works/:workId/ai-conversations", (request, response) => data(response, store.listAiConversations(request.params.workId)));
+  app.get("/api/works/:workId/ai-conversations", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listAiConversationsPage(request.params.workId, pagination) : store.listAiConversations(request.params.workId));
+  });
   app.post("/api/works/:workId/ai-conversations", (request, response) => {
     const input = parse(z.object({ title: z.string().max(200).optional() }), request.body ?? {});
     data(response, store.createAiConversation(request.params.workId, input.title), 201);
   });
-  app.get("/api/ai-conversations/:conversationId", (request, response) => data(response, store.getAiConversation(request.params.conversationId)));
+  app.get("/api/ai-conversations/:conversationId", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.getAiConversationPage(request.params.conversationId, pagination) : store.getAiConversation(request.params.conversationId));
+  });
   app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
     const input = parse(z.object({ messageId: identifier, title: z.string().max(200).optional() }), request.body);
     data(response, store.forkAiConversation(request.params.conversationId, input.messageId, input.title), 201);
@@ -1071,7 +1153,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
   app.post("/api/providers/:providerId/test", async (request, response) => data(response, await ai.testProvider(request.params.providerId)));
-  app.get("/api/providers/:providerId/models", (request, response) => data(response, ai.listModels(request.params.providerId)));
+  app.get("/api/providers/:providerId/models", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
+  });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
   app.get("/api/models/:modelId", (request, response) => data(response, ai.getModel(request.params.modelId)));
   app.patch("/api/models/:modelId", (request, response) => data(response, ai.updateModel(request.params.modelId, parse(modelSchema.partial(), request.body))));
@@ -1079,8 +1164,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ai.deleteModel(request.params.modelId);
     noContent(response);
   });
-  app.get("/api/works/:workId/models", (request, response) => data(response, ai.listWorkModels(request.params.workId)));
-  app.get("/api/works/:workId/task-defaults", (request, response) => data(response, ai.listTaskDefaults(request.params.workId)));
+  app.get("/api/works/:workId/models", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listWorkModelsPage(request.params.workId, pagination) : ai.listWorkModels(request.params.workId));
+  });
+  app.get("/api/works/:workId/task-defaults", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listTaskDefaultsPage(request.params.workId, pagination) : ai.listTaskDefaults(request.params.workId));
+  });
   app.put("/api/works/:workId/task-defaults/:taskType", (request, response) => {
     const taskType = parse(z.enum(TASK_TYPES), request.params.taskType) as TaskType;
     const input = parse(z.object({ modelId: identifier }), request.body);
@@ -1089,7 +1180,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/suggestions", (request, response) => {
     const status = typeof request.query.status === "string" ? request.query.status : undefined;
-    data(response, ai.listSuggestions(request.params.workId, status));
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listSuggestionsPage(request.params.workId, pagination, status) : ai.listSuggestions(request.params.workId, status));
   });
   app.post("/api/works/:workId/suggestions", async (request, response) => {
     const input = parse(z.object({
@@ -1177,7 +1269,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/suggestions/:suggestionId", (request, response) => data(response, ai.getSuggestion(request.params.suggestionId)));
   app.get("/api/suggestions/:suggestionId/guards", (request, response) => {
-    data(response, store.listContinuationGuards(request.params.suggestionId));
+    const pagination = parsePagination(request.query);
+    data(response, pagination
+      ? store.listContinuationGuardsPage(request.params.suggestionId, pagination)
+      : store.listContinuationGuards(request.params.suggestionId));
   });
   app.post("/api/suggestions/:suggestionId/guard", async (request, response) => {
     const input = parse(z.object({ content: z.string().max(2_000_000).optional() }), request.body ?? {});
@@ -1188,7 +1283,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, ai.acceptSuggestion(request.params.suggestionId, input.content));
   });
   app.post("/api/suggestions/:suggestionId/reject", (request, response) => data(response, ai.rejectSuggestion(request.params.suggestionId)));
-  app.get("/api/works/:workId/ai-calls", (request, response) => data(response, ai.listCalls(request.params.workId)));
+  app.get("/api/works/:workId/ai-calls", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? ai.listCallsPage(request.params.workId, pagination) : ai.listCalls(request.params.workId));
+  });
 
   app.get("/api/works/:workId/search", (request, response) => {
     const query = parse(z.string().trim().min(1).max(500), request.query.q);
@@ -1205,7 +1303,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.${format === "markdown" ? "md" : "txt"}`);
     response.send(store.exportText(request.params.workId, format));
   });
-  app.get("/api/works/:workId/audit-logs", (request, response) => data(response, store.listAuditLogs(request.params.workId)));
+  app.get("/api/works/:workId/audit-logs", (request, response) => {
+    const pagination = parsePagination(request.query);
+    data(response, pagination ? store.listAuditLogsPage(request.params.workId, pagination) : store.listAuditLogs(request.params.workId));
+  });
 
   if (options.serveUi ?? true) {
     const publicPath = options.publicPath ?? join(process.cwd(), "src", "public");

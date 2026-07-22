@@ -25,6 +25,10 @@ describe("结构化日志", () => {
     });
 
     const serialized = JSON.stringify(records[0]);
+    expect(records[0]).toMatchObject({ ts: "2026-07-19T00:00:00.000Z" });
+    expect(records[0]).not.toHaveProperty("timestamp");
+    expect(records[0]).toMatchObject({ svc: "scriverse" });
+    expect(records[0]).not.toHaveProperty("service");
     for (const secret of ["private-account", "private-password", "private-csrf", "private-api-key", "private-user-id", "private-access-token", "bearer-secret", "provider-secret", "query-secret", "user:pass"]) {
       expect(serialized).not.toContain(secret);
     }

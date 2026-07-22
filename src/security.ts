@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
+import { Agent } from "undici";
 import { AppError } from "./errors.js";
 import { logger } from "./logger.js";
 
@@ -182,14 +183,45 @@ function unsafeIpKind(address: string): "private" | "blocked" | null {
   return null;
 }
 
-export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<void> {
+type SafeAiEndpointAddress = { address: string; family: 4 | 6 };
+type SafeAiEndpointValidator = (url: string) => Promise<readonly SafeAiEndpointAddress[] | void>;
+
+const pinnedAiAddresses = new Map<string, SafeAiEndpointAddress[]>();
+const maximumPinnedAiHosts = 1_000;
+const pinnedAiAgent = new Agent({
+  connect: {
+    lookup: (hostname, _options, callback) => {
+      const addresses = pinnedAiAddresses.get(hostname.toLocaleLowerCase());
+      if (!addresses?.length) {
+        callback(new Error("AI endpoint was not resolved by the SSRF validator"), []);
+        return;
+      }
+      callback(null, addresses);
+    }
+  }
+});
+
+function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAddress[]): void {
+  const key = hostname.toLocaleLowerCase();
+  if (!pinnedAiAddresses.has(key) && pinnedAiAddresses.size >= maximumPinnedAiHosts) {
+    const oldest = pinnedAiAddresses.keys().next().value;
+    if (oldest) pinnedAiAddresses.delete(oldest);
+  }
+  pinnedAiAddresses.delete(key);
+  pinnedAiAddresses.set(key, addresses);
+}
+
+export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
   const endpoint = new URL(value);
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
     throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
   }
-  const addresses = isIP(endpoint.hostname)
-    ? [{ address: endpoint.hostname }]
-    : await lookup(endpoint.hostname, { all: true, verbatim: true }).catch(() => []);
+  const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
+    ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
+    : (await lookup(endpoint.hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
+      address,
+      family: family as 4 | 6
+    }));
   if (!addresses.length) throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商域名无法解析");
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
@@ -198,6 +230,7 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
       throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
     }
   }
+  return addresses;
 }
 
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);
@@ -210,15 +243,23 @@ export async function fetchSafeAiEndpoint(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  validateOutboundUrl?: (url: string) => Promise<void>,
+  validateOutboundUrl?: SafeAiEndpointValidator,
   maxRedirects = 5
 ): Promise<Awaited<ReturnType<typeof fetch>>> {
   let currentUrl = url;
   const baseHeaders = new Headers(init.headers);
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
     logger.debug("ai.outbound_request.validating", { hostname: new URL(currentUrl).hostname, hop });
-    await validateOutboundUrl?.(currentUrl);
-    const response = await fetchImpl(currentUrl, { ...init, headers: baseHeaders, redirect: "manual" });
+    const validatedAddresses = await validateOutboundUrl?.(currentUrl);
+    const requestInit: RequestInit & { dispatcher?: Agent } = {
+      ...init,
+      headers: baseHeaders,
+      redirect: "manual" as const,
+      ...(Array.isArray(validatedAddresses) && validatedAddresses.length
+        ? (rememberPinnedAiAddresses(new URL(currentUrl).hostname, validatedAddresses), { dispatcher: pinnedAiAgent })
+        : {})
+    };
+    const response = await fetchImpl(currentUrl, requestInit);
     logger.debug("ai.outbound_request.response", { hostname: new URL(currentUrl).hostname, hop, status: response.status });
     if (!redirectStatuses.has(response.status)) return response;
     const location = response.headers.get("location");
