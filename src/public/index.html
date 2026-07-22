@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260721-analysis-descriptions">
+    <link rel="stylesheet" href="/styles.css?v=20260722-entity-editor-page">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -316,16 +316,41 @@
       </form>
     </dialog>
 
-    <dialog id="character-editor-dialog" class="character-editor-dialog" aria-labelledby="character-editor-title">
-      <form id="character-editor-form">
+    <section id="entity-editor-view" class="entity-editor-view hidden" aria-label="全屏资料编辑">
+      <form id="setting-editor-form" class="entity-editor-page hidden" aria-labelledby="setting-editor-title">
+        <header class="entity-editor-header">
+          <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
+          <div class="entity-editor-heading">
+            <span id="setting-editor-eyebrow" class="eyebrow">作者事实</span>
+            <h1 id="setting-editor-title">新建设定</h1>
+          </div>
+          <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
+        </header>
+        <div class="setting-editor-workspace">
+          <aside class="setting-editor-sidebar" aria-label="设定元数据">
+            <label>标题<input id="setting-editor-name" name="title" maxlength="200" required></label>
+            <label>分类<select id="setting-editor-category" name="category">
+              <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
+            </select></label>
+            <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
+            <label id="setting-change-note-field">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
+          </aside>
+          <main class="setting-editor-content">
+            <label for="setting-editor-body"><span>设定正文</span><small>适合维护长篇世界观、规则、历史、地点与创作约束。</small></label>
+            <textarea id="setting-editor-body" name="content" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容" required></textarea>
+          </main>
+        </div>
+      </form>
+
+      <form id="character-editor-form" class="entity-editor-page hidden" aria-labelledby="character-editor-title">
         <header class="character-editor-header">
+          <button id="character-editor-close" class="entity-editor-back" type="button">返回角色列表</button>
           <div>
             <span id="character-editor-eyebrow" class="eyebrow">人物主档案</span>
-            <div class="character-editor-title-row"><h2 id="character-editor-title">新建角色</h2><span id="character-editor-version" class="character-version-badge">新档案</span></div>
+            <div class="character-editor-title-row"><h1 id="character-editor-title">新建角色</h1><span id="character-editor-version" class="character-version-badge">新档案</span></div>
           </div>
           <div class="character-editor-header-actions">
             <button id="character-history-button" class="ghost-button" type="button" aria-controls="character-history-panel" aria-expanded="false">版本历史</button>
-            <button id="character-editor-close" class="dialog-close" aria-label="关闭人物编辑器" type="button">×</button>
           </div>
         </header>
         <div class="character-editor-workspace">
@@ -344,10 +369,14 @@
         </div>
         <footer class="character-editor-actions">
           <label>版本说明<input id="character-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充红莲形态与能力限制"></label>
-          <div><button id="character-editor-cancel" class="ghost-button" type="button">取消</button><button id="character-editor-submit" class="primary-button" type="submit">保存新版本</button></div>
+          <div><button id="character-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="character-editor-submit" class="primary-button" type="submit">保存新版本</button></div>
         </footer>
       </form>
-    </dialog>
+
+      <section id="character-section-editor-view" class="entity-editor-page hidden" aria-labelledby="character-section-editor-title">
+      <div id="character-section-editor-host" class="character-section-editor-host"></div>
+      </section>
+    </section>
 
     <dialog id="search-dialog" class="dialog wide-dialog" aria-labelledby="search-dialog-title">
       <div class="dialog-header">
@@ -546,6 +575,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260721-pagination"></script>
+    <script type="module" src="/app.js?v=20260722-pagination-entity-editor-page"></script>
   </body>
 </html>

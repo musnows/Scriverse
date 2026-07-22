@@ -22,6 +22,40 @@ function safeImageTarget(value) {
   return null;
 }
 
+function replaceInlineCodeSpans(value, preserve) {
+  const source = String(value ?? "");
+  let output = "";
+  let cursor = 0;
+  while (cursor < source.length) {
+    const openingStart = source.indexOf("`", cursor);
+    if (openingStart < 0) {
+      output += source.slice(cursor);
+      break;
+    }
+    let openingEnd = openingStart + 1;
+    while (source[openingEnd] === "`") openingEnd += 1;
+    const delimiter = source.slice(openingStart, openingEnd);
+    let closingStart = source.indexOf(delimiter, openingEnd);
+    while (closingStart >= 0) {
+      const touchesBacktickBefore = closingStart > 0 && source[closingStart - 1] === "`";
+      const touchesBacktickAfter = source[closingStart + delimiter.length] === "`";
+      if (!touchesBacktickBefore && !touchesBacktickAfter) break;
+      closingStart = source.indexOf(delimiter, closingStart + 1);
+    }
+    output += source.slice(cursor, openingStart);
+    if (closingStart < 0) {
+      output += delimiter;
+      cursor = openingEnd;
+      continue;
+    }
+    let code = source.slice(openingEnd, closingStart).replace(/\s+/gu, " ");
+    if (/^ .* $/u.test(code) && code.trim()) code = code.slice(1, -1);
+    output += preserve(`<code>${escapeHtml(code)}</code>`);
+    cursor = closingStart + delimiter.length;
+  }
+  return output;
+}
+
 function renderInlineMarkdown(value) {
   const tokens = [];
   const preserve = (html) => {
@@ -30,7 +64,7 @@ function renderInlineMarkdown(value) {
     return marker;
   };
   let source = String(value ?? "");
-  source = source.replace(/`([^`\n]+)`/gu, (_match, code) => preserve(`<code>${escapeHtml(code)}</code>`));
+  source = replaceInlineCodeSpans(source, preserve);
   source = source.replace(/!\[([^\]\n]*)\]\(([^)\s]+)\)/gu, (_match, label, src) => {
     const target = safeImageTarget(src);
     if (!target) return `[图片：${label || src}]`;

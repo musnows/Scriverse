@@ -1,6 +1,6 @@
 import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260721-release-0.3.6";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
-import { renderMarkdown } from "/markdown.js?v=20260721-character-attachments";
+import { renderMarkdown } from "/markdown.js?v=20260722-inline-code";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
@@ -14,7 +14,7 @@ import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260714-refresh-restore";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260722-entity-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
@@ -352,6 +352,10 @@ function replacePageRoute(route) {
 
 function currentPageRoute() {
   const workId = state.work?.id ?? null;
+  if (!$("#entity-editor-view").classList.contains("hidden") && workId && entityEditorType) {
+    const entityId = entityEditorType === "setting" ? settingEditorItem?.id : characterEditorItem?.id;
+    return { view: "entity-editor", workId, entity: entityEditorType, entityId: entityId ?? null };
+  }
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
   if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
@@ -461,6 +465,9 @@ const chapterAutoSaveDelay = 800;
 let aiMentionMatch = null;
 let aiMentionRange = null;
 let settingsReturnContext = null;
+let entityEditorType = null;
+let entityEditorDirty = false;
+let settingEditorItem = null;
 let characterEditorItem = null;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
@@ -468,7 +475,48 @@ let characterEditorRelationshipsLoading = false;
 let characterEditorSections = [];
 let characterSectionPreviewTimer = null;
 let characterSectionPendingAttachments = [];
+let characterSectionEditorDirty = false;
 let entityHistoryContext = null;
+
+function showEntityEditorPage(type) {
+  entityEditorType = type;
+  entityEditorDirty = false;
+  characterSectionEditorDirty = false;
+  $("#entity-editor-view").classList.remove("hidden");
+  $("#setting-editor-form").classList.toggle("hidden", type !== "setting");
+  $("#character-editor-form").classList.toggle("hidden", type !== "character");
+  $("#character-section-editor-view").classList.add("hidden");
+  $("#app").inert = true;
+  document.body.classList.add("entity-editor-open");
+  replacePageRoute(currentPageRoute());
+}
+
+function markEntityEditorDirty() {
+  if (entityEditorType && canEditWork()) entityEditorDirty = true;
+}
+
+function confirmEntityEditorDiscard(message) {
+  if (!entityEditorDirty) return true;
+  return window.confirm(message ?? "当前资料有未保存修改，返回列表将丢弃这些修改。是否继续？");
+}
+
+async function closeEntityEditor({ force = false } = {}) {
+  if (!$("#character-section-editor-view").classList.contains("hidden")) return closeCharacterSectionEditor({ force });
+  if (!force && !confirmEntityEditorDiscard()) return false;
+  await discardPendingCharacterAttachments();
+  const module = entityEditorType === "setting" ? "settings" : "characters";
+  entityEditorType = null;
+  entityEditorDirty = false;
+  settingEditorItem = null;
+  characterEditorItem = null;
+  $("#entity-editor-view").classList.add("hidden");
+  $("#setting-editor-form").classList.add("hidden");
+  $("#character-editor-form").classList.add("hidden");
+  $("#app").inert = false;
+  document.body.classList.remove("entity-editor-open");
+  await showModule(module);
+  return true;
+}
 
 function setModuleNavExpanded(expanded) {
   moduleNavExpanded = expanded;
@@ -1690,7 +1738,11 @@ async function initializePage() {
     }
 
     if (requestedWork) {
-      state.module = route.view === "module" ? route.module : "editor";
+      state.module = route.view === "module"
+        ? route.module
+        : route.view === "entity-editor"
+          ? (route.entity === "setting" ? "settings" : "characters")
+          : "editor";
       await selectWork(requestedWork.id, route.view === "editor" ? route.chapterId : null);
     }
 
@@ -1699,6 +1751,17 @@ async function initializePage() {
       return;
     }
     if (route.view === "module") return;
+    if (route.view === "entity-editor") {
+      const records = route.entity === "setting" ? state.settings : state.characters;
+      const item = route.entityId ? records.find((record) => record.id === route.entityId) : null;
+      if (route.entityId && !item) {
+        toast(route.entity === "setting" ? "未找到要编辑的设定" : "未找到要编辑的角色", "error");
+        return;
+      }
+      if (route.entity === "setting") openSettingEditor(item);
+      else await openCharacterEditor(item);
+      return;
+    }
     if (route.view === "welcome") {
       showWelcome(true);
       return;
@@ -1938,13 +2001,13 @@ async function openSearchResult(result) {
   if (result.type === "character") {
     await showModule("characters");
     const character = state.characters.find((item) => item.id === result.id);
-    if (character) openCharacterDialog(character);
+    if (character) openCharacterEditor(character);
     return;
   }
   if (result.type === "setting") {
     await showModule("settings");
     const setting = await api(`/api/settings/${encodeURIComponent(result.id)}`);
-    openSettingDialog(setting);
+    openSettingEditor(setting);
     return;
   }
   if (result.type === "race") {
@@ -2354,7 +2417,7 @@ async function renderSettings() {
     await renderSettings();
     await loadAiReferences();
   }));
-  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingDialog(records.find((item) => item.id === button.dataset.editSetting))));
+  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
@@ -2392,7 +2455,7 @@ async function renderCharacters() {
     }
   });
   $("#module-content").querySelectorAll("[data-open-character]").forEach((card) => {
-    const open = () => openCharacterDialog(state.characters.find((item) => item.id === card.dataset.openCharacter));
+    const open = () => openCharacterEditor(state.characters.find((item) => item.id === card.dataset.openCharacter));
     card.addEventListener("click", (event) => { if (!event.target.closest("button")) open(); });
     card.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -2400,7 +2463,7 @@ async function renderCharacters() {
       open();
     });
   });
-  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterDialog(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
 }
 
 async function renderRaces() {
@@ -3332,17 +3395,50 @@ function openVolumeDialog(item) {
     }, "分卷设置");
 }
 
-function openSettingDialog(item) {
-  openDialog(item ? "编辑设定" : "新建设定",
-    field("title", "标题", "text", item?.title) +
-    field("category", "分类", "select", item?.category ?? "世界规则", [["世界规则", "世界规则"], ["历史与年代", "历史与年代"], ["地点与地图", "地点与地图"], ["组织与阵营", "组织与阵营"], ["物种与族群", "物种与族群"], ["科技与物品", "科技与物品"], ["术语与称谓", "术语与称谓"], ["创作约束", "创作约束"]]) +
-    field("content", "设定说明", "textarea", item?.content) + field("locked", "锁定为 AI 硬约束", "checkbox", item?.locked),
-    async (form) => {
-      const body = { title: form.get("title"), category: form.get("category"), content: form.get("content"), locked: form.get("locked") === "on", status: form.get("locked") === "on" ? "confirmed" : (item?.status ?? "draft") };
+function openSettingEditor(item = null) {
+  settingEditorItem = item;
+  $("#setting-editor-eyebrow").textContent = item ? "人工修正" : "作者事实";
+  $("#setting-editor-title").textContent = item ? `编辑“${item.title}”` : "新建设定";
+  $("#setting-editor-name").value = item?.title ?? "";
+  $("#setting-editor-category").value = item?.category ?? "世界规则";
+  $("#setting-editor-locked").checked = Boolean(item?.locked);
+  $("#setting-editor-body").value = item?.content ?? "";
+  $("#setting-change-note").value = "";
+  $("#setting-change-note-field").classList.toggle("hidden", !item);
+  $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
+  const viewOnly = !canEditWork();
+  $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
+  $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
+  $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
+  $("#setting-editor-form").onsubmit = async (event) => {
+    event.preventDefault();
+    if (!canEditWork()) return;
+    const form = new FormData(event.currentTarget);
+    const submit = $("#setting-editor-submit");
+    submit.disabled = true;
+    try {
+      const locked = form.get("locked") === "on";
+      const body = {
+        title: String(form.get("title") ?? "").trim(),
+        category: String(form.get("category") ?? "世界规则"),
+        content: String(form.get("content") ?? ""),
+        locked,
+        status: locked ? "confirmed" : (item?.status ?? "draft"),
+        ...(item ? { changeNote: String(form.get("changeNote") ?? "").trim() } : {})
+      };
       await api(item ? `/api/settings/${item.id}` : `/api/works/${state.work.id}/settings`, { method: item ? "PATCH" : "POST", body });
-      await renderSettings();
+      entityEditorDirty = false;
       await loadAiReferences();
-    }, item ? "人工修正" : "作者事实");
+      await closeEntityEditor({ force: true });
+      toast(item ? "设定新版本已保存" : "设定已创建");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      submit.disabled = false;
+    }
+  };
+  showEntityEditorPage("setting");
+  $("#setting-editor-name").focus();
 }
 
 function characterEditorSection(key, title, description, content) {
@@ -3440,7 +3536,7 @@ async function loadCharacterEditorRelationships(characterId) {
 async function refreshRelationshipSurfaces(characterId = null) {
   const tasks = [];
   if (state.module === "relationships") tasks.push(renderRelationships());
-  if (characterId && $("#character-editor-dialog").open && characterEditorItem?.id === characterId) {
+  if (characterId && entityEditorType === "character" && !$("#entity-editor-view").classList.contains("hidden") && characterEditorItem?.id === characterId) {
     tasks.push(loadCharacterEditorRelationships(characterId));
   }
   await Promise.all(tasks);
@@ -3477,9 +3573,29 @@ function scheduleCharacterSectionPreview() {
   }, 260);
 }
 
+async function closeCharacterSectionEditor({ force = false } = {}) {
+  if (!force && characterSectionEditorDirty && !window.confirm("当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？")) return false;
+  if (characterSectionPreviewTimer !== null) {
+    clearTimeout(characterSectionPreviewTimer);
+    characterSectionPreviewTimer = null;
+  }
+  await discardPendingCharacterAttachments();
+  characterSectionEditorDirty = false;
+  $("#character-section-editor-view").classList.add("hidden");
+  $("#character-editor-form").classList.remove("hidden");
+  $("#character-section-editor-host").innerHTML = "";
+  replacePageRoute(currentPageRoute());
+  return true;
+}
+
 function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
-  return `<section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
+  return `<div class="character-section-editor-shell">
+    <header class="character-section-editor-header">
+      <div><span class="eyebrow">人物 Markdown 档案</span><h2 id="character-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建档案章节"}</h2></div>
+      <button class="entity-editor-back" type="button" data-character-section-edit-close>返回人物档案</button>
+    </header>
+    <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
     <div class="character-markdown-editor-meta">
       <label>章节类型<select id="character-section-type">${options}</select></label>
       <label>章节标题<input id="character-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：背景故事" required></label>
@@ -3494,17 +3610,23 @@ function characterSectionEditorHtml(section = null) {
       <label>Markdown 原文<textarea id="character-section-markdown" maxlength="500000" spellcheck="true" placeholder="支持标题、列表、引用、表格、链接和图片">${esc(section?.contentMarkdown ?? "")}</textarea></label>
       <div><span class="character-markdown-preview-label">安全预览</span><article id="character-section-preview" class="character-markdown-document message-body">${renderMarkdown(section?.contentMarkdown ?? "") || '<p class="character-markdown-empty">预览区域暂无内容。</p>'}</article></div>
     </div>
-    <label class="character-markdown-change-note">版本说明<input id="character-section-change-note" maxlength="500" placeholder="可选，例如：补充远古时期经历"></label>
-    <div class="character-markdown-editor-actions"><button type="button" data-character-section-edit-cancel>取消</button><button type="button" class="primary-button" data-character-section-edit-save>${section ? "保存章节版本" : "创建章节"}</button></div>
-  </section>`;
+    <div class="character-markdown-editor-footer">
+      <label class="character-markdown-change-note">版本说明<input id="character-section-change-note" maxlength="500" placeholder="可选，例如：补充远古时期经历"></label>
+      <div class="character-markdown-editor-actions"><button type="button" data-character-section-edit-cancel>取消</button><button type="button" class="primary-button" data-character-section-edit-save>${section ? "保存章节版本" : "创建章节"}</button></div>
+    </div>
+    </section>
+  </div>`;
 }
 
 async function openCharacterSectionEditor(section = null) {
   await discardPendingCharacterAttachments();
-  const host = $("#character-markdown-sections");
-  if (!host) return;
+  const host = $("#character-section-editor-host");
   host.innerHTML = characterSectionEditorHtml(section);
+  characterSectionEditorDirty = false;
+  $("#character-editor-form").classList.add("hidden");
+  $("#character-section-editor-view").classList.remove("hidden");
   const textarea = $("#character-section-markdown");
+  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
   textarea.addEventListener("input", scheduleCharacterSectionPreview);
   $("#character-section-attachment").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
@@ -3524,6 +3646,7 @@ async function openCharacterSectionEditor(section = null) {
       const suffix = end < textarea.value.length && !textarea.value.slice(end).startsWith("\n") ? "\n\n" : "";
       textarea.setRangeText(`${prefix}${insertion}${suffix}`, start, end, "end");
       textarea.focus();
+      characterSectionEditorDirty = true;
       scheduleCharacterSectionPreview();
       toast(attachment.storedMimeType === "image/webp" ? "图片已转换为无损 WebP 并插入" : "图片已插入；转换后未变小，因此保留原格式");
     } catch (error) {
@@ -3533,10 +3656,8 @@ async function openCharacterSectionEditor(section = null) {
       input.value = "";
     }
   });
-  host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", async () => {
-    await discardPendingCharacterAttachments();
-    renderCharacterMarkdownSections();
-  });
+  host.querySelector("[data-character-section-edit-close]").addEventListener("click", () => void closeCharacterSectionEditor());
+  host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-save]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     const title = $("#character-section-title").value.trim();
@@ -3565,6 +3686,8 @@ async function openCharacterSectionEditor(section = null) {
       characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
       renderCharacterMarkdownSections();
       await Promise.all([renderCharacters(), loadAiReferences()]);
+      characterSectionEditorDirty = false;
+      await closeCharacterSectionEditor({ force: true });
       toast(section ? `“${saved.title}”已保存为 v${saved.versionNo}` : `已创建“${saved.title}”`);
     } catch (error) {
       toast(error.message, "error");
@@ -3798,7 +3921,7 @@ async function showCharacterHistory() {
   }
 }
 
-async function openCharacterDialog(item) {
+async function openCharacterEditor(item = null) {
   [state.races, state.organizations] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/races`),
     apiAllPages(`/api/works/${state.work.id}/organizations`)
@@ -3823,13 +3946,14 @@ async function openCharacterDialog(item) {
     $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
     $("#character-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
   }
+  $("#character-change-note").readOnly = viewOnly;
+  $("#character-editor-submit").classList.toggle("hidden", viewOnly);
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
   const relationshipTab = document.querySelector("[data-character-editor-tab='relationships']");
   relationshipTab.disabled = !item;
   relationshipTab.title = item ? "查看和编辑人物关系" : "创建人物档案后即可维护人物关系";
-  const dialog = $("#character-editor-dialog");
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
@@ -3843,8 +3967,9 @@ async function openCharacterDialog(item) {
       const previousVersion = characterEditorItem?.versionNo;
       if (!wasEditing) delete body.changeNote;
       const saved = await api(wasEditing ? `/api/characters/${characterEditorItem.id}` : `/api/works/${state.work.id}/characters`, { method: wasEditing ? "PATCH" : "POST", body });
-      dialog.close();
-      await Promise.all([renderCharacters(), loadAiReferences()]);
+      entityEditorDirty = false;
+      await loadAiReferences();
+      await closeEntityEditor({ force: true });
       toast(!wasEditing ? "人物档案已创建" : saved.versionNo === previousVersion ? "没有检测到人物档案变更" : `人物档案已保存为 v${saved.versionNo}`);
     } catch (error) {
       toast(error.message, "error");
@@ -3852,7 +3977,7 @@ async function openCharacterDialog(item) {
       submit.disabled = false;
     }
   };
-  dialog.showModal();
+  showEntityEditorPage("character");
   if (item) {
     void loadCharacterEditorRelationships(item.id);
     void loadCharacterMarkdownSections(item.id);
@@ -4614,9 +4739,16 @@ $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
-$("#character-editor-close").addEventListener("click", () => $("#character-editor-dialog").close());
-$("#character-editor-cancel").addEventListener("click", () => $("#character-editor-dialog").close());
-$("#character-editor-dialog").addEventListener("close", () => { void discardPendingCharacterAttachments(); });
+$("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
+$("#character-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
+$("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
+$("#setting-editor-form").addEventListener("input", markEntityEditorDirty);
+$("#setting-editor-form").addEventListener("change", markEntityEditorDirty);
+$("#character-editor-form").addEventListener("input", markEntityEditorDirty);
+$("#character-editor-form").addEventListener("change", markEntityEditorDirty);
+$("#character-editor-fields").addEventListener("click", (event) => {
+  if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove]")) markEntityEditorDirty();
+});
 $("#character-history-button").addEventListener("click", () => {
   if ($("#character-history-panel").classList.contains("hidden")) void showCharacterHistory();
   else setCharacterHistoryVisible(false);
@@ -4715,7 +4847,7 @@ $("#module-nav").addEventListener("click", (event) => {
   if (button.dataset.module) showModule(button.dataset.module);
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
-$("#module-create-button").addEventListener("click", () => ({ settings: openSettingDialog, characters: openCharacterDialog, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
+$("#module-create-button").addEventListener("click", () => ({ settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   scheduleAiContextUsage();
@@ -4926,7 +5058,7 @@ $("#search-form").addEventListener("submit", async (event) => {
 $("#export-button").addEventListener("click", () => {
   if (state.work) window.location.href = `/api/works/${state.work.id}/export?format=markdown`;
 });
-window.addEventListener("beforeunload", (event) => { if (state.dirty) event.preventDefault(); });
+window.addEventListener("beforeunload", (event) => { if (state.dirty || entityEditorDirty || characterSectionEditorDirty) event.preventDefault(); });
 
 initializePage().catch((error) => {
   restoringPageRoute = false;
