@@ -373,4 +373,35 @@ describe("作品、导入和章节版本 API", () => {
     const fileVersionsAfter = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     expect(fileVersionsAfter.body.data[0].fileType).toBe("snapshot");
   });
+
+  it("拒绝损坏的文件版本快照且不改动当前正文", async () => {
+    const created = await request(runtime.app).post("/api/works").send({ title: "损坏快照保护" }).expect(201);
+    const workId = String(created.body.data.id);
+    await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .attach("file", Buffer.from("第一章\n\n当前正文。"), "broken.txt")
+      .expect(201);
+
+    const directoryBefore = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    const chapterId = String(directoryBefore.body.data.volumes[0].chapters[0].id);
+    const version = (await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200)).body.data[0];
+    const versionCountBefore = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count);
+    runtime.database.run("UPDATE file_versions SET snapshot_json = ? WHERE id = ?", "{invalid", version.id);
+
+    const failed = await request(runtime.app)
+      .post(`/api/works/${workId}/file-versions/${version.id}/restore`)
+      .expect(409);
+    expect(failed.body.error.code).toBe("FILE_VERSION_INVALID");
+    const directoryAfter = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(directoryAfter.body.data.volumes[0].chapters[0].id).toBe(chapterId);
+    const chapterAfter = await request(runtime.app).get(`/api/chapters/${chapterId}`).expect(200);
+    expect(chapterAfter.body.data.content).toBe("当前正文。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count)).toBe(versionCountBefore);
+  });
 });

@@ -220,6 +220,79 @@ export type AiConversationContext = {
   messages: Array<{ id: string; role: "user" | "assistant"; content: string }>;
 };
 
+type RestorableFileSnapshotChapter = {
+  title: string;
+  content: string;
+  sortOrder: number;
+  chapterType: ChapterType;
+};
+
+type RestorableFileSnapshotVolume = {
+  title: string;
+  kind: string;
+  source: string;
+  description: string;
+  keywords: string[];
+  sortOrder: number;
+  chapters: RestorableFileSnapshotChapter[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function invalidFileSnapshot(): never {
+  throw new AppError(409, "FILE_VERSION_INVALID", "正文历史快照已损坏，未执行恢复");
+}
+
+function parseRestorableFileSnapshot(value: string, workId: string): { volumes: RestorableFileSnapshotVolume[] } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    invalidFileSnapshot();
+  }
+  if (!isRecord(parsed) || parsed.id !== workId || !Array.isArray(parsed.volumes) || parsed.volumes.length > 10_000) {
+    return invalidFileSnapshot();
+  }
+  let chapterCount = 0;
+  let contentLength = 0;
+  const volumes = parsed.volumes.map((volumeValue) => {
+    if (!isRecord(volumeValue) || typeof volumeValue.title !== "string" || typeof volumeValue.kind !== "string"
+      || typeof volumeValue.source !== "string" || typeof volumeValue.description !== "string"
+      || !Array.isArray(volumeValue.keywords) || !volumeValue.keywords.every((keyword) => typeof keyword === "string")
+      || typeof volumeValue.sortOrder !== "number" || !Number.isFinite(volumeValue.sortOrder) || !Array.isArray(volumeValue.chapters)) {
+      return invalidFileSnapshot();
+    }
+    const chapters = volumeValue.chapters.map((chapterValue) => {
+      if (!isRecord(chapterValue) || typeof chapterValue.title !== "string" || typeof chapterValue.content !== "string"
+        || typeof chapterValue.sortOrder !== "number" || !Number.isFinite(chapterValue.sortOrder)
+        || !["正文", "设定", "作者的话", "其他"].includes(String(chapterValue.chapterType))) {
+        return invalidFileSnapshot();
+      }
+      chapterCount += 1;
+      contentLength += chapterValue.content.length;
+      if (chapterCount > 100_000 || contentLength > 20_000_000) return invalidFileSnapshot();
+      return {
+        title: chapterValue.title,
+        content: chapterValue.content,
+        sortOrder: chapterValue.sortOrder,
+        chapterType: chapterValue.chapterType as ChapterType
+      };
+    });
+    return {
+      title: volumeValue.title,
+      kind: volumeValue.kind,
+      source: volumeValue.source,
+      description: volumeValue.description,
+      keywords: [...volumeValue.keywords] as string[],
+      sortOrder: volumeValue.sortOrder,
+      chapters
+    };
+  });
+  return { volumes };
+}
+
 function requiredString(row: Row, key: string): string {
   return String(row[key] ?? "");
 }
@@ -1074,8 +1147,7 @@ export class Store {
     this.getWork(workId);
     const version = this.db.get("SELECT * FROM file_versions WHERE id = ? AND work_id = ?", fileVersionId, workId);
     if (!version) throw notFound("文件版本");
-    const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
-    const volumes = Array.isArray(snapshot.volumes) ? snapshot.volumes as Array<Record<string, unknown>> : [];
+    const { volumes } = parseRestorableFileSnapshot(requiredString(version, "snapshot_json"), workId);
     return this.db.transaction(() => {
       const current = this.getWork(workId);
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
@@ -1108,28 +1180,24 @@ export class Store {
       this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
       for (const volume of volumes) {
         const volumeId = id("volume");
-        const chapters = Array.isArray(volume.chapters) ? volume.chapters as Array<Record<string, unknown>> : [];
         this.insertVolumeWithId(workId, volumeId, {
-          title: String(volume.title ?? "正文"),
-          kind: String(volume.kind ?? "main"),
-          source: String(volume.source ?? "manual"),
-          description: String(volume.description ?? ""),
-          keywords: Array.isArray(volume.keywords) ? volume.keywords as string[] : [],
-          sortOrder: Number(volume.sortOrder ?? 0)
+          title: volume.title,
+          kind: volume.kind,
+          source: volume.source,
+          description: volume.description,
+          keywords: volume.keywords,
+          sortOrder: volume.sortOrder
         }, "restore", fileVersionId, `恢复文件版本 ${fileVersionId}`);
-        for (const chapter of chapters) {
-          const chapterType = (["正文", "设定", "作者的话", "其他"].includes(String(chapter.chapterType))
-            ? String(chapter.chapterType)
-            : "正文") as ChapterType;
+        for (const chapter of volume.chapters) {
           this.insertChapter(
             workId,
             volumeId,
-            String(chapter.title ?? "未命名章节"),
-            String(chapter.content ?? ""),
-            Number(chapter.sortOrder ?? 0),
+            chapter.title,
+            chapter.content,
+            chapter.sortOrder,
             "restore",
             fileVersionId,
-            chapterType
+            chapter.chapterType
           );
         }
       }
