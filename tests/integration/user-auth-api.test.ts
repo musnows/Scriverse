@@ -1,5 +1,6 @@
+import { createServer, type Server } from "node:http";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 
 type SessionCredentials = {
@@ -12,6 +13,8 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
   "base64"
 );
+let authTestServer: Server;
+let activeRuntimeApp: Runtime["app"] | null = null;
 
 async function solveCaptcha(app: Runtime["app"]): Promise<{ captchaId: string; captchaAnswer: string }> {
   const response = await request(app).get("/api/auth/captcha").expect(200);
@@ -33,17 +36,55 @@ async function register(runtime: Runtime, username: string): Promise<SessionCred
   return { agent, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
 }
 
+function createUserAuthTestRuntime(allowRegistration = true): Runtime {
+  const runtime = createRuntime({
+    databasePath: ":memory:",
+    masterSecret: "user-auth-test-master-secret-with-enough-length",
+    serveUi: false,
+    revealCaptchaAnswer: true,
+    security: { allowRegistration, enforceSameOrigin: true }
+  });
+  activeRuntimeApp = runtime.app;
+  return {
+    ...runtime,
+    app: authTestServer as unknown as Runtime["app"],
+    close: () => {
+      if (activeRuntimeApp === runtime.app) activeRuntimeApp = null;
+      runtime.close();
+    }
+  };
+}
+
 describe("用户、作品权限与操作者追踪 API", () => {
   let runtime: Runtime;
 
-  beforeEach(() => {
-    runtime = createRuntime({
-      databasePath: ":memory:",
-      masterSecret: "user-auth-test-master-secret-with-enough-length",
-      serveUi: false,
-      revealCaptchaAnswer: true,
-      security: { allowRegistration: true, enforceSameOrigin: true }
+  beforeAll(async () => {
+    authTestServer = createServer((incoming, outgoing) => {
+      if (!activeRuntimeApp) {
+        outgoing.writeHead(503).end();
+        return;
+      }
+      activeRuntimeApp(incoming, outgoing);
     });
+    await new Promise<void>((resolve, reject) => {
+      const rejectStart = (error: Error) => reject(error);
+      authTestServer.once("error", rejectStart);
+      authTestServer.listen(0, "127.0.0.1", () => {
+        authTestServer.off("error", rejectStart);
+        authTestServer.unref();
+        resolve();
+      });
+    });
+  });
+  afterAll(async () => {
+    authTestServer.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      authTestServer.close((error) => error ? reject(error) : resolve());
+    });
+  });
+
+  beforeEach(() => {
+    runtime = createUserAuthTestRuntime();
   });
   afterEach(() => runtime.close());
 
@@ -867,13 +908,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
   it("未显式开启注册时连首位管理员注册也会被拒绝", async () => {
     runtime.close();
-    runtime = createRuntime({
-      databasePath: ":memory:",
-      masterSecret: "user-auth-test-master-secret-with-enough-length",
-      serveUi: false,
-      revealCaptchaAnswer: true,
-      security: { allowRegistration: false, enforceSameOrigin: true }
-    });
+    runtime = createUserAuthTestRuntime(false);
     const closedSession = await request(runtime.app).get("/api/auth/session").expect(200);
     expect(closedSession.body.data).toMatchObject({ setupRequired: true, registrationOpen: false });
     const captcha = await solveCaptcha(runtime.app);
