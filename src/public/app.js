@@ -5074,12 +5074,30 @@ $("#profile-form").addEventListener("submit", async (event) => {
 $("#password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const newPassword = String(form.get("newPassword") ?? "");
+  const passwordConfirmation = String(form.get("passwordConfirmation") ?? "");
+  if (newPassword !== passwordConfirmation) {
+    const confirmationInput = $("#password-form input[name='passwordConfirmation']");
+    confirmationInput.setCustomValidity("两次输入的密码不一致");
+    confirmationInput.reportValidity();
+    confirmationInput.focus();
+    return;
+  }
   try {
-    await api("/api/auth/password", { method: "PATCH", body: { currentPassword: form.get("currentPassword"), newPassword: form.get("newPassword") } });
+    await api("/api/auth/password", { method: "PATCH", body: { currentPassword: form.get("currentPassword"), newPassword, passwordConfirmation } });
     event.currentTarget.reset();
     toast("密码已更新，其他设备的会话已退出");
   } catch (error) { toast(error.message, "error"); }
 });
+function validatePasswordChangeConfirmation() {
+  const newPasswordInput = $("#password-form input[name='newPassword']");
+  const confirmationInput = $("#password-form input[name='passwordConfirmation']");
+  const matches = !confirmationInput.value || newPasswordInput.value === confirmationInput.value;
+  confirmationInput.setCustomValidity(matches ? "" : "两次输入的密码不一致");
+  return matches;
+}
+$("#password-form input[name='newPassword']").addEventListener("input", validatePasswordChangeConfirmation);
+$("#password-form input[name='passwordConfirmation']").addEventListener("input", validatePasswordChangeConfirmation);
 $("#api-key-reset-button").addEventListener("click", async () => {
   if ($("#api-key-reset-button").textContent.includes("重置") && !window.confirm("重置后，所有使用旧 API Key 的 CLI 会立即退出登录。确定继续吗？")) return;
   try {

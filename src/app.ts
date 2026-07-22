@@ -89,7 +89,10 @@ const memberPermissionSchema = z.union([
   z.object({ role: memberRoleValueSchema }).strict()
 ]);
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
-const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
+const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema, passwordConfirmation: passwordSchema }).strict().refine((input) => input.newPassword === input.passwordConfirmation, {
+  path: ["passwordConfirmation"],
+  message: "两次输入的密码不一致"
+});
 const changeNoteSchema = z.string().trim().max(500).optional();
 const expectedVersionNoSchema = z.coerce.number().int().positive().optional();
 
