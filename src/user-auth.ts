@@ -6,6 +6,20 @@ import { sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
+import {
+  canReadWorkModule,
+  canWriteWorkModule,
+  classifyWorkModulePermissions,
+  fullWorkModulePermissions,
+  settingsEditorModulePermissions,
+  storedMembershipForPermissions,
+  storedWorkModulePermissions,
+  workPermissionModuleLabels,
+  workPermissionModules,
+  type PublicWorkAccessRole,
+  type WorkModulePermissions,
+  type WorkPermissionModule
+} from "./work-permissions.js";
 
 export type AuthUser = RequestActor & {
   status: "active" | "disabled";
@@ -35,8 +49,9 @@ export type AuthApiKey = {
   prefix: string;
 };
 
-export type WorkAccessRole = "admin" | "owner" | "editor" | "settings-editor" | "viewer";
+export type WorkAccessRole = "admin" | PublicWorkAccessRole;
 export type AssignableWorkMemberRole = "editor" | "settings-editor" | "viewer";
+export type WorkMemberPermissionInput = { role: AssignableWorkMemberRole } | { permissions: WorkModulePermissions };
 
 export type ApiKeyStatus = {
   configured: boolean;
@@ -60,26 +75,18 @@ declare global {
 const sessionCookieName = "scriverse_session";
 const sessionLifetimeMs = 30 * 24 * 60 * 60_000;
 const apiKeyPrefix = "scrv_";
-const settingsEditorPermissions = JSON.stringify({ editScope: "settings" });
-
-function membershipAccessRole(row: Row | undefined): "owner" | "editor" | "settings-editor" | "viewer" | null {
+function membershipAccessRole(row: Row | undefined): PublicWorkAccessRole | null {
   const role = String(row?.role ?? "");
-  if (role === "owner" || role === "viewer") return role;
-  if (role !== "editor") return null;
-  try {
-    const permissions = JSON.parse(String(row?.permissions_json ?? "{}")) as unknown;
-    if (permissions && typeof permissions === "object" && !Array.isArray(permissions)
-      && (permissions as Record<string, unknown>).editScope === "settings") return "settings-editor";
-  } catch {
-    // 无效权限配置按兼容的完整编辑权限处理。
-  }
-  return "editor";
+  if (role === "owner") return "owner";
+  if (role !== "editor" && role !== "viewer") return null;
+  return classifyWorkModulePermissions(storedWorkModulePermissions(role, row?.permissions_json));
 }
 
-function storedMembership(role: AssignableWorkMemberRole): { role: "editor" | "viewer"; permissionsJson: string } {
-  return role === "settings-editor"
-    ? { role: "editor", permissionsJson: settingsEditorPermissions }
-    : { role, permissionsJson: "{}" };
+function permissionsFromInput(input: WorkMemberPermissionInput): WorkModulePermissions {
+  if ("permissions" in input) return input.permissions;
+  if (input.role === "editor") return fullWorkModulePermissions();
+  if (input.role === "settings-editor") return settingsEditorModulePermissions();
+  return storedWorkModulePermissions("viewer", "{}");
 }
 
 function sha256(value: string): string {
@@ -524,13 +531,16 @@ export class UserAuthService {
        FROM work_memberships membership JOIN users user ON user.id = membership.user_id
        WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user.username`,
       workId
-    ).map((row) => ({
-      userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
-      role: membershipAccessRole(row), status: String(row.status), createdAt: String(row.created_at),
-      avatarUrl: row.avatar_sha256
-        ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
-      : null
-    }));
+    ).map((row) => {
+      const permissions = storedWorkModulePermissions(String(row.role), row.permissions_json);
+      return {
+        userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
+        role: membershipAccessRole(row), permissions, status: String(row.status), createdAt: String(row.created_at),
+        avatarUrl: row.avatar_sha256
+          ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
+        : null
+      };
+    });
   }
 
   listMembersPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
@@ -542,19 +552,25 @@ export class UserAuthService {
       workId,
       ...page.params
     );
-    return paginated(rows.map((row) => ({
-      userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
-      role: membershipAccessRole(row), status: String(row.status), createdAt: String(row.created_at),
-      avatarUrl: row.avatar_sha256
-        ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
+    return paginated(rows.map((row) => {
+      const permissions = storedWorkModulePermissions(String(row.role), row.permissions_json);
+      return {
+        userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
+        role: membershipAccessRole(row), permissions, status: String(row.status), createdAt: String(row.created_at),
+        avatarUrl: row.avatar_sha256
+          ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
         : null
-    })), pagination);
+      };
+    }), pagination);
   }
 
-  addMember(workId: string, userId: string, role: AssignableWorkMemberRole, invitedByUserId: string): Record<string, unknown>[] {
+  addMember(workId: string, userId: string, input: WorkMemberPermissionInput, invitedByUserId: string): Record<string, unknown>[] {
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    if (!work) throw notFound("作品");
+    if (String(work.owner_user_id ?? "") === userId) throw new AppError(409, "OWNER_REQUIRED", "不能修改作品创建者权限");
     const user = this.getUser(userId);
     if (user.status !== "active") throw new AppError(409, "USER_DISABLED", "不能邀请已停用用户");
-    const stored = storedMembership(role);
+    const stored = storedMembershipForPermissions(permissionsFromInput(input));
     this.database.run(
       `INSERT INTO work_memberships (work_id, user_id, role, permissions_json, invited_by_user_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET
@@ -569,11 +585,11 @@ export class UserAuthService {
     return this.listMembers(workId);
   }
 
-  updateMemberRole(workId: string, userId: string, role: AssignableWorkMemberRole): Record<string, unknown>[] {
+  updateMemberPermissions(workId: string, userId: string, input: WorkMemberPermissionInput): Record<string, unknown>[] {
     const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === userId) throw new AppError(409, "OWNER_REQUIRED", "不能修改作品创建者权限");
-    const stored = storedMembership(role);
+    const stored = storedMembershipForPermissions(permissionsFromInput(input));
     const result = this.database.run(
       "UPDATE work_memberships SET role = ?, permissions_json = ? WHERE work_id = ? AND user_id = ? AND role <> 'owner'",
       stored.role,
@@ -602,15 +618,43 @@ export class UserAuthService {
     return membershipAccessRole(membership);
   }
 
-  assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false, allowAdminAccess = true, settingsWrite = false): void {
+  workModulePermissions(user: AuthUser, workId: string, allowAdminAccess = true): WorkModulePermissions | null {
+    if (allowAdminAccess && user.role === "admin") return fullWorkModulePermissions();
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    if (!work) throw notFound("作品");
+    if (String(work.owner_user_id ?? "") === user.userId) return fullWorkModulePermissions();
+    const membership = this.database.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
+    if (!membership) return null;
+    return storedWorkModulePermissions(String(membership.role), membership.permissions_json);
+  }
+
+  assertWorkAccess(
+    user: AuthUser,
+    workId: string,
+    requirements: { read?: readonly WorkPermissionModule[]; write?: readonly WorkPermissionModule[] } = {},
+    ownerOnly = false,
+    allowAdminAccess = true
+  ): void {
     if (workId === PLATFORM_AI_WORK_ID && (!allowAdminAccess || user.role !== "admin")) throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const role = this.workRole(user, workId, allowAdminAccess);
     if (!role) throw new AppError(403, "WORK_ACCESS_DENIED", "你没有访问这部作品的权限");
     if (ownerOnly && role !== "admin" && role !== "owner") throw new AppError(403, "WORK_OWNER_REQUIRED", "该操作仅限作品创建者或系统管理员");
-    if (write && role === "settings-editor" && !settingsWrite) {
-      throw new AppError(403, "WORK_PROSE_EDIT_DENIED", "你只能编辑设定资料，不能修改正文或作品配置");
+    if (role === "admin" || role === "owner") return;
+    const permissions = this.workModulePermissions(user, workId, allowAdminAccess);
+    if (!permissions) throw new AppError(403, "WORK_ACCESS_DENIED", "你没有访问这部作品的权限");
+    for (const module of requirements.read ?? []) {
+      if (!canReadWorkModule(permissions, module)) {
+        throw new AppError(403, "WORK_MODULE_READ_DENIED", `你没有读取“${workPermissionModuleLabels[module]}”模块的权限`);
+      }
     }
-    if (write && !["admin", "owner", "editor", "settings-editor"].includes(role)) throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
+    for (const module of requirements.write ?? []) {
+      if (canWriteWorkModule(permissions, module)) continue;
+      if (role === "viewer") throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
+      if (role === "settings-editor") {
+        throw new AppError(403, "WORK_PROSE_EDIT_DENIED", "你只能编辑已授权的设定资料，不能执行此操作");
+      }
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", `你没有编辑“${workPermissionModuleLabels[module]}”模块的权限`);
+    }
   }
 }
 
@@ -700,6 +744,125 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   };
 }
 
+const contentPermissionModules = workPermissionModules.filter((module) => !["reviews", "ai", "ai-settings"].includes(module));
+
+type WorkAuthorizationRequirements = {
+  read?: WorkPermissionModule[];
+  write?: WorkPermissionModule[];
+  ownerOnly?: boolean;
+};
+
+function requestBodyRecord(request: Request): Record<string, unknown> {
+  return request.body && typeof request.body === "object" && !Array.isArray(request.body)
+    ? request.body as Record<string, unknown>
+    : {};
+}
+
+function hasBodyField(request: Request, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(requestBodyRecord(request), field);
+}
+
+function aiContextReadModules(request: Request): WorkPermissionModule[] {
+  const scope = requestBodyRecord(request).scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope) || (scope as Record<string, unknown>).type === "none") return [];
+  return [...contentPermissionModules];
+}
+
+function workModuleRequirements(request: Request, write: boolean): WorkAuthorizationRequirements {
+  const pathname = request.path;
+  const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
+    write ? { write: [module, ...extraWrite] } : { read: [module] }
+  );
+  if (/^\/api\/works\/[^/]+$/u.test(pathname)) return write ? { ownerOnly: true } : {};
+  if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) return write ? { ownerOnly: true } : {};
+  if (/^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(pathname)) return { ownerOnly: true };
+  if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
+  if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { read: ["ai"] };
+  if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
+  if (/^\/api\/entity-versions\/[^/]+\/[^/]+(?:\/restore)?$/u.test(pathname)) {
+    const entityType = pathname.split("/")[3] ?? "";
+    const moduleByEntityType: Record<string, WorkPermissionModule> = {
+      volume: "prose",
+      setting: "settings",
+      race: "races",
+      organization: "organizations",
+      "timeline-track": "timeline",
+      "timeline-event": "timeline",
+      relationship: "relationships",
+      "chapter-outline": "outlines",
+      foreshadow: "outlines"
+    };
+    const module = moduleByEntityType[entityType];
+    if (entityType === "work") return { ownerOnly: true };
+    if (!module) return { ownerOnly: true };
+    if (write && (entityType === "race" || entityType === "organization")) return direct(module, ["characters"]);
+    return direct(module);
+  }
+  if (/^\/api\/(?:works\/[^/]+\/characters|characters\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const extraWrite: WorkPermissionModule[] = [];
+    if (write) {
+      const mergeOrRestore = /^\/api\/characters\/[^/]+\/(?:merge|restore)$/u.test(pathname);
+      const deleting = request.method === "DELETE" && /^\/api\/characters\/[^/]+$/u.test(pathname);
+      if (mergeOrRestore || deleting || hasBodyField(request, "raceId") || hasBodyField(request, "species")) extraWrite.push("races");
+      if (mergeOrRestore || deleting || hasBodyField(request, "organizationIds")) extraWrite.push("organizations");
+      if (mergeOrRestore || deleting) extraWrite.push("timeline", "relationships");
+    }
+    return direct("characters", extraWrite);
+  }
+  if (/^\/api\/(?:works\/[^/]+\/races|races\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const body = requestBodyRecord(request);
+    const memberIds = Array.isArray(body.memberIds) ? body.memberIds : [];
+    const createsMembers = request.method === "POST" && /^\/api\/works\/[^/]+\/races$/u.test(pathname) && memberIds.length > 0;
+    const updatesMembers = request.method === "PATCH" && (hasBodyField(request, "memberIds") || hasBodyField(request, "name"));
+    const replacesMembers = request.method === "DELETE" || /^\/api\/races\/[^/]+\/merge$/u.test(pathname);
+    return direct("races", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
+  }
+  if (/^\/api\/(?:works\/[^/]+\/organizations|organizations\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const body = requestBodyRecord(request);
+    const memberIds = Array.isArray(body.memberIds) ? body.memberIds : [];
+    const createsMembers = request.method === "POST" && /^\/api\/works\/[^/]+\/organizations$/u.test(pathname) && memberIds.length > 0;
+    const updatesMembers = request.method === "PATCH" && hasBodyField(request, "memberIds");
+    const replacesMembers = request.method === "DELETE" || /^\/api\/organizations\/[^/]+\/merge$/u.test(pathname);
+    return direct("organizations", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
+  }
+  const rules: Array<[RegExp, WorkPermissionModule]> = [
+    [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters)(?:\/|$)/u, "prose"],
+    [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
+    [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
+    [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],
+    [/^\/api\/character-sections\/[^/]+(?:\/|$)/u, "characters"],
+    [/^\/api\/works\/[^/]+\/(?:timeline-tracks|timeline)(?:\/|$)/u, "timeline"],
+    [/^\/api\/(?:timeline-tracks|timeline)\/[^/]+(?:\/|$)/u, "timeline"],
+    [/^\/api\/works\/[^/]+\/relationships(?:\/|$)/u, "relationships"],
+    [/^\/api\/relationships\/[^/]+(?:\/|$)/u, "relationships"],
+    [/^\/api\/works\/[^/]+\/(?:outlines|foreshadows)(?:\/|$)/u, "outlines"],
+    [/^\/api\/(?:foreshadows|foreshadow-occurrences)\/[^/]+(?:\/|$)/u, "outlines"],
+    [/^\/api\/works\/[^/]+\/ai-settings(?:\/|$)/u, "ai-settings"],
+    [/^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u, "ai-settings"]
+  ];
+  for (const [pattern, module] of rules) if (pattern.test(pathname)) return direct(module);
+
+  if (write && /^\/api\/reviews\/[^/]+\/character-resolution$/u.test(pathname)) {
+    const merging = requestBodyRecord(request).action === "merge";
+    return merging
+      ? { write: ["reviews", "characters", "races", "organizations", "timeline", "relationships"] }
+      : { write: ["reviews"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/reviews|reviews\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    return direct("reviews");
+  }
+  if (write && /^\/api\/suggestions\/[^/]+\/accept$/u.test(pathname)) {
+    return { write: ["ai", "prose"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/(?:tasks|suggestions|ai-calls|ai-context-usage|ai-conversations|chat)|tasks\/[^/]+|ai-conversations\/[^/]+|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const contextRead = aiContextReadModules(request);
+    if (/^\/api\/works\/[^/]+\/ai-context-usage$/u.test(pathname)) return { read: ["ai", ...contextRead] };
+    return write ? { read: contextRead, write: ["ai"] } : { read: ["ai"] };
+  }
+  if (/^\/api\/works\/[^/]+\/(?:search|export)$/u.test(pathname)) return { read: [...contentPermissionModules] };
+  return { ownerOnly: true };
+}
+
 export function createWorkAuthorizationMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
   return (request, _response, next) => {
     if (disabled || !request.path.startsWith("/api/") || request.path.startsWith("/api/auth/") || request.path === "/api/health") return next();
@@ -720,20 +883,8 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
     const workId = auth.resolveWorkId(request.path);
     if (!workId) return next();
     const write = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-    const ownerOnly = write && (
-      /^\/api\/works\/[^/]+$/u.test(request.path)
-      || /^\/api\/works\/[^/]+\/cover$/u.test(request.path)
-      || /^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(request.path)
-    );
-    const settingsWrite = write && (
-      /^\/api\/works\/[^/]+\/(?:settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)(?:\/merge)?$/u.test(request.path)
-      || /^\/api\/(?:settings|characters|character-sections|races|organizations|timeline-tracks|timeline|relationships|foreshadows|foreshadow-occurrences)\/[^/]+(?:\/(?:merge|restore|split|sections|occurrences))?$/u.test(request.path)
-      || /^\/api\/chapters\/[^/]+\/outline$/u.test(request.path)
-      || /^\/api\/entity-versions\/(?:setting|race|organization|timeline-track|timeline-event|relationship|chapter-outline|foreshadow)\/[^/]+\/restore$/u.test(request.path)
-      || /^\/api\/works\/[^/]+\/attachments$/u.test(request.path)
-      || /^\/api\/attachments\/[^/]+$/u.test(request.path)
-    );
-    auth.assertWorkAccess(user, workId, write, ownerOnly, request.authMethod !== "api-key", settingsWrite);
+    const requirements = workModuleRequirements(request, write);
+    auth.assertWorkAccess(user, workId, requirements, requirements.ownerOnly === true, request.authMethod !== "api-key");
     next();
   };
 }

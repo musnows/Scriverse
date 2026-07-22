@@ -6,6 +6,13 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
+  classifyWorkModulePermissions,
+  emptyWorkModulePermissions,
+  fullWorkModulePermissions,
+  storedWorkModulePermissions,
+  type WorkModulePermissions
+} from "./work-permissions.js";
+import {
   countWords,
   documentShortSearchTerms,
   id,
@@ -967,6 +974,8 @@ export class Store {
 
   getWorkDirectory(workId: string): Record<string, unknown> {
     const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { ...work, volumes: [] };
     const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
     const chapterRows = this.db.all(
       `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
@@ -991,6 +1000,8 @@ export class Store {
 
   getWorkDirectoryPage(workId: string, pagination: Pagination): Record<string, unknown> {
     const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { ...work, volumes: [], directoryPage: paginated([], pagination) };
     const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
     const page = paginationSql(pagination);
     const chapterRows = this.db.all(
@@ -1822,15 +1833,19 @@ export class Store {
     const membership = actor
       ? this.db.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
       : undefined;
-    const membershipPermissions = json<Record<string, unknown>>(optionalString(membership ?? {}, "permissions_json"), {});
     const membershipRole = String(membership?.role ?? "");
+    const ownerAccess = ownerUserId === actor?.userId;
+    const adminAccess = actor?.role === "admin" && actor.authentication !== "api-key";
+    const modulePermissions = !actor || ownerAccess || adminAccess
+      ? fullWorkModulePermissions()
+      : membershipRole
+        ? storedWorkModulePermissions(membershipRole, optionalString(membership ?? {}, "permissions_json"))
+        : emptyWorkModulePermissions();
     const accessRole = ownerUserId === actor?.userId
       ? "owner"
-      : actor?.role === "admin"
+      : adminAccess
         ? "admin"
-        : membershipRole === "editor" && membershipPermissions.editScope === "settings"
-          ? "settings-editor"
-          : ["editor", "viewer"].includes(membershipRole) ? membershipRole : null;
+        : membershipRole ? classifyWorkModulePermissions(modulePermissions) : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")
@@ -1849,8 +1864,9 @@ export class Store {
       versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", requiredString(row, "id")),
       ownerUserId,
       accessRole,
-      chapterCount: numberValue(count ?? {}, "chapter_count"),
-      wordCount: numberValue(count ?? {}, "word_count"),
+      modulePermissions,
+      chapterCount: modulePermissions.prose === "none" ? 0 : numberValue(count ?? {}, "chapter_count"),
+      wordCount: modulePermissions.prose === "none" ? 0 : numberValue(count ?? {}, "word_count"),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
