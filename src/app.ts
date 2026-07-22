@@ -468,8 +468,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const auth = new UserAuthService(database);
   const store = new Store(database);
   const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
+    if (!request.authUser) return fullWorkModulePermissions();
     const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
-    if (!request.authUser || !resolvedWorkId) return fullWorkModulePermissions();
+    if (!resolvedWorkId) return fullWorkModulePermissions();
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
