@@ -347,6 +347,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ content: "不应写入。" })
       .expect(403);
     expect(proseWriteDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const proseImportDenied = await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .attach("file", Buffer.from("第一章\n\n不应导入。"), "readonly.txt")
+      .expect(403);
+    expect(proseImportDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
 
     await collaborator.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", collaborator.csrfToken)
@@ -431,6 +436,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
+    const hiddenProseImport = await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .attach("file", Buffer.from("第一章\n\n不应导入。"), "hidden-prose.txt")
+      .expect(403);
+    expect(hiddenProseImport.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/reviews`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/models`).expect(200);

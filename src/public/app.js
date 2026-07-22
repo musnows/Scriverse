@@ -123,6 +123,9 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
+  $("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);
+  $("#import-file-button").setAttribute("aria-hidden", String(proseReadOnly));
+  $("#import-file").disabled = proseReadOnly;
   $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canEditProse());
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#chapter-title").readOnly = proseReadOnly;
