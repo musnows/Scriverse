@@ -141,6 +141,7 @@ type OrganizationInput = {
   name: string;
   description?: string;
   settings?: string[];
+  settingsMarkdown?: string;
   memberIds?: string[];
 };
 
@@ -149,8 +150,18 @@ type RaceInput = {
   parentRaceId?: string | null;
   description?: string;
   settings?: string[];
+  settingsMarkdown?: string;
   memberIds?: string[];
 };
+
+function settingsFromInput(settingsMarkdown?: string, settings?: string[], fallback: string[] = []): string[] {
+  if (settingsMarkdown !== undefined) return settingsMarkdown.trim() ? [settingsMarkdown] : [];
+  return settings ?? fallback;
+}
+
+function settingsMarkdownFromList(settings: unknown): string {
+  return Array.isArray(settings) ? settings.map(String).filter(Boolean).join("\n\n") : "";
+}
 
 type ChapterOutlineInput = {
   goal?: string;
@@ -2389,6 +2400,7 @@ export class Store {
     changeNote = ""
   ): Record<string, unknown> {
     const timestamp = now();
+    const content = input.content;
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO settings (id, work_id, title, category, content, tags_json, status, locked, evidence_json, scope_json, author_note, created_at, updated_at)
@@ -2397,7 +2409,7 @@ export class Store {
         workId,
         input.title,
         input.category,
-        input.content,
+        content,
         JSON.stringify(input.tags ?? []),
         input.status ?? "draft",
         input.locked ? 1 : 0,
@@ -2407,6 +2419,7 @@ export class Store {
         timestamp,
         timestamp
       );
+      this.syncMarkdownAttachmentReferences(workId, "setting", settingId, content);
       this.recordEntityVersion("setting", settingId, source, sourceRef, changeNote || "建立世界观设定", timestamp);
       this.audit(workId, source === "restore" ? "setting.restored" : "setting.created", "setting", settingId, {
         locked: input.locked ?? false,
@@ -2444,6 +2457,7 @@ export class Store {
     expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getSetting(settingId);
+    const content = input.content ?? String(current.content);
     this.db.transaction(() => {
       this.assertExpectedVersion("setting", settingId, expectedVersionNo, "设定");
       this.db.run(
@@ -2451,7 +2465,7 @@ export class Store {
          evidence_json = ?, scope_json = ?, author_note = ?, updated_at = ? WHERE id = ?`,
         input.title ?? String(current.title),
         input.category ?? String(current.category),
-        input.content ?? String(current.content),
+        content,
         JSON.stringify(input.tags ?? current.tags),
         input.status ?? String(current.status),
         (input.locked ?? Boolean(current.locked)) ? 1 : 0,
@@ -2461,6 +2475,7 @@ export class Store {
         now(),
         settingId
       );
+      this.syncMarkdownAttachmentReferences(String(current.workId), "setting", settingId, content);
       this.recordEntityVersion("setting", settingId, source, sourceRef, changeNote || "更新世界观设定");
       this.audit(String(current.workId), "setting.updated", "setting", settingId, { fields: Object.keys(input), source, sourceRef });
     });
@@ -2472,6 +2487,7 @@ export class Store {
     this.db.transaction(() => {
       this.assertExpectedVersion("setting", settingId, expectedVersionNo, "设定");
       this.recordEntityVersion("setting", settingId, "delete", null, "删除世界观设定");
+      this.clearMarkdownAttachmentReferences("setting", settingId);
       this.db.run("DELETE FROM settings WHERE id = ?", settingId);
       this.audit(String(current.workId), "setting.deleted", "setting", settingId);
     });
@@ -2518,6 +2534,7 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const settings = settingsFromInput(input.settingsMarkdown, input.settings);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -2529,10 +2546,11 @@ export class Store {
         name,
         normalizedName,
         input.description ?? "",
-        JSON.stringify(input.settings ?? []),
+        JSON.stringify(settings),
         timestamp,
         timestamp
       );
+      this.syncMarkdownAttachmentReferences(workId, "race", raceId, settingsMarkdownFromList(settings));
       this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `设为种族“${name}”`);
       this.recordEntityVersion("race", raceId, source, sourceRef, changeNote || "建立种族档案", timestamp);
@@ -2586,6 +2604,7 @@ export class Store {
       ? [...new Set([...(current.memberIds as string[]), ...(memberIds ?? [])])]
       : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
+    const settings = settingsFromInput(input.settingsMarkdown, input.settings, current.settings as string[]);
     this.db.transaction(() => {
       this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.db.run(
@@ -2594,10 +2613,11 @@ export class Store {
         name,
         normalizedName,
         input.description ?? String(current.description),
-        JSON.stringify(input.settings ?? current.settings),
+        JSON.stringify(settings),
         now(),
         raceId
       );
+      this.syncMarkdownAttachmentReferences(workId, "race", raceId, settingsMarkdownFromList(settings));
       if (nameChanged) this.db.run("UPDATE characters SET species = ?, updated_at = ? WHERE race_id = ?", name, now(), raceId);
       if (memberIds) this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, nameChanged ? `种族更名为“${name}”` : `种族“${name}”成员关系变更`);
@@ -2618,6 +2638,7 @@ export class Store {
       this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.recordEntityVersion("race", raceId, "delete", null, "删除种族档案");
       this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", now(), raceId);
+      this.clearMarkdownAttachmentReferences("race", raceId);
       this.db.run("DELETE FROM races WHERE id = ?", raceId);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `种族“${String(current.name)}”已删除`);
       this.audit(String(current.workId), "race.deleted", "race", raceId);
@@ -2656,6 +2677,7 @@ export class Store {
         timestamp,
         targetRaceId
       );
+      this.syncMarkdownAttachmentReferences(workId, "race", targetRaceId, settingsMarkdownFromList(settings));
       this.db.run(
         "UPDATE characters SET race_id = ?, species = ?, updated_at = ? WHERE race_id = ?",
         targetRaceId,
@@ -2667,6 +2689,7 @@ export class Store {
         this.db.run("UPDATE races SET parent_race_id = ?, updated_at = ? WHERE id = ?", targetRaceId, timestamp, childRaceId);
         this.recordEntityVersion("race", childRaceId, "merge", mergeId, `因种族“${String(source.name)}”合并而迁移父种族`, timestamp);
       }
+      this.clearMarkdownAttachmentReferences("race", sourceRaceId);
       this.db.run("DELETE FROM races WHERE id = ?", sourceRaceId);
       this.recordMembershipVersions(memberSnapshots, "race", targetRaceId, `合并种族“${String(source.name)}”`);
       this.recordEntityVersion("race", targetRaceId, "merge", mergeId, `合并种族“${String(source.name)}”`, timestamp);
@@ -2696,6 +2719,7 @@ export class Store {
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       settings: json(requiredString(row, "settings_json"), []),
+      settingsMarkdown: settingsMarkdownFromList(json(requiredString(row, "settings_json"), [])),
       lineage: lineage.map((item) => ({ id: item.id, name: item.name })),
       effectiveSettings: lineage.flatMap((item, index) => item.settings.map((value) => ({
         value,
@@ -2790,6 +2814,7 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const settings = settingsFromInput(input.settingsMarkdown, input.settings);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
@@ -2800,10 +2825,11 @@ export class Store {
         name,
         normalizedName,
         input.description ?? "",
-        JSON.stringify(input.settings ?? []),
+        JSON.stringify(settings),
         timestamp,
         timestamp
       );
+      this.syncMarkdownAttachmentReferences(workId, "organization", organizationId, settingsMarkdownFromList(settings));
       this.replaceOrganizationMembers(organizationId, memberIds);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `加入组织“${name}”`);
       this.recordEntityVersion("organization", organizationId, source, sourceRef, changeNote || "建立组织档案", timestamp);
@@ -2850,6 +2876,7 @@ export class Store {
     if (memberIds) this.assertCharactersInWork(workId, memberIds);
     const touchedMemberIds = memberIds ? [...new Set([...(current.memberIds as string[]), ...memberIds])] : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
+    const settings = settingsFromInput(input.settingsMarkdown, input.settings, current.settings as string[]);
     this.db.transaction(() => {
       this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.db.run(
@@ -2857,10 +2884,11 @@ export class Store {
         name,
         normalizedName,
         input.description ?? String(current.description),
-        JSON.stringify(input.settings ?? current.settings),
+        JSON.stringify(settings),
         now(),
         organizationId
       );
+      this.syncMarkdownAttachmentReferences(workId, "organization", organizationId, settingsMarkdownFromList(settings));
       if (memberIds) {
         this.replaceOrganizationMembers(organizationId, memberIds);
         this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${name}”成员关系变更`);
@@ -2877,6 +2905,7 @@ export class Store {
     this.db.transaction(() => {
       this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.recordEntityVersion("organization", organizationId, "delete", null, "删除组织档案");
+      this.clearMarkdownAttachmentReferences("organization", organizationId);
       this.db.run("DELETE FROM organizations WHERE id = ?", organizationId);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${String(current.name)}”已删除`);
       this.audit(String(current.workId), "organization.deleted", "organization", organizationId);
@@ -2915,6 +2944,7 @@ export class Store {
         timestamp,
         targetOrganizationId
       );
+      this.syncMarkdownAttachmentReferences(workId, "organization", targetOrganizationId, settingsMarkdownFromList(settings));
       for (const membership of sourceMemberships) {
         this.db.run(
           `INSERT INTO character_organization_memberships (character_id, organization_id, role, note, created_at, updated_at)
@@ -2927,6 +2957,7 @@ export class Store {
           timestamp
         );
       }
+      this.clearMarkdownAttachmentReferences("organization", sourceOrganizationId);
       this.db.run("DELETE FROM organizations WHERE id = ?", sourceOrganizationId);
       this.recordMembershipVersions(memberSnapshots, "organization", targetOrganizationId, `合并组织“${String(source.name)}”`);
       this.recordEntityVersion("organization", targetOrganizationId, "merge", mergeId, `合并组织“${String(source.name)}”`, timestamp);
@@ -2954,6 +2985,7 @@ export class Store {
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       settings: json(requiredString(row, "settings_json"), []),
+      settingsMarkdown: settingsMarkdownFromList(json(requiredString(row, "settings_json"), [])),
       memberIds: members.map((member) => member.characterId),
       members,
       versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),
@@ -3268,25 +3300,34 @@ export class Store {
     return [...new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]{1,300})/gu)].map((match) => String(match[1])))];
   }
 
-  private syncCharacterProfileSectionAttachments(section: Record<string, unknown>): void {
-    const sectionId = String(section.id);
-    const workId = String(section.workId);
-    const attachmentIds = this.attachmentIdsInMarkdown(String(section.contentMarkdown));
+  private syncMarkdownAttachmentReferences(workId: string, entityType: string, entityId: string, contentMarkdown: string): void {
+    const attachmentIds = this.attachmentIdsInMarkdown(contentMarkdown);
     for (const attachmentId of attachmentIds) {
       const attachment = this.getAttachment(attachmentId);
       if (attachment.workId !== workId) throw new AppError(400, "ATTACHMENT_WORK_MISMATCH", "附件不属于当前作品");
     }
-    this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = ? AND entity_id = ?", entityType, entityId);
     for (const attachmentId of attachmentIds) {
       this.db.run(
         `INSERT INTO attachment_references (attachment_id, work_id, entity_type, entity_id, created_at)
-         VALUES (?, ?, 'character-section', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?)`,
         attachmentId,
         workId,
-        sectionId,
+        entityType,
+        entityId,
         now()
       );
     }
+  }
+
+  private clearMarkdownAttachmentReferences(entityType: string, entityId: string): void {
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = ? AND entity_id = ?", entityType, entityId);
+  }
+
+  private syncCharacterProfileSectionAttachments(section: Record<string, unknown>): void {
+    const sectionId = String(section.id);
+    const workId = String(section.workId);
+    this.syncMarkdownAttachmentReferences(workId, "character-section", sectionId, String(section.contentMarkdown));
   }
 
   createCharacterProfileSection(
@@ -3585,7 +3626,7 @@ export class Store {
   deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
     const attachment = this.getAttachment(attachmentId);
     const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
-    if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被人物档案章节引用，无法删除");
+    if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被资料引用，无法删除");
     const storageKey = String(attachment.storageKey);
     this.db.transaction(() => {
       this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);

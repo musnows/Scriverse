@@ -417,8 +417,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
-    expect(application.text).toContain('field("settings", "组织设定（逐条填写）", "item-list"');
-    expect(application.text).toContain('form.getAll("settings")');
+    expect(application.text).toContain('field("settingsMarkdown", "组织设定", "markdown"');
+    expect(application.text).toContain('form.get("settingsMarkdown")');
+    expect(application.text).toContain('field("settingsMarkdown", "种族共同设定", "markdown"');
     expect(application.text).toContain('field("memberIds", "组织成员（可多选）", "chips"');
     expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");

@@ -1459,10 +1459,30 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-editor-lock span { display: grid; gap: 4px; }
 .setting-editor-lock b { color: var(--ink); font-size: 11px; }
 .setting-editor-lock small { line-height: 1.55; }
-.setting-editor-content { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 14px; min-height: 0; padding: 34px clamp(28px, 6vw, 96px) 46px; }
-.setting-editor-content > label { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; color: var(--ink); font-size: 14px; }
-.setting-editor-content > label small { color: var(--muted); font-size: 10px; }
-.setting-editor-content textarea { width: 100%; height: 100%; min-height: 0; padding: 26px 30px; resize: none; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 15px; line-height: 1.8; }
+.setting-editor-content { min-height: 0; padding: 34px clamp(28px, 6vw, 96px) 46px; overflow: hidden; }
+.setting-markdown-field { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 14px; height: 100%; min-height: 0; }
+.setting-markdown-heading, .markdown-editor-field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; color: var(--ink); font-size: 14px; }
+.setting-markdown-heading small, .markdown-editor-field-heading small { color: var(--muted); font-size: 10px; }
+.markdown-editor-toolbar { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.markdown-editor-toolbar .ghost-button { display: inline-flex; width: auto; flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); cursor: pointer; }
+.markdown-editor-toolbar > span { min-width: 0; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setting-markdown-compose, .markdown-editor-compose { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
+.setting-markdown-compose > label, .setting-markdown-compose > div, .markdown-editor-compose > label, .markdown-editor-compose > div { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+.setting-markdown-compose > label, .markdown-editor-compose > label { gap: 7px; color: var(--muted); font-size: 10px; }
+.setting-markdown-compose textarea, .markdown-editor-compose textarea { width: 100%; height: 100%; min-height: 0; padding: 20px 22px; resize: none; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: 13px/1.75 var(--font-latin), var(--font-cjk), monospace; tab-size: 2; }
+.markdown-editor-compose > div { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.markdown-editor-preview-label { padding: 9px 11px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.markdown-editor-preview { min-height: 0; padding: 16px 18px; overflow-y: auto; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+.markdown-editor-empty { margin: 0; padding: 18px; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); font-size: 10px; text-align: center; }
+.markdown-editor-field { display: grid; gap: 10px; min-width: 0; }
+.markdown-editor-field .markdown-editor-compose { min-height: 360px; }
+.record-markdown-preview { max-height: 260px; margin: 12px 0 8px; overflow: hidden; overflow-wrap: anywhere; color: var(--ink); font-size: 12px; line-height: 1.7; }
+.record-markdown-preview > :first-child, .knowledge-markdown-block .message-body > :first-child { margin-top: 0; }
+.record-markdown-preview > :last-child, .knowledge-markdown-block .message-body > :last-child { margin-bottom: 0; }
+.knowledge-markdown-block { min-width: 0; margin: 10px 0 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.knowledge-markdown-block.inherited { border-style: dashed; background: var(--surface-soft); }
+.knowledge-markdown-block > small { display: block; margin-bottom: 7px; color: var(--accent-dark); font-size: 9px; }
+.knowledge-markdown-block .message-body { overflow-wrap: anywhere; font-size: 12px; line-height: 1.65; }
 .character-editor-header > div:nth-child(2) { min-width: 0; text-align: center; }
 .character-editor-header h1, .character-editor-header h3 { margin: 0; }
 .character-editor-title-row { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
@@ -1652,7 +1672,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .setting-editor-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); overflow-y: auto; }
   .setting-editor-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 18px; overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
   .setting-editor-content { min-height: 70dvh; padding: 20px 18px; }
-  .setting-editor-content > label { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .setting-markdown-field { height: 70dvh; }
+  .setting-markdown-heading, .markdown-editor-field-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .setting-markdown-compose, .markdown-editor-field .markdown-editor-compose { grid-template-columns: minmax(0, 1fr); min-height: auto; }
+  .setting-markdown-compose textarea, .markdown-editor-field .markdown-editor-compose textarea { min-height: 42dvh; resize: vertical; }
+  .setting-markdown-compose > div, .markdown-editor-field .markdown-editor-compose > div { min-height: 42dvh; }
   .character-editor-workspace, .character-editor-workspace.history-open { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .character-editor-nav { flex-direction: row; overflow-x: auto; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .character-editor-nav button { flex: 0 0 130px; }
@@ -1675,6 +1699,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
 @media (max-width: 640px) {
   .setting-editor-sidebar { grid-template-columns: minmax(0, 1fr); }
+  .markdown-editor-toolbar { align-items: flex-start; flex-direction: column; }
+  .markdown-editor-toolbar > span { white-space: normal; }
   .ai-history-dialog-body { min-height: min(360px, 62vh); padding: 12px 14px 18px; }
   .account-settings-body { padding: 16px; }
   .account-settings-section { padding: 15px; }
