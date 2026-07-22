@@ -47,8 +47,12 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("当前选项：覆盖正文");
     expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(styles.text).toContain(".import-history-load-more");
-    expect(application.text).toContain('$("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);');
+    expect(application.text).toContain('$("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));');
+    expect(application.text).toContain('$("#import-file-button").addEventListener("click", (event) => {');
     expect(application.text).toContain('$("#import-file").disabled = proseReadOnly;');
+    expect(application.text).toContain('toast("当前权限只能编辑设定资料，不能导入正文", "error");');
+    expect(styles.text).not.toContain('.prose-read-only-mode:not(.shelf-mode) .left-primary-actions .file-button');
+    expect(styles.text).not.toContain('.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button');
     expect(application.text).toContain('$("#import-mode-overwrite").disabled = !canOverwrite;');
     expect(application.text).toContain("function canReplaceProse(work = state.work)");
     expect(application.text).toContain("正文导入历史");

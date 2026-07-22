@@ -477,7 +477,6 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.prose-hidden-mode:not(.shelf-mode) .left-actions,
 .app-shell.prose-hidden-mode:not(.shelf-mode) .panel-heading,
 .app-shell.prose-hidden-mode:not(.shelf-mode) #novel-tree { display: none !important; }
-.app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #new-volume-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
@@ -485,7 +484,6 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-title[readonly],
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
-.app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-volume-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-chapter-button,
 .app-shell.view-only-mode:not(.shelf-mode) #module-create-button,

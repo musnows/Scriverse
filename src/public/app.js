@@ -129,8 +129,8 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
-  $("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);
-  $("#import-file-button").setAttribute("aria-hidden", String(proseReadOnly));
+  $("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));
+  $("#import-file-button").setAttribute("title", proseReadOnly ? "当前权限不能导入正文" : "导入 TXT / DOCX");
   $("#import-file").disabled = proseReadOnly;
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#chapter-title").readOnly = proseReadOnly;
@@ -5415,6 +5415,13 @@ $("#ai-scope").addEventListener("change", scheduleAiContextUsage);
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
+});
+$("#import-file-button").addEventListener("click", (event) => {
+  if (!state.work || canEditProse()) return;
+  event.preventDefault();
+  event.stopPropagation();
+  $("#import-file").value = "";
+  toast("当前权限只能编辑设定资料，不能导入正文", "error");
 });
 $("#import-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
