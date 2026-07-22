@@ -123,6 +123,7 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
+  $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canEditProse());
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#chapter-title").readOnly = proseReadOnly;
   $("#chapter-content").readOnly = proseReadOnly;
@@ -4741,6 +4742,89 @@ async function showVersions() {
   $("#versions-dialog").showModal();
 }
 
+function importHistoryRecordLabel(version) {
+  const restorePrefix = "before-restore:";
+  if (version.fileType === "snapshot" && version.fileName.startsWith(restorePrefix)) {
+    return {
+      title: `恢复操作前备份：${version.fileName.slice(restorePrefix.length)}`,
+      kind: "自动备份",
+      action: "恢复此操作前备份"
+    };
+  }
+  return { title: version.fileName, kind: String(version.fileType).toUpperCase(), action: "恢复到此次导入前" };
+}
+
+function renderImportHistory(versions) {
+  const host = $("#import-history-list");
+  if (!versions.length) {
+    host.innerHTML = '<p class="entity-history-empty">还没有正文导入记录。首次导入后会自动保存导入前快照。</p>';
+    return;
+  }
+  host.innerHTML = versions.map((version) => {
+    const label = importHistoryRecordLabel(version);
+    return `<article class="entity-version-card import-history-card" data-file-version="${esc(version.id)}">
+      <header><strong title="${esc(label.title)}">${esc(label.title)}</strong><span class="import-history-kind">${esc(label.kind)}</span></header>
+      <time>${esc(formatDateTime(version.createdAt))} · ${esc(version.actor || "历史数据")}</time>
+      <p>${version.fileType === "snapshot" ? "恢复操作执行前自动保存的完整正文。" : "保存的是这次文件导入开始前的完整正文。"}</p>
+      <small>恢复会先备份当前正文，可再次撤销。</small>
+      <button type="button" data-file-version-restore="${esc(version.id)}" data-default-label="${esc(label.action)}">${esc(label.action)}</button>
+    </article>`;
+  }).join("");
+  host.querySelectorAll("[data-file-version-restore]").forEach((button) => button.addEventListener("click", async () => {
+    if (!state.work || !canEditProse()) return;
+    const defaultLabel = button.dataset.defaultLabel;
+    if (button.dataset.confirmed !== "true") {
+      host.querySelectorAll("[data-file-version-restore]").forEach((other) => {
+        other.dataset.confirmed = "false";
+        other.classList.remove("is-confirming");
+        other.textContent = other.dataset.defaultLabel;
+      });
+      button.dataset.confirmed = "true";
+      button.classList.add("is-confirming");
+      button.textContent = "再次点击确认恢复";
+      window.setTimeout(() => {
+        if (!button.isConnected || button.dataset.confirmed !== "true") return;
+        button.dataset.confirmed = "false";
+        button.classList.remove("is-confirming");
+        button.textContent = defaultLabel;
+      }, 5000);
+      return;
+    }
+    if (!confirmDiscardChanges("当前章节有未保存修改，恢复正文会丢弃这些本地修改。是否继续？")) return;
+    button.disabled = true;
+    cancelChapterAutoSave();
+    const workId = state.work.id;
+    try {
+      await api(`/api/works/${encodeURIComponent(workId)}/file-versions/${encodeURIComponent(button.dataset.fileVersionRestore)}/restore`, {
+        method: "POST",
+        body: { expectedVersionNo: state.work.versionNo }
+      });
+      state.dirty = false;
+      $("#import-history-dialog").close();
+      await loadWorks(workId);
+      toast("正文已恢复，恢复前内容已自动备份");
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function openImportHistory() {
+  if (!state.work || !canEditProse()) {
+    toast("需要正文编辑权限才能恢复导入历史", "error");
+    return;
+  }
+  $("#import-history-list").innerHTML = '<p class="entity-history-empty">正在读取导入历史…</p>';
+  $("#import-history-dialog").showModal();
+  try {
+    renderImportHistory(await api(`/api/works/${encodeURIComponent(state.work.id)}/file-versions`));
+  } catch (error) {
+    $("#import-history-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
 async function showChapterInsight() {
   if (!state.chapter) return;
   const panel = $("#chapter-insight");
@@ -5057,6 +5141,8 @@ $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
+$("#import-history-button").addEventListener("click", () => openImportHistory());
+$("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });

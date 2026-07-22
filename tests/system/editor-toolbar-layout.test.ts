@@ -28,11 +28,15 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span class="import-file-label import-file-label-full" aria-hidden="true">导入 TXT / DOCX</span>');
     expect(page.text).toContain('<span class="import-file-label import-file-label-compact" aria-hidden="true">导入TXT/DOCX</span>');
     expect(page.text).toContain('<span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>');
+    expect(page.text).toContain('id="import-history-button"');
+    expect(page.text).toContain('id="import-history-dialog"');
+    expect(page.text).toContain("每条记录都保存了该次导入开始前的正文");
     expect(page.text).toContain('id="import-mode-dialog"');
     expect(page.text).toContain('id="import-mode-append"');
     expect(page.text).toContain('id="import-mode-overwrite"');
     expect(page.text).toContain("把新文件解析出的卷章添加到目录末尾");
     expect(styles.text).toContain(".import-mode-options");
+    expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(styles.text).toContain('@container (max-width: 120px)');
     expect(styles.text).toContain('@container (max-width: 88px)');
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');

@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-module-permissions-cr">
+    <link rel="stylesheet" href="/styles.css?v=20260722-import-history">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -99,6 +99,7 @@
             </label>
             <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
           </div>
+          <button id="import-history-button" class="secondary-button import-history-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog">导入历史与恢复</button>
           <button id="new-volume-button" class="secondary-button" type="button">新建分卷</button>
           <button id="new-chapter-button" class="secondary-button" type="button">新建章节</button>
         </div>
@@ -480,6 +481,17 @@
       <div id="versions-list" class="versions-list"></div>
     </dialog>
 
+    <dialog id="import-history-dialog" class="dialog wide-dialog" aria-labelledby="import-history-title" aria-describedby="import-history-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">正文安全</span><h2 id="import-history-title">导入历史与正文恢复</h2></div>
+        <button id="import-history-close" class="dialog-close" aria-label="关闭导入历史" type="button">×</button>
+      </div>
+      <div class="import-history-body">
+        <p id="import-history-description" class="import-history-note">每条记录都保存了该次导入开始前的正文。恢复时会先自动备份当前正文，再重新建立分卷和章节；恢复后请检查与章节关联的大纲、伏笔和首次登场信息。</p>
+        <div id="import-history-list" class="entity-history-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
     <dialog id="users-dialog" class="dialog wide-dialog" aria-labelledby="users-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="users-dialog-title">用户管理</h2></div><button id="users-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="access-dialog-body">
@@ -611,6 +623,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-module-permissions-cr"></script>
+    <script type="module" src="/app.js?v=20260722-import-history"></script>
   </body>
 </html>
