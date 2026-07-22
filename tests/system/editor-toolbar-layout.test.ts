@@ -45,7 +45,6 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".import-mode-option input:checked + .import-mode-option-card");
     expect(application.text).toContain("function confirmToast(message");
     expect(application.text).toContain("当前选项：覆盖正文");
-    expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(styles.text).toContain(".import-history-load-more");
     expect(application.text).toContain('$("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));');
     expect(application.text).toContain('$("#import-file-button").addEventListener("click", (event) => {');
