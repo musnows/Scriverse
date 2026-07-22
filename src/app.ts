@@ -26,6 +26,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
+import { fullWorkModulePermissions, type WorkModulePermissions } from "./work-permissions.js";
 import {
   clearSessionCookie,
   createCliApiScopeMiddleware,
@@ -64,8 +65,29 @@ const loginSchema = z.object({
   ...captchaFields
 }).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
-const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
-const memberRoleSchema = z.object({ role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
+const memberRoleValueSchema = z.enum(["editor", "settings-editor", "viewer"]);
+const moduleAccessSchema = z.enum(["none", "read", "write"]);
+const modulePermissionsSchema = z.object({
+  prose: moduleAccessSchema,
+  settings: moduleAccessSchema,
+  characters: moduleAccessSchema,
+  races: moduleAccessSchema,
+  organizations: moduleAccessSchema,
+  timeline: moduleAccessSchema,
+  relationships: moduleAccessSchema,
+  outlines: moduleAccessSchema,
+  reviews: moduleAccessSchema,
+  ai: moduleAccessSchema,
+  "ai-settings": moduleAccessSchema
+}).strict();
+const memberSchema = z.union([
+  z.object({ userId: identifier, permissions: modulePermissionsSchema }).strict(),
+  z.object({ userId: identifier, role: memberRoleValueSchema }).strict()
+]);
+const memberPermissionSchema = z.union([
+  z.object({ permissions: modulePermissionsSchema }).strict(),
+  z.object({ role: memberRoleValueSchema }).strict()
+]);
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 const changeNoteSchema = z.string().trim().max(500).optional();
@@ -368,6 +390,65 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   return schema.parse(value);
 }
 
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function mapRecords(value: unknown, mapper: (record: Record<string, unknown>) => Record<string, unknown>): unknown {
+  if (Array.isArray(value)) return value.map((item) => recordValue(item) ? mapper(item as Record<string, unknown>) : item);
+  const record = recordValue(value);
+  if (!record) return value;
+  if (Array.isArray(record.items)) {
+    return { ...record, items: record.items.map((item) => recordValue(item) ? mapper(item as Record<string, unknown>) : item) };
+  }
+  return mapper(record);
+}
+
+function redactCharacterLinks(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  const result = { ...record };
+  if (permissions.races === "none") {
+    result.raceId = null;
+    result.race = null;
+    result.species = "";
+  }
+  if (permissions.organizations === "none") {
+    result.organizationIds = [];
+    result.organizations = [];
+  }
+  return result;
+}
+
+function redactRaceMembers(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  return permissions.characters === "none" ? { ...record, memberIds: [], members: [] } : record;
+}
+
+function redactOrganizationMembers(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
+  return permissions.characters === "none" ? { ...record, memberIds: [], members: [] } : record;
+}
+
+function redactMergeRecords(
+  value: unknown,
+  mapper: (record: Record<string, unknown>) => Record<string, unknown>
+): unknown {
+  const record = recordValue(value);
+  if (!record) return value;
+  return {
+    ...record,
+    ...(recordValue(record.target) ? { target: mapper(record.target as Record<string, unknown>) } : {}),
+    ...(recordValue(record.source) ? { source: mapper(record.source as Record<string, unknown>) } : {})
+  };
+}
+
+function redactVersionSnapshots(
+  value: unknown,
+  mapper: (record: Record<string, unknown>) => Record<string, unknown>
+): unknown {
+  return mapRecords(value, (version) => {
+    const snapshot = recordValue(version.snapshot);
+    return snapshot ? { ...version, snapshot: mapper(snapshot) } : version;
+  });
+}
+
 export function createRuntime(options: RuntimeOptions): Runtime {
   logger.info("runtime.initializing", {
     databasePath: options.databasePath,
@@ -386,6 +467,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
   const store = new Store(database);
+  const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
+    if (!request.authUser) return fullWorkModulePermissions();
+    const resolvedWorkId = workId ?? auth.resolveWorkId(request.path) ?? undefined;
+    if (!resolvedWorkId) return fullWorkModulePermissions();
+    return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
+  };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
@@ -595,19 +682,34 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/members", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(memberSchema, request.body);
-    const members = auth.addMember(request.params.workId, input.userId, input.role, request.authUser.userId);
-    store.audit(request.params.workId, "work.member-added", "user", input.userId, { role: input.role });
+    const permissionInput = "permissions" in input
+      ? { permissions: input.permissions as WorkModulePermissions }
+      : { role: input.role };
+    const members = database.transaction(() => {
+      const result = auth.addMember(request.params.workId, input.userId, permissionInput, request.authUser!.userId);
+      store.audit(request.params.workId, "work.member-added", "user", input.userId, permissionInput);
+      return result;
+    });
     data(response, members, 201);
   });
   app.patch("/api/works/:workId/members/:userId", (request, response) => {
-    const input = parse(memberRoleSchema, request.body);
-    const members = auth.updateMemberRole(request.params.workId, request.params.userId, input.role);
-    store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, { role: input.role });
+    const input = parse(memberPermissionSchema, request.body);
+    const permissionInput = "permissions" in input
+      ? { permissions: input.permissions as WorkModulePermissions }
+      : { role: input.role };
+    const members = database.transaction(() => {
+      const result = auth.updateMemberPermissions(request.params.workId, request.params.userId, permissionInput);
+      store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, permissionInput);
+      return result;
+    });
     data(response, members);
   });
   app.delete("/api/works/:workId/members/:userId", (request, response) => {
-    const members = auth.removeMember(request.params.workId, request.params.userId);
-    store.audit(request.params.workId, "work.member-removed", "user", request.params.userId);
+    const members = database.transaction(() => {
+      const result = auth.removeMember(request.params.workId, request.params.userId);
+      store.audit(request.params.workId, "work.member-removed", "user", request.params.userId);
+      return result;
+    });
     data(response, members);
   });
   app.patch("/api/works/:workId", (request, response) => {
@@ -797,23 +899,34 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       includeMerged: z.enum(["0", "1"]).default("0")
     }), request.query);
     const pagination = parsePagination(request.query);
-    data(response, pagination
+    const permissions = requestPermissions(request, request.params.workId);
+    const characters = pagination
       ? store.listCharactersPage(request.params.workId, pagination, includeSections === "true", includeMerged === "1")
-      : store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1"));
+      : store.listCharacters(request.params.workId, includeSections === "true", includeMerged === "1");
+    data(response, mapRecords(characters, (character) => redactCharacterLinks(character, permissions)));
   });
-  app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
-  app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
+  app.post("/api/works/:workId/characters", (request, response) => {
+    const character = store.createCharacter(request.params.workId, parse(characterSchema, request.body));
+    data(response, redactCharacterLinks(character, requestPermissions(request, request.params.workId)), 201);
+  });
+  app.get("/api/characters/:characterId", (request, response) => {
+    data(response, redactCharacterLinks(store.getCharacter(request.params.characterId), requestPermissions(request)));
+  });
   app.patch("/api/characters/:characterId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
-    data(response, store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo));
+    const character = store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo);
+    data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
   app.get("/api/characters/:characterId/versions", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listCharacterVersionsPage(request.params.characterId, pagination) : store.listCharacterVersions(request.params.characterId));
+    const versions = pagination ? store.listCharacterVersionsPage(request.params.characterId, pagination) : store.listCharacterVersions(request.params.characterId);
+    const permissions = requestPermissions(request);
+    data(response, redactVersionSnapshots(versions, (snapshot) => redactCharacterLinks(snapshot, permissions)));
   });
   app.post("/api/characters/:characterId/restore", (request, response) => {
     const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
-    data(response, store.restoreCharacter(request.params.characterId, input.versionNo, input.expectedVersionNo));
+    const character = store.restoreCharacter(request.params.characterId, input.versionNo, input.expectedVersionNo);
+    data(response, redactCharacterLinks(character, requestPermissions(request)));
   });
   app.delete("/api/characters/:characterId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -826,11 +939,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       expectedTargetVersionNo: z.number().int().positive(),
       expectedSourceVersionNo: z.number().int().positive()
     }).strict(), request.body);
-    data(response, store.mergeCharacters({
+    const result = store.mergeCharacters({
       reviewId: null,
       sourceCharacterId: request.params.characterId,
       ...input
-    }));
+    });
+    const permissions = requestPermissions(request);
+    data(response, redactMergeRecords(result, (character) => redactCharacterLinks(character, permissions)));
   });
   app.get("/api/characters/:characterId/sections", (request, response) => {
     const pagination = parsePagination(request.query);
@@ -913,15 +1028,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/races", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listRacesPage(request.params.workId, pagination) : store.listRaces(request.params.workId));
+    const races = pagination ? store.listRacesPage(request.params.workId, pagination) : store.listRaces(request.params.workId);
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, mapRecords(races, (race) => redactRaceMembers(race, permissions)));
   });
   app.post("/api/works/:workId/races", (request, response) => {
-    data(response, store.createRace(request.params.workId, parse(raceSchema, request.body)), 201);
+    const race = store.createRace(request.params.workId, parse(raceSchema, request.body));
+    data(response, redactRaceMembers(race, requestPermissions(request, request.params.workId)), 201);
   });
-  app.get("/api/races/:raceId", (request, response) => data(response, store.getRace(request.params.raceId)));
+  app.get("/api/races/:raceId", (request, response) => {
+    data(response, redactRaceMembers(store.getRace(request.params.raceId), requestPermissions(request)));
+  });
   app.patch("/api/races/:raceId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(raceSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
-    data(response, store.updateRace(request.params.raceId, input, "manual", null, changeNote, expectedVersionNo));
+    const race = store.updateRace(request.params.raceId, input, "manual", null, changeNote, expectedVersionNo);
+    data(response, redactRaceMembers(race, requestPermissions(request)));
   });
   app.delete("/api/races/:raceId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -930,20 +1051,28 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/races/:raceId/merge", (request, response) => {
     const input = parse(z.object({ targetRaceId: identifier }).strict(), request.body);
-    data(response, store.mergeRaces(request.params.raceId, input.targetRaceId));
+    const result = store.mergeRaces(request.params.raceId, input.targetRaceId);
+    const permissions = requestPermissions(request);
+    data(response, redactMergeRecords(result, (race) => redactRaceMembers(race, permissions)));
   });
 
   app.get("/api/works/:workId/organizations", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listOrganizationsPage(request.params.workId, pagination) : store.listOrganizations(request.params.workId));
+    const organizations = pagination ? store.listOrganizationsPage(request.params.workId, pagination) : store.listOrganizations(request.params.workId);
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, mapRecords(organizations, (organization) => redactOrganizationMembers(organization, permissions)));
   });
   app.post("/api/works/:workId/organizations", (request, response) => {
-    data(response, store.createOrganization(request.params.workId, parse(organizationSchema, request.body)), 201);
+    const organization = store.createOrganization(request.params.workId, parse(organizationSchema, request.body));
+    data(response, redactOrganizationMembers(organization, requestPermissions(request, request.params.workId)), 201);
   });
-  app.get("/api/organizations/:organizationId", (request, response) => data(response, store.getOrganization(request.params.organizationId)));
+  app.get("/api/organizations/:organizationId", (request, response) => {
+    data(response, redactOrganizationMembers(store.getOrganization(request.params.organizationId), requestPermissions(request)));
+  });
   app.patch("/api/organizations/:organizationId", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
-    data(response, store.updateOrganization(request.params.organizationId, input, "manual", null, changeNote, expectedVersionNo));
+    const organization = store.updateOrganization(request.params.organizationId, input, "manual", null, changeNote, expectedVersionNo);
+    data(response, redactOrganizationMembers(organization, requestPermissions(request)));
   });
   app.delete("/api/organizations/:organizationId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -952,7 +1081,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/organizations/:organizationId/merge", (request, response) => {
     const input = parse(z.object({ targetOrganizationId: identifier }).strict(), request.body);
-    data(response, store.mergeOrganizations(request.params.organizationId, input.targetOrganizationId));
+    const result = store.mergeOrganizations(request.params.organizationId, input.targetOrganizationId);
+    const permissions = requestPermissions(request);
+    data(response, redactMergeRecords(result, (organization) => redactOrganizationMembers(organization, permissions)));
   });
 
   app.get("/api/works/:workId/timeline-tracks", (request, response) => {
@@ -1034,9 +1165,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/entity-versions/:entityType/:entityId", (request, response) => {
     const input = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
     const pagination = parsePagination(request.query);
-    data(response, pagination
+    const versions = pagination
       ? store.listEntityVersionsPage(input.entityType, input.entityId, pagination)
-      : store.listEntityVersions(input.entityType, input.entityId));
+      : store.listEntityVersions(input.entityType, input.entityId);
+    const permissions = requestPermissions(request);
+    if (input.entityType === "race") {
+      data(response, redactVersionSnapshots(versions, (snapshot) => redactRaceMembers(snapshot, permissions)));
+      return;
+    }
+    if (input.entityType === "organization") {
+      data(response, redactVersionSnapshots(versions, (snapshot) => redactOrganizationMembers(snapshot, permissions)));
+      return;
+    }
+    data(response, versions);
   });
   app.post("/api/entity-versions/:entityType/:entityId/restore", (request, response) => {
     const params = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
