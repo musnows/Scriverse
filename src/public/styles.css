@@ -706,7 +706,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .left-primary-actions { display: flex; grid-column: 1 / -1; width: 100%; align-items: center; gap: 8px; }
 .left-primary-actions .file-button { flex: 1 1 auto; width: auto; min-width: 0; }
 .left-primary-actions #left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }
-.import-history-button { grid-column: 1 / -1; }
 .file-button, .secondary-button { display: grid; place-items: center; min-height: 30px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: transparent; }
 .file-button { container-type: inline-size; overflow: hidden; white-space: nowrap; }
 .import-file-label-compact, .import-file-label-short { display: none; }
