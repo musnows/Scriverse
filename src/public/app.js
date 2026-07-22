@@ -20,6 +20,7 @@ import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-v
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadUiModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260722-module-permissions";
+import { clipboardImageFiles } from "/character-markdown.js?v=20260723-clipboard-images";
 
 const state = {
   user: null,
@@ -3945,6 +3946,47 @@ function scheduleCharacterSectionPreview() {
   }, 260);
 }
 
+function characterSectionImageLabel(file, fallback = "图片附件") {
+  return String(file?.name ?? "").replace(/[\[\]\r\n]/gu, "").trim() || fallback;
+}
+
+async function uploadCharacterSectionAttachment(file) {
+  const body = new FormData();
+  body.append("file", file);
+  const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
+  if (!attachment.deduplicated) characterSectionPendingAttachments.push(String(attachment.id));
+  return {
+    attachment,
+    imageLabel: characterSectionImageLabel(file)
+  };
+}
+
+function insertCharacterSectionAttachment(textarea, attachment, imageLabel) {
+  const insertion = `![${imageLabel}](attachment://${attachment.id})`;
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? start;
+  const prefix = start > 0 && !textarea.value.slice(0, start).endsWith("\n") ? "\n\n" : "";
+  const suffix = end < textarea.value.length && !textarea.value.slice(end).startsWith("\n") ? "\n\n" : "";
+  textarea.setRangeText(`${prefix}${insertion}${suffix}`, start, end, "end");
+  textarea.focus();
+  characterSectionEditorDirty = true;
+  scheduleCharacterSectionPreview();
+}
+
+async function pasteCharacterSectionImages(files, textarea) {
+  let insertedCount = 0;
+  for (const file of files) {
+    try {
+      const { attachment, imageLabel } = await uploadCharacterSectionAttachment(file);
+      insertCharacterSectionAttachment(textarea, attachment, imageLabel);
+      insertedCount += 1;
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  if (insertedCount > 0) toast(insertedCount === 1 ? "剪贴板图片已插入" : `已插入 ${insertedCount} 张剪贴板图片`);
+}
+
 async function closeCharacterSectionEditor({ force = false } = {}) {
   if (!force && characterSectionEditorDirty && !window.confirm("当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？")) return false;
   if (characterSectionPreviewTimer !== null) {
@@ -3976,7 +4018,7 @@ function characterSectionEditorHtml(section = null) {
     <div class="character-markdown-toolbar">
       <label class="ghost-button" for="character-section-attachment">上传并插入图片</label>
       <input id="character-section-attachment" class="hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif">
-      <span>图片会优先转换为体积更小的无损 WebP</span>
+      <span>图片会优先转换为体积更小的无损 WebP，也可使用 Mac Command+V 或 Windows、Linux Ctrl+V 粘贴</span>
     </div>
     <div class="character-markdown-compose">
       <label>Markdown 原文<textarea id="character-section-markdown" maxlength="500000" spellcheck="true" placeholder="支持标题、列表、引用、表格、链接和图片">${esc(section?.contentMarkdown ?? "")}</textarea></label>
@@ -4000,26 +4042,20 @@ async function openCharacterSectionEditor(section = null) {
   const textarea = $("#character-section-markdown");
   host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
   textarea.addEventListener("input", scheduleCharacterSectionPreview);
+  textarea.addEventListener("paste", (event) => {
+    const files = clipboardImageFiles(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void pasteCharacterSectionImages(files, textarea);
+  });
   $("#character-section-attachment").addEventListener("change", async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
     const input = event.currentTarget;
     input.disabled = true;
-    const body = new FormData();
-    body.append("file", file);
     try {
-      const attachment = await api(`/api/works/${state.work.id}/attachments`, { method: "POST", body });
-      if (!attachment.deduplicated) characterSectionPendingAttachments.push(String(attachment.id));
-      const imageLabel = file.name.replace(/[\]\r\n]/gu, "").trim() || "图片附件";
-      const insertion = `![${imageLabel}](attachment://${attachment.id})`;
-      const start = textarea.selectionStart ?? textarea.value.length;
-      const end = textarea.selectionEnd ?? start;
-      const prefix = start > 0 && !textarea.value.slice(0, start).endsWith("\n") ? "\n\n" : "";
-      const suffix = end < textarea.value.length && !textarea.value.slice(end).startsWith("\n") ? "\n\n" : "";
-      textarea.setRangeText(`${prefix}${insertion}${suffix}`, start, end, "end");
-      textarea.focus();
-      characterSectionEditorDirty = true;
-      scheduleCharacterSectionPreview();
+      const { attachment, imageLabel } = await uploadCharacterSectionAttachment(file);
+      insertCharacterSectionAttachment(textarea, attachment, imageLabel);
       toast(attachment.storedMimeType === "image/webp" ? "图片已转换为无损 WebP 并插入" : "图片已插入；转换后未变小，因此保留原格式");
     } catch (error) {
       toast(error.message, "error");

@@ -289,6 +289,8 @@ describe("作者完整创作流程", () => {
     expect(markdown.text).toContain("safeLinkTarget");
     expect(markdown.text).toContain("renderMarkdownTable");
     expect(application.text).toContain('/markdown.js?v=20260722-inline-code');
+    expect(application.text).toContain('/character-markdown.js?v=20260723-clipboard-images');
+    expect(application.text).toContain('Mac Command+V 或 Windows、Linux Ctrl+V');
     expect(page.text).toContain('id="character-section-editor-view"');
     expect(application.text).toContain('id="character-section-markdown"');
     expect(application.text).toContain("attachment://${attachment.id}");
