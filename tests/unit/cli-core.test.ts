@@ -43,6 +43,7 @@ describe("Scriverse CLI 核心", () => {
   it("资源契约只开放受控读写动作且不包含删除", () => {
     expect(cliResourceTypes).toHaveLength(11);
     expect(cliWorkDefinition.actions).not.toContain("delete");
+    expect(cliWorkDefinition.actions).toEqual(expect.arrayContaining(["history", "restore"]));
     for (const type of cliResourceTypes) {
       expect(cliResourceDefinitions[type].actions).not.toContain("delete");
       expect(cliResourceDefinitions[type].create.example).toBeTruthy();
