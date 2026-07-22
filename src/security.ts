@@ -301,3 +301,7 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
     allowRegistration: environment.APP_ALLOW_REGISTRATION === "true"
   };
 }
+
+export function isDevelopmentAuthBypassEnabled(environment: NodeJS.ProcessEnv): boolean {
+  return environment.NODE_ENV !== "production" && environment.APP_DEV_SKIP_AUTH === "true";
+}

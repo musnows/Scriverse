@@ -33,7 +33,8 @@ import {
   createUserSessionMiddleware,
   createWorkAuthorizationMiddleware,
   setSessionCookie,
-  UserAuthService
+  UserAuthService,
+  type AuthUser
 } from "./user-auth.js";
 
 const nonEmpty = z.string().trim().min(1);
@@ -366,6 +367,8 @@ export type RuntimeOptions = {
   publicPath?: string;
   security?: RuntimeSecurityOptions;
   disableUserAuth?: boolean;
+  /** 开发环境专用：使用已有的第一个活动账户进入工作台，不创建会话。 */
+  devAuthBypass?: boolean;
   /** 测试用：在验证码接口中回显答案 */
   revealCaptchaAnswer?: boolean;
 };
@@ -456,6 +459,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     databasePath: options.databasePath,
     serveUi: options.serveUi ?? true,
     userAuthDisabled: options.disableUserAuth === true,
+    devAuthBypass: options.devAuthBypass === true,
     deploymentAuthEnabled: Boolean(options.security?.auth),
     sameOriginEnforced: options.security?.enforceSameOrigin ?? true
   });
@@ -468,6 +472,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
+  const getDevelopmentUser = (): AuthUser | null => options.devAuthBypass
+    ? auth.listUsers().find((user) => user.status === "active") ?? null
+    : null;
   const store = new Store(database);
   const requestPermissions = (request: Request, workId?: string): WorkModulePermissions => {
     if (!request.authUser) return fullWorkModulePermissions();
@@ -521,6 +528,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/auth/session", (request, response) => {
     const session = auth.authenticate(request);
     const registrationOpen = options.security?.allowRegistration === true;
+    const developmentUser = getDevelopmentUser();
+    if (!session && developmentUser) {
+      data(response, { authenticated: true, user: developmentUser, csrfToken: null, setupRequired: false, registrationOpen });
+      return;
+    }
     data(response, session
       ? { authenticated: true, user: session.user, csrfToken: session.csrfToken, setupRequired: false, registrationOpen }
       : { authenticated: false, user: null, csrfToken: null, setupRequired: !auth.hasUsers(), registrationOpen });
