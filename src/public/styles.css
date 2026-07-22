@@ -1474,11 +1474,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .markdown-editor-toolbar .ghost-button { display: inline-flex; width: auto; flex: 0 0 auto; padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); cursor: pointer; }
 .markdown-editor-toolbar > span { min-width: 0; color: var(--muted); font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .setting-markdown-compose, .markdown-editor-compose { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
-.setting-markdown-compose > label, .setting-markdown-compose > div, .markdown-editor-compose > label, .markdown-editor-compose > div { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
-.setting-markdown-compose > label, .markdown-editor-compose > label { gap: 7px; color: var(--muted); font-size: 10px; }
+.setting-markdown-compose > label, .setting-markdown-compose > div, .markdown-editor-compose > label, .markdown-editor-compose > div { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
 .setting-markdown-compose textarea, .markdown-editor-compose textarea { width: 100%; height: 100%; min-height: 0; padding: 20px 22px; resize: none; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: 13px/1.75 var(--font-latin), var(--font-cjk), monospace; tab-size: 2; }
 .markdown-editor-compose > div { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.markdown-editor-preview-label { padding: 9px 11px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .markdown-editor-preview { min-height: 0; padding: 16px 18px; overflow-y: auto; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
 .markdown-editor-empty { margin: 0; padding: 18px; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); font-size: 10px; text-align: center; }
 .markdown-editor-field { display: grid; gap: 10px; min-width: 0; }
@@ -1571,10 +1569,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-markdown-toolbar .ghost-button { display: inline-flex; width: auto; padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); cursor: pointer; }
 .character-markdown-compose { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-height: 0; }
 .character-markdown-compose > label, .character-markdown-compose > div { min-width: 0; min-height: 0; }
-.character-markdown-compose > label { grid-template-rows: auto minmax(0, 1fr); }
+.character-markdown-compose > label { display: grid; grid-template-rows: minmax(0, 1fr); }
 .character-markdown-compose textarea { height: 100%; min-height: 0; resize: none; font-family: var(--font-latin), var(--font-cjk), monospace; line-height: 1.65; tab-size: 2; }
 .character-markdown-compose > div { display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
-.character-markdown-preview-label { padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .character-markdown-compose .character-markdown-document { overflow-y: auto; padding: 14px 16px; }
 .character-markdown-editor-footer { display: grid; grid-template-columns: minmax(0, 620px) auto; align-items: end; justify-content: space-between; gap: 18px; }
 .character-markdown-editor-actions { display: flex; justify-content: flex-end; gap: 8px; }

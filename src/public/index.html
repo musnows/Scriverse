@@ -367,8 +367,8 @@
             <div class="setting-markdown-field" data-markdown-editor>
               <div class="setting-markdown-heading"><span>设定正文</span><small>支持标题、列表、引用、表格、链接和图片；可使用 Mac Command+V 或 Windows、Linux Ctrl+V 粘贴图片。</small></div>
               <div class="setting-markdown-compose">
-                <label>Markdown 原文<textarea id="setting-editor-body" name="content" data-markdown-textarea maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容"></textarea></label>
-                <div><span class="markdown-editor-preview-label">安全预览</span><article class="markdown-editor-preview message-body" data-markdown-preview><p class="markdown-editor-empty">预览区域暂无内容。</p></article></div>
+                <label><textarea id="setting-editor-body" name="content" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容"></textarea></label>
+                <div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview><p class="markdown-editor-empty">预览区域暂无内容。</p></article></div>
               </div>
             </div>
           </main>
