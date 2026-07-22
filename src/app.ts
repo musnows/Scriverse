@@ -64,8 +64,8 @@ const loginSchema = z.object({
   ...captchaFields
 }).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
-const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "viewer"]) }).strict();
-const memberRoleSchema = z.object({ role: z.enum(["editor", "viewer"]) }).strict();
+const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
+const memberRoleSchema = z.object({ role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 const changeNoteSchema = z.string().trim().max(500).optional();
@@ -200,7 +200,7 @@ const organizationSchema = z.object({
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
   memberIds: z.array(identifier).max(1000).optional()
-});
+}).strict();
 
 const raceSchema = z.object({
   name: nonEmpty.max(200),
@@ -820,6 +820,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.deleteCharacter(request.params.characterId, input.expectedVersionNo);
     noContent(response);
   });
+  app.post("/api/characters/:characterId/merge", (request, response) => {
+    const input = parse(z.object({
+      targetCharacterId: identifier,
+      expectedTargetVersionNo: z.number().int().positive(),
+      expectedSourceVersionNo: z.number().int().positive()
+    }).strict(), request.body);
+    data(response, store.mergeCharacters({
+      reviewId: null,
+      sourceCharacterId: request.params.characterId,
+      ...input
+    }));
+  });
   app.get("/api/characters/:characterId/sections", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination
@@ -916,6 +928,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.deleteRace(request.params.raceId, input.expectedVersionNo);
     noContent(response);
   });
+  app.post("/api/races/:raceId/merge", (request, response) => {
+    const input = parse(z.object({ targetRaceId: identifier }).strict(), request.body);
+    data(response, store.mergeRaces(request.params.raceId, input.targetRaceId));
+  });
 
   app.get("/api/works/:workId/organizations", (request, response) => {
     const pagination = parsePagination(request.query);
@@ -933,6 +949,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     store.deleteOrganization(request.params.organizationId, input.expectedVersionNo);
     noContent(response);
+  });
+  app.post("/api/organizations/:organizationId/merge", (request, response) => {
+    const input = parse(z.object({ targetOrganizationId: identifier }).strict(), request.body);
+    data(response, store.mergeOrganizations(request.params.organizationId, input.targetOrganizationId));
   });
 
   app.get("/api/works/:workId/timeline-tracks", (request, response) => {

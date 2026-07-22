@@ -1820,13 +1820,17 @@ export class Store {
     const actor = currentRequestActor();
     const ownerUserId = optionalString(row, "owner_user_id");
     const membership = actor
-      ? this.db.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
+      ? this.db.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
       : undefined;
+    const membershipPermissions = json<Record<string, unknown>>(optionalString(membership ?? {}, "permissions_json"), {});
+    const membershipRole = String(membership?.role ?? "");
     const accessRole = ownerUserId === actor?.userId
       ? "owner"
       : actor?.role === "admin"
         ? "admin"
-        : ["editor", "viewer"].includes(String(membership?.role ?? "")) ? String(membership?.role) : null;
+        : membershipRole === "editor" && membershipPermissions.editScope === "settings"
+          ? "settings-editor"
+          : ["editor", "viewer"].includes(membershipRole) ? membershipRole : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")
@@ -2532,6 +2536,57 @@ export class Store {
     });
   }
 
+  mergeRaces(sourceRaceId: string, targetRaceId: string): Record<string, unknown> {
+    if (sourceRaceId === targetRaceId) throw new AppError(400, "RACE_MERGE_SELF", "不能把种族合并到自身");
+    const source = this.getRace(sourceRaceId);
+    const target = this.getRace(targetRaceId);
+    if (source.workId !== target.workId) throw new AppError(400, "RACE_WORK_MISMATCH", "待合并种族不属于同一作品");
+
+    const workId = String(target.workId);
+    const mergeId = id("raceMerge");
+    const timestamp = now();
+    const memberIds = [...new Set([...(target.memberIds as string[]), ...(source.memberIds as string[])])];
+    const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const sourceChildren = this.db.all("SELECT id FROM races WHERE parent_race_id = ? ORDER BY id", sourceRaceId)
+      .map((row) => requiredString(row, "id"))
+      .filter((childRaceId) => childRaceId !== targetRaceId);
+    const targetDescendsFromSource = (target.lineage as Array<{ id: string }>).some((race) => race.id === sourceRaceId);
+    const targetParentRaceId = targetDescendsFromSource
+      ? source.parentRaceId as string | null
+      : target.parentRaceId as string | null;
+    const descriptionParts = [String(target.description).trim(), String(source.description).trim()].filter(Boolean);
+    const description = [...new Set(descriptionParts)].join("\n\n");
+    const settings = [...new Set([...(target.settings as string[]), ...(source.settings as string[])])];
+
+    this.db.transaction(() => {
+      this.recordEntityVersion("race", sourceRaceId, "delete", mergeId, `合并至种族“${String(target.name)}”`, timestamp);
+      this.db.run(
+        "UPDATE races SET parent_race_id = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        targetParentRaceId,
+        description,
+        JSON.stringify(settings),
+        timestamp,
+        targetRaceId
+      );
+      this.db.run(
+        "UPDATE characters SET race_id = ?, species = ?, updated_at = ? WHERE race_id = ?",
+        targetRaceId,
+        String(target.name),
+        timestamp,
+        sourceRaceId
+      );
+      for (const childRaceId of sourceChildren) {
+        this.db.run("UPDATE races SET parent_race_id = ?, updated_at = ? WHERE id = ?", targetRaceId, timestamp, childRaceId);
+        this.recordEntityVersion("race", childRaceId, "merge", mergeId, `因种族“${String(source.name)}”合并而迁移父种族`, timestamp);
+      }
+      this.db.run("DELETE FROM races WHERE id = ?", sourceRaceId);
+      this.recordMembershipVersions(memberSnapshots, "race", targetRaceId, `合并种族“${String(source.name)}”`);
+      this.recordEntityVersion("race", targetRaceId, "merge", mergeId, `合并种族“${String(source.name)}”`, timestamp);
+      this.audit(workId, "race.merged", "race", targetRaceId, { mergeId, sourceRaceId });
+    });
+    return { mergeId, target: this.getRace(targetRaceId), source };
+  }
+
   resolveRaceReference(workId: string, value: string): string | null {
     const normalizedName = normalizeCharacterName(value);
     if (!normalizedName) return null;
@@ -2738,6 +2793,58 @@ export class Store {
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${String(current.name)}”已删除`);
       this.audit(String(current.workId), "organization.deleted", "organization", organizationId);
     });
+  }
+
+  mergeOrganizations(sourceOrganizationId: string, targetOrganizationId: string): Record<string, unknown> {
+    if (sourceOrganizationId === targetOrganizationId) {
+      throw new AppError(400, "ORGANIZATION_MERGE_SELF", "不能把组织合并到自身");
+    }
+    const source = this.getOrganization(sourceOrganizationId);
+    const target = this.getOrganization(targetOrganizationId);
+    if (source.workId !== target.workId) {
+      throw new AppError(400, "ORGANIZATION_WORK_MISMATCH", "待合并组织不属于同一作品");
+    }
+
+    const workId = String(target.workId);
+    const mergeId = id("organizationMerge");
+    const timestamp = now();
+    const memberIds = [...new Set([...(target.memberIds as string[]), ...(source.memberIds as string[])])];
+    const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const descriptionParts = [String(target.description).trim(), String(source.description).trim()].filter(Boolean);
+    const description = [...new Set(descriptionParts)].join("\n\n");
+    const settings = [...new Set([...(target.settings as string[]), ...(source.settings as string[])])];
+    const sourceMemberships = this.db.all(
+      "SELECT character_id, role, note, created_at FROM character_organization_memberships WHERE organization_id = ?",
+      sourceOrganizationId
+    );
+
+    this.db.transaction(() => {
+      this.recordEntityVersion("organization", sourceOrganizationId, "delete", mergeId, `合并至组织“${String(target.name)}”`, timestamp);
+      this.db.run(
+        "UPDATE organizations SET description = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        description,
+        JSON.stringify(settings),
+        timestamp,
+        targetOrganizationId
+      );
+      for (const membership of sourceMemberships) {
+        this.db.run(
+          `INSERT INTO character_organization_memberships (character_id, organization_id, role, note, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(character_id, organization_id) DO NOTHING`,
+          requiredString(membership, "character_id"),
+          targetOrganizationId,
+          requiredString(membership, "role"),
+          requiredString(membership, "note"),
+          requiredString(membership, "created_at"),
+          timestamp
+        );
+      }
+      this.db.run("DELETE FROM organizations WHERE id = ?", sourceOrganizationId);
+      this.recordMembershipVersions(memberSnapshots, "organization", targetOrganizationId, `合并组织“${String(source.name)}”`);
+      this.recordEntityVersion("organization", targetOrganizationId, "merge", mergeId, `合并组织“${String(source.name)}”`, timestamp);
+      this.audit(workId, "organization.merged", "organization", targetOrganizationId, { mergeId, sourceOrganizationId });
+    });
+    return { mergeId, target: this.getOrganization(targetOrganizationId), source };
   }
 
   private mapOrganization(row: Row): Record<string, unknown> {
@@ -3590,9 +3697,22 @@ export class Store {
     this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(current.versionNo));
     const timestamp = now();
     const versionNo = Number(current.versionNo) + 1;
+    const workId = String(current.workId);
+    const timelineEvents = this.listTimelineEvents(workId).filter(
+      (event) => (event.participantIds as string[]).includes(characterId)
+    );
+    const relationships = this.listRelationships(workId).filter(
+      (relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId
+    );
     this.db.transaction(() => {
       const lockedCurrent = this.getCharacter(characterId);
       this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
+      for (const event of timelineEvents) {
+        this.updateTimelineEvent(String(event.id), {
+          participantIds: (event.participantIds as string[]).filter((participantId) => participantId !== characterId)
+        }, "manual", characterId, `删除角色“${String(current.name)}”后移除参与者引用`);
+      }
+      for (const relationship of relationships) this.deleteRelationship(String(relationship.id));
       const sectionIds = this.db.all("SELECT id FROM character_profile_sections WHERE character_id = ?", characterId)
         .map((row) => requiredString(row, "id"));
       for (const sectionId of sectionIds) {
@@ -3601,7 +3721,7 @@ export class Store {
       this.db.run("UPDATE characters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, characterId);
       this.insertCharacterVersion(characterId, versionNo, "delete", null, "删除人物", timestamp);
       this.db.run("DELETE FROM characters WHERE id = ?", characterId);
-      this.audit(String(current.workId), "character.deleted", "character", characterId, { versionNo });
+      this.audit(workId, "character.deleted", "character", characterId, { versionNo });
     });
   }
 
@@ -3691,7 +3811,7 @@ export class Store {
   }
 
   mergeCharacters(input: {
-    reviewId: string;
+    reviewId: string | null;
     targetCharacterId: string;
     sourceCharacterId: string;
     expectedTargetVersionNo: number;
@@ -3700,28 +3820,30 @@ export class Store {
     if (input.targetCharacterId === input.sourceCharacterId) {
       throw new AppError(400, "CHARACTER_MERGE_SELF", "不能把角色合并到自身");
     }
-    const review = this.getReviewItem(input.reviewId);
-    if (review.itemType !== "character-duplicate" || review.status !== "pending") {
-      throw new AppError(409, "CHARACTER_REVIEW_DECIDED", "该角色查重项已经处理");
-    }
-    const reviewCharacterIds = (review.entityRefs as unknown[]).flatMap((reference) => {
-      if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
-      const characterId = (reference as Record<string, unknown>).id;
-      return typeof characterId === "string" ? [characterId] : [];
-    });
-    if (!reviewCharacterIds.includes(input.targetCharacterId) || !reviewCharacterIds.includes(input.sourceCharacterId)) {
-      throw new AppError(400, "CHARACTER_REVIEW_MISMATCH", "待合并角色与审核项不一致");
+    const review = input.reviewId ? this.getReviewItem(input.reviewId) : null;
+    if (review) {
+      if (review.itemType !== "character-duplicate" || review.status !== "pending") {
+        throw new AppError(409, "CHARACTER_REVIEW_DECIDED", "该角色查重项已经处理");
+      }
+      const reviewCharacterIds = (review.entityRefs as unknown[]).flatMap((reference) => {
+        if (!reference || typeof reference !== "object" || Array.isArray(reference)) return [];
+        const characterId = (reference as Record<string, unknown>).id;
+        return typeof characterId === "string" ? [characterId] : [];
+      });
+      if (!reviewCharacterIds.includes(input.targetCharacterId) || !reviewCharacterIds.includes(input.sourceCharacterId)) {
+        throw new AppError(400, "CHARACTER_REVIEW_MISMATCH", "待合并角色与审核项不一致");
+      }
     }
     const target = this.getCharacter(input.targetCharacterId);
     const source = this.getCharacter(input.sourceCharacterId);
-    if (target.workId !== source.workId || target.workId !== review.workId) {
+    if (target.workId !== source.workId || (review && target.workId !== review.workId)) {
       throw new AppError(400, "CHARACTER_WORK_MISMATCH", "待合并角色不属于同一作品");
     }
     if (target.mergedIntoCharacterId || source.mergedIntoCharacterId) {
       throw new AppError(409, "CHARACTER_ALREADY_MERGED", "待合并角色中已有角色被合并");
     }
     if (Number(target.versionNo) !== input.expectedTargetVersionNo || Number(source.versionNo) !== input.expectedSourceVersionNo) {
-      throw new AppError(409, "CHARACTER_VERSION_CHANGED", "角色在审核后已发生变化，请重新运行查重");
+      throw new AppError(409, "CHARACTER_VERSION_CHANGED", "角色已发生变化，请刷新后重试");
     }
 
     const workId = String(target.workId);
@@ -3808,6 +3930,9 @@ export class Store {
       }
 
       this.db.run("DELETE FROM character_organization_memberships WHERE character_id = ?", sourceId);
+      this.db.run("UPDATE character_profile_sections SET character_id = ?, updated_at = ? WHERE character_id = ?", targetId, timestamp, sourceId);
+      this.db.run("UPDATE character_profile_section_versions SET character_id = ? WHERE character_id = ?", targetId, sourceId);
+      this.db.run("UPDATE character_profile_section_search SET character_id = ? WHERE character_id = ?", targetId, sourceId);
       const sourceVersionNo = Number(source.versionNo) + 1;
       this.db.run(
         "UPDATE characters SET merged_into_character_id = ?, merged_at = ?, version_no = ?, updated_at = ? WHERE id = ?",
@@ -3833,12 +3958,14 @@ export class Store {
         timestamp,
         currentRequestActor()?.userId ?? null
       );
-      this.db.run(
-        "UPDATE review_items SET status = 'fixed', resolution_note = ?, updated_at = ? WHERE id = ?",
-        `已将“${String(source.name)}”合并到“${String(target.name)}”`,
-        timestamp,
-        input.reviewId
-      );
+      if (input.reviewId) {
+        this.db.run(
+          "UPDATE review_items SET status = 'fixed', resolution_note = ?, updated_at = ? WHERE id = ?",
+          `已将“${String(source.name)}”合并到“${String(target.name)}”`,
+          timestamp,
+          input.reviewId
+        );
+      }
       this.audit(workId, "character.merged", "character", targetId, {
         mergeId,
         sourceCharacterId: sourceId,
@@ -3849,7 +3976,7 @@ export class Store {
       mergeId,
       target: this.getCharacter(targetId),
       source: this.getCharacter(sourceId),
-      review: this.getReviewItem(input.reviewId)
+      review: input.reviewId ? this.getReviewItem(input.reviewId) : null
     };
   }
 

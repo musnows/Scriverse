@@ -465,6 +465,19 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .member-invite-form .primary-button { min-height: 38px; white-space: nowrap; }
 .app-shell.view-only-mode:not(.shelf-mode) { grid-template-columns: var(--left-panel-width) minmax(480px, 1fr); }
 .app-shell.view-only-mode:not(.shelf-mode) .ai-panel { display: none; }
+.app-shell.settings-only-mode:not(.shelf-mode) { grid-template-columns: var(--left-panel-width) minmax(480px, 1fr); }
+.app-shell.settings-only-mode:not(.shelf-mode) .ai-panel { display: none; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #new-volume-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #save-button { display: none !important; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-title[readonly],
+.app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
+.app-shell.settings-only-mode:not(.shelf-mode) [data-work-settings],
+.app-shell.settings-only-mode:not(.shelf-mode) [data-module="tasks"],
+.app-shell.settings-only-mode:not(.shelf-mode) [data-module="ai-settings"] { display: none !important; }
 .app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-volume-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-chapter-button,
@@ -506,6 +519,11 @@ body.work-viewer-mode [data-item-list-remove],
 body.work-viewer-mode [data-structured-list-add],
 body.work-viewer-mode [data-structured-list-remove],
 body.work-viewer-mode .character-editor-actions { display: none !important; }
+body.work-settings-editor-mode [data-review-id],
+body.work-settings-editor-mode .task-auto-run-panel,
+body.work-settings-editor-mode [data-run-task],
+body.work-settings-editor-mode [data-cancel-task],
+body.work-settings-editor-mode [data-restore-version] { display: none !important; }
 .search-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0; }
 .search-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .search-form input {
@@ -803,6 +821,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-duplicate-actions { flex-wrap: wrap; }
 .card-actions { display: flex; gap: 6px; margin-top: 15px; }
 .card-actions button { border: 1px solid var(--line); background: transparent; border-radius: 3px; font-size: 10px; padding: 5px 8px; }
+.card-actions .danger-button { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); color: var(--accent-dark); }
+.card-actions .danger-button:hover, .card-actions .danger-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .card-actions .primary-button { border-color: var(--accent); background: var(--accent); color: #fff; padding: 8px 13px; font-size: 12px; }
 .card-actions .primary-button:hover, .card-actions .primary-button:focus-visible { background: var(--accent-dark); }
 .provider-card-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
@@ -1344,6 +1364,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .dialog-fields input, .dialog-fields textarea, .dialog-fields select { width: 100%; padding: 9px 10px; font-size: 13px; }
 .dialog-fields textarea { resize: vertical; min-height: 90px; line-height: 1.6; }
+.merge-dialog-note { margin: 0; padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 11px; line-height: 1.6; }
 .form-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .analysis-type-description { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .item-list-rows { display: grid; gap: 7px; }
