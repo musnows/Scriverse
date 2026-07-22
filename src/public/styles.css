@@ -1450,16 +1450,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-editor-back { justify-self: start; min-height: 36px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
 .entity-editor-back::before { content: "←"; margin-right: 7px; }
 .entity-editor-back:hover { border-color: var(--accent); color: var(--accent-dark); }
-.setting-editor-workspace { display: grid; grid-template-columns: minmax(260px, 330px) minmax(0, 1fr); height: calc(100% - 78px); min-height: 0; }
-.setting-editor-sidebar { display: grid; align-content: start; gap: 22px; padding: 34px clamp(22px, 3vw, 42px); overflow-y: auto; border-right: 1px solid var(--line); background: var(--surface-soft); }
-.setting-editor-sidebar > label { display: grid; gap: 8px; color: var(--muted); font-size: 11px; }
+.setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); height: calc(100% - 78px); min-height: 0; }
+.setting-editor-sidebar { display: grid; grid-template-columns: minmax(180px, 1.25fr) minmax(140px, .8fr) minmax(240px, 1.45fr) minmax(180px, 1fr); align-items: end; gap: 12px; padding: 14px clamp(22px, 3vw, 42px); border-bottom: 1px solid var(--line); background: var(--surface-soft); }
+.setting-editor-sidebar > label { display: grid; align-content: end; gap: 6px; min-width: 0; color: var(--muted); font-size: 11px; }
 .setting-editor-sidebar input, .setting-editor-sidebar select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 13px; }
-.setting-editor-lock { grid-template-columns: auto minmax(0, 1fr); align-items: start; padding: 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.setting-editor-lock { grid-template-columns: auto minmax(0, 1fr); align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
 .setting-editor-lock input { width: auto; margin-top: 3px; }
 .setting-editor-lock span { display: grid; gap: 4px; }
 .setting-editor-lock b { color: var(--ink); font-size: 11px; }
 .setting-editor-lock small { line-height: 1.55; }
-.setting-editor-content { min-height: 0; padding: 34px clamp(28px, 6vw, 96px) 46px; overflow: hidden; }
+.setting-editor-content { min-height: 0; padding: 22px clamp(28px, 6vw, 96px) 32px; overflow: hidden; }
 .setting-markdown-field { display: grid; grid-template-rows: auto auto minmax(0, 1fr); gap: 14px; height: 100%; min-height: 0; }
 .setting-markdown-heading, .markdown-editor-field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; color: var(--ink); font-size: 14px; }
 .setting-markdown-heading small, .markdown-editor-field-heading small { color: var(--muted); font-size: 10px; }

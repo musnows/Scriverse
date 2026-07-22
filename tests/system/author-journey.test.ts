@@ -209,6 +209,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain(".setting-editor-workspace");
+    expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr);");
+    expect(styles.text).toContain(".setting-editor-sidebar { display: grid; grid-template-columns:");
     expect(styles.text).toContain(".character-relationship-row");
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
