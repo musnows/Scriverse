@@ -1973,14 +1973,41 @@ async function openPlatformUiSettingsDialog() {
   }
 }
 
+const memberRoleDetails = Object.freeze({
+  owner: { label: "作品创建者", description: "拥有全部权限，并可配置成员访问级别。" },
+  viewer: { label: "仅查看", description: "可查看正文与设定，不能修改任何内容。" },
+  "settings-editor": { label: "仅编辑设定", description: "可维护设定、角色、种族、组织、时间线、关系、大纲与伏笔；正文和作品配置只读。" },
+  editor: { label: "编辑正文与设定", description: "可编辑正文和全部设定内容；不能管理成员权限。" }
+});
+
+function memberRoleDetail(role) {
+  return memberRoleDetails[role] ?? memberRoleDetails.viewer;
+}
+
+function memberRoleOptions(selectedRole) {
+  return ["viewer", "settings-editor", "editor"].map((role) => {
+    const detail = memberRoleDetail(role);
+    return `<option value="${role}" ${selectedRole === role ? "selected" : ""}>${detail.label}</option>`;
+  }).join("");
+}
+
+function updateMemberRoleDescription() {
+  const description = $("#member-role-description");
+  if (description) description.textContent = memberRoleDetail($("#member-role-select").value).description;
+}
+
 function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
-  $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : member.role === "settings-editor" ? "设定编辑" : "完整协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
-    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="settings-editor" ${member.role === "settings-editor" ? "selected" : ""}>仅编辑设定</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>编辑正文与设定</option></select>`}
-    ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
-  </article>`).join("");
+  $("#members-list").innerHTML = members.map((member) => {
+    const detail = memberRoleDetail(member.role);
+    const descriptionId = `member-role-summary-${member.userId}`;
+    return `<article class="access-row">
+      <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small id="${esc(descriptionId)}">${esc(detail.label)} · ${esc(detail.description)}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
+      ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" aria-describedby="${esc(descriptionId)}" ${canManage ? "" : "disabled"}>${memberRoleOptions(member.role)}</select>`}
+      ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
+    </article>`;
+  }).join("");
   bindUserAvatarFallbacks($("#members-list"));
   $("#members-list").querySelectorAll("[data-member-role]").forEach((select) => select.addEventListener("change", async () => {
     if (!work) return;
@@ -2023,6 +2050,7 @@ async function openMembersDialog(targetWork = state.work) {
   $("#members-dialog-title").textContent = "可访问人";
   $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
   $("#member-invite-form").classList.toggle("hidden", !canManage);
+  updateMemberRoleDescription();
   $("#members-dialog").showModal();
   try {
     const members = await api(`/api/works/${encodeURIComponent(targetWork.id)}/members`);
@@ -3533,8 +3561,8 @@ function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
   const accessField = `<section class="work-access-field" aria-labelledby="work-access-title">
-    <div><strong id="work-access-title">可访问人</strong><small>可以分别授予成员仅查看或共同编辑权限。</small></div>
-    ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">添加或管理可访问人</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
+    <div><strong id="work-access-title">成员权限</strong><small>每位成员可单独配置以下三档作品权限。</small><div class="work-access-options" aria-label="可配置的成员权限"><span>仅查看</span><span>仅编辑设定</span><span>编辑正文与设定</span></div></div>
+    ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">配置成员权限</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
   </section>`;
   openDialog("作品信息",
     workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
@@ -4919,6 +4947,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
 });
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
 $("#members-dialog").addEventListener("close", () => { memberDialogWork = null; });
+$("#member-role-select").addEventListener("change", updateMemberRoleDescription);
 $("#member-invite-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const userId = $("#member-user-select").value;
