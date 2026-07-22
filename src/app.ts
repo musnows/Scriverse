@@ -1221,7 +1221,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/tasks", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listTasksPage(request.params.workId, pagination) : store.listTasks(request.params.workId));
+    const summary = request.query.view === "summary";
+    data(response, pagination
+      ? (summary ? store.listTaskSummariesPage(request.params.workId, pagination) : store.listTasksPage(request.params.workId, pagination))
+      : store.listTasks(request.params.workId));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
