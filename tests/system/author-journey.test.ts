@@ -425,8 +425,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
-    expect(application.text).toContain('field("settingsMarkdown", title, "markdown"');
-    expect(application.text).toContain('data.get("settingsMarkdown")');
+    expect(application.text).toContain("knowledgeSectionsField(kind, item)");
+    expect(application.text).toContain("data-knowledge-section-add");
+    expect(application.text).toContain("collectKnowledgeSections(form)");
     expect(application.text).toContain('data.getAll("memberIds")');
     expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");

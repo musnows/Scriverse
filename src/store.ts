@@ -142,6 +142,7 @@ type OrganizationInput = {
   description?: string;
   settings?: string[];
   settingsMarkdown?: string;
+  settingsSections?: KnowledgeSectionInput[];
   memberIds?: string[];
 };
 
@@ -151,7 +152,22 @@ type RaceInput = {
   description?: string;
   settings?: string[];
   settingsMarkdown?: string;
+  settingsSections?: KnowledgeSectionInput[];
   memberIds?: string[];
+};
+
+export type KnowledgeSectionInput = {
+  title: string;
+  contentMarkdown?: string;
+  summary?: string;
+  sortOrder?: number;
+};
+
+type KnowledgeSection = {
+  title: string;
+  contentMarkdown: string;
+  summary: string;
+  sortOrder: number;
 };
 
 function settingsFromInput(settingsMarkdown?: string, settings?: string[], fallback: string[] = []): string[] {
@@ -161,6 +177,72 @@ function settingsFromInput(settingsMarkdown?: string, settings?: string[], fallb
 
 function settingsMarkdownFromList(settings: unknown): string {
   return Array.isArray(settings) ? settings.map(String).filter(Boolean).join("\n\n") : "";
+}
+
+function knowledgeSectionTitle(contentMarkdown: string, index: number): string {
+  const heading = contentMarkdown.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/mu)?.[1]?.trim();
+  return heading || `设定 ${index + 1}`;
+}
+
+function normalizeKnowledgeSections(sections: KnowledgeSectionInput[]): KnowledgeSection[] {
+  return sections.map((section, index) => {
+    const contentMarkdown = section.contentMarkdown ?? "";
+    return {
+      title: section.title.trim() || knowledgeSectionTitle(contentMarkdown, index),
+      contentMarkdown,
+      summary: section.summary?.trim() ?? "",
+      sortOrder: Number.isFinite(section.sortOrder) ? Math.max(0, Math.trunc(section.sortOrder!)) : index
+    };
+  });
+}
+
+function knowledgeSectionInput(value: unknown, index: number): KnowledgeSectionInput | null {
+  if (!isRecord(value)) return null;
+  const contentMarkdown = typeof value.contentMarkdown === "string"
+    ? value.contentMarkdown
+    : typeof value.content === "string" ? value.content : "";
+  const title = typeof value.title === "string" ? value.title : "";
+  return {
+    title: title || knowledgeSectionTitle(contentMarkdown, index),
+    contentMarkdown,
+    summary: typeof value.summary === "string" ? value.summary : "",
+    sortOrder: typeof value.sortOrder === "number" ? value.sortOrder : index
+  };
+}
+
+function knowledgeSectionsFromStored(value: unknown, fallback: string[] = []): KnowledgeSection[] {
+  const parsed = typeof value === "string" ? json<unknown>(value, []) : value;
+  if (Array.isArray(parsed)) {
+    const sections = parsed.map((item, index) => knowledgeSectionInput(item, index)).filter((item): item is KnowledgeSectionInput => item !== null);
+    if (sections.length > 0 || fallback.length === 0) return normalizeKnowledgeSections(sections);
+  }
+  return normalizeKnowledgeSections(fallback.map((contentMarkdown, index) => ({
+    title: knowledgeSectionTitle(contentMarkdown, index),
+    contentMarkdown,
+    sortOrder: index
+  })));
+}
+
+function knowledgeSectionsFromInput(
+  sections: KnowledgeSectionInput[] | undefined,
+  settingsMarkdown: string | undefined,
+  settings: string[] | undefined,
+  fallbackSections: KnowledgeSection[] = []
+): KnowledgeSection[] {
+  if (sections !== undefined) return normalizeKnowledgeSections(sections);
+  if (settingsMarkdown !== undefined || settings !== undefined) {
+    const legacySettings = settingsFromInput(settingsMarkdown, settings);
+    return knowledgeSectionsFromStored(legacySettings.map((contentMarkdown, index) => ({
+      title: knowledgeSectionTitle(contentMarkdown, index),
+      contentMarkdown,
+      sortOrder: index
+    })));
+  }
+  return fallbackSections;
+}
+
+function settingsFromKnowledgeSections(sections: KnowledgeSection[]): string[] {
+  return sections.map((section) => section.contentMarkdown).filter((content) => content.trim());
 }
 
 type ChapterOutlineInput = {
@@ -446,12 +528,14 @@ export class Store {
       parentRaceId: entity.parentRaceId,
       description: entity.description,
       settings: entity.settings,
+      settingsSections: entity.settingsSections,
       memberIds: entity.memberIds
     };
     if (type === "organization") return {
       name: entity.name,
       description: entity.description,
       settings: entity.settings,
+      settingsSections: entity.settingsSections,
       memberIds: entity.memberIds
     };
     if (type === "timeline-track") return {
@@ -2534,12 +2618,13 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
-    const settings = settingsFromInput(input.settingsMarkdown, input.settings);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, settings_sections_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         raceId,
         workId,
         parentRaceId,
@@ -2547,6 +2632,7 @@ export class Store {
         normalizedName,
         input.description ?? "",
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         timestamp
       );
@@ -2604,16 +2690,19 @@ export class Store {
       ? [...new Set([...(current.memberIds as string[]), ...(memberIds ?? [])])]
       : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
-    const settings = settingsFromInput(input.settingsMarkdown, input.settings, current.settings as string[]);
+    const currentSections = knowledgeSectionsFromStored(current.settingsSections, current.settings as string[]);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings, currentSections);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     this.db.transaction(() => {
       this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.db.run(
-        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
         parentRaceId,
         name,
         normalizedName,
         input.description ?? String(current.description),
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         now(),
         raceId
       );
@@ -2665,15 +2754,18 @@ export class Store {
       : target.parentRaceId as string | null;
     const descriptionParts = [String(target.description).trim(), String(source.description).trim()].filter(Boolean);
     const description = [...new Set(descriptionParts)].join("\n\n");
-    const settings = [...new Set([...(target.settings as string[]), ...(source.settings as string[])])];
+    const settingsSections = [...knowledgeSectionsFromStored(target.settingsSections, target.settings as string[]), ...knowledgeSectionsFromStored(source.settingsSections, source.settings as string[])]
+      .map((section, index) => ({ ...section, sortOrder: index }));
+    const settings = settingsFromKnowledgeSections(settingsSections);
 
     this.db.transaction(() => {
       this.recordEntityVersion("race", sourceRaceId, "delete", mergeId, `合并至种族“${String(target.name)}”`, timestamp);
       this.db.run(
-        "UPDATE races SET parent_race_id = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE races SET parent_race_id = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?",
         targetParentRaceId,
         description,
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         targetRaceId
       );
@@ -2708,6 +2800,8 @@ export class Store {
   private mapRace(row: Row): Record<string, unknown> {
     const raceId = requiredString(row, "id");
     const lineage = this.raceLineage(raceId);
+    const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const members = this.db.all("SELECT id, name FROM characters WHERE race_id = ? ORDER BY name", requiredString(row, "id")).map((member) => ({
       characterId: requiredString(member, "id"),
       name: requiredString(member, "name")
@@ -2718,11 +2812,15 @@ export class Store {
       parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
-      settings: json(requiredString(row, "settings_json"), []),
-      settingsMarkdown: settingsMarkdownFromList(json(requiredString(row, "settings_json"), [])),
+      settings,
+      settingsMarkdown: settingsMarkdownFromList(settings),
+      settingsSections,
       lineage: lineage.map((item) => ({ id: item.id, name: item.name })),
-      effectiveSettings: lineage.flatMap((item, index) => item.settings.map((value) => ({
-        value,
+      effectiveSettings: lineage.flatMap((item, index) => item.settingsSections.map((section) => ({
+        title: section.title,
+        summary: section.summary,
+        sortOrder: section.sortOrder,
+        value: section.contentMarkdown,
         sourceRaceId: item.id,
         sourceRaceName: item.name,
         inherited: index < lineage.length - 1
@@ -2767,19 +2865,21 @@ export class Store {
     }
   }
 
-  private raceLineage(raceId: string): Array<{ id: string; name: string; settings: string[] }> {
-    const lineage: Array<{ id: string; name: string; settings: string[] }> = [];
+  private raceLineage(raceId: string): Array<{ id: string; name: string; settings: string[]; settingsSections: KnowledgeSection[] }> {
+    const lineage: Array<{ id: string; name: string; settings: string[]; settingsSections: KnowledgeSection[] }> = [];
     const seen = new Set<string>();
     let currentId: string | null = raceId;
     while (currentId) {
       if (seen.has(currentId)) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级存在循环");
       seen.add(currentId);
-      const row = this.db.get("SELECT id, name, settings_json, parent_race_id FROM races WHERE id = ?", currentId);
+      const row = this.db.get("SELECT id, name, settings_json, settings_sections_json, parent_race_id FROM races WHERE id = ?", currentId);
       if (!row) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级引用了不存在的父种族");
+      const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
       lineage.push({
         id: requiredString(row, "id"),
         name: requiredString(row, "name"),
-        settings: json<string[]>(requiredString(row, "settings_json"), [])
+        settings: settingsFromKnowledgeSections(settingsSections),
+        settingsSections
       });
       currentId = optionalString(row, "parent_race_id");
     }
@@ -2814,18 +2914,20 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
-    const settings = settingsFromInput(input.settingsMarkdown, input.settings);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO organizations (id, work_id, name, normalized_name, description, settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO organizations (id, work_id, name, normalized_name, description, settings_json, settings_sections_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         organizationId,
         workId,
         name,
         normalizedName,
         input.description ?? "",
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         timestamp
       );
@@ -2876,15 +2978,18 @@ export class Store {
     if (memberIds) this.assertCharactersInWork(workId, memberIds);
     const touchedMemberIds = memberIds ? [...new Set([...(current.memberIds as string[]), ...memberIds])] : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
-    const settings = settingsFromInput(input.settingsMarkdown, input.settings, current.settings as string[]);
+    const currentSections = knowledgeSectionsFromStored(current.settingsSections, current.settings as string[]);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings, currentSections);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     this.db.transaction(() => {
       this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.db.run(
-        `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
         name,
         normalizedName,
         input.description ?? String(current.description),
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         now(),
         organizationId
       );
@@ -2929,7 +3034,9 @@ export class Store {
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
     const descriptionParts = [String(target.description).trim(), String(source.description).trim()].filter(Boolean);
     const description = [...new Set(descriptionParts)].join("\n\n");
-    const settings = [...new Set([...(target.settings as string[]), ...(source.settings as string[])])];
+    const settingsSections = [...knowledgeSectionsFromStored(target.settingsSections, target.settings as string[]), ...knowledgeSectionsFromStored(source.settingsSections, source.settings as string[])]
+      .map((section, index) => ({ ...section, sortOrder: index }));
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const sourceMemberships = this.db.all(
       "SELECT character_id, role, note, created_at FROM character_organization_memberships WHERE organization_id = ?",
       sourceOrganizationId
@@ -2938,9 +3045,10 @@ export class Store {
     this.db.transaction(() => {
       this.recordEntityVersion("organization", sourceOrganizationId, "delete", mergeId, `合并至组织“${String(target.name)}”`, timestamp);
       this.db.run(
-        "UPDATE organizations SET description = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE organizations SET description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?",
         description,
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         targetOrganizationId
       );
@@ -2967,6 +3075,8 @@ export class Store {
   }
 
   private mapOrganization(row: Row): Record<string, unknown> {
+    const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const members = this.db.all(
       `SELECT c.id, c.name, m.role, m.note
        FROM character_organization_memberships m
@@ -2984,8 +3094,9 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
-      settings: json(requiredString(row, "settings_json"), []),
-      settingsMarkdown: settingsMarkdownFromList(json(requiredString(row, "settings_json"), [])),
+      settings,
+      settingsMarkdown: settingsMarkdownFromList(settings),
+      settingsSections,
       memberIds: members.map((member) => member.characterId),
       members,
       versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),

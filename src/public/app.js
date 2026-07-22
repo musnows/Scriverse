@@ -2788,7 +2788,7 @@ async function renderRaces() {
       <article class="record-card race-card"><small>${item.memberIds.length} 位直接角色 · ${item.settings.length ? "已填写共同设定" : "暂无共同设定"}</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
         <p>${esc(item.description || "尚未填写种族简介")}</p>
-        <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<section class="knowledge-markdown-block${setting.inherited ? " inherited" : ""}"><small>${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}</small><div class="message-body">${renderMarkdown(setting.value) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></section>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
+        <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<section class="knowledge-markdown-block${setting.inherited ? " inherited" : ""}"><div class="knowledge-markdown-block-heading"><h4>${esc(setting.title || "未命名章节")}</h4><small>${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}</small></div><div class="message-body">${renderMarkdown(setting.value) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></section>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
         <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("races") && state.races.length > 1 ? `<button data-merge-race="${esc(item.id)}">合并</button>` : ""}${canEditModule("races") ? `<button class="danger-button" data-delete-race="${esc(item.id)}">删除</button>` : ""}</div>
       </article>
@@ -2832,7 +2832,7 @@ async function renderOrganizations() {
   $("#module-content").innerHTML = state.organizations.length ? `<div class="card-grid organization-grid">${state.organizations.map((item) => `
     <article class="record-card organization-card"><small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
-      <div class="organization-settings">${item.settings.length ? `<article class="knowledge-markdown-block"><div class="message-body">${renderMarkdown(item.settingsMarkdown ?? item.settings.join("\n\n")) || '<p class="markdown-editor-empty">暂无组织设定</p>'}</div></article>` : '<span class="pill">暂无组织设定</span>'}</div>
+      <div class="organization-settings">${item.settingsSections?.length ? item.settingsSections.map((section) => `<article class="knowledge-markdown-block"><div class="knowledge-markdown-block-heading"><h4>${esc(section.title || "未命名章节")}</h4></div><div class="message-body">${renderMarkdown(section.contentMarkdown) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></article>`).join("") : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
       <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("organizations") && state.organizations.length > 1 ? `<button data-merge-organization="${esc(item.id)}">合并</button>` : ""}${canEditModule("organizations") ? `<button class="danger-button" data-delete-organization="${esc(item.id)}">删除</button>` : ""}</div>
     </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
@@ -3541,6 +3541,74 @@ function field(name, label, type = "text", value = "", options = []) {
   }
   if (type === "checkbox") return `<label class="checkbox-field"><input name="${esc(name)}" type="checkbox" ${value ? "checked" : ""}><span>${esc(label)}</span></label>`;
   return `<label>${esc(label)}<input name="${esc(name)}" type="${esc(type)}" value="${esc(value)}" ${type === "password" ? 'autocomplete="new-password"' : ""} ${type === "number" ? 'step="any"' : ""}></label>`;
+}
+
+function knowledgeSectionTitleFromMarkdown(content, index) {
+  return String(content).match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/mu)?.[1]?.trim() || `设定 ${index + 1}`;
+}
+
+function normalizeKnowledgeEditorSections(item) {
+  const sections = Array.isArray(item?.settingsSections)
+    ? item.settingsSections.map((section, index) => ({
+      title: String(section.title ?? "").trim() || knowledgeSectionTitleFromMarkdown(section.contentMarkdown ?? "", index),
+      contentMarkdown: String(section.contentMarkdown ?? section.content ?? ""),
+      summary: String(section.summary ?? ""),
+      sortOrder: Number.isFinite(Number(section.sortOrder)) ? Number(section.sortOrder) : index
+    }))
+    : [];
+  if (sections.length > 0) return sections;
+  const legacy = String(item?.settingsMarkdown ?? (Array.isArray(item?.settings) ? item.settings.join("\n\n") : ""));
+  return [{ title: legacy.trim() ? knowledgeSectionTitleFromMarkdown(legacy, 0) : "", contentMarkdown: legacy, summary: "", sortOrder: 0 }];
+}
+
+function knowledgeSectionEditorHtml(section, index, kind) {
+  const label = kind === "race" ? "种族" : "组织";
+  return `<article class="knowledge-section-card" data-knowledge-section>
+    <header class="knowledge-section-card-header"><label><span>第 ${index + 1} 条标题</span><input name="settingsSectionTitle" data-knowledge-section-title value="${esc(section.title ?? "")}" maxlength="200" placeholder="例如：生理特征、组织章程" aria-label="${label}设定章节标题"></label><button type="button" class="ghost-button" data-knowledge-section-remove aria-label="删除第 ${index + 1} 条设定">删除章节</button></header>
+    <div class="markdown-editor-field" data-markdown-editor><div class="markdown-editor-compose"><label><textarea name="settingsSectionContent" data-markdown-textarea aria-label="${label}设定章节 Markdown 原文" maxlength="200000" spellcheck="true" placeholder="在这里编辑 Markdown 设定">${esc(section.contentMarkdown ?? "")}</textarea></label><div role="region" aria-label="Markdown 预览"><article class="markdown-editor-preview message-body" data-markdown-preview>${renderMarkdown(section.contentMarkdown ?? "") || '<p class="markdown-editor-empty">预览区域暂无内容。</p>'}</article></div></div></div>
+  </article>`;
+}
+
+function knowledgeSectionsField(kind, item) {
+  const sections = normalizeKnowledgeEditorSections(item);
+  return `<div class="knowledge-sections-field" data-knowledge-sections-field data-knowledge-section-kind="${esc(kind)}"><div class="knowledge-sections-toolbar"><strong>${kind === "race" ? "种族设定章节" : "组织设定章节"}</strong><button type="button" class="ghost-button" data-knowledge-section-add>添加章节</button></div><div class="knowledge-section-list" data-knowledge-section-list>${sections.map((section, index) => knowledgeSectionEditorHtml(section, index, kind)).join("")}</div></div>`;
+}
+
+function collectKnowledgeSections(form) {
+  const sections = [];
+  form.querySelectorAll("[data-knowledge-section]").forEach((row, index) => {
+    const title = String(row.querySelector("[data-knowledge-section-title]")?.value ?? "").trim();
+    const contentMarkdown = String(row.querySelector("[data-markdown-textarea]")?.value ?? "");
+    if (!title && !contentMarkdown.trim()) return;
+    if (!title) throw new Error(`请填写第 ${index + 1} 条 Markdown 设定的标题`);
+    sections.push({ title, contentMarkdown, sortOrder: sections.length });
+  });
+  return sections;
+}
+
+function bindKnowledgeSectionControls(container) {
+  const addButton = container.querySelector("[data-knowledge-section-add]");
+  const list = container.querySelector("[data-knowledge-section-list]");
+  if (!addButton || !list) return;
+  addButton.addEventListener("click", () => {
+    const kind = container.dataset.knowledgeSectionKind ?? "organization";
+    list.insertAdjacentHTML("beforeend", knowledgeSectionEditorHtml({ title: "", contentMarkdown: "" }, list.children.length, kind));
+    const row = list.lastElementChild;
+    if (!row) return;
+    bindMarkdownEditors(row);
+    row.querySelector("[data-knowledge-section-title]")?.focus();
+    markEntityEditorDirty();
+  });
+  list.addEventListener("click", (event) => {
+    const removeButton = event.target.closest("[data-knowledge-section-remove]");
+    if (!removeButton) return;
+    removeButton.closest("[data-knowledge-section]")?.remove();
+    list.querySelectorAll("[data-knowledge-section]").forEach((row, index) => {
+      const title = row.querySelector("[data-knowledge-section-title]");
+      if (title?.previousElementSibling) title.previousElementSibling.textContent = `第 ${index + 1} 条标题`;
+    });
+    markEntityEditorDirty();
+  });
 }
 
 function bindDynamicListControls(container) {
@@ -4533,19 +4601,20 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
   const label = isRace ? "种族" : "组织";
   const title = isRace ? "种族共同设定" : "组织设定";
   const tabs = isRace
-    ? [["basic", "基础资料", "名称、层级与简介"], ["settings", "共同设定", "Markdown 长篇设定"], ["members", "种族成员", "角色归属"]]
-    : [["basic", "基础资料", "名称与简介"], ["settings", "组织设定", "Markdown 长篇设定"], ["members", "组织成员", "角色归属"]];
+    ? [["basic", "基础资料", "名称、层级与简介"], ["settings", "共同设定", "Markdown 设定章节"], ["members", "种族成员", "角色归属"]]
+    : [["basic", "基础资料", "名称与简介"], ["settings", "组织设定", "Markdown 设定章节"], ["members", "组织成员", "角色归属"]];
   $("#knowledge-editor-nav").innerHTML = tabs.map(([key, tabTitle, description], index) => `<button type="button" role="tab" data-knowledge-editor-tab="${key}" aria-selected="${index === 0}" tabindex="${index === 0 ? "0" : "-1"}">${tabTitle}<small>${description}</small></button>`).join("");
   const basicFields = field("name", `${label}名称`, "text", item?.name, []) + (isRace ? field("parentRaceId", "父种族", "select", item?.parentRaceId ?? "", parentOptions) : "") + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
     : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
-    + knowledgeEditorSection("settings", title, "", field("settingsMarkdown", title, "markdown", item?.settingsMarkdown ?? item?.settings?.join("\n\n"), { placeholder: isRace ? "例如：\n\n## 生理特征\n\n- 记录种族的共同规律" : "例如：\n\n## 组织章程\n\n- 记录组织的制度、目标与禁忌" }))
+    + knowledgeEditorSection("settings", title, "", knowledgeSectionsField(kind, item))
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
   document.querySelectorAll("[data-knowledge-editor-tab]").forEach((button) => {
     button.onclick = () => activateKnowledgeEditorTab(button.dataset.knowledgeEditorTab);
   });
+  bindKnowledgeSectionControls($("[data-knowledge-sections-field]"));
   activateKnowledgeEditorTab("basic");
 }
 
@@ -4588,10 +4657,11 @@ async function openKnowledgeEditor(kind, item) {
       const data = new FormData(form);
       const name = String(data.get("name") ?? "").trim();
       if (!name) throw new Error(`请填写${label}名称`);
-      const settingsMarkdown = String(data.get("settingsMarkdown") ?? "");
+      const settingsSections = collectKnowledgeSections(form);
+      const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
       const body = isRace
-        ? { name, parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown }
-        : { name, description: data.get("description"), settingsMarkdown };
+        ? { name, parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
+        : { name, description: data.get("description"), settingsMarkdown, settingsSections };
       if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
       const wasEditing = Boolean(knowledgeEditorItem);
       await api(wasEditing ? `/api/${module}/${knowledgeEditorItem.id}` : `/api/works/${state.work.id}/${module}`, { method: wasEditing ? "PATCH" : "POST", body });

@@ -218,11 +218,24 @@ const relationshipSchema = z.object({
   locked: z.boolean().optional()
 });
 
+const knowledgeSectionSchema = z.object({
+  title: nonEmpty.max(200),
+  contentMarkdown: z.string().max(200_000).optional(),
+  summary: z.string().max(100_000).optional(),
+  sortOrder: z.number().int().min(0).max(100_000).optional()
+}).strict();
+
+const knowledgeSectionsSchema = knowledgeSectionSchema.array().max(200).superRefine((sections, context) => {
+  const totalLength = sections.reduce((total, section) => total + (section.contentMarkdown?.length ?? 0) + (section.summary?.length ?? 0), 0);
+  if (totalLength > 200_000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Markdown 章节总长度不能超过 200000 个字符" });
+});
+
 const organizationSchema = z.object({
   name: nonEmpty.max(200),
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
   settingsMarkdown: z.string().max(200_000).optional(),
+  settingsSections: knowledgeSectionsSchema.optional(),
   memberIds: z.array(identifier).max(1000).optional()
 }).strict();
 
@@ -232,6 +245,7 @@ const raceSchema = z.object({
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
   settingsMarkdown: z.string().max(200_000).optional(),
+  settingsSections: knowledgeSectionsSchema.optional(),
   memberIds: z.array(identifier).max(1000).optional()
 }).strict();
 
