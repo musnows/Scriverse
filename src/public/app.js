@@ -1424,15 +1424,75 @@ applyTypographySettings(typographySettings);
 applyColorTheme(currentColorTheme());
 applyPanelLayout();
 
+function optimisticVersionForPath(path) {
+  const normalizedPath = String(path).split("?")[0];
+  const find = (items, id) => items.find((item) => String(item?.id ?? item?.chapterId ?? "") === id)?.versionNo;
+  const workMatch = normalizedPath.match(/^\/api\/works\/([^/]+)(?:\/(?:cover|import|file-versions\/[^/]+\/restore))?$/u);
+  if (workMatch) {
+    const workId = decodeURIComponent(workMatch[1]);
+    return state.works.find((item) => item.id === workId)?.versionNo ?? (state.work?.id === workId ? state.work.versionNo : undefined);
+  }
+  const resourceMatch = normalizedPath.match(/^\/api\/(volumes|chapters|settings|races|organizations|timeline-tracks|timeline|relationships|foreshadows|characters|character-sections)\/([^/]+)(?:\/(?:restore|move|split))?$/u);
+  if (resourceMatch) {
+    const resourceId = decodeURIComponent(resourceMatch[2]);
+    const collection = {
+      settings: state.settings,
+      races: state.races,
+      organizations: state.organizations,
+      "timeline-tracks": state.timelineTracks,
+      characters: state.characters
+    }[resourceMatch[1]] ?? [];
+    if (resourceMatch[1] === "chapters" && state.chapter?.id === resourceId) return state.chapter.versionNo;
+    if (resourceMatch[1] === "volumes") return find(state.work?.volumes ?? [], resourceId);
+    if (resourceMatch[1] === "character-sections") return find(characterEditorSections, resourceId);
+    if (resourceMatch[1] === "characters" && characterEditorItem?.id === resourceId) return characterEditorItem.versionNo;
+    return find(collection, resourceId);
+  }
+  const outlineMatch = normalizedPath.match(/^\/api\/chapters\/([^/]+)\/outline$/u);
+  if (outlineMatch) return find(state.outlines ?? [], decodeURIComponent(outlineMatch[1]));
+  const entityRestoreMatch = normalizedPath.match(/^\/api\/entity-versions\/(work|volume|setting|race|organization|timeline-track|timeline-event|relationship|chapter-outline|foreshadow)\/([^/]+)\/restore$/u);
+  if (entityRestoreMatch) {
+    const entityType = entityRestoreMatch[1];
+    const entityId = decodeURIComponent(entityRestoreMatch[2]);
+    if (entityType === "work") return state.works.find((item) => item.id === entityId)?.versionNo ?? (state.work?.id === entityId ? state.work.versionNo : undefined);
+    if (entityType === "volume") return find(state.work?.volumes ?? [], entityId);
+    if (entityType === "chapter-outline") return find(state.outlines ?? [], entityId);
+    const collection = {
+      setting: state.settings,
+      race: state.races,
+      organization: state.organizations,
+      "timeline-track": state.timelineTracks
+    }[entityType] ?? [];
+    return find(collection, entityId);
+  }
+  return undefined;
+}
+
+function attachOptimisticVersion(path, method, body) {
+  if (!["PATCH", "PUT", "DELETE", "POST"].includes(method)) return body;
+  if (body instanceof FormData) {
+    if (!body.has("expectedVersionNo")) {
+      const versionNo = optimisticVersionForPath(path);
+      if (Number.isInteger(versionNo) && versionNo > 0) body.append("expectedVersionNo", String(versionNo));
+    }
+    return body;
+  }
+  const currentBody = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  if (currentBody.expectedVersionNo !== undefined) return currentBody;
+  const versionNo = optimisticVersionForPath(path);
+  return Number.isInteger(versionNo) && versionNo > 0 ? { ...currentBody, expectedVersionNo: versionNo } : body;
+}
+
 async function api(path, options = {}) {
   const method = String(options.method ?? "GET").toUpperCase();
+  const body = attachOptimisticVersion(path, method, options.body);
   const headers = { ...(options.headers ?? {}) };
   if (state.csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) headers["X-CSRF-Token"] = state.csrfToken;
-  if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, options.body instanceof FormData ? { ...options, headers } : {
+  if (!(body instanceof FormData)) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, body instanceof FormData ? { ...options, body, headers } : {
     ...options,
     headers,
-    body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body
+    body: body && typeof body !== "string" ? JSON.stringify(body) : body
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
@@ -2527,7 +2587,12 @@ async function renderTimeline() {
     const eventIds = [...$("#module-content").querySelectorAll("[data-event-select]:checked")].map((input) => input.dataset.eventSelect);
     if (eventIds.length < 2) return toast("请至少选择两个时间事件", "error");
     openDialog("合并时间事件", field("name", "合并后的事件名称") + field("description", "合并说明（留空则拼接原说明）", "textarea"), async (form) => {
-      await api(`/api/works/${state.work.id}/timeline/merge`, { method: "POST", body: { eventIds, name: form.get("name"), description: form.get("description") || undefined } });
+      await api(`/api/works/${state.work.id}/timeline/merge`, { method: "POST", body: {
+        eventIds,
+        name: form.get("name"),
+        description: form.get("description") || undefined,
+        expectedVersionNos: Object.fromEntries(eventIds.map((eventId) => [eventId, Number(events.find((event) => event.id === eventId)?.versionNo)]))
+      } });
       await renderTimeline();
     }, "保留参与者与证据");
   });
@@ -3706,7 +3771,7 @@ async function showCharacterSectionVersions(sectionId) {
     host.querySelectorAll("[data-character-section-restore]").forEach((button) => button.addEventListener("click", async () => {
       button.disabled = true;
       try {
-        await api(`/api/character-sections/${sectionId}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.characterSectionRestore) } });
+      await api(`/api/character-sections/${sectionId}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.characterSectionRestore) } });
         characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
         renderCharacterMarkdownSections();
         await Promise.all([renderCharacters(), loadAiReferences()]);
@@ -4033,7 +4098,7 @@ function openTimelineDialog(item, preferredTrackId = null) {
   const trackOptions = [["", "未分组"], ...state.timelineTracks.map((track) => [track.id, track.name])];
   openDialog(item ? "编辑大事件" : "新建大事件", field("trackId", "所属独立时间轴", "select", item?.trackId ?? preferredTrackId ?? "", trackOptions) + field("name", "事件名称", "text", item?.name) + field("timeLabel", "时间描述", "text", item?.timeLabel ?? "时间待定") + field("timeSort", "排序值（留空表示时间待定）", "number", item?.timeSort ?? "") + field("eventType", "事件类型", "text", item?.eventType ?? "other") + field("location", "地点", "text", item?.location) + field("description", "事件简述", "textarea", item?.description), async (form) => {
     const rawSort = String(form.get("timeSort") ?? "").trim();
-    const body = { trackId: form.get("trackId") || null, name: form.get("name"), timeLabel: form.get("timeLabel"), timeSort: rawSort ? Number(rawSort) : null, eventType: form.get("eventType"), location: form.get("location"), description: form.get("description"), status: item?.status ?? "confirmed" };
+    const body = { trackId: form.get("trackId") || null, name: form.get("name"), timeLabel: form.get("timeLabel"), timeSort: rawSort ? Number(rawSort) : null, eventType: form.get("eventType"), location: form.get("location"), description: form.get("description"), status: item?.status ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) };
     await api(item ? `/api/timeline/${item.id}` : `/api/works/${state.work.id}/timeline`, { method: item ? "PATCH" : "POST", body });
     await renderTimeline();
   }, item ? "人工调整" : "作者确认事件");
@@ -4049,7 +4114,7 @@ function openOutlineDialog(item) {
     field("status", "规划状态", "select", item.status ?? "draft", [["draft", "草稿"], ["ready", "可执行"], ["completed", "已完成"]]),
     async (form) => {
       await api(`/api/chapters/${item.chapterId}/outline`, { method: "PUT", body: {
-        goal: form.get("goal"), conflict: form.get("conflict"), turningPoint: form.get("turningPoint"), notes: form.get("notes"), status: form.get("status")
+        goal: form.get("goal"), conflict: form.get("conflict"), turningPoint: form.get("turningPoint"), notes: form.get("notes"), status: form.get("status"), expectedVersionNo: item.versionNo
       } });
       await renderOutlines();
       toast("章节规划已保存");
@@ -4092,7 +4157,8 @@ function openForeshadowDialog(item) {
       const occurrences = [...preservedOccurrences, ...editedOccurrences];
       const body = {
         title: form.get("title"), description: form.get("description"), importance: form.get("importance"), status: form.get("status"),
-        plannedPayoffChapterId: form.get("payoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences
+        plannedPayoffChapterId: form.get("payoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences,
+        ...(item ? { expectedVersionNo: item.versionNo } : {})
       };
       await api(item ? `/api/foreshadows/${item.id}` : `/api/works/${state.work.id}/foreshadows`, { method: item ? "PATCH" : "POST", body });
       await renderOutlines();
@@ -4105,7 +4171,7 @@ function openTimelineSplitDialog(item) {
     await api(`/api/timeline/${item.id}/split`, { method: "POST", body: { parts: [
       { name: form.get("firstName"), description: form.get("firstDescription") },
       { name: form.get("secondName"), description: form.get("secondDescription") }
-    ] } });
+    ], expectedVersionNo: item.versionNo } });
     await renderTimeline();
   }, "原证据同步保留");
 }
@@ -4118,7 +4184,7 @@ async function openRelationshipDialog(item, options = {}) {
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
   openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
     const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
-    await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed" } });
+    await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) } });
     await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
 }
