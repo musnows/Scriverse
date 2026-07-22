@@ -17,6 +17,10 @@ export type WorkModuleAccess = "none" | "read" | "write";
 export type WorkModulePermissions = Record<WorkPermissionModule, WorkModuleAccess>;
 export type PublicWorkAccessRole = "owner" | "editor" | "settings-editor" | "viewer" | "custom";
 
+export const proseReplacementPermissionModules = workPermissionModules.filter(
+  (module): module is WorkPermissionModule => module !== "ai-settings"
+);
+
 export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = {
   prose: "正文",
   settings: "设定库",

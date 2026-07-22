@@ -313,6 +313,23 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ volumeId: volume.body.data.id, title: "第一章", content: "模块权限正文。" })
       .expect(201);
+    const fileVersionId = "file_module_permission_history";
+    runtime.database.run(
+      `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      fileVersionId,
+      workId,
+      "module-permission.txt",
+      "txt",
+      0,
+      0,
+      "[]",
+      JSON.stringify(runtime.store.getWorkTree(workId)),
+      new Date().toISOString(),
+      owner.user.userId
+    );
+    const ownerFileVersions = await owner.agent.get(`/api/works/${workId}/file-versions`).expect(200);
+    expect(ownerFileVersions.body.data[0].id).toBe(fileVersionId);
 
     const permissions = {
       prose: "read",
@@ -347,6 +364,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ content: "不应写入。" })
       .expect(403);
     expect(proseWriteDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const proseImportDenied = await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .attach("file", Buffer.from("第一章\n\n不应导入。"), "readonly.txt")
+      .expect(403);
+    expect(proseImportDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const readableFileVersions = await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(200);
+    expect(readableFileVersions.body.data[0].id).toBe(fileVersionId);
+    const restoreDenied = await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    expect(restoreDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
 
     await collaborator.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", collaborator.csrfToken)
@@ -376,6 +406,65 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ title: "只读后越权", category: "世界规则", content: "不应写入。" })
       .expect(403);
+
+    const versionCountBeforeDeniedReplacement = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count);
+    const limitedRestore = await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    expect(limitedRestore.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const limitedOverwrite = await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .field("mode", "overwrite")
+      .attach("file", Buffer.from("第一章\n\n不应覆盖。"), "limited-overwrite.txt")
+      .expect(403);
+    expect(limitedOverwrite.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const unchangedChapter = await collaborator.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
+    expect(unchangedChapter.body.data.content).toBe("已授权正文编辑。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count)).toBe(versionCountBeforeDeniedReplacement);
+    await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .field("mode", "append")
+      .attach("file", Buffer.from("第二章\n\n允许追加。"), "limited-append.txt")
+      .expect(201);
+
+    await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .send({})
+      .expect(403);
+    const fullPermissions = Object.fromEntries(Object.keys(updatedPermissions).map((module) => [module, "write"]));
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: fullPermissions })
+      .expect(200);
+    const currentWork = await collaborator.agent.get(`/api/works/${workId}`).expect(200);
+    const versionCountBeforeConflict = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count);
+    const conflict = await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: Number(currentWork.body.data.versionNo) + 1 })
+      .expect(409);
+    expect(conflict.body.error.code).toBe("VERSION_CONFLICT");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count)).toBe(versionCountBeforeConflict);
+    const restored = await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: currentWork.body.data.versionNo })
+      .expect(200);
+    expect(restored.body.data.restoredFrom).toBe(fileVersionId);
 
     await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
       .set("X-CSRF-Token", owner.csrfToken)
@@ -431,6 +520,17 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
+    await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
+    await collaborator.agent
+      .post(`/api/works/${workId}/file-versions/file_missing/restore`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    const hiddenProseImport = await collaborator.agent.post(`/api/works/${workId}/import`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .attach("file", Buffer.from("第一章\n\n不应导入。"), "hidden-prose.txt")
+      .expect(403);
+    expect(hiddenProseImport.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/reviews`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/models`).expect(200);

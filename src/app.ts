@@ -26,7 +26,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
-import { fullWorkModulePermissions, type WorkModulePermissions } from "./work-permissions.js";
+import { fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   clearSessionCookie,
   createCliApiScopeMiddleware,
@@ -765,11 +765,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (extension !== ".txt" && extension !== ".docx") {
       throw new AppError(415, "UNSUPPORTED_FILE", "MVP 仅支持 TXT 和 DOCX 导入");
     }
+    const mode = parse(z.enum(["append", "overwrite"]), request.body.mode ?? "overwrite");
+    if (mode === "overwrite" && request.authUser) {
+      auth.assertWorkAccess(
+        request.authUser,
+        String(request.params.workId),
+        { write: proseReplacementPermissionModules },
+        false,
+        request.authMethod !== "api-key"
+      );
+    }
     const text = validateImportedText(extension === ".docx"
       ? await extractDocxText(request.file.buffer)
       : decodeUtf8ImportedText(request.file.buffer));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
-    const mode = parse(z.enum(["append", "overwrite"]), request.body.mode ?? "overwrite");
     const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
     data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed, mode, expectedVersionNo), 201);
   });
