@@ -26,13 +26,14 @@ describe("全书概要上下文引用", () => {
     expect(page.text).toContain('<option value="chapter-summary">当前章节 + 全书概要</option>');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260722-settings-editor-access');
+    expect(page.text).toContain('/app.js?v=20260722-settings-import-version-lock');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="ai-agent-tools"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
     expect(application.text).toContain('scopeType === "none" ? { type: "none"');
     expect(application.text).toContain("if (includeBookSummary) scope.includeBookSummary = true;");
+    expect(application.text).toContain('body.append("expectedVersionNo", String(state.work.versionNo));');
     expect(styles.text).not.toContain(".ai-book-summary-reference");
     expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input { min-height: 40px;");
     expect(styles.text).toContain(".ai-agent-tools { display: grid; gap: 8px; }");

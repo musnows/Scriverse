@@ -1405,6 +1405,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .checkbox-field input { width: auto; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px 20px; }
 .dialog-actions .reset-button { margin-right: auto; }
+.import-mode-dialog { width: min(560px, calc(100vw - 32px)); }
+.import-mode-body { display: grid; gap: 14px; padding: 20px 24px 6px; }
+.import-mode-body p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.import-mode-file-summary { overflow-wrap: anywhere; color: var(--ink) !important; font-weight: 600; }
+.import-mode-unsaved-warning { padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--line)); border-radius: 4px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark) !important; }
+.import-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.import-mode-options section { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
+.import-mode-options strong { color: var(--ink); font-size: 12px; }
+.import-mode-options span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+@media (max-width: 560px) {
+  .import-mode-options { grid-template-columns: 1fr; }
+  .import-mode-dialog .dialog-actions { flex-wrap: wrap; }
+}
 .entity-editor-open { overflow: hidden; }
 .entity-editor-view { position: fixed; z-index: 700; inset: 0; overflow: hidden; background: var(--panel); color: var(--ink); }
 .entity-editor-view.hidden, .entity-editor-page.hidden { display: none; }

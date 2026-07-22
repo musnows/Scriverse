@@ -69,6 +69,7 @@ const memberRoleSchema = z.object({ role: z.enum(["editor", "settings-editor", "
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 const changeNoteSchema = z.string().trim().max(500).optional();
+const expectedVersionNoSchema = z.coerce.number().int().positive().optional();
 
 function validateImportedText(text: string): string {
   if (text.length > maximumImportedTextLength) throw new AppError(413, "IMPORT_TEXT_TOO_LARGE", "导入文件解压后的文本超过 2000 万字符限制");
@@ -609,9 +610,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.audit(request.params.workId, "work.member-removed", "user", request.params.userId);
     data(response, members);
   });
-  app.patch("/api/works/:workId", (request, response) => data(response, store.updateWork(request.params.workId, parse(workSchema.partial(), request.body))));
+  app.patch("/api/works/:workId", (request, response) => {
+    const { expectedVersionNo, changeNote, ...input } = parse(
+      workSchema.partial().extend({ expectedVersionNo: expectedVersionNoSchema, changeNote: changeNoteSchema }).strict(),
+      request.body
+    );
+    data(response, store.updateWork(request.params.workId, input, expectedVersionNo, "manual", null, changeNote));
+  });
   app.delete("/api/works/:workId", async (request, response) => {
-    const removableStorageKeys = store.deleteWork(request.params.workId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    const removableStorageKeys = store.deleteWork(request.params.workId, input.expectedVersionNo);
     await Promise.all(removableStorageKeys.map((storageKey) => attachmentStorage.remove(storageKey)));
     noContent(response);
   });
@@ -631,10 +639,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const isWebp = bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
     const mimeType: "image/png" | "image/jpeg" | "image/webp" | null = isPng ? "image/png" : isJpeg ? "image/jpeg" : isWebp ? "image/webp" : null;
     if (!mimeType) throw new AppError(415, "INVALID_COVER", "封面文件内容不是有效的 PNG、JPEG 或 WebP 图片");
-    data(response, store.setWorkCover(String(request.params.workId), mimeType, bytes));
+    const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
+    data(response, store.setWorkCover(String(request.params.workId), mimeType, bytes, expectedVersionNo));
   });
   app.delete("/api/works/:workId/cover", (request, response) => {
-    store.deleteWorkCover(request.params.workId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteWorkCover(request.params.workId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -643,7 +653,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listFileVersionsPage(request.params.workId, pagination) : store.listFileVersions(request.params.workId));
   });
   app.post("/api/works/:workId/file-versions/:fileVersionId/restore", (request, response) => {
-    data(response, store.restoreFileVersion(request.params.workId, request.params.fileVersionId));
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    data(response, store.restoreFileVersion(request.params.workId, request.params.fileVersionId, input.expectedVersionNo));
   });
   app.post("/api/works/:workId/import", upload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要导入的 TXT 或 DOCX 文件");
@@ -656,7 +667,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? await extractDocxText(request.file.buffer)
       : decodeUtf8ImportedText(request.file.buffer));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
-    data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed), 201);
+    const mode = parse(z.enum(["append", "overwrite"]), request.body.mode ?? "overwrite");
+    const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
+    data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed, mode, expectedVersionNo), 201);
   });
 
   app.post("/api/works/:workId/volumes", (request, response) => {
@@ -664,12 +677,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.createVolume(request.params.workId, input), 201);
   });
   app.patch("/api/volumes/:volumeId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), sortOrder: z.number().int().min(0).optional() }), request.body);
-    data(response, store.updateVolume(request.params.volumeId, input));
+    const input = parse(z.object({ title: nonEmpty.max(200).optional(), kind: z.enum(["main", "prequel", "extra", "epilogue", "appendix"]).optional(), description: z.string().max(5_000).optional(), keywords: z.array(nonEmpty.max(100)).max(100).optional(), sortOrder: z.number().int().min(0).optional(), expectedVersionNo: expectedVersionNoSchema, changeNote: changeNoteSchema }).strict(), request.body);
+    const { expectedVersionNo, changeNote, ...volumeInput } = input;
+    data(response, store.updateVolume(request.params.volumeId, volumeInput, expectedVersionNo, "manual", null, changeNote));
   });
   app.get("/api/volumes/:volumeId", (request, response) => data(response, store.getVolume(request.params.volumeId)));
   app.delete("/api/volumes/:volumeId", (request, response) => {
-    store.deleteVolume(request.params.volumeId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteVolume(request.params.volumeId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -679,12 +694,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {
-    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema }).strict(), request.body);
-    const { source, changeNote, ...chapterInput } = input;
-    data(response, store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual", null, changeNote));
+    const input = parse(z.object({ title: nonEmpty.max(300).optional(), content: z.string().max(2_000_000).optional(), excludedFromAnalysis: z.boolean().optional(), chapterType: chapterTypeSchema.optional(), source: z.enum(["manual", "auto"]).optional(), changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const { source, changeNote, expectedVersionNo, ...chapterInput } = input;
+    data(response, store.saveChapter(request.params.chapterId, chapterInput, source ?? "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/chapters/:chapterId", (request, response) => {
-    store.deleteChapter(request.params.chapterId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteChapter(request.params.chapterId, input.expectedVersionNo);
     noContent(response);
   });
   app.get("/api/chapters/:chapterId/versions", (request, response) => {
@@ -696,12 +712,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
   });
   app.post("/api/chapters/:chapterId/restore", (request, response) => {
-    const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
-    data(response, store.restoreChapter(request.params.chapterId, input.versionNo));
+    const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.restoreChapter(request.params.chapterId, input.versionNo, input.expectedVersionNo));
   });
   app.post("/api/chapters/:chapterId/move", (request, response) => {
-    const input = parse(z.object({ volumeId: identifier, sortOrder: z.number().int().min(0) }), request.body);
-    data(response, store.moveChapter(request.params.chapterId, input));
+    const input = parse(z.object({ volumeId: identifier, sortOrder: z.number().int().min(0), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const { expectedVersionNo, ...moveInput } = input;
+    data(response, store.moveChapter(request.params.chapterId, moveInput, expectedVersionNo));
   });
 
   app.get("/api/works/:workId/outlines", (request, response) => {
@@ -710,11 +727,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/chapters/:chapterId/outline", (request, response) => data(response, store.getChapterOutline(request.params.chapterId)));
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
-    const { changeNote, ...input } = parse(chapterOutlineSchema.extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.upsertChapterOutline(request.params.chapterId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(chapterOutlineSchema.extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.upsertChapterOutline(request.params.chapterId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/chapters/:chapterId/outline", (request, response) => {
-    store.deleteChapterOutline(request.params.chapterId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteChapterOutline(request.params.chapterId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -733,21 +751,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/foreshadows/:foreshadowId", (request, response) => data(response, store.getForeshadow(request.params.foreshadowId)));
   app.patch("/api/foreshadows/:foreshadowId", (request, response) => {
-    const { changeNote, ...input } = parse(foreshadowSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateForeshadow(request.params.foreshadowId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(foreshadowSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateForeshadow(request.params.foreshadowId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/foreshadows/:foreshadowId", (request, response) => {
-    store.deleteForeshadow(request.params.foreshadowId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteForeshadow(request.params.foreshadowId, input.expectedVersionNo);
     noContent(response);
   });
   app.post("/api/foreshadows/:foreshadowId/occurrences", (request, response) => {
-    data(response, store.createForeshadowOccurrence(request.params.foreshadowId, parse(foreshadowOccurrenceSchema, request.body)), 201);
+    const input = parse(foreshadowOccurrenceSchema.extend({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const { expectedVersionNo, ...occurrenceInput } = input;
+    data(response, store.createForeshadowOccurrence(request.params.foreshadowId, occurrenceInput, expectedVersionNo), 201);
   });
   app.patch("/api/foreshadow-occurrences/:occurrenceId", (request, response) => {
-    data(response, store.updateForeshadowOccurrence(request.params.occurrenceId, parse(foreshadowOccurrenceSchema.partial(), request.body)));
+    const input = parse(foreshadowOccurrenceSchema.partial().extend({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    const { expectedVersionNo, ...occurrenceInput } = input;
+    data(response, store.updateForeshadowOccurrence(request.params.occurrenceId, occurrenceInput, expectedVersionNo));
   });
   app.delete("/api/foreshadow-occurrences/:occurrenceId", (request, response) => {
-    store.deleteForeshadowOccurrence(request.params.occurrenceId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteForeshadowOccurrence(request.params.occurrenceId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -758,11 +782,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/settings", (request, response) => data(response, store.createSetting(request.params.workId, parse(settingSchema, request.body)), 201));
   app.get("/api/settings/:settingId", (request, response) => data(response, store.getSetting(request.params.settingId)));
   app.patch("/api/settings/:settingId", (request, response) => {
-    const { changeNote, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateSetting(request.params.settingId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(settingSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateSetting(request.params.settingId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/settings/:settingId", (request, response) => {
-    store.deleteSetting(request.params.settingId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteSetting(request.params.settingId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -779,19 +804,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/characters", (request, response) => data(response, store.createCharacter(request.params.workId, parse(characterSchema, request.body)), 201));
   app.get("/api/characters/:characterId", (request, response) => data(response, store.getCharacter(request.params.characterId)));
   app.patch("/api/characters/:characterId", (request, response) => {
-    const { changeNote, ...input } = parse(characterUpdateSchema, request.body);
-    data(response, store.updateCharacter(request.params.characterId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(characterUpdateSchema.extend({ expectedVersionNo: expectedVersionNoSchema }), request.body);
+    data(response, store.updateCharacter(request.params.characterId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.get("/api/characters/:characterId/versions", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listCharacterVersionsPage(request.params.characterId, pagination) : store.listCharacterVersions(request.params.characterId));
   });
   app.post("/api/characters/:characterId/restore", (request, response) => {
-    const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
-    data(response, store.restoreCharacter(request.params.characterId, input.versionNo));
+    const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.restoreCharacter(request.params.characterId, input.versionNo, input.expectedVersionNo));
   });
   app.delete("/api/characters/:characterId", (request, response) => {
-    store.deleteCharacter(request.params.characterId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteCharacter(request.params.characterId, input.expectedVersionNo);
     noContent(response);
   });
   app.post("/api/characters/:characterId/merge", (request, response) => {
@@ -822,14 +848,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.getCharacterProfileSection(request.params.sectionId));
   });
   app.patch("/api/character-sections/:sectionId", (request, response) => {
-    const { changeNote, ...input } = parse(
-      characterProfileSectionSchema.partial().extend({ changeNote: changeNoteSchema }).strict(),
+    const { changeNote, expectedVersionNo, ...input } = parse(
+      characterProfileSectionSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(),
       request.body
     );
-    data(response, store.updateCharacterProfileSection(request.params.sectionId, input, "manual", null, changeNote));
+    data(response, store.updateCharacterProfileSection(request.params.sectionId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/character-sections/:sectionId", (request, response) => {
-    store.deleteCharacterProfileSection(request.params.sectionId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteCharacterProfileSection(request.params.sectionId, input.expectedVersionNo);
     noContent(response);
   });
   app.get("/api/character-sections/:sectionId/versions", (request, response) => {
@@ -839,8 +866,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : store.listCharacterProfileSectionVersions(request.params.sectionId));
   });
   app.post("/api/character-sections/:sectionId/restore", (request, response) => {
-    const input = parse(z.object({ versionNo: z.number().int().positive() }).strict(), request.body);
-    data(response, store.restoreCharacterProfileSection(request.params.sectionId, input.versionNo));
+    const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.restoreCharacterProfileSection(request.params.sectionId, input.versionNo, input.expectedVersionNo));
   });
 
   app.get("/api/works/:workId/attachments", (request, response) => {
@@ -893,11 +920,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/races/:raceId", (request, response) => data(response, store.getRace(request.params.raceId)));
   app.patch("/api/races/:raceId", (request, response) => {
-    const { changeNote, ...input } = parse(raceSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateRace(request.params.raceId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(raceSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateRace(request.params.raceId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/races/:raceId", (request, response) => {
-    store.deleteRace(request.params.raceId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteRace(request.params.raceId, input.expectedVersionNo);
     noContent(response);
   });
   app.post("/api/races/:raceId/merge", (request, response) => {
@@ -914,11 +942,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/organizations/:organizationId", (request, response) => data(response, store.getOrganization(request.params.organizationId)));
   app.patch("/api/organizations/:organizationId", (request, response) => {
-    const { changeNote, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateOrganization(request.params.organizationId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(organizationSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateOrganization(request.params.organizationId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/organizations/:organizationId", (request, response) => {
-    store.deleteOrganization(request.params.organizationId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteOrganization(request.params.organizationId, input.expectedVersionNo);
     noContent(response);
   });
   app.post("/api/organizations/:organizationId/merge", (request, response) => {
@@ -933,11 +962,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/timeline-tracks", (request, response) => data(response, store.createTimelineTrack(request.params.workId, parse(timelineTrackSchema, request.body)), 201));
   app.get("/api/timeline-tracks/:trackId", (request, response) => data(response, store.getTimelineTrack(request.params.trackId)));
   app.patch("/api/timeline-tracks/:trackId", (request, response) => {
-    const { changeNote, ...input } = parse(timelineTrackSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateTimelineTrack(request.params.trackId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(timelineTrackSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateTimelineTrack(request.params.trackId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/timeline-tracks/:trackId", (request, response) => {
-    store.deleteTimelineTrack(request.params.trackId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteTimelineTrack(request.params.trackId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -952,14 +982,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       name: nonEmpty.max(300),
       description: z.string().max(100_000).optional(),
       timeLabel: z.string().max(300).optional(),
-      timeSort: z.number().finite().nullable().optional()
-    }), request.body);
-    data(response, store.mergeTimelineEvents(request.params.workId, input.eventIds, input), 201);
+      timeSort: z.number().finite().nullable().optional(),
+      expectedVersionNos: z.record(identifier, z.number().int().positive()).optional()
+    }).strict(), request.body);
+    const { expectedVersionNos, ...mergeInput } = input;
+    data(response, store.mergeTimelineEvents(request.params.workId, input.eventIds, mergeInput, expectedVersionNos), 201);
   });
   app.get("/api/timeline/:eventId", (request, response) => data(response, store.getTimelineEvent(request.params.eventId)));
   app.patch("/api/timeline/:eventId", (request, response) => {
-    const { changeNote, ...input } = parse(timelineSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateTimelineEvent(request.params.eventId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(timelineSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateTimelineEvent(request.params.eventId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.post("/api/timeline/:eventId/split", (request, response) => {
     const input = parse(z.object({
@@ -968,12 +1000,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         description: z.string().max(100_000).optional(),
         timeLabel: z.string().max(300).optional(),
         timeSort: z.number().finite().nullable().optional()
-      })).min(2)
-    }), request.body);
-    data(response, store.splitTimelineEvent(request.params.eventId, input.parts), 201);
+    })).min(2),
+      expectedVersionNo: expectedVersionNoSchema
+    }).strict(), request.body);
+    data(response, store.splitTimelineEvent(request.params.eventId, input.parts, input.expectedVersionNo), 201);
   });
   app.delete("/api/timeline/:eventId", (request, response) => {
-    store.deleteTimelineEvent(request.params.eventId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteTimelineEvent(request.params.eventId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -988,11 +1022,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/relationships", (request, response) => data(response, store.createRelationship(request.params.workId, parse(relationshipSchema, request.body)), 201));
   app.get("/api/relationships/:relationshipId", (request, response) => data(response, store.getRelationship(request.params.relationshipId)));
   app.patch("/api/relationships/:relationshipId", (request, response) => {
-    const { changeNote, ...input } = parse(relationshipSchema.partial().extend({ changeNote: changeNoteSchema }), request.body);
-    data(response, store.updateRelationship(request.params.relationshipId, input, "manual", null, changeNote));
+    const { changeNote, expectedVersionNo, ...input } = parse(relationshipSchema.partial().extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.updateRelationship(request.params.relationshipId, input, "manual", null, changeNote, expectedVersionNo));
   });
   app.delete("/api/relationships/:relationshipId", (request, response) => {
-    store.deleteRelationship(request.params.relationshipId);
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.deleteRelationship(request.params.relationshipId, input.expectedVersionNo);
     noContent(response);
   });
 
@@ -1005,8 +1040,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/entity-versions/:entityType/:entityId/restore", (request, response) => {
     const params = parse(z.object({ entityType: versionedEntityTypeSchema, entityId: identifier }), request.params);
-    const input = parse(z.object({ versionNo: z.number().int().positive() }), request.body);
-    data(response, store.restoreEntityVersion(params.entityType, params.entityId, input.versionNo));
+    const input = parse(z.object({ versionNo: z.number().int().positive(), expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);
+    data(response, store.restoreEntityVersion(params.entityType, params.entityId, input.versionNo, input.expectedVersionNo));
   });
 
   app.get("/api/works/:workId/reviews", (request, response) => {

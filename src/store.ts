@@ -26,6 +26,7 @@ type WorkInput = {
 };
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
+type ImportMode = "append" | "overwrite";
 
 type SettingInput = {
   title: string;
@@ -170,6 +171,8 @@ type ForeshadowInput = {
 };
 
 export const versionedEntityTypes = [
+  "work",
+  "volume",
   "setting",
   "race",
   "organization",
@@ -235,7 +238,62 @@ export class Store {
     this.backfillEntityVersionBaselines();
   }
 
+  private currentEntityVersionNo(type: VersionedEntityType, entityId: string): number {
+    const row = this.db.get(
+      "SELECT MAX(version_no) AS version_no FROM entity_versions WHERE entity_type = ? AND entity_id = ?",
+      type,
+      entityId
+    );
+    return numberValue(row ?? {}, "version_no");
+  }
+
+  private currentChapterVersionNo(chapterId: string): number {
+    return numberValue(this.db.get("SELECT MAX(version_no) AS version_no FROM chapter_versions WHERE chapter_id = ?", chapterId) ?? {}, "version_no");
+  }
+
+  private currentCharacterVersionNo(characterId: string): number {
+    return numberValue(this.db.get("SELECT MAX(version_no) AS version_no FROM character_versions WHERE character_id = ?", characterId) ?? {}, "version_no");
+  }
+
+  private currentCharacterSectionVersionNo(sectionId: string): number {
+    return numberValue(this.db.get("SELECT MAX(version_no) AS version_no FROM character_profile_section_versions WHERE section_id = ?", sectionId) ?? {}, "version_no");
+  }
+
+  private assertExpectedVersion(
+    type: VersionedEntityType,
+    entityId: string,
+    expectedVersionNo: number | undefined,
+    entityName: string,
+    currentVersionNo = this.currentEntityVersionNo(type, entityId)
+  ): void {
+    if (expectedVersionNo === undefined || expectedVersionNo === currentVersionNo) return;
+    throw new AppError(409, "VERSION_CONFLICT", `${entityName}已发生变化，请刷新后重试`, {
+      entityType: type,
+      entityId,
+      expectedVersionNo,
+      currentVersionNo
+    });
+  }
+
+  private assertExpectedRevision(
+    entityType: string,
+    entityId: string,
+    expectedVersionNo: number | undefined,
+    entityName: string,
+    currentVersionNo: number
+  ): void {
+    if (expectedVersionNo === undefined || expectedVersionNo === currentVersionNo) return;
+    throw new AppError(409, "VERSION_CONFLICT", `${entityName}已发生变化，请刷新后重试`, {
+      entityType,
+      entityId,
+      expectedVersionNo,
+      currentVersionNo
+    });
+  }
+
   private versionedEntity(type: VersionedEntityType, entityId: string): Record<string, unknown> {
+    if (type === "work") return this.getWork(entityId);
+    if (type === "volume") return this.getVolume(entityId);
     if (type === "setting") return this.getSetting(entityId);
     if (type === "race") return this.getRace(entityId);
     if (type === "organization") return this.getOrganization(entityId);
@@ -260,6 +318,23 @@ export class Store {
   }
 
   private versionedEntitySnapshot(type: VersionedEntityType, entity: Record<string, unknown>): Record<string, unknown> {
+    if (type === "work") return {
+      title: entity.title,
+      author: entity.author,
+      description: entity.description,
+      language: entity.language,
+      coverUrl: entity.coverUrl,
+      tags: entity.tags,
+      ownerUserId: entity.ownerUserId
+    };
+    if (type === "volume") return {
+      title: entity.title,
+      kind: entity.kind,
+      source: entity.source,
+      description: entity.description,
+      keywords: entity.keywords,
+      sortOrder: entity.sortOrder
+    };
     if (type === "setting") return {
       title: entity.title,
       category: entity.category,
@@ -365,7 +440,7 @@ export class Store {
       `INSERT INTO entity_versions (id, work_id, entity_type, entity_id, version_no, snapshot_json, source, source_ref, change_note, created_at, created_by_user_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id("entityVersion"),
-      String(entity.workId),
+      type === "work" ? entityId : String(entity.workId),
       type,
       entityId,
       versionNo,
@@ -381,6 +456,8 @@ export class Store {
 
   private backfillEntityVersionBaselines(): void {
     const entities: Array<[VersionedEntityType, string, string]> = [
+      ...this.db.all("SELECT id, updated_at FROM works").map((row) => ["work", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
+      ...this.db.all("SELECT id, updated_at FROM volumes").map((row) => ["volume", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM settings").map((row) => ["setting", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM races").map((row) => ["race", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
       ...this.db.all("SELECT id, updated_at FROM organizations").map((row) => ["organization", requiredString(row, "id"), requiredString(row, "updated_at")] as [VersionedEntityType, string, string]),
@@ -450,7 +527,7 @@ export class Store {
     })), pagination);
   }
 
-  restoreEntityVersion(type: VersionedEntityType, entityId: string, versionNo: number): Record<string, unknown> {
+  restoreEntityVersion(type: VersionedEntityType, entityId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
     const version = this.db.get(
       "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? AND version_no = ?",
       type,
@@ -464,17 +541,23 @@ export class Store {
     const changeNote = `恢复至 v${versionNo}`;
     const workId = requiredString(version, "work_id");
     const existing = this.tryVersionedEntity(type, entityId);
+    const currentVersionNo = existing
+      ? type === "work" ? Number(existing.versionNo) : type === "volume" ? Number(existing.versionNo) : this.currentEntityVersionNo(type, entityId)
+      : this.currentEntityVersionNo(type, entityId);
+    this.assertExpectedVersion(type, entityId, expectedVersionNo, type === "work" ? "作品" : type === "volume" ? "分卷" : "创作资料", currentVersionNo);
     let restored: Record<string, unknown>;
     if (!existing) {
       restored = this.recreateEntityFromSnapshot(type, workId, entityId, snapshot, sourceRef, changeNote);
-    } else if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote);
-    else if (type === "race") restored = this.updateRace(entityId, snapshot as Partial<RaceInput>, "restore", sourceRef, changeNote);
-    else if (type === "organization") restored = this.updateOrganization(entityId, snapshot as Partial<OrganizationInput>, "restore", sourceRef, changeNote);
-    else if (type === "timeline-track") restored = this.updateTimelineTrack(entityId, snapshot as Partial<TimelineTrackInput>, "restore", sourceRef, changeNote);
-    else if (type === "timeline-event") restored = this.updateTimelineEvent(entityId, snapshot as Partial<TimelineInput>, "restore", sourceRef, changeNote);
-    else if (type === "relationship") restored = this.updateRelationship(entityId, snapshot as Partial<RelationshipInput>, "restore", sourceRef, changeNote);
-    else if (type === "chapter-outline") restored = this.upsertChapterOutline(entityId, snapshot as ChapterOutlineInput, "restore", sourceRef, changeNote);
-    else restored = this.updateForeshadow(entityId, snapshot as Partial<ForeshadowInput>, "restore", sourceRef, changeNote);
+    } else if (type === "work") restored = this.updateWork(entityId, snapshot as Partial<WorkInput>, expectedVersionNo, "restore", sourceRef, changeNote);
+    else if (type === "volume") restored = this.updateVolume(entityId, snapshot as Partial<{ title: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }>, expectedVersionNo, "restore", sourceRef, changeNote);
+    else if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "race") restored = this.updateRace(entityId, snapshot as Partial<RaceInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "organization") restored = this.updateOrganization(entityId, snapshot as Partial<OrganizationInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "timeline-track") restored = this.updateTimelineTrack(entityId, snapshot as Partial<TimelineTrackInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "timeline-event") restored = this.updateTimelineEvent(entityId, snapshot as Partial<TimelineInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "relationship") restored = this.updateRelationship(entityId, snapshot as Partial<RelationshipInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "chapter-outline") restored = this.upsertChapterOutline(entityId, snapshot as ChapterOutlineInput, "restore", sourceRef, changeNote, expectedVersionNo);
+    else restored = this.updateForeshadow(entityId, snapshot as Partial<ForeshadowInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     const currentVersion = this.db.get(
       "SELECT MAX(version_no) AS version_no FROM entity_versions WHERE entity_type = ? AND entity_id = ?",
       type,
@@ -492,6 +575,42 @@ export class Store {
     changeNote: string
   ): Record<string, unknown> {
     this.getWork(workId);
+    if (type === "work") {
+      return this.db.transaction(() => {
+        const ownerUserId = typeof snapshot.ownerUserId === "string" ? snapshot.ownerUserId : null;
+        const timestamp = now();
+        this.db.run(
+          `INSERT INTO works (id, title, author, description, language, cover_url, tags_json, version_no, created_at, updated_at, owner_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
+          entityId,
+          String(snapshot.title ?? "未命名作品"),
+          String(snapshot.author ?? ""),
+          String(snapshot.description ?? ""),
+          String(snapshot.language ?? "zh-CN"),
+          snapshot.coverUrl as string | null ?? null,
+          JSON.stringify(Array.isArray(snapshot.tags) ? snapshot.tags : []),
+          timestamp,
+          timestamp,
+          ownerUserId
+        );
+        if (ownerUserId) {
+          this.db.run(
+            "INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at) VALUES (?, ?, 'owner', ?, ?)",
+            entityId,
+            ownerUserId,
+            ownerUserId,
+            timestamp
+          );
+        }
+        const versionNo = this.recordEntityVersion("work", entityId, "restore", sourceRef, changeNote, timestamp);
+        this.db.run("UPDATE works SET version_no = ? WHERE id = ?", versionNo, entityId);
+        this.audit(entityId, "work.restored", "work", entityId, { sourceRef });
+        return this.getWork(entityId);
+      });
+    }
+    if (type === "volume") {
+      return this.db.transaction(() => this.insertVolumeWithId(workId, entityId, snapshot as { title: string; kind?: string; source?: string; description?: string; keywords?: string[]; sortOrder?: number }, "restore", sourceRef, changeNote));
+    }
     if (type === "setting") {
       return this.insertSettingWithId(workId, entityId, snapshot as SettingInput, "restore", sourceRef, changeNote);
     }
@@ -569,6 +688,7 @@ export class Store {
           timestamp
         );
       }
+      this.recordEntityVersion("work", workId, "create", null, "建立作品", timestamp);
       this.audit(workId, "work.created", "work", workId);
     });
     return this.getWork(workId);
@@ -737,30 +857,37 @@ export class Store {
     return this.getWorkAiSettings(workId);
   }
 
-  updateWork(workId: string, input: Partial<WorkInput>): Record<string, unknown> {
-    const current = this.getWork(workId);
-    const timestamp = now();
-    this.db.run(
-      `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?, updated_at = ?
-       WHERE id = ?`,
-      input.title ?? String(current.title),
-      input.author ?? String(current.author),
-      input.description ?? String(current.description),
-      input.language ?? String(current.language),
-      input.coverUrl === undefined ? (current.coverUrl as string | null) : input.coverUrl,
-      JSON.stringify(input.tags ?? current.tags),
-      timestamp,
-      workId
-    );
-    this.audit(workId, "work.updated", "work", workId, { fields: Object.keys(input) });
+  updateWork(workId: string, input: Partial<WorkInput>, expectedVersionNo?: number, source = "manual", sourceRef: string | null = null, changeNote = ""): Record<string, unknown> {
+    this.db.transaction(() => {
+      const current = this.getWork(workId);
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
+      const timestamp = now();
+      this.db.run(
+        `UPDATE works SET title = ?, author = ?, description = ?, language = ?, cover_url = ?, tags_json = ?, version_no = version_no + 1, updated_at = ?
+         WHERE id = ?`,
+        input.title ?? String(current.title),
+        input.author ?? String(current.author),
+        input.description ?? String(current.description),
+        input.language ?? String(current.language),
+        input.coverUrl === undefined ? (current.coverUrl as string | null) : input.coverUrl,
+        JSON.stringify(input.tags ?? current.tags),
+        timestamp,
+        workId
+      );
+      this.recordEntityVersion("work", workId, source, sourceRef, changeNote || "更新作品信息", timestamp);
+      this.audit(workId, "work.updated", "work", workId, { fields: Object.keys(input), versionNo: Number(current.versionNo) + 1, source, sourceRef, changeNote });
+    });
     return this.getWork(workId);
   }
 
-  deleteWork(workId: string): string[] {
+  deleteWork(workId: string, expectedVersionNo?: number): string[] {
     const work = this.getWork(workId);
     const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
       .map((row) => requiredString(row, "storage_key"));
     this.db.transaction(() => {
+      const current = this.getWork(workId);
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
+      this.recordEntityVersion("work", workId, "delete", null, "删除作品");
       this.audit(null, "work.deleted", "work", workId, { title: work.title });
       this.db.run("DELETE FROM works WHERE id = ?", workId);
     });
@@ -769,24 +896,28 @@ export class Store {
     ) === 0);
   }
 
-  setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer): Record<string, unknown> {
-    this.getWork(workId);
-    const timestamp = now();
+  setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
     const sha256 = createHash("sha256").update(content).digest("hex");
-    this.db.run(
-      `INSERT INTO work_covers (work_id, mime_type, content, byte_length, sha256, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(work_id) DO UPDATE SET mime_type = excluded.mime_type, content = excluded.content,
-       byte_length = excluded.byte_length, sha256 = excluded.sha256, updated_at = excluded.updated_at`,
-      workId,
-      mimeType,
-      content,
-      content.byteLength,
-      sha256,
-      timestamp
-    );
-    this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
-    this.audit(workId, "work.cover.updated", "work", workId, { mimeType, byteLength: content.byteLength, sha256 });
+    this.db.transaction(() => {
+      const current = this.getWork(workId);
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
+      const timestamp = now();
+      this.db.run(
+        `INSERT INTO work_covers (work_id, mime_type, content, byte_length, sha256, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_id) DO UPDATE SET mime_type = excluded.mime_type, content = excluded.content,
+         byte_length = excluded.byte_length, sha256 = excluded.sha256, updated_at = excluded.updated_at`,
+        workId,
+        mimeType,
+        content,
+        content.byteLength,
+        sha256,
+        timestamp
+      );
+      this.db.run("UPDATE works SET version_no = version_no + 1, updated_at = ? WHERE id = ?", timestamp, workId);
+      this.recordEntityVersion("work", workId, "manual", null, "更新作品封面", timestamp);
+      this.audit(workId, "work.cover.updated", "work", workId, { mimeType, byteLength: content.byteLength, sha256 });
+    });
     return this.getWork(workId);
   }
 
@@ -803,11 +934,16 @@ export class Store {
     };
   }
 
-  deleteWorkCover(workId: string): void {
-    this.getWork(workId);
-    this.db.run("DELETE FROM work_covers WHERE work_id = ?", workId);
-    this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", now(), workId);
-    this.audit(workId, "work.cover.deleted", "work", workId);
+  deleteWorkCover(workId: string, expectedVersionNo?: number): void {
+    this.db.transaction(() => {
+      const current = this.getWork(workId);
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
+      const timestamp = now();
+      this.db.run("DELETE FROM work_covers WHERE work_id = ?", workId);
+      this.db.run("UPDATE works SET version_no = version_no + 1, updated_at = ? WHERE id = ?", timestamp, workId);
+      this.recordEntityVersion("work", workId, "manual", null, "删除作品封面", timestamp);
+      this.audit(workId, "work.cover.deleted", "work", workId);
+    });
   }
 
   getWorkTree(workId: string): Record<string, unknown> {
@@ -923,13 +1059,15 @@ export class Store {
     })), pagination);
   }
 
-  restoreFileVersion(workId: string, fileVersionId: string): Record<string, unknown> {
+  restoreFileVersion(workId: string, fileVersionId: string, expectedVersionNo?: number): Record<string, unknown> {
     this.getWork(workId);
     const version = this.db.get("SELECT * FROM file_versions WHERE id = ? AND work_id = ?", fileVersionId, workId);
     if (!version) throw notFound("文件版本");
     const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
     const volumes = Array.isArray(snapshot.volumes) ? snapshot.volumes as Array<Record<string, unknown>> : [];
     return this.db.transaction(() => {
+      const current = this.getWork(workId);
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       const currentTree = this.getWorkTree(workId);
       const currentChapters = this.db.all("SELECT content FROM chapters WHERE work_id = ?", workId);
       const wordCount = currentChapters.reduce((sum, row) => sum + countWords(requiredString(row, "content")), 0);
@@ -953,24 +1091,21 @@ export class Store {
         timestamp,
         currentRequestActor()?.userId ?? null
       );
+      for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
+        this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "替换作品树前保存分卷历史");
+      }
       this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
       for (const volume of volumes) {
         const volumeId = id("volume");
         const chapters = Array.isArray(volume.chapters) ? volume.chapters as Array<Record<string, unknown>> : [];
-        this.db.run(
-          `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          volumeId,
-          workId,
-          String(volume.title ?? "正文"),
-          String(volume.kind ?? "main"),
-          String(volume.source ?? "manual"),
-          String(volume.description ?? ""),
-          JSON.stringify(Array.isArray(volume.keywords) ? this.normalizeVolumeKeywords(volume.keywords as string[]) : []),
-          Number(volume.sortOrder ?? 0),
-          timestamp,
-          timestamp
-        );
+        this.insertVolumeWithId(workId, volumeId, {
+          title: String(volume.title ?? "正文"),
+          kind: String(volume.kind ?? "main"),
+          source: String(volume.source ?? "manual"),
+          description: String(volume.description ?? ""),
+          keywords: Array.isArray(volume.keywords) ? volume.keywords as string[] : [],
+          sortOrder: Number(volume.sortOrder ?? 0)
+        }, "restore", fileVersionId, `恢复文件版本 ${fileVersionId}`);
         for (const chapter of chapters) {
           const chapterType = (["正文", "设定", "作者的话", "其他"].includes(String(chapter.chapterType))
             ? String(chapter.chapterType)
@@ -987,7 +1122,8 @@ export class Store {
           );
         }
       }
-      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.db.run("UPDATE works SET version_no = version_no + 1, updated_at = ? WHERE id = ?", timestamp, workId);
+      this.recordEntityVersion("work", workId, "restore", fileVersionId, `恢复文件版本 ${fileVersionId}`, timestamp);
       this.audit(workId, "file.restored", "file-version", fileVersionId, { restorePointId });
       return {
         fileVersionId: restorePointId,
@@ -997,22 +1133,24 @@ export class Store {
     });
   }
 
-  importNovel(workId: string, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
+  importNovel(workId: string, fileName: string, fileType: string, parsed: ParsedNovel, mode: ImportMode = "overwrite", expectedVersionNo?: number): Record<string, unknown> {
     this.getWork(workId);
     let result: Record<string, unknown> = {};
-    this.db.transaction(() => { result = this.importNovelInTransaction(workId, fileName, fileType, parsed); });
+    this.db.transaction(() => { result = this.importNovelInTransaction(workId, fileName, fileType, parsed, mode, expectedVersionNo); });
     return { ...result, tree: this.getWorkDirectory(workId) };
   }
 
   createImportedWork(input: WorkInput, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
     return this.db.transaction(() => {
       const work = this.createWork(input);
-      const imported = this.importNovelInTransaction(String(work.id), fileName, fileType, parsed);
+      const imported = this.importNovelInTransaction(String(work.id), fileName, fileType, parsed, undefined, undefined, false);
       return { ...imported, work: this.getWork(String(work.id)) };
     });
   }
 
-  private importNovelInTransaction(workId: string, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
+  private importNovelInTransaction(workId: string, fileName: string, fileType: string, parsed: ParsedNovel, mode: ImportMode = "overwrite", expectedVersionNo?: number, bumpWorkVersion = true): Record<string, unknown> {
+    const current = this.getWork(workId);
+    this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
     const fileVersionId = id("file");
     const timestamp = now();
     const snapshot = this.getWorkTree(workId);
@@ -1030,33 +1168,44 @@ export class Store {
       timestamp,
       currentRequestActor()?.userId ?? null
     );
-    this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+    let volumeOrderOffset = 0;
+    if (mode === "overwrite") {
+      for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
+        this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "导入前保存分卷历史");
+      }
+      this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+    } else {
+      const lastVolume = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
+      volumeOrderOffset = numberValue(lastVolume ?? {}, "value") + 1;
+    }
+    let firstImportedChapterId: string | null = null;
     for (const volume of parsed.volumes) {
       const volumeId = id("volume");
-      this.db.run(
-        `INSERT INTO volumes (id, work_id, title, kind, source, sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        volumeId,
-        workId,
-        volume.title,
-        volume.kind,
-        volume.source,
-        volume.order,
-        timestamp,
-        timestamp
-      );
+      this.insertVolumeWithId(workId, volumeId, {
+        title: volume.title,
+        kind: volume.kind,
+        source: volume.source,
+        sortOrder: volumeOrderOffset + volume.order
+      }, "import", fileVersionId, "导入分卷");
       for (const chapter of volume.chapters) {
-        this.insertChapter(workId, volumeId, chapter.title, chapter.content, chapter.order, "import", fileVersionId, chapter.chapterType);
+        const chapterId = this.insertChapter(workId, volumeId, chapter.title, chapter.content, chapter.order, "import", fileVersionId, chapter.chapterType);
+        firstImportedChapterId ??= chapterId;
       }
     }
-    this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+    if (bumpWorkVersion) {
+      this.db.run("UPDATE works SET version_no = version_no + 1, updated_at = ? WHERE id = ?", timestamp, workId);
+      this.recordEntityVersion("work", workId, "import", fileVersionId, "导入作品正文", timestamp);
+    }
     this.audit(workId, "work.imported", "file-version", fileVersionId, {
       fileName,
+      mode,
       volumeCount: parsed.volumes.length,
       chapterCount: parsed.volumes.reduce((sum, volume) => sum + volume.chapters.length, 0)
     });
     return {
       fileVersionId,
+      firstImportedChapterId,
+      mode,
       warnings: parsed.warnings,
       wordCount: parsed.wordCount,
       paragraphCount: parsed.paragraphCount
@@ -1064,24 +1213,37 @@ export class Store {
   }
 
   createVolume(workId: string, input: { title: string; kind?: string; description?: string; keywords?: string[] }): Record<string, unknown> {
+    return this.db.transaction(() => this.insertVolumeWithId(workId, id("volume"), input, "create", null, "建立分卷"));
+  }
+
+  private insertVolumeWithId(
+    workId: string,
+    volumeId: string,
+    input: { title: string; kind?: string; source?: string; description?: string; keywords?: string[]; sortOrder?: number },
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = ""
+  ): Record<string, unknown> {
     this.getWork(workId);
-    const volumeId = id("volume");
     const timestamp = now();
     const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
     this.db.run(
-      `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?)`,
+      `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, version_no, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
       volumeId,
       workId,
       input.title,
       input.kind ?? "main",
+      input.source ?? "manual",
       input.description?.trim() ?? "",
       JSON.stringify(this.normalizeVolumeKeywords(input.keywords ?? [])),
-      numberValue(last ?? {}, "value") + 1,
+      input.sortOrder ?? numberValue(last ?? {}, "value") + 1,
       timestamp,
       timestamp
     );
-    this.audit(workId, "volume.created", "volume", volumeId);
+    const versionNo = this.recordEntityVersion("volume", volumeId, source, sourceRef, changeNote || "建立分卷", timestamp);
+    if (versionNo !== 1) this.db.run("UPDATE volumes SET version_no = ? WHERE id = ?", versionNo, volumeId);
+    this.audit(workId, source === "restore" ? "volume.restored" : "volume.created", "volume", volumeId, { source, sourceRef });
     return this.getVolume(volumeId);
   }
 
@@ -1091,30 +1253,41 @@ export class Store {
     return this.mapVolume(row);
   }
 
-  updateVolume(volumeId: string, input: { title?: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }): Record<string, unknown> {
-    const current = this.getVolume(volumeId);
-    this.db.run(
-      "UPDATE volumes SET title = ?, kind = ?, description = ?, keywords_json = ?, sort_order = ?, source = 'manual', updated_at = ? WHERE id = ?",
-      input.title ?? String(current.title),
-      input.kind ?? String(current.kind),
-      input.description?.trim() ?? String(current.description),
-      JSON.stringify(input.keywords === undefined ? current.keywords : this.normalizeVolumeKeywords(input.keywords)),
-      input.sortOrder ?? Number(current.sortOrder),
-      now(),
-      volumeId
-    );
-    this.audit(String(current.workId), "volume.updated", "volume", volumeId, input);
+  updateVolume(volumeId: string, input: { title?: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }, expectedVersionNo?: number, source = "manual", sourceRef: string | null = null, changeNote = ""): Record<string, unknown> {
+    this.db.transaction(() => {
+      const current = this.getVolume(volumeId);
+      this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
+      const timestamp = now();
+      this.db.run(
+        "UPDATE volumes SET title = ?, kind = ?, description = ?, keywords_json = ?, sort_order = ?, source = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?",
+        input.title ?? String(current.title),
+        input.kind ?? String(current.kind),
+        input.description?.trim() ?? String(current.description),
+        JSON.stringify(input.keywords === undefined ? current.keywords : this.normalizeVolumeKeywords(input.keywords)),
+        input.sortOrder ?? Number(current.sortOrder),
+        source === "restore" ? String(current.source) : "manual",
+        timestamp,
+        volumeId
+      );
+      this.recordEntityVersion("volume", volumeId, source, sourceRef, changeNote || "更新分卷信息", timestamp);
+      this.audit(String(current.workId), "volume.updated", "volume", volumeId, { ...input, versionNo: Number(current.versionNo) + 1, source, sourceRef, changeNote });
+    });
     return this.getVolume(volumeId);
   }
 
-  deleteVolume(volumeId: string): void {
+  deleteVolume(volumeId: string, expectedVersionNo?: number): void {
     const volume = this.getVolume(volumeId);
     const count = this.db.get("SELECT COUNT(*) AS value FROM chapters WHERE volume_id = ?", volumeId);
     if (numberValue(count ?? {}, "value") > 0) {
       throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
     }
-    this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
-    this.audit(String(volume.workId), "volume.deleted", "volume", volumeId);
+    this.db.transaction(() => {
+      const current = this.getVolume(volumeId);
+      this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
+      this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
+      this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
+      this.audit(String(current.workId), "volume.deleted", "volume", volumeId, { versionNo: Number(current.versionNo) });
+    });
   }
 
   createChapter(workId: string, input: { volumeId: string; title: string; content?: string; chapterType?: ChapterType }): Record<string, unknown> {
@@ -1304,9 +1477,11 @@ export class Store {
     input: { title?: string; content?: string; excludedFromAnalysis?: boolean; chapterType?: ChapterType },
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getChapter(chapterId);
+    this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(current.versionNo));
     const nextTitle = input.title ?? String(current.title);
     const nextContent = input.content === undefined ? String(current.content) : normalizeParagraphSpacing(input.content);
     const nextExcluded = input.excludedFromAnalysis ?? Boolean(current.excludedFromAnalysis);
@@ -1318,6 +1493,8 @@ export class Store {
     const timestamp = now();
     const versionNo = Number(current.versionNo) + (hasTextChange ? 1 : 0);
     this.db.transaction(() => {
+      const lockedCurrent = this.getChapter(chapterId);
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedCurrent.versionNo));
       this.db.run(
         `UPDATE chapters SET title = ?, content = ?, chapter_type = ?, word_count = ?, version_no = ?, analysis_status = ?,
          excluded_from_analysis = ?, updated_at = ? WHERE id = ?`,
@@ -1355,11 +1532,12 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
-  restoreChapter(chapterId: string, versionNo: number): Record<string, unknown> {
+  restoreChapter(chapterId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
     const version = this.db.get("SELECT * FROM chapter_versions WHERE chapter_id = ? AND version_no = ?", chapterId, versionNo);
     if (!version) throw notFound("章节版本");
     const existing = this.db.get("SELECT id FROM chapters WHERE id = ?", chapterId);
     if (!existing) {
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", this.currentChapterVersionNo(chapterId));
       return this.recreateChapterFromVersion(chapterId, version);
     }
     return this.saveChapter(
@@ -1367,7 +1545,8 @@ export class Store {
       { title: requiredString(version, "title"), content: requiredString(version, "content") },
       "restore",
       requiredString(version, "id"),
-      `恢复至 v${versionNo}`
+      `恢复至 v${versionNo}`,
+      expectedVersionNo
     );
   }
 
@@ -1425,11 +1604,14 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
-  moveChapter(chapterId: string, input: { volumeId: string; sortOrder: number }): Record<string, unknown> {
+  moveChapter(chapterId: string, input: { volumeId: string; sortOrder: number }, expectedVersionNo?: number): Record<string, unknown> {
     const chapter = this.getChapter(chapterId);
+    this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(chapter.versionNo));
     const volume = this.getVolume(input.volumeId);
     if (volume.workId !== chapter.workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "卷不属于当前作品");
     this.db.transaction(() => {
+      const lockedChapter = this.getChapter(chapterId);
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedChapter.versionNo));
       this.db.run(
         `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
          WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
@@ -1451,11 +1633,14 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
-  deleteChapter(chapterId: string): void {
+  deleteChapter(chapterId: string, expectedVersionNo?: number): void {
     const chapter = this.getChapter(chapterId);
+    this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(chapter.versionNo));
     const timestamp = now();
     const versionNo = Number(chapter.versionNo) + 1;
     this.db.transaction(() => {
+      const lockedChapter = this.getChapter(chapterId);
+      this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedChapter.versionNo));
       this.db.run("UPDATE chapters SET version_no = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, chapterId);
       this.insertChapterVersionRow({
         workId: String(chapter.workId),
@@ -1661,6 +1846,7 @@ export class Store {
         ? `/api/works/${encodeURIComponent(requiredString(row, "id"))}/cover?v=${encodeURIComponent(requiredString(cover, "updated_at"))}`
         : optionalString(row, "cover_url"),
       tags: json(requiredString(row, "tags_json"), []),
+      versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", requiredString(row, "id")),
       ownerUserId,
       accessRole,
       chapterCount: numberValue(count ?? {}, "chapter_count"),
@@ -1680,6 +1866,7 @@ export class Store {
       description: optionalString(row, "description") ?? "",
       keywords: json<string[]>(optionalString(row, "keywords_json"), []),
       sortOrder: numberValue(row, "sort_order"),
+      versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("volume", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -1791,12 +1978,14 @@ export class Store {
     input: ChapterOutlineInput,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const chapter = this.getChapter(chapterId);
     const current = this.getChapterOutline(chapterId);
     const timestamp = now();
     this.db.transaction(() => {
+      if (current) this.assertExpectedVersion("chapter-outline", chapterId, expectedVersionNo, "章节大纲");
       this.db.run(
         `INSERT INTO chapter_outlines (chapter_id, goal, conflict, turning_point, notes, status, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -1818,11 +2007,12 @@ export class Store {
     return this.getChapterOutline(chapterId) as Record<string, unknown>;
   }
 
-  deleteChapterOutline(chapterId: string): void {
+  deleteChapterOutline(chapterId: string, expectedVersionNo?: number): void {
     const chapter = this.getChapter(chapterId);
     const outline = this.getChapterOutline(chapterId);
     if (!outline) return;
     this.db.transaction(() => {
+      this.assertExpectedVersion("chapter-outline", chapterId, expectedVersionNo, "章节大纲");
       this.recordEntityVersion("chapter-outline", chapterId, "delete", null, "删除章节大纲");
       this.db.run("DELETE FROM chapter_outlines WHERE chapter_id = ?", chapterId);
       this.audit(String(chapter.workId), "outline.deleted", "chapter-outline", chapterId);
@@ -1840,6 +2030,7 @@ export class Store {
       turningPoint: requiredString(row, "turning_point"),
       notes: requiredString(row, "notes"),
       status: requiredString(row, "status"),
+      versionNo: this.currentEntityVersionNo("chapter-outline", requiredString(row, "chapter_id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -1913,6 +2104,7 @@ export class Store {
       overdue: Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
         && this.chapterSequence(workId, plannedPayoffChapterId) < this.chapterSequence(workId, currentChapterId)),
       occurrences,
+      versionNo: this.currentEntityVersionNo("foreshadow", foreshadowId),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -1952,12 +2144,14 @@ export class Store {
     input: Partial<ForeshadowInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getForeshadow(foreshadowId);
     const workId = String(current.workId);
     if (input.plannedPayoffChapterId) this.assertChapterInWork(input.plannedPayoffChapterId, workId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("foreshadow", foreshadowId, expectedVersionNo, "伏笔");
       this.db.run(
         `UPDATE foreshadows SET title = ?, description = ?, status = ?, importance = ?,
          planned_payoff_chapter_id = ?, resolution_note = ?, updated_at = ? WHERE id = ?`,
@@ -1980,18 +2174,20 @@ export class Store {
     return this.getForeshadow(foreshadowId);
   }
 
-  deleteForeshadow(foreshadowId: string): void {
+  deleteForeshadow(foreshadowId: string, expectedVersionNo?: number): void {
     const current = this.getForeshadow(foreshadowId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("foreshadow", foreshadowId, expectedVersionNo, "伏笔");
       this.recordEntityVersion("foreshadow", foreshadowId, "delete", null, "删除伏笔");
       this.db.run("DELETE FROM foreshadows WHERE id = ?", foreshadowId);
       this.audit(String(current.workId), "foreshadow.deleted", "foreshadow", foreshadowId);
     });
   }
 
-  createForeshadowOccurrence(foreshadowId: string, input: ForeshadowOccurrenceInput): Record<string, unknown> {
+  createForeshadowOccurrence(foreshadowId: string, input: ForeshadowOccurrenceInput, expectedVersionNo?: number): Record<string, unknown> {
     const foreshadow = this.getForeshadow(foreshadowId);
     const occurrenceId = this.db.transaction(() => {
+      this.assertExpectedVersion("foreshadow", foreshadowId, expectedVersionNo, "伏笔");
       const createdId = this.insertForeshadowOccurrence(foreshadowId, String(foreshadow.workId), input);
       this.recordEntityVersion("foreshadow", foreshadowId, "manual", createdId, "添加伏笔章节记录");
       this.audit(String(foreshadow.workId), "foreshadow.occurrence.created", "foreshadow-occurrence", createdId);
@@ -2000,12 +2196,13 @@ export class Store {
     return this.getForeshadowOccurrence(occurrenceId);
   }
 
-  updateForeshadowOccurrence(occurrenceId: string, input: Partial<ForeshadowOccurrenceInput>): Record<string, unknown> {
+  updateForeshadowOccurrence(occurrenceId: string, input: Partial<ForeshadowOccurrenceInput>, expectedVersionNo?: number): Record<string, unknown> {
     const current = this.getForeshadowOccurrence(occurrenceId);
     const foreshadow = this.getForeshadow(String(current.foreshadowId));
     const chapterId = input.chapterId ?? String(current.chapterId);
     this.assertChapterInWork(chapterId, String(foreshadow.workId));
     this.db.transaction(() => {
+      this.assertExpectedVersion("foreshadow", String(current.foreshadowId), expectedVersionNo, "伏笔");
       this.db.run(
         `UPDATE foreshadow_occurrences SET chapter_id = ?, role = ?, note = ?, evidence_json = ?, updated_at = ? WHERE id = ?`,
         chapterId,
@@ -2020,9 +2217,10 @@ export class Store {
     return this.getForeshadowOccurrence(occurrenceId);
   }
 
-  deleteForeshadowOccurrence(occurrenceId: string): void {
+  deleteForeshadowOccurrence(occurrenceId: string, expectedVersionNo?: number): void {
     const current = this.getForeshadowOccurrence(occurrenceId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("foreshadow", String(current.foreshadowId), expectedVersionNo, "伏笔");
       this.db.run("DELETE FROM foreshadow_occurrences WHERE id = ?", occurrenceId);
       this.recordEntityVersion("foreshadow", String(current.foreshadowId), "manual", occurrenceId, "删除伏笔章节记录");
     });
@@ -2154,10 +2352,12 @@ export class Store {
     input: Partial<SettingInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getSetting(settingId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("setting", settingId, expectedVersionNo, "设定");
       this.db.run(
         `UPDATE settings SET title = ?, category = ?, content = ?, tags_json = ?, status = ?, locked = ?,
          evidence_json = ?, scope_json = ?, author_note = ?, updated_at = ? WHERE id = ?`,
@@ -2179,9 +2379,10 @@ export class Store {
     return this.getSetting(settingId);
   }
 
-  deleteSetting(settingId: string): void {
+  deleteSetting(settingId: string, expectedVersionNo?: number): void {
     const current = this.getSetting(settingId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("setting", settingId, expectedVersionNo, "设定");
       this.recordEntityVersion("setting", settingId, "delete", null, "删除世界观设定");
       this.db.run("DELETE FROM settings WHERE id = ?", settingId);
       this.audit(String(current.workId), "setting.deleted", "setting", settingId);
@@ -2201,6 +2402,7 @@ export class Store {
       evidence: json(requiredString(row, "evidence_json"), []),
       scope: json(requiredString(row, "scope_json"), {}),
       authorNote: requiredString(row, "author_note"),
+      versionNo: this.currentEntityVersionNo("setting", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -2274,7 +2476,8 @@ export class Store {
     input: Partial<RaceInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getRace(raceId);
     const workId = String(current.workId);
@@ -2296,6 +2499,7 @@ export class Store {
       : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
     this.db.transaction(() => {
+      this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.db.run(
         `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
         parentRaceId,
@@ -2315,7 +2519,7 @@ export class Store {
     return this.getRace(raceId);
   }
 
-  deleteRace(raceId: string): void {
+  deleteRace(raceId: string, expectedVersionNo?: number): void {
     const current = this.getRace(raceId);
     const child = this.db.get("SELECT id FROM races WHERE parent_race_id = ? LIMIT 1", raceId);
     if (child) {
@@ -2323,6 +2527,7 @@ export class Store {
     }
     const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
     this.db.transaction(() => {
+      this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.recordEntityVersion("race", raceId, "delete", null, "删除种族档案");
       this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", now(), raceId);
       this.db.run("DELETE FROM races WHERE id = ?", raceId);
@@ -2412,6 +2617,7 @@ export class Store {
       }))),
       memberIds: members.map((member) => member.characterId),
       members,
+      versionNo: this.currentEntityVersionNo("race", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -2541,7 +2747,8 @@ export class Store {
     input: Partial<OrganizationInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getOrganization(organizationId);
     const workId = String(current.workId);
@@ -2556,6 +2763,7 @@ export class Store {
     const touchedMemberIds = memberIds ? [...new Set([...(current.memberIds as string[]), ...memberIds])] : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
     this.db.transaction(() => {
+      this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.db.run(
         `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
         name,
@@ -2575,10 +2783,11 @@ export class Store {
     return this.getOrganization(organizationId);
   }
 
-  deleteOrganization(organizationId: string): void {
+  deleteOrganization(organizationId: string, expectedVersionNo?: number): void {
     const current = this.getOrganization(organizationId);
     const memberSnapshots = this.captureCharacterSnapshots(current.memberIds as string[]);
     this.db.transaction(() => {
+      this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.recordEntityVersion("organization", organizationId, "delete", null, "删除组织档案");
       this.db.run("DELETE FROM organizations WHERE id = ?", organizationId);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${String(current.name)}”已删除`);
@@ -2659,6 +2868,7 @@ export class Store {
       settings: json(requiredString(row, "settings_json"), []),
       memberIds: members.map((member) => member.characterId),
       members,
+      versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -3036,11 +3246,15 @@ export class Store {
     input: Partial<CharacterProfileSectionInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getCharacterProfileSection(sectionId);
+    this.assertExpectedRevision("character-section", sectionId, expectedVersionNo, "人物档案章节", Number(current.versionNo));
     const timestamp = now();
     this.db.transaction(() => {
+      const lockedCurrent = this.getCharacterProfileSection(sectionId);
+      this.assertExpectedRevision("character-section", sectionId, expectedVersionNo, "人物档案章节", Number(lockedCurrent.versionNo));
       this.db.run(
         `UPDATE character_profile_sections SET section_type = ?, title = ?, content_markdown = ?, summary = ?, sort_order = ?,
          source_path = ?, source_hash = ?, version_no = version_no + 1, updated_at = ? WHERE id = ?`,
@@ -3063,9 +3277,12 @@ export class Store {
     return this.getCharacterProfileSection(sectionId);
   }
 
-  deleteCharacterProfileSection(sectionId: string): void {
+  deleteCharacterProfileSection(sectionId: string, expectedVersionNo?: number): void {
     const current = this.getCharacterProfileSection(sectionId);
+    this.assertExpectedRevision("character-section", sectionId, expectedVersionNo, "人物档案章节", Number(current.versionNo));
     this.db.transaction(() => {
+      const lockedCurrent = this.getCharacterProfileSection(sectionId);
+      this.assertExpectedRevision("character-section", sectionId, expectedVersionNo, "人物档案章节", Number(lockedCurrent.versionNo));
       this.db.run("UPDATE character_profile_sections SET version_no = version_no + 1 WHERE id = ?", sectionId);
       const deleting = this.getCharacterProfileSection(sectionId);
       this.recordCharacterProfileSectionVersion(deleting, "delete", null, "删除人物 Markdown 章节");
@@ -3123,7 +3340,7 @@ export class Store {
     })), pagination);
   }
 
-  restoreCharacterProfileSection(sectionId: string, versionNo: number): Record<string, unknown> {
+  restoreCharacterProfileSection(sectionId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
     const version = this.db.get(
       "SELECT * FROM character_profile_section_versions WHERE section_id = ? AND version_no = ?",
       sectionId,
@@ -3133,8 +3350,9 @@ export class Store {
     const snapshot = json<Record<string, unknown>>(requiredString(version, "snapshot_json"), {});
     const existing = this.db.get("SELECT id FROM character_profile_sections WHERE id = ?", sectionId);
     if (existing) {
-      return this.updateCharacterProfileSection(sectionId, snapshot as Partial<CharacterProfileSectionInput>, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`);
+      return this.updateCharacterProfileSection(sectionId, snapshot as Partial<CharacterProfileSectionInput>, "restore", requiredString(version, "id"), `恢复至 v${versionNo}`, expectedVersionNo);
     }
+    this.assertExpectedRevision("character-section", sectionId, expectedVersionNo, "人物档案章节", this.currentCharacterSectionVersionNo(sectionId));
     const characterId = requiredString(version, "character_id");
     const character = this.getCharacter(characterId);
     const timestamp = now();
@@ -3300,9 +3518,11 @@ export class Store {
     input: Partial<CharacterInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getCharacter(characterId);
+    this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(current.versionNo));
     if (current.mergedIntoCharacterId) throw new AppError(409, "CHARACTER_ALREADY_MERGED", "已合并角色不能直接编辑");
     const before = this.characterSnapshot(current);
     const workId = String(current.workId);
@@ -3320,6 +3540,8 @@ export class Store {
     const organizationIds = input.organizationIds === undefined ? null : [...new Set(input.organizationIds)];
     if (organizationIds) this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
+      const lockedCurrent = this.getCharacter(characterId);
+      this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       this.db.run(
         `UPDATE characters SET name = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
          locked_fields_json = ?, visibility = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
@@ -3400,13 +3622,14 @@ export class Store {
     })), pagination);
   }
 
-  restoreCharacter(characterId: string, versionNo: number): Record<string, unknown> {
+  restoreCharacter(characterId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
     const version = this.db.get("SELECT * FROM character_versions WHERE character_id = ? AND version_no = ?", characterId, versionNo);
     if (!version) throw notFound("人物版本");
     const snapshot = json<CharacterSnapshot>(requiredString(version, "snapshot_json"), {} as CharacterSnapshot);
     if (!snapshot.name) throw new AppError(500, "CHARACTER_VERSION_INVALID", "人物版本快照无效");
     const existing = this.db.get("SELECT id FROM characters WHERE id = ?", characterId);
     if (!existing) {
+      this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", this.currentCharacterVersionNo(characterId));
       return this.recreateCharacterFromVersion(characterId, version, snapshot, versionNo);
     }
     return this.updateCharacter(
@@ -3414,7 +3637,8 @@ export class Store {
       snapshot,
       "restore",
       requiredString(version, "id"),
-      `恢复至 v${versionNo}`
+      `恢复至 v${versionNo}`,
+      expectedVersionNo
     );
   }
 
@@ -3468,8 +3692,9 @@ export class Store {
     return this.getCharacter(characterId);
   }
 
-  deleteCharacter(characterId: string): void {
+  deleteCharacter(characterId: string, expectedVersionNo?: number): void {
     const current = this.getCharacter(characterId);
+    this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(current.versionNo));
     const timestamp = now();
     const versionNo = Number(current.versionNo) + 1;
     const workId = String(current.workId);
@@ -3480,6 +3705,8 @@ export class Store {
       (relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId
     );
     this.db.transaction(() => {
+      const lockedCurrent = this.getCharacter(characterId);
+      this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       for (const event of timelineEvents) {
         this.updateTimelineEvent(String(event.id), {
           participantIds: (event.participantIds as string[]).filter((participantId) => participantId !== characterId)
@@ -3637,6 +3864,10 @@ export class Store {
     const referenceSnapshot = { relationships: sourceRelationships, timelineEvents, memberships: sourceMemberships };
 
     this.db.transaction(() => {
+      const lockedTarget = this.getCharacter(targetId);
+      const lockedSource = this.getCharacter(sourceId);
+      this.assertExpectedRevision("character", targetId, input.expectedTargetVersionNo, "目标角色", Number(lockedTarget.versionNo));
+      this.assertExpectedRevision("character", sourceId, input.expectedSourceVersionNo, "来源角色", Number(lockedSource.versionNo));
       this.db.run("DELETE FROM character_names WHERE character_id = ?", sourceId);
       const aliases = [...(target.aliases as string[]), String(source.name), ...(source.aliases as string[])];
       const uniqueAliases = [...new Map(aliases
@@ -3653,7 +3884,7 @@ export class Store {
         currentState: { ...(source.currentState as Record<string, unknown>), ...(target.currentState as Record<string, unknown>) },
         lockedFields: [...new Set([...(target.lockedFields as string[]), ...(source.lockedFields as string[])])],
         firstChapterId: (target.firstChapterId as string | null) ?? (source.firstChapterId as string | null)
-      }, "merge", mergeId, `合并角色“${String(source.name)}”`);
+      }, "merge", mergeId, `合并角色“${String(source.name)}”`, input.expectedTargetVersionNo);
 
       for (const event of timelineEvents) {
         const participantIds = [...new Set((event.participantIds as string[]).map(
@@ -3880,10 +4111,12 @@ export class Store {
     input: Partial<TimelineTrackInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getTimelineTrack(trackId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("timeline-track", trackId, expectedVersionNo, "时间轴");
       this.db.run(
         "UPDATE timeline_tracks SET name = ?, description = ?, sort_order = ?, updated_at = ? WHERE id = ?",
         input.name ?? String(current.name),
@@ -3898,9 +4131,10 @@ export class Store {
     return this.getTimelineTrack(trackId);
   }
 
-  deleteTimelineTrack(trackId: string): void {
+  deleteTimelineTrack(trackId: string, expectedVersionNo?: number): void {
     const current = this.getTimelineTrack(trackId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("timeline-track", trackId, expectedVersionNo, "时间轴");
       this.recordEntityVersion("timeline-track", trackId, "delete", null, "删除时间轴");
       this.db.run("DELETE FROM timeline_tracks WHERE id = ?", trackId);
       this.audit(String(current.workId), "timeline-track.deleted", "timeline-track", trackId);
@@ -3994,7 +4228,8 @@ export class Store {
     input: Partial<TimelineInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getTimelineEvent(eventId);
     if (input.trackId) {
@@ -4002,6 +4237,7 @@ export class Store {
       if (track.workId !== current.workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "独立时间轴不属于当前作品");
     }
     this.db.transaction(() => {
+      this.assertExpectedVersion("timeline-event", eventId, expectedVersionNo, "时间事件");
       this.db.run(
         `UPDATE timeline_events SET track_id = ?, name = ?, description = ?, event_type = ?, time_label = ?, time_sort = ?,
          chapter_ids_json = ?, participant_ids_json = ?, location = ?, causes_json = ?, impact_scope = ?, evidence_json = ?,
@@ -4028,9 +4264,10 @@ export class Store {
     return this.getTimelineEvent(eventId);
   }
 
-  deleteTimelineEvent(eventId: string): void {
+  deleteTimelineEvent(eventId: string, expectedVersionNo?: number): void {
     const current = this.getTimelineEvent(eventId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("timeline-event", eventId, expectedVersionNo, "时间事件");
       this.recordEntityVersion("timeline-event", eventId, "delete", null, "删除时间事件");
       this.db.run("DELETE FROM timeline_events WHERE id = ?", eventId);
       this.audit(String(current.workId), "timeline.deleted", "timeline-event", eventId);
@@ -4040,7 +4277,8 @@ export class Store {
   mergeTimelineEvents(
     workId: string,
     eventIds: string[],
-    input: { name: string; description?: string; timeLabel?: string; timeSort?: number | null }
+    input: { name: string; description?: string; timeLabel?: string; timeSort?: number | null },
+    expectedVersionNos?: Record<string, number>
   ): Record<string, unknown> {
     this.getWork(workId);
     const uniqueIds = [...new Set(eventIds)];
@@ -4053,6 +4291,9 @@ export class Store {
     };
     const knownSorts = events.map((event) => event.timeSort).filter((value): value is number => typeof value === "number");
     return this.db.transaction(() => {
+      for (const event of events) {
+        this.assertExpectedVersion("timeline-event", String(event.id), expectedVersionNos?.[String(event.id)], "时间事件", Number(event.versionNo));
+      }
       const merged = this.createTimelineEvent(workId, {
         name: input.name,
         trackId: events.every((event) => event.trackId === events[0]?.trackId) ? (events[0]?.trackId as string | null) : null,
@@ -4079,11 +4320,15 @@ export class Store {
 
   splitTimelineEvent(
     eventId: string,
-    parts: Array<{ name: string; description?: string; timeLabel?: string; timeSort?: number | null }>
+    parts: Array<{ name: string; description?: string; timeLabel?: string; timeSort?: number | null }>,
+    expectedVersionNo?: number
   ): Record<string, unknown>[] {
     const source = this.getTimelineEvent(eventId);
+    this.assertExpectedVersion("timeline-event", eventId, expectedVersionNo, "时间事件", Number(source.versionNo));
     if (parts.length < 2) throw new AppError(400, "EVENT_PARTS_REQUIRED", "拆分时间事件至少需要两项");
     return this.db.transaction(() => {
+      const lockedSource = this.getTimelineEvent(eventId);
+      this.assertExpectedVersion("timeline-event", eventId, expectedVersionNo, "时间事件", Number(lockedSource.versionNo));
       const created = parts.map((part, index) => this.createTimelineEvent(String(source.workId), {
         name: part.name,
         trackId: source.trackId as string | null,
@@ -4125,6 +4370,7 @@ export class Store {
       impactScope: requiredString(row, "impact_scope"),
       evidence: json(requiredString(row, "evidence_json"), []),
       status: requiredString(row, "status"),
+      versionNo: this.currentEntityVersionNo("timeline-event", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -4137,6 +4383,7 @@ export class Store {
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
       sortOrder: numberValue(row, "sort_order"),
+      versionNo: this.currentEntityVersionNo("timeline-track", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -4231,7 +4478,8 @@ export class Store {
     input: Partial<RelationshipInput>,
     source = "manual",
     sourceRef: string | null = null,
-    changeNote = ""
+    changeNote = "",
+    expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getRelationship(relationshipId);
     let fromCharacterId = input.fromCharacterId ?? String(current.fromCharacterId);
@@ -4253,6 +4501,7 @@ export class Store {
       relationshipId
     );
     this.db.transaction(() => {
+      this.assertExpectedVersion("relationship", relationshipId, expectedVersionNo, "人物关系");
       this.db.run(
         `UPDATE relationships SET from_character_id = ?, to_character_id = ?, category = ?, subtype = ?, keywords_json = ?, directed = ?,
          current_status = ?, time_range_json = ?, confidence = ?, evidence_json = ?, confirmation_status = ?, locked = ?, updated_at = ?
@@ -4278,9 +4527,10 @@ export class Store {
     return this.getRelationship(relationshipId);
   }
 
-  deleteRelationship(relationshipId: string): void {
+  deleteRelationship(relationshipId: string, expectedVersionNo?: number): void {
     const current = this.getRelationship(relationshipId);
     this.db.transaction(() => {
+      this.assertExpectedVersion("relationship", relationshipId, expectedVersionNo, "人物关系");
       this.recordEntityVersion("relationship", relationshipId, "delete", null, "删除人物关系");
       this.db.run("DELETE FROM relationships WHERE id = ?", relationshipId);
       this.audit(String(current.workId), "relationship.deleted", "relationship", relationshipId);
@@ -4303,6 +4553,7 @@ export class Store {
       evidence: json(requiredString(row, "evidence_json"), []),
       confirmationStatus: requiredString(row, "confirmation_status"),
       locked: booleanValue(row, "locked"),
+      versionNo: this.currentEntityVersionNo("relationship", requiredString(row, "id")),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };

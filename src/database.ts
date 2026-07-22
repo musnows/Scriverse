@@ -83,6 +83,7 @@ export class Database {
         cover_url TEXT,
         tags_json TEXT NOT NULL DEFAULT '[]',
         is_internal INTEGER NOT NULL DEFAULT 0,
+        version_no INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -108,6 +109,7 @@ export class Database {
         description TEXT NOT NULL DEFAULT '',
         keywords_json TEXT NOT NULL DEFAULT '[]',
         sort_order INTEGER NOT NULL,
+        version_no INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -1489,13 +1491,34 @@ export class Database {
     }
     if (!applied.has(34)) {
       this.transaction(() => {
-        const columns = new Set(this.all("PRAGMA table_info(work_memberships)").map((row) => String(row.name)));
-        if (!columns.has("permissions_json")) {
+        const workColumns = new Set(this.all("PRAGMA table_info(works)").map((row) => String(row.name)));
+        if (!workColumns.has("version_no")) {
+          this.run("ALTER TABLE works ADD COLUMN version_no INTEGER NOT NULL DEFAULT 1");
+        }
+        const volumeColumns = new Set(this.all("PRAGMA table_info(volumes)").map((row) => String(row.name)));
+        if (!volumeColumns.has("version_no")) {
+          this.run("ALTER TABLE volumes ADD COLUMN version_no INTEGER NOT NULL DEFAULT 1");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (34, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(35)) {
+      this.transaction(() => {
+        const workColumns = new Set(this.all("PRAGMA table_info(works)").map((row) => String(row.name)));
+        if (!workColumns.has("version_no")) {
+          this.run("ALTER TABLE works ADD COLUMN version_no INTEGER NOT NULL DEFAULT 1");
+        }
+        const volumeColumns = new Set(this.all("PRAGMA table_info(volumes)").map((row) => String(row.name)));
+        if (!volumeColumns.has("version_no")) {
+          this.run("ALTER TABLE volumes ADD COLUMN version_no INTEGER NOT NULL DEFAULT 1");
+        }
+        const membershipColumns = new Set(this.all("PRAGMA table_info(work_memberships)").map((row) => String(row.name)));
+        if (!membershipColumns.has("permissions_json")) {
           this.run("ALTER TABLE work_memberships ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '{}'");
         }
         this.run(`UPDATE work_memberships SET permissions_json = '{}'
           WHERE NOT json_valid(permissions_json) OR json_type(permissions_json) <> 'object'`);
-        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (34, ?)", new Date().toISOString());
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (35, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

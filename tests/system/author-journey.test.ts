@@ -231,8 +231,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260722-settings-editor-access');
-    expect(page.text).toContain('/styles.css?v=20260722-settings-editor-access');
+    expect(page.text).toContain('/app.js?v=20260722-settings-import-version-lock');
+    expect(page.text).toContain('/styles.css?v=20260722-settings-import-mode');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
