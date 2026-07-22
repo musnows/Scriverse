@@ -13,7 +13,7 @@ export const RESTORABLE_MODULES = Object.freeze([
 
 const moduleSet = new Set(RESTORABLE_MODULES);
 const returnViewSet = new Set(["shelf", "editor", "module", "welcome"]);
-const entityEditorSet = new Set(["setting", "character"]);
+const entityEditorSet = new Set(["setting", "character", "race", "organization"]);
 
 function value(params, key) {
   return String(params.get(key) ?? "").trim();

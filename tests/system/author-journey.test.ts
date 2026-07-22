@@ -181,6 +181,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="entity-editor-view"');
     expect(page.text).toContain('id="setting-editor-form"');
     expect(page.text).toContain('id="character-editor-form"');
+    expect(page.text).toContain('id="knowledge-editor-form"');
     expect(page.text).toContain('id="character-history-button"');
     expect(page.text.match(/data-character-editor-tab=/gu)).toHaveLength(5);
     expect(page.text).toContain('data-character-editor-tab="relationships"');
@@ -188,6 +189,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
     expect(application.text).toContain("function openSettingEditor(item = null)");
     expect(application.text).toContain("function openCharacterEditor(item = null)");
+    expect(application.text).toContain("function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions)");
+    expect(application.text).toContain("async function openKnowledgeEditor(kind, item)");
+    expect(application.text).toContain("async function openOrganizationDialog(item)");
     expect(application.text).toContain("function renderCharacterEditorRelationships()");
     expect(application.text).toContain("refreshRelationshipSurfaces");
     expect(application.text).toContain("data-character-relationship-edit");
@@ -209,6 +213,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain("#setting-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr);");
+    expect(styles.text).toContain("#knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }");
+    expect(styles.text).toContain('.setting-markdown-compose > div[role="region"], .markdown-editor-compose > div[role="region"]');
     expect(styles.text).toContain(".setting-editor-title-input");
     expect(styles.text).toContain(".setting-editor-header-fields");
     expect(styles.text).toContain(".character-relationship-row");
@@ -414,15 +420,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="race-tree-node" open');
     expect(application.text).toContain('field("raceId", "种族", "select"');
     expect(application.text).not.toContain('field("species", "种族", "text"');
-    expect(application.text).toContain('field("memberIds", "属于该种族的角色（可多选）", "chips"');
+    expect(application.text).toContain('field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips"');
     expect(application.text).toContain('field("organizationIds", "所属组织（可多选）", "chips"');
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
-    expect(application.text).toContain('field("settingsMarkdown", "组织设定", "markdown"');
-    expect(application.text).toContain('form.get("settingsMarkdown")');
-    expect(application.text).toContain('field("settingsMarkdown", "种族共同设定", "markdown"');
-    expect(application.text).toContain('field("memberIds", "组织成员（可多选）", "chips"');
+    expect(application.text).toContain('field("settingsMarkdown", title, "markdown"');
+    expect(application.text).toContain('data.get("settingsMarkdown")');
+    expect(application.text).toContain('data.getAll("memberIds")');
     expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");

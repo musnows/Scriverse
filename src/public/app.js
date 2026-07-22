@@ -14,7 +14,7 @@ import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260713-character-history";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260714-all-knowledge-history";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260722-entity-editor-page";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260723-knowledge-editor-page";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
@@ -409,7 +409,7 @@ function replacePageRoute(route) {
 function currentPageRoute() {
   const workId = state.work?.id ?? null;
   if (!$("#entity-editor-view").classList.contains("hidden") && workId && entityEditorType) {
-    const entityId = entityEditorType === "setting" ? settingEditorItem?.id : characterEditorItem?.id;
+    const entityId = entityEditorType === "setting" ? settingEditorItem?.id : entityEditorType === "character" ? characterEditorItem?.id : knowledgeEditorItem?.id;
     return { view: "entity-editor", workId, entity: entityEditorType, entityId: entityId ?? null };
   }
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
@@ -525,6 +525,8 @@ let entityEditorType = null;
 let entityEditorDirty = false;
 let settingEditorItem = null;
 let characterEditorItem = null;
+let knowledgeEditorItem = null;
+let knowledgeEditorKind = null;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
@@ -542,6 +544,7 @@ function showEntityEditorPage(type) {
   $("#entity-editor-view").classList.remove("hidden");
   $("#setting-editor-form").classList.toggle("hidden", type !== "setting");
   $("#character-editor-form").classList.toggle("hidden", type !== "character");
+  $("#knowledge-editor-form").classList.toggle("hidden", !["race", "organization"].includes(type));
   $("#character-section-editor-view").classList.add("hidden");
   $("#app").inert = true;
   document.body.classList.add("entity-editor-open");
@@ -549,7 +552,7 @@ function showEntityEditorPage(type) {
 }
 
 function markEntityEditorDirty() {
-  const module = entityEditorType === "setting" ? "settings" : "characters";
+  const module = entityEditorType === "setting" ? "settings" : entityEditorType === "character" ? "characters" : entityEditorType === "race" ? "races" : "organizations";
   if (entityEditorType && canEditModule(module)) entityEditorDirty = true;
 }
 
@@ -563,14 +566,17 @@ async function closeEntityEditor({ force = false } = {}) {
   if (!force && !confirmEntityEditorDiscard()) return false;
   await discardPendingCharacterAttachments();
   await discardPendingMarkdownAttachments();
-  const module = entityEditorType === "setting" ? "settings" : "characters";
+  const module = entityEditorType === "setting" ? "settings" : entityEditorType === "character" ? "characters" : entityEditorType === "race" ? "races" : "organizations";
   entityEditorType = null;
   entityEditorDirty = false;
   settingEditorItem = null;
   characterEditorItem = null;
+  knowledgeEditorItem = null;
+  knowledgeEditorKind = null;
   $("#entity-editor-view").classList.add("hidden");
   $("#setting-editor-form").classList.add("hidden");
   $("#character-editor-form").classList.add("hidden");
+  $("#knowledge-editor-form").classList.add("hidden");
   $("#app").inert = false;
   document.body.classList.remove("entity-editor-open");
   await showModule(module);
@@ -1925,7 +1931,7 @@ async function initializePage() {
       state.module = route.view === "module"
         ? route.module
         : route.view === "entity-editor"
-          ? (route.entity === "setting" ? "settings" : "characters")
+          ? ({ setting: "settings", character: "characters", race: "races", organization: "organizations" }[route.entity] ?? "characters")
           : "editor";
       await selectWork(requestedWork.id, route.view === "editor" ? route.chapterId : null);
     }
@@ -1936,14 +1942,16 @@ async function initializePage() {
     }
     if (route.view === "module") return;
     if (route.view === "entity-editor") {
-      const records = route.entity === "setting" ? state.settings : state.characters;
+      const records = route.entity === "setting" ? state.settings : route.entity === "character" ? state.characters : route.entity === "race" ? state.races : state.organizations;
       const item = route.entityId ? records.find((record) => record.id === route.entityId) : null;
       if (route.entityId && !item) {
-        toast(route.entity === "setting" ? "未找到要编辑的设定" : "未找到要编辑的角色", "error");
+        toast(({ setting: "未找到要编辑的设定", character: "未找到要编辑的角色", race: "未找到要编辑的种族", organization: "未找到要编辑的组织" }[route.entity] ?? "未找到要编辑的档案"), "error");
         return;
       }
       if (route.entity === "setting") openSettingEditor(item);
-      else await openCharacterEditor(item);
+      else if (route.entity === "character") await openCharacterEditor(item);
+      else if (route.entity === "race") await openRaceDialog(item);
+      else if (route.entity === "organization") await openOrganizationDialog(item);
       return;
     }
     if (route.view === "welcome") {
@@ -3493,7 +3501,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-markdown-editor><div class="markdown-editor-field-heading"><span>${esc(label)}</span><small>支持标题、列表、引用、表格、链接和图片</small></div><div class="markdown-editor-toolbar"><label class="ghost-button" for="${esc(name)}-attachment">上传并插入图片</label><input id="${esc(name)}-attachment" class="hidden" data-markdown-attachment type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif"><span>可使用 Mac Command+V 或 Windows、Linux Ctrl+V 粘贴图片</span></div><div class="markdown-editor-compose"><label><textarea name="${esc(name)}" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}">${esc(value)}</textarea></label><div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview>${renderMarkdown(value) || '<p class="markdown-editor-empty">预览区域暂无内容。</p>'}</article></div></div></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-markdown-editor><div class="markdown-editor-compose"><label><textarea name="${esc(name)}" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}">${esc(value)}</textarea></label><div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview>${renderMarkdown(value) || '<p class="markdown-editor-empty">预览区域暂无内容。</p>'}</article></div></div></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -4507,44 +4515,108 @@ async function openCharacterEditor(item = null) {
   }
 }
 
-async function openRaceDialog(item) {
+function knowledgeEditorSection(key, title, description, content) {
+  return `<section class="character-editor-section${key === "basic" ? "" : " hidden"}" data-knowledge-editor-panel="${esc(key)}" role="tabpanel"><header><div><span class="eyebrow">${esc(title)}</span><h3>${esc(title)}</h3></div>${description ? `<p>${esc(description)}</p>` : ""}</header><div class="character-editor-section-fields">${content}</div></section>`;
+}
+
+function activateKnowledgeEditorTab(key) {
+  document.querySelectorAll("[data-knowledge-editor-tab]").forEach((button) => {
+    const active = button.dataset.knowledgeEditorTab === key;
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  document.querySelectorAll("[data-knowledge-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.knowledgeEditorPanel !== key));
+}
+
+function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
+  const isRace = kind === "race";
+  const label = isRace ? "种族" : "组织";
+  const title = isRace ? "种族共同设定" : "组织设定";
+  const tabs = isRace
+    ? [["basic", "基础资料", "名称、层级与简介"], ["settings", "共同设定", "Markdown 长篇设定"], ["members", "种族成员", "角色归属"]]
+    : [["basic", "基础资料", "名称与简介"], ["settings", "组织设定", "Markdown 长篇设定"], ["members", "组织成员", "角色归属"]];
+  $("#knowledge-editor-nav").innerHTML = tabs.map(([key, tabTitle, description], index) => `<button type="button" role="tab" data-knowledge-editor-tab="${key}" aria-selected="${index === 0}" tabindex="${index === 0 ? "0" : "-1"}">${tabTitle}<small>${description}</small></button>`).join("");
+  const basicFields = field("name", `${label}名称`, "text", item?.name, []) + (isRace ? field("parentRaceId", "父种族", "select", item?.parentRaceId ?? "", parentOptions) : "") + field("description", `${label}简介`, "textarea", item?.description, []);
+  const memberField = memberOptions.length
+    ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
+    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
+  $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
+    + knowledgeEditorSection("settings", title, "", field("settingsMarkdown", title, "markdown", item?.settingsMarkdown ?? item?.settings?.join("\n\n"), { placeholder: isRace ? "例如：\n\n## 生理特征\n\n- 记录种族的共同规律" : "例如：\n\n## 组织章程\n\n- 记录组织的制度、目标与禁忌" }))
+    + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
+  document.querySelectorAll("[data-knowledge-editor-tab]").forEach((button) => {
+    button.onclick = () => activateKnowledgeEditorTab(button.dataset.knowledgeEditorTab);
+  });
+  activateKnowledgeEditorTab("basic");
+}
+
+async function openKnowledgeEditor(kind, item) {
+  await discardPendingMarkdownAttachments();
   state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
-  const parentOptions = [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
-    .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
-    .map((race) => [race.id, racePathLabel(race)])];
-  openDialog(item ? "编辑种族" : "新建种族",
-    field("name", "种族名称", "text", item?.name) +
-    field("parentRaceId", "父种族", "select", item?.parentRaceId ?? "", parentOptions) +
-    field("description", "种族简介", "textarea", item?.description) +
-    field("settingsMarkdown", "种族共同设定", "markdown", item?.settingsMarkdown ?? item?.settings?.join("\n\n"), { placeholder: "例如：\n\n## 生理特征\n\n- 记录种族的共同规律" }) +
-    (memberOptions.length ? field("memberIds", "属于该种族的角色（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
-    async (form) => {
-      const settingsMarkdown = String(form.get("settingsMarkdown") ?? "");
-      const body = { name: form.get("name"), parentRaceId: form.get("parentRaceId") || null, description: form.get("description"), settingsMarkdown };
-      if (canReadModule("characters")) body.memberIds = form.getAll("memberIds").map(String);
-      await api(item ? `/api/races/${item.id}` : `/api/works/${state.work.id}/races`, { method: item ? "PATCH" : "POST", body });
-      await renderRaces();
+  const isRace = kind === "race";
+  const module = isRace ? "races" : "organizations";
+  const label = isRace ? "种族" : "组织";
+  const parentOptions = isRace
+    ? [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
+      .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
+      .map((race) => [race.id, racePathLabel(race)])]
+    : [];
+  knowledgeEditorItem = item ?? null;
+  knowledgeEditorKind = kind;
+  $("#knowledge-editor-eyebrow").textContent = item ? `${label}档案` : `建立${label}档案`;
+  $("#knowledge-editor-title").textContent = item?.name || `新建${label}`;
+  $("#knowledge-editor-version").textContent = item ? `v${item.versionNo ?? 1}` : "新档案";
+  $("#knowledge-editor-header-note").textContent = isRace ? "层级、共同设定与角色归属" : "简介、组织设定与成员归属";
+  $("#knowledge-editor-footer-note").textContent = `保存${label}档案后返回${isRace ? "种族" : "组织"}列表。`;
+  $("#knowledge-editor-submit").textContent = item ? `保存${label}档案` : `创建${label}档案`;
+  renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions);
+  const viewOnly = !canEditModule(module);
+  if (viewOnly) {
+    $("#knowledge-editor-eyebrow").textContent = `${label}档案`;
+    $("#knowledge-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
+    $("#knowledge-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
+  }
+  $("#knowledge-editor-fields").querySelectorAll("[data-markdown-attachment]").forEach((control) => { control.disabled = viewOnly; });
+  $("#knowledge-editor-submit").classList.toggle("hidden", viewOnly);
+  const form = $("#knowledge-editor-form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (!canEditModule(module)) return;
+    const submit = $("#knowledge-editor-submit");
+    submit.disabled = true;
+    try {
+      const data = new FormData(form);
+      const name = String(data.get("name") ?? "").trim();
+      if (!name) throw new Error(`请填写${label}名称`);
+      const settingsMarkdown = String(data.get("settingsMarkdown") ?? "");
+      const body = isRace
+        ? { name, parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown }
+        : { name, description: data.get("description"), settingsMarkdown };
+      if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
+      const wasEditing = Boolean(knowledgeEditorItem);
+      await api(wasEditing ? `/api/${module}/${knowledgeEditorItem.id}` : `/api/works/${state.work.id}/${module}`, { method: wasEditing ? "PATCH" : "POST", body });
+      await cleanupPendingMarkdownAttachments(settingsMarkdown);
+      entityEditorDirty = false;
       await loadAiReferences();
-    }, item ? "种族档案" : "作品内种族", { wide: true });
+      await closeEntityEditor({ force: true });
+      toast(wasEditing ? `${label}档案已保存` : `${label}档案已创建`);
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      submit.disabled = false;
+    }
+  };
+  showEntityEditorPage(kind);
+  bindMarkdownEditors($("#knowledge-editor-form"));
+  $("#knowledge-editor-fields").querySelector("input:not([type='checkbox']), textarea")?.focus();
+}
+
+async function openRaceDialog(item) {
+  await openKnowledgeEditor("race", item);
 }
 
 async function openOrganizationDialog(item) {
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
-  openDialog(item ? "编辑组织" : "新建组织",
-    field("name", "组织名称", "text", item?.name) +
-    field("description", "组织简介", "textarea", item?.description) +
-    field("settingsMarkdown", "组织设定", "markdown", item?.settingsMarkdown ?? item?.settings?.join("\n\n"), { placeholder: "例如：\n\n## 组织章程\n\n- 记录组织的制度、目标与禁忌" }) +
-    (memberOptions.length ? field("memberIds", "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
-    async (form) => {
-      const settingsMarkdown = String(form.get("settingsMarkdown") ?? "");
-      const body = { name: form.get("name"), description: form.get("description"), settingsMarkdown };
-      if (canReadModule("characters")) body.memberIds = form.getAll("memberIds").map(String);
-      await api(item ? `/api/organizations/${item.id}` : `/api/works/${state.work.id}/organizations`, { method: item ? "PATCH" : "POST", body });
-      await renderOrganizations();
-      await loadAiReferences();
-    }, item ? "组织档案" : "世界内组织", { wide: true });
+  await openKnowledgeEditor("organization", item);
 }
 
 function openTimelineTrackDialog(item) {
@@ -5401,10 +5473,14 @@ $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
 $("#character-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
 $("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
+$("#knowledge-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
+$("#knowledge-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
 $("#setting-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#setting-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#character-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#character-editor-form").addEventListener("change", markEntityEditorDirty);
+$("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
+$("#knowledge-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#character-editor-fields").addEventListener("click", (event) => {
   if (event.target.closest("[data-item-list-add], [data-structured-list-add], [data-item-list-remove], [data-structured-list-remove]")) markEntityEditorDirty();
 });

@@ -365,7 +365,7 @@
         <div class="setting-editor-workspace">
           <main class="setting-editor-content">
             <div class="setting-markdown-field" data-markdown-editor>
-              <div class="setting-markdown-heading"><span>设定正文</span><small>支持标题、列表、引用、表格、链接和图片；可使用 Mac Command+V 或 Windows、Linux Ctrl+V 粘贴图片。</small></div>
+              <div class="setting-markdown-heading"><span>设定正文</span></div>
               <div class="setting-markdown-compose">
                 <label><textarea id="setting-editor-body" name="content" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容"></textarea></label>
                 <div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview><p class="markdown-editor-empty">预览区域暂无内容。</p></article></div>
@@ -403,6 +403,25 @@
         <footer class="character-editor-actions">
           <label>版本说明<input id="character-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充红莲形态与能力限制"></label>
           <div><button id="character-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="character-editor-submit" class="primary-button" type="submit">保存新版本</button></div>
+        </footer>
+      </form>
+
+      <form id="knowledge-editor-form" class="entity-editor-page hidden" aria-labelledby="knowledge-editor-title">
+        <header class="character-editor-header knowledge-editor-header">
+          <button id="knowledge-editor-close" class="entity-editor-back" type="button">返回列表</button>
+          <div>
+            <span id="knowledge-editor-eyebrow" class="eyebrow">世界档案</span>
+            <div class="character-editor-title-row"><h1 id="knowledge-editor-title">新建档案</h1><span id="knowledge-editor-version" class="character-version-badge">新档案</span></div>
+          </div>
+          <div class="character-editor-header-actions"><span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span></div>
+        </header>
+        <div class="character-editor-workspace knowledge-editor-workspace">
+          <nav id="knowledge-editor-nav" class="character-editor-nav" role="tablist" aria-label="世界档案编辑分区"></nav>
+          <main id="knowledge-editor-fields" class="character-editor-fields"></main>
+        </div>
+        <footer class="character-editor-actions knowledge-editor-actions">
+          <p id="knowledge-editor-footer-note">保存后返回当前列表。</p>
+          <div><button id="knowledge-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="knowledge-editor-submit" class="primary-button" type="submit">保存档案</button></div>
         </footer>
       </form>
 

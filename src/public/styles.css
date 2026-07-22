@@ -1443,6 +1443,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-editor-view.hidden, .entity-editor-page.hidden { display: none; }
 .entity-editor-page { width: 100%; height: 100%; min-height: 0; }
 #character-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+#knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .entity-editor-header, .character-editor-header { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) minmax(160px, 1fr); align-items: center; gap: 24px; min-height: 78px; padding: 14px clamp(18px, 3vw, 44px); border-bottom: 1px solid var(--line); background: var(--panel); }
 .entity-editor-heading { min-width: 0; text-align: center; }
 .entity-editor-heading h1 { overflow: hidden; margin: 2px 0 0; font-size: 24px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -1477,7 +1478,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-markdown-compose > label, .setting-markdown-compose > div, .markdown-editor-compose > label, .markdown-editor-compose > div { display: grid; grid-template-rows: minmax(0, 1fr); min-width: 0; min-height: 0; }
 .setting-markdown-compose textarea, .markdown-editor-compose textarea { width: 100%; height: 100%; min-height: 0; padding: 20px 22px; resize: none; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); font: 13px/1.75 var(--font-latin), var(--font-cjk), monospace; tab-size: 2; }
 .markdown-editor-compose > div { overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
-.markdown-editor-preview { min-height: 0; padding: 16px 18px; overflow-y: auto; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+.setting-markdown-compose > div[role="region"], .markdown-editor-compose > div[role="region"] { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.markdown-editor-preview { height: 100%; min-height: 0; box-sizing: border-box; padding: 16px 18px; overflow-y: auto; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
 .markdown-editor-empty { margin: 0; padding: 18px; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); font-size: 10px; text-align: center; }
 .markdown-editor-field { display: grid; gap: 10px; min-width: 0; }
 .markdown-editor-field .markdown-editor-compose { min-height: 360px; }
@@ -1493,6 +1495,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-title-row { display: flex; align-items: center; gap: 10px; margin-top: 3px; }
 .character-editor-title-row { justify-content: center; }
 .character-editor-title-row h1 { overflow: hidden; font-size: 24px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-editor-header-note { color: var(--muted); font-size: 10px; text-align: right; }
 .character-version-badge { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-deep); color: var(--accent-dark); font: 10px/1 var(--font-latin), monospace; }
 .character-editor-header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .character-editor-header-actions .ghost-button { min-height: 34px; }
@@ -1511,7 +1514,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-section > header p { max-width: 430px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; text-align: right; }
 .character-editor-section-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px 20px; }
 .character-editor-section-fields > label, .character-editor-section-fields > .form-field { display: grid; align-content: start; gap: 7px; color: var(--muted); font-size: 11px; }
-.character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-field-help { grid-column: 1 / -1; }
+.character-editor-section-fields > label:has(textarea), .character-editor-section-fields > .structured-list-field, .character-editor-section-fields > .chip-field, .character-editor-section-fields > .markdown-editor-field, .character-editor-field-help { grid-column: 1 / -1; }
 .character-editor-section-fields input, .character-editor-section-fields textarea, .character-editor-section-fields select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); font-size: 13px; }
 .character-editor-section-fields textarea { min-height: 120px; resize: vertical; line-height: 1.65; }
 .character-editor-section-fields .section-list-row textarea { min-height: 180px; }
@@ -1605,6 +1608,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-editor-actions input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); font-size: 12px; }
 .character-editor-actions > div { display: flex; gap: 8px; }
 .character-editor-actions button { min-height: 36px; }
+.knowledge-editor-actions > p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .appearance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 22px 24px; }
 .appearance-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .appearance-grid select { width: 100%; padding: 9px 10px; font-size: 13px; }
