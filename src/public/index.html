@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-prose-replacement-permission">
+    <link rel="stylesheet" href="/styles.css?v=20260723-import-mode-permission-selection">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -320,22 +320,27 @@
     <dialog id="import-mode-dialog" class="dialog import-mode-dialog" aria-labelledby="import-mode-dialog-title" aria-describedby="import-mode-dialog-description" data-testid="import-mode-dialog">
       <form method="dialog">
         <div class="dialog-header">
-          <div><span class="eyebrow">已有项目</span><h2 id="import-mode-dialog-title">选择正文导入方式</h2></div>
+          <div><span class="eyebrow">已有项目</span><h2 id="import-mode-dialog-title" tabindex="-1">选择正文导入方式</h2></div>
           <button class="dialog-close" value="cancel" aria-label="取消导入" type="submit">×</button>
         </div>
         <div class="import-mode-body">
           <p id="import-mode-dialog-description">即将把所选文件导入当前作品。请选择追加还是覆盖正文。</p>
           <p id="import-mode-file-summary" class="import-mode-file-summary"></p>
           <p id="import-mode-unsaved-warning" class="import-mode-unsaved-warning hidden" role="alert">当前章节有未保存修改，继续导入会丢失这些本地修改。</p>
-          <div class="import-mode-options" aria-label="导入方式说明">
-            <section><strong>追加正文</strong><span>保留现有卷章，把新文件解析出的卷章添加到目录末尾。</span></section>
-            <section><strong>覆盖正文</strong><span>删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span><small id="import-mode-overwrite-permission" class="import-mode-permission hidden">覆盖会影响章节关联资料，需要所有受影响模块均为可编辑。</small></section>
+          <div class="import-mode-options" role="radiogroup" aria-label="正文导入方式">
+            <label class="import-mode-option" data-testid="import-mode-append-option">
+              <input id="import-mode-append" type="radio" name="importMode" value="append" aria-describedby="import-mode-append-description">
+              <span class="import-mode-option-card"><strong>追加正文</strong><span id="import-mode-append-description">保留现有卷章，把新文件解析出的卷章添加到目录末尾。</span></span>
+            </label>
+            <label class="import-mode-option" data-testid="import-mode-overwrite-option">
+              <input id="import-mode-overwrite" type="radio" name="importMode" value="overwrite" aria-describedby="import-mode-overwrite-description import-mode-overwrite-permission">
+              <span class="import-mode-option-card"><strong>覆盖正文</strong><span id="import-mode-overwrite-description">删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span><small id="import-mode-overwrite-permission" class="import-mode-permission hidden">覆盖会影响章节关联资料，需要所有受影响模块均为可编辑。</small></span>
+            </label>
           </div>
         </div>
         <div class="dialog-actions">
           <button class="ghost-button" value="cancel" type="submit">取消</button>
-          <button id="import-mode-append" class="ghost-button" value="append" type="submit">追加正文</button>
-          <button id="import-mode-overwrite" class="primary-button" value="overwrite" type="submit">覆盖正文</button>
+          <button id="import-mode-confirm" class="primary-button" value="confirm" type="submit" disabled>确认</button>
         </div>
       </form>
     </dialog>
@@ -623,6 +628,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-prose-replacement-permission"></script>
+    <script type="module" src="/app.js?v=20260723-import-mode-permission-selection"></script>
   </body>
 </html>

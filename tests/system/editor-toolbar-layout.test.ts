@@ -36,9 +36,15 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="import-mode-dialog"');
     expect(page.text).toContain('id="import-mode-append"');
     expect(page.text).toContain('id="import-mode-overwrite"');
+    expect(page.text).toContain('name="importMode" value="append"');
+    expect(page.text).toContain('id="import-mode-confirm"');
+    expect(page.text).toContain('value="confirm" type="submit" disabled>确认</button>');
     expect(page.text).toContain("把新文件解析出的卷章添加到目录末尾");
     expect(page.text).toContain("覆盖会影响章节关联资料，需要所有受影响模块均为可编辑");
     expect(styles.text).toContain(".import-mode-options");
+    expect(styles.text).toContain(".import-mode-option input:checked + .import-mode-option-card");
+    expect(application.text).toContain("function confirmToast(message");
+    expect(application.text).toContain("当前选项：覆盖正文");
     expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(styles.text).toContain(".import-history-load-more");
     expect(application.text).toContain('$("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);');
