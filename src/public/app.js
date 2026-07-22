@@ -19,6 +19,7 @@ import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelatio
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
+import { WORK_PERMISSION_MODULES, canReadUiModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260722-module-permissions";
 
 const state = {
   user: null,
@@ -81,18 +82,66 @@ function analysisTaskStatusLabel(status) {
 }
 
 function canEditWork(work = state.work) {
-  return ["admin", "owner", "editor"].includes(String(work?.accessRole));
+  return WORK_PERMISSION_MODULES.some((item) => canWriteUiModule(work, item.uiModule));
+}
+
+function canEditProse(work = state.work) {
+  return canWriteUiModule(work, "editor");
+}
+
+function canReplaceProse(work = state.work) {
+  return WORK_PERMISSION_MODULES
+    .filter((item) => item.id !== "ai-settings")
+    .every((item) => canWriteUiModule(work, item.uiModule));
+}
+
+function canManageWork(work = state.work) {
+  return ["admin", "owner"].includes(String(work?.accessRole));
+}
+
+function canEditModule(module, work = state.work) {
+  return canWriteUiModule(work, module);
+}
+
+function canReadModule(module, work = state.work) {
+  return canReadUiModule(work, module);
+}
+
+function canReadAggregateContent(work = state.work) {
+  return ["editor", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"]
+    .every((module) => canReadModule(module, work));
 }
 
 function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
+  const proseReadOnly = Boolean(state.work) && !canEditProse();
+  const proseHidden = Boolean(state.work) && !canReadModule("editor");
+  const aiHidden = Boolean(state.work) && !canReadModule("tasks");
+  const aiReadOnly = Boolean(state.work) && !canEditModule("tasks");
+  const moduleReadOnly = Boolean(state.work) && !canEditModule(state.module);
   $("#app").classList.toggle("view-only-mode", viewOnly);
-  document.body.classList.toggle("work-viewer-mode", viewOnly);
-  $("#chapter-title").readOnly = viewOnly;
-  $("#chapter-content").readOnly = viewOnly;
-  $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
-  $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
-  if (viewOnly) {
+  $("#app").classList.toggle("prose-read-only-mode", proseReadOnly);
+  $("#app").classList.toggle("prose-hidden-mode", proseHidden);
+  $("#app").classList.toggle("ai-hidden-mode", aiHidden);
+  document.body.classList.toggle("work-viewer-mode", moduleReadOnly);
+  for (const item of WORK_PERMISSION_MODULES) {
+    const button = $(`#module-nav [data-module="${item.uiModule}"]`);
+    if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
+  }
+  $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
+  $("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);
+  $("#import-file-button").setAttribute("aria-hidden", String(proseReadOnly));
+  $("#import-file").disabled = proseReadOnly;
+  $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canReplaceProse());
+  $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
+  $("#chapter-title").readOnly = proseReadOnly;
+  $("#chapter-content").readOnly = proseReadOnly;
+  $("#chapter-title").setAttribute("aria-readonly", String(proseReadOnly));
+  $("#chapter-content").setAttribute("aria-readonly", String(proseReadOnly));
+  $("#ai-prompt").readOnly = aiReadOnly;
+  $("#ai-prompt").setAttribute("aria-readonly", String(aiReadOnly));
+  $("#ai-send").classList.toggle("permission-hidden", aiReadOnly);
+  if (proseReadOnly) {
     cancelChapterAutoSave();
     state.dirty = false;
   }
@@ -144,6 +193,8 @@ const panelLayoutStorageKey = "ai-novel-panel-layout-v1";
 const panelLayoutDefaults = Object.freeze({ leftWidth: 280, aiWidth: 360, leftCollapsed: false, aiCollapsed: false });
 let restoringPageRoute = true;
 let memberDialogWork = null;
+let memberDialogMembers = [];
+let memberDialogDirectory = [];
 let onboardingStep = 0;
 let onboardingAutoScheduled = false;
 let onboardingPositionFrame = null;
@@ -157,6 +208,10 @@ let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
+let workScopedUiGeneration = 0;
+let importHistoryRecords = [];
+let importHistoryNextPage = null;
+let importHistoryRequestId = 0;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -492,7 +547,8 @@ function showEntityEditorPage(type) {
 }
 
 function markEntityEditorDirty() {
-  if (entityEditorType && canEditWork()) entityEditorDirty = true;
+  const module = entityEditorType === "setting" ? "settings" : "characters";
+  if (entityEditorType && canEditModule(module)) entityEditorDirty = true;
 }
 
 function confirmEntityEditorDiscard(message) {
@@ -1064,8 +1120,9 @@ function renderAiConversationHistory() {
 async function loadAiConversations(openLatest = true) {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.aiConversations = conversations;
   loadedAiConversationsWorkId = workId;
   renderAiConversationHistory();
@@ -1717,7 +1774,7 @@ function cancelChapterAutoSave() {
 }
 
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
-  if (!state.chapter || !canEditWork()) return;
+  if (!state.chapter || !canEditProse()) return;
   cancelChapterAutoSave();
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
@@ -1727,7 +1784,7 @@ function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
 }
 
 async function persistChapter({ automatic = false } = {}) {
-  if (!canEditWork()) return null;
+  if (!canEditProse()) return null;
   if (!state.chapter) {
     if (!automatic) toast("请先选择章节", "error");
     return null;
@@ -1799,9 +1856,12 @@ function chooseExistingWorkImportMode(file) {
   const dialog = $("#import-mode-dialog");
   const form = dialog.querySelector("form");
   const confirm = $("#import-mode-confirm");
+  const canOverwrite = canReplaceProse();
   $("#import-mode-file-summary").textContent = `文件：${file.name}；当前作品：《${state.work.title}》`;
   $("#import-mode-unsaved-warning").classList.toggle("hidden", !state.dirty);
   form.reset();
+  $("#import-mode-overwrite").disabled = !canOverwrite;
+  $("#import-mode-overwrite-permission").classList.toggle("hidden", canOverwrite);
   confirm.disabled = true;
   form.onchange = () => { confirm.disabled = !form.querySelector('input[name="importMode"]:checked'); };
   dialog.returnValue = "cancel";
@@ -1935,13 +1995,14 @@ function captureSettingsReturnContext() {
 function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
+  const canReadAggregate = hasWork && canReadAggregateContent();
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
-  $("#top-search-button").disabled = !hasWork;
-  $("#export-button").disabled = !hasWork;
+  $("#top-search-button").disabled = !canReadAggregate;
+  $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
@@ -2003,46 +2064,76 @@ async function openPlatformUiSettingsDialog() {
   }
 }
 
+function renderMemberPermissionGrid(value) {
+  const permissions = normalizeModulePermissions(value, "custom");
+  $("#member-permission-grid").innerHTML = WORK_PERMISSION_MODULES.map((item) => `<label class="member-permission-row">
+    <span>${esc(item.label)}</span>
+    <select data-member-permission="${esc(item.id)}" aria-label="${esc(item.label)}权限">
+      <option value="none" ${permissions[item.id] === "none" ? "selected" : ""}>无权限</option>
+      <option value="read" ${permissions[item.id] === "read" ? "selected" : ""}>只读</option>
+      <option value="write" ${permissions[item.id] === "write" ? "selected" : ""}>可编辑</option>
+    </select>
+  </label>`).join("");
+}
+
+function selectedMemberPermissions() {
+  const permissions = emptyModulePermissions();
+  $("#member-permission-grid").querySelectorAll("[data-member-permission]").forEach((select) => {
+    permissions[select.dataset.memberPermission] = select.value;
+  });
+  return permissions;
+}
+
+function selectMemberForConfiguration(userId) {
+  const fieldset = $("#member-permission-fieldset");
+  const member = memberDialogMembers.find((item) => item.userId === userId);
+  fieldset.disabled = !userId;
+  renderMemberPermissionGrid(member?.permissions ?? emptyModulePermissions());
+  $("#member-permission-submit").textContent = member ? "更新模块权限" : "添加成员并保存";
+}
+
+function renderMemberSelector(selectedUserId = "") {
+  const ownerIds = new Set(memberDialogMembers.filter((member) => member.role === "owner").map((member) => member.userId));
+  const people = new Map(memberDialogDirectory.map((user) => [user.userId, user]));
+  for (const member of memberDialogMembers) if (member.role !== "owner") people.set(member.userId, member);
+  const options = [...people.values()].filter((user) => !ownerIds.has(user.userId));
+  $("#member-user-select").innerHTML = options.length
+    ? `<option value="">选择用户</option>${options.map((user) => {
+      const existing = memberDialogMembers.some((member) => member.userId === user.userId && member.role !== "owner");
+      return `<option value="${esc(user.userId)}" ${selectedUserId === user.userId ? "selected" : ""}>${esc(user.displayName)} · @${esc(user.username)}${existing ? " · 已加入" : ""}</option>`;
+    }).join("")}`
+    : '<option value="">没有可配置的用户</option>';
+  $("#member-user-select").disabled = !options.length;
+  selectMemberForConfiguration(selectedUserId);
+}
+
 function renderMembers(members) {
+  memberDialogMembers = members;
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
-  $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
-    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>可编辑</option></select>`}
-    ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
-  </article>`).join("");
+  $("#members-list").innerHTML = members.map((member) => {
+    const descriptionId = `member-role-summary-${member.userId}`;
+    return `<article class="access-row">
+      <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small id="${esc(descriptionId)}">${member.role === "owner" ? "作品创建者 · 拥有全部模块管理权限" : esc(permissionSummary(member.permissions))}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
+      ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-configure-member="${esc(member.userId)}" aria-describedby="${esc(descriptionId)}">配置权限</button>`}
+      ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
+    </article>`;
+  }).join("");
   bindUserAvatarFallbacks($("#members-list"));
-  $("#members-list").querySelectorAll("[data-member-role]").forEach((select) => select.addEventListener("change", async () => {
-    if (!work) return;
-    const previousRole = members.find((member) => member.userId === select.dataset.memberRole)?.role ?? "viewer";
-    try {
-      const updated = await api(`/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(select.dataset.memberRole)}`, { method: "PATCH", body: { role: select.value } });
-      renderMembers(updated);
-      toast("成员权限已更新");
-    } catch (error) {
-      select.value = previousRole;
-      toast(error.message, "error");
-    }
+  $("#members-list").querySelectorAll("[data-configure-member]").forEach((button) => button.addEventListener("click", () => {
+    $("#member-user-select").value = button.dataset.configureMember;
+    selectMemberForConfiguration(button.dataset.configureMember);
+    $("#member-user-select").focus();
   }));
   $("#members-list").querySelectorAll("[data-remove-member]").forEach((button) => button.addEventListener("click", async () => {
     if (!work) return;
     try {
       const updated = await api(`/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(button.dataset.removeMember)}`, { method: "DELETE" });
       renderMembers(updated);
-      await fillMemberCandidates(updated);
+      renderMemberSelector();
       toast("协作者已移除");
     } catch (error) { toast(error.message, "error"); }
   }));
-}
-
-async function fillMemberCandidates(members) {
-  const directory = await api("/api/users/directory");
-  const memberIds = new Set(members.map((member) => member.userId));
-  const candidates = directory.filter((user) => !memberIds.has(user.userId));
-  $("#member-user-select").innerHTML = candidates.length
-    ? `<option value="">选择用户</option>${candidates.map((user) => `<option value="${esc(user.userId)}">${esc(user.displayName)} · @${esc(user.username)}</option>`).join("")}`
-    : '<option value="">没有可邀请的用户</option>';
-  $("#member-user-select").disabled = !candidates.length;
 }
 
 async function openMembersDialog(targetWork = state.work) {
@@ -2050,14 +2141,22 @@ async function openMembersDialog(targetWork = state.work) {
   memberDialogWork = targetWork;
   const canManage = ["admin", "owner"].includes(String(targetWork.accessRole));
   $("#members-dialog-eyebrow").textContent = `作品权限 · 《${targetWork.title}》`;
-  $("#members-dialog-title").textContent = "可访问人";
+  $("#members-dialog-title").textContent = "成员模块权限";
   $("#members-list").innerHTML = '<p class="empty-state">正在读取成员……</p>';
-  $("#member-invite-form").classList.toggle("hidden", !canManage);
+  $("#member-permission-form").classList.toggle("hidden", !canManage);
+  memberDialogMembers = [];
+  memberDialogDirectory = [];
+  renderMemberPermissionGrid(emptyModulePermissions());
+  $("#member-permission-fieldset").disabled = true;
   $("#members-dialog").showModal();
   try {
-    const members = await api(`/api/works/${encodeURIComponent(targetWork.id)}/members`);
+    const [members, directory] = await Promise.all([
+      api(`/api/works/${encodeURIComponent(targetWork.id)}/members`),
+      canManage ? api("/api/users/directory") : Promise.resolve([])
+    ]);
+    memberDialogDirectory = directory;
     renderMembers(members);
-    if (canManage) await fillMemberCandidates(members);
+    if (canManage) renderMemberSelector();
   } catch (error) { $("#members-dialog").close(); toast(error.message, "error"); }
 }
 
@@ -2211,9 +2310,9 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "全部只读" : work.accessRole === "settings-editor" ? "设定协作" : work.accessRole === "editor" ? "全部可编辑" : work.accessRole === "custom" ? "自定义权限" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
-      ${canEditWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
+      ${canManageWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
     </article>`).join("")}
     <button class="book-card book-add-card" id="book-add-card" type="button" aria-label="新建作品" data-testid="book-add-card"><span>＋</span><strong>新建作品</strong><small>从零开始或导入 TXT / DOCX</small></button>`;
   shelf.querySelectorAll("[data-open-work]").forEach((button) => button.addEventListener("click", () => selectWork(button.dataset.openWork)));
@@ -2224,34 +2323,45 @@ function renderShelf() {
   $("#book-add-card").addEventListener("click", openWorkDialog);
 }
 
+function resetWorkScopedUiCaches() {
+  workScopedUiGeneration += 1;
+  loadedAiModelsWorkId = null;
+  loadedAiReferencesWorkId = null;
+  loadedAiConversationsWorkId = null;
+  aiModelsLoadPromise = null;
+  aiModelsLoadWorkId = null;
+  aiReferencesLoadPromise = null;
+  aiReferencesLoadWorkId = null;
+  aiConversationsLoadPromise = null;
+  aiConversationsLoadWorkId = null;
+  state.models = [];
+  state.characters = [];
+  state.settings = [];
+  state.collapsedVolumeIds.clear();
+  lastSavedChapterSnapshot = null;
+  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
+  aiContextUsageTimer = null;
+  aiContextUsageRequest += 1;
+  state.aiCitations = [];
+  state.aiReferences = [];
+  state.aiPromptSent = false;
+  state.aiConversationId = null;
+  state.aiConversations = [];
+  renderAiCitations();
+  renderAiReferences();
+  renderAiQuickActions();
+  resetAiFeed();
+  $("#ai-conversation-title").textContent = "新对话";
+  $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
+  setAiContextMeter(null);
+  renderAiConversationHistory();
+}
+
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
   const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
-  if (state.work?.id !== nextWork.id) {
-    loadedAiModelsWorkId = null;
-    loadedAiReferencesWorkId = null;
-    loadedAiConversationsWorkId = null;
-    state.models = [];
-    state.characters = [];
-    state.settings = [];
-    if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-    aiContextUsageTimer = null;
-    aiContextUsageRequest += 1;
-    state.aiCitations = [];
-    state.aiReferences = [];
-    state.aiPromptSent = false;
-    state.aiConversationId = null;
-    state.aiConversations = [];
-    renderAiCitations();
-    renderAiReferences();
-    renderAiQuickActions();
-    resetAiFeed();
-    $("#ai-conversation-title").textContent = "新对话";
-    $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
-    setAiContextMeter(null);
-    renderAiConversationHistory();
-  }
+  if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -2261,16 +2371,18 @@ async function selectWork(workId, preferredChapterId = null) {
   settingsReturnContext = null;
   state.work = nextWork;
   state.chapter = null;
+  if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
-  $("#top-search-button").disabled = false;
+  $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
   const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
   const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
   if (state.module === "editor" && preferredChapterId) await selectChapter(preferredChapterId);
   else if (state.module === "editor" && targetChapter) await selectChapter(targetChapter.id);
-  else if (state.module === "editor") showWelcome(true);
+  else if (state.module === "editor" && canReadModule("editor")) showWelcome(true);
+  else if (!canReadModule(state.module)) showWelcome(true);
   else await showModule(state.module);
   return true;
 }
@@ -2298,7 +2410,7 @@ function renderTree() {
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditWork()) return;
+      if (!canEditProse()) return;
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
@@ -2306,7 +2418,7 @@ function renderTree() {
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditWork()) return;
+      if (!canEditProse()) return;
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
@@ -2340,6 +2452,7 @@ async function selectChapter(chapterId) {
   state.chapter = await api(`/api/chapters/${chapterId}`);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   state.module = "editor";
+  applyWorkAccessMode();
   markActiveModule("editor");
   $("#welcome-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
@@ -2356,7 +2469,7 @@ async function selectChapter(chapterId) {
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  if (!canEditWork()) setSaveState("仅查看");
+  if (!canEditProse()) setSaveState("正文只读");
   else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
@@ -2414,10 +2527,18 @@ const moduleMeta = {
 
 async function showModule(module) {
   if (!state.work) return showWelcome();
-  if (!canEditWork() && ["tasks", "ai-settings"].includes(module)) module = "editor";
+  if (!canReadModule(module)) {
+    const fallback = firstReadableUiModule(state.work);
+    if (!fallback) {
+      showWelcome(true);
+      return toast("当前账户尚未获授权访问任何作品模块", "error");
+    }
+    module = fallback;
+  }
   if (module !== "editor" && state.module === "editor" && !confirmDiscardChanges()) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
+  applyWorkAccessMode();
   markActiveModule(module);
   if (module === "editor") {
     if (state.chapter) await selectChapter(state.chapter.id);
@@ -2436,7 +2557,7 @@ async function showModule(module) {
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditWork());
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
@@ -2525,6 +2646,36 @@ function bindEntityHistoryButtons(refresh) {
   }));
 }
 
+function openEntityMergeDialog({ typeLabel, source, candidates, endpoint, body, refresh, impact }) {
+  const targetOptions = candidates
+    .filter((candidate) => candidate.id !== source.id)
+    .map((candidate) => [candidate.id, candidate.name]);
+  openDialog(`合并${typeLabel}`,
+    `<p class="merge-dialog-note">“${esc(source.name)}”将合并到所选档案，目标档案会保留。${esc(impact)}</p>` +
+    field("targetId", `目标${typeLabel}`, "select", targetOptions[0]?.[0] ?? "", targetOptions),
+    async (form) => {
+      const target = candidates.find((candidate) => candidate.id === form.get("targetId"));
+      if (!target) throw new Error(`请选择目标${typeLabel}`);
+      await api(endpoint(source), { method: "POST", body: body(target) });
+      await refresh();
+      await loadAiReferences();
+      toast(`已将“${source.name}”合并到“${target.name}”`);
+    }, "人工资料管理", { submitLabel: "确认合并" });
+}
+
+async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning = "" }) {
+  const detail = warning ? `\n${warning}` : "";
+  if (!window.confirm(`确认删除${typeLabel}“${item.name}”吗？${detail}`)) return;
+  try {
+    await api(endpoint(item), { method: "DELETE" });
+    await refresh();
+    await loadAiReferences();
+    toast(`已删除${typeLabel}“${item.name}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
@@ -2545,10 +2696,10 @@ async function renderSettings() {
 async function renderCharacters() {
   [state.characters, state.races, state.organizations] = await Promise.all([
     apiPage(`/api/works/${state.work.id}/characters`).then((result) => result.items),
-    apiAllPages(`/api/works/${state.work.id}/races`),
-    apiAllPages(`/api/works/${state.work.id}/organizations`)
+    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
-  const auditPanel = `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>`;
+  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>` : "";
   $("#module-content").innerHTML = auditPanel + (state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
@@ -2560,7 +2711,7 @@ async function renderCharacters() {
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
-    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`;
+    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button>${canEditModule("characters") && state.characters.length > 1 ? `<button data-merge-character="${esc(item.id)}">合并</button>` : ""}${canEditModule("characters") ? `<button class="danger-button" data-delete-character="${esc(item.id)}">删除</button>` : ""}</div></article>`;
   }).join("")}</div>`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   $("#create-character-audit-task")?.addEventListener("click", async () => {
@@ -2585,12 +2736,40 @@ async function renderCharacters() {
     });
   });
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  $("#module-content").querySelectorAll("[data-merge-character]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.characters.find((item) => item.id === button.dataset.mergeCharacter);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "角色",
+      source,
+      candidates: state.characters,
+      endpoint: (item) => `/api/characters/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({
+        targetCharacterId: target.id,
+        expectedTargetVersionNo: target.versionNo,
+        expectedSourceVersionNo: source.versionNo
+      }),
+      refresh: renderCharacters,
+      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-character]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.characters.find((character) => character.id === button.dataset.deleteCharacter);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "角色",
+      item,
+      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}`,
+      refresh: renderCharacters,
+      warning: "相关人物关系会删除，时间线中的参与者引用会移除。"
+    });
+  }));
 }
 
 async function renderRaces() {
   [state.races, state.characters] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/races`),
-    apiAllPages(`/api/works/${state.work.id}/characters`)
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
@@ -2600,29 +2779,77 @@ async function renderRaces() {
         <p>${esc(item.description || "尚未填写种族简介")}</p>
         <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<span class="pill${setting.inherited ? " inherited" : ""}" title="${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}">${esc(setting.value)}<small>${esc(setting.sourceRaceName)}</small></span>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("races") && state.races.length > 1 ? `<button data-merge-race="${esc(item.id)}">合并</button>` : ""}${canEditModule("races") ? `<button class="danger-button" data-delete-race="${esc(item.id)}">删除</button>` : ""}</div>
       </article>
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
   $("#module-content").innerHTML = state.races.length ? `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  $("#module-content").querySelectorAll("[data-merge-race]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.races.find((item) => item.id === button.dataset.mergeRace);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "种族",
+      source,
+      candidates: state.races,
+      endpoint: (item) => `/api/races/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({ targetRaceId: target.id }),
+      refresh: renderRaces,
+      impact: "来源种族的角色、子种族、简介与共同设定会迁移到目标种族。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-race]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.races.find((race) => race.id === button.dataset.deleteRace);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "种族",
+      item,
+      endpoint: (race) => `/api/races/${encodeURIComponent(race.id)}`,
+      refresh: renderRaces,
+      warning: "已绑定角色将变为未指定种族；有子种族时需先迁移或合并。"
+    });
+  }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
 async function renderOrganizations() {
   [state.organizations, state.characters] = await Promise.all([
     apiAllPages(`/api/works/${state.work.id}/organizations`),
-    apiAllPages(`/api/works/${state.work.id}/characters`)
+    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   $("#module-content").innerHTML = state.organizations.length ? `<div class="card-grid organization-grid">${state.organizations.map((item) => `
     <article class="record-card organization-card"><small>${item.memberIds.length} 位成员 · ${item.settings.length} 条设定</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("organizations") && state.organizations.length > 1 ? `<button data-merge-organization="${esc(item.id)}">合并</button>` : ""}${canEditModule("organizations") ? `<button class="danger-button" data-delete-organization="${esc(item.id)}">删除</button>` : ""}</div>
     </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  $("#module-content").querySelectorAll("[data-merge-organization]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.organizations.find((item) => item.id === button.dataset.mergeOrganization);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "组织",
+      source,
+      candidates: state.organizations,
+      endpoint: (item) => `/api/organizations/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({ targetOrganizationId: target.id }),
+      refresh: renderOrganizations,
+      impact: "来源组织的成员、简介与组织设定会迁移到目标组织。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-organization]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.organizations.find((organization) => organization.id === button.dataset.deleteOrganization);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "组织",
+      item,
+      endpoint: (organization) => `/api/organizations/${encodeURIComponent(organization.id)}`,
+      refresh: renderOrganizations,
+      warning: "角色与该组织的成员关系会一并移除。"
+    });
+  }));
   bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 
@@ -2691,7 +2918,7 @@ async function renderOutlines() {
 }
 
 async function renderRelationships() {
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const relationships = (await apiPage(`/api/works/${state.work.id}/relationships`)).items;
   const nameOf = (id) => state.characters.find((item) => item.id === id)?.name ?? "未知角色";
   state.galaxy?.destroy();
@@ -2722,9 +2949,13 @@ async function renderRelationships() {
 }
 
 async function renderReviews() {
+  const canReadCharacters = canReadModule("characters");
+  const canResolveReview = canEditModule("reviews");
+  const canMergeCharacters = canResolveReview
+    && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
   const [reviews, characters] = await Promise.all([
     apiPage(`/api/works/${state.work.id}/reviews`).then((result) => result.items),
-    apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`)
+    canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
   const characterById = new Map(characters.map((character) => [character.id, character]));
   const duplicateCard = (item) => {
@@ -2732,17 +2963,21 @@ async function renderReviews() {
     const sides = refs.map((reference) => ({ reference, character: characterById.get(reference.id) }));
     const sideHtml = sides.map(({ character }) => `<section><strong>${esc(character.name)}</strong><small>v${esc(String(character.versionNo))} · ${esc(character.species || "种族未知")}</small><div>${character.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("") || '<span class="organization-empty">无别名</span>'}</div><p>${esc(character.attributes?.identity || character.profile?.summary || "尚未记录身份说明")}</p></section>`).join("");
     const evidenceHtml = (item.evidence ?? []).map((evidence) => `<li><strong>${esc(evidence.chapterTitle || evidence.chapterId || "原文")}</strong><q>${esc(evidence.quote || "")}</q>${evidence.supports ? `<small>${esc(evidence.supports)}</small>` : ""}</li>`).join("");
-    const actions = item.status === "pending" && sides.length === 2 ? `<div class="card-actions character-duplicate-actions">
+    const mergeActions = item.status === "pending" && sides.length === 2 && canMergeCharacters ? `
       <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[0].character.id)}" data-merge-source="${esc(sides[1].character.id)}" data-target-version="${esc(String(sides[0].reference.versionNo))}" data-source-version="${esc(String(sides[1].reference.versionNo))}">合并为 ${esc(sides[0].character.name)}</button>
-      <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[1].character.id)}" data-merge-source="${esc(sides[0].character.id)}" data-target-version="${esc(String(sides[1].reference.versionNo))}" data-source-version="${esc(String(sides[0].reference.versionNo))}">合并为 ${esc(sides[1].character.name)}</button>
-      <button data-keep-characters-separate="${esc(item.id)}">确认是不同角色</button>
-    </div>` : "";
+      <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[1].character.id)}" data-merge-source="${esc(sides[0].character.id)}" data-target-version="${esc(String(sides[1].reference.versionNo))}" data-source-version="${esc(String(sides[0].reference.versionNo))}">合并为 ${esc(sides[1].character.name)}</button>` : "";
+    const keepSeparateAction = item.status === "pending" && canResolveReview
+      ? `<button data-keep-characters-separate="${esc(item.id)}">确认是不同角色</button>`
+      : "";
+    const actions = mergeActions || keepSeparateAction
+      ? `<div class="card-actions character-duplicate-actions">${mergeActions}${keepSeparateAction}</div>`
+      : "";
     return `<article class="record-card character-duplicate-review"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
   };
   $("#module-content").innerHTML = reviews.length ? `<div class="card-grid">${reviews.map((item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
     <article class="record-card"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
     <p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>
-    ${item.status === "pending" ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`).join("")}</div>`
+    ${item.status === "pending" && canResolveReview ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`).join("")}</div>`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
@@ -2785,12 +3020,15 @@ async function renderReviews() {
 async function renderTasks() {
   const [tasks, settings] = await Promise.all([
     apiPage(`/api/works/${state.work.id}/tasks`).then((result) => result.items),
-    api(`/api/works/${state.work.id}/ai-settings`)
+    canReadModule("ai-settings")
+      ? api(`/api/works/${state.work.id}/ai-settings`)
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
   ]);
+  const canConfigureAutoRun = canEditModule("tasks") && canEditModule("ai-settings");
   const pendingCount = tasks.filter((item) => item.status === "pending").length;
   const runningCount = tasks.filter((item) => item.status === "running").length;
   $("#module-content").innerHTML = `
-    <section class="task-auto-run-panel" aria-labelledby="task-auto-run-title">
+    <section class="task-auto-run-panel ${canConfigureAutoRun ? "" : "hidden"}" aria-labelledby="task-auto-run-title">
       <div class="task-auto-run-copy">
         <strong id="task-auto-run-title">自动执行待分析任务</strong>
         <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
@@ -3008,6 +3246,10 @@ async function renderBookAiSettings() {
     "afterend",
     `<label><input name="agent-tool" type="checkbox" value="read_character_sections" ${agentTools.has("read_character_sections") ? "checked" : ""}><span><strong>读取人物 Markdown 章节</strong><small>根据知识查询返回的章节 ID 精读人物背景、能力与经历原文。</small></span></label>`
   );
+  if (!canEditModule("ai-settings")) {
+    host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
+    host.querySelectorAll(".primary-button").forEach((button) => button.classList.add("permission-hidden"));
+  }
   $("#save-work-system-prompt").addEventListener("click", async () => {
     const button = $("#save-work-system-prompt");
     button.disabled = true;
@@ -3076,8 +3318,9 @@ async function renderBookAiSettings() {
 async function loadModels() {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.models = models;
   loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
@@ -3218,11 +3461,12 @@ async function refreshAiContextUsage() {
 async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const [characters, settings] = await Promise.all([
-    apiAllPages(`/api/works/${workId}/characters`),
-    apiAllPages(`/api/works/${workId}/settings`)
+    canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
+    canReadModule("settings") ? apiAllPages(`/api/works/${workId}/settings`) : Promise.resolve([])
   ]);
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
   state.settings = settings;
   loadedAiReferencesWorkId = workId;
@@ -3457,8 +3701,8 @@ function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
   const accessField = `<section class="work-access-field" aria-labelledby="work-access-title">
-    <div><strong id="work-access-title">可访问人</strong><small>可以分别授予成员仅查看或共同编辑权限。</small></div>
-    ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">添加或管理可访问人</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
+    <div><strong id="work-access-title">成员权限</strong><small>选择成员后，可为每个作品模块单独设置无权限、只读或可编辑。</small><div class="work-access-options" aria-label="成员权限配置方式"><span>按成员配置</span><span>按模块授权</span><span>读写分离</span></div></div>
+    ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">配置成员权限</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
   </section>`;
   openDialog("作品信息",
     workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
@@ -3487,6 +3731,7 @@ function openWorkSettingsDialog(work) {
 
 async function openChapterDialog() {
   if (!state.work) return openWorkDialog();
+  if (!canEditProse()) return toast("当前权限只能编辑设定资料，正文为只读", "error");
   if (!state.work.volumes.length) {
     await api(`/api/works/${state.work.id}/volumes`, { method: "POST", body: { title: "正文", kind: "main" } });
     state.work = await api(`/api/works/${state.work.id}`);
@@ -3501,6 +3746,7 @@ async function openChapterDialog() {
 
 function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
+  if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
   openDialog(item ? "编辑分卷" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
@@ -3532,13 +3778,13 @@ function openSettingEditor(item = null) {
   $("#setting-change-note").value = "";
   $("#setting-change-note-field").classList.toggle("hidden", !item);
   $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
-  const viewOnly = !canEditWork();
+  const viewOnly = !canEditModule("settings");
   $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
   $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
   $("#setting-editor-form").onsubmit = async (event) => {
     event.preventDefault();
-    if (!canEditWork()) return;
+    if (!canEditModule("settings")) return;
     const form = new FormData(event.currentTarget);
     const submit = $("#setting-editor-submit");
     submit.disabled = true;
@@ -3620,11 +3866,11 @@ function renderCharacterEditorRelationships() {
     const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
     const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
     return `<article class="character-relationship-row">
-      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${canEditWork() ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${canEditModule("relationships") ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
       <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
     </article>`;
   }).join("");
-  host.innerHTML = `<div class="character-relationship-toolbar"><p>与 ${esc(characterEditorItem.name)} 有关的其他人物及关系关键词。</p>${canEditWork() ? '<button type="button" class="ghost-button" data-character-relationship-create>新建关系</button>' : ""}</div>${rows || '<p class="character-relationship-status">暂未记录与其他人物的关系。</p>'}`;
+  host.innerHTML = `<div class="character-relationship-toolbar"><p>与 ${esc(characterEditorItem.name)} 有关的其他人物及关系关键词。</p>${canEditModule("relationships") ? '<button type="button" class="ghost-button" data-character-relationship-create>新建关系</button>' : ""}</div>${rows || '<p class="character-relationship-status">暂未记录与其他人物的关系。</p>'}`;
   host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
     const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
     if (relationship) void openRelationshipDialog(relationship, { characterId });
@@ -3854,9 +4100,9 @@ function renderCharacterMarkdownSections() {
     host.innerHTML = '<div class="character-editor-empty-field"><b>Markdown 档案章节</b><span>创建人物档案后即可添加背景故事、能力、经历和研究记录。</span></div>';
     return;
   }
-  const toolbar = `<div class="character-markdown-list-toolbar"><div><b>Markdown 档案章节</b><span>长篇内容独立保存、渲染、检索和版本管理。</span></div>${canEditWork() ? '<button type="button" class="primary-button" data-character-section-create>新建章节</button>' : ""}</div>`;
+  const toolbar = `<div class="character-markdown-list-toolbar"><div><b>Markdown 档案章节</b><span>长篇内容独立保存、渲染、检索和版本管理。</span></div>${canEditModule("characters") ? '<button type="button" class="primary-button" data-character-section-create>新建章节</button>' : ""}</div>`;
   const sections = characterEditorSections.map((section) => `<article class="character-markdown-section">
-    <header><div><span>${esc(characterSectionTypeLabels[section.sectionType] ?? section.sectionType)}</span><h4>${esc(section.title)}</h4>${section.summary ? `<p>${esc(section.summary)}</p>` : ""}</div><div>${canEditWork() ? `<button type="button" data-character-section-edit="${esc(section.id)}">编辑</button>` : ""}<button type="button" data-character-section-versions="${esc(section.id)}">版本</button>${canEditWork() ? `<button type="button" data-character-section-delete="${esc(section.id)}">删除</button>` : ""}</div></header>
+    <header><div><span>${esc(characterSectionTypeLabels[section.sectionType] ?? section.sectionType)}</span><h4>${esc(section.title)}</h4>${section.summary ? `<p>${esc(section.summary)}</p>` : ""}</div><div>${canEditModule("characters") ? `<button type="button" data-character-section-edit="${esc(section.id)}">编辑</button>` : ""}<button type="button" data-character-section-versions="${esc(section.id)}">版本</button>${canEditModule("characters") ? `<button type="button" data-character-section-delete="${esc(section.id)}">删除</button>` : ""}</div></header>
     <div class="character-markdown-document message-body">${renderMarkdown(section.contentMarkdown) || '<p class="character-markdown-empty">本章节暂无正文。</p>'}</div>
     <div data-character-section-versions-host="${esc(section.id)}"></div>
   </article>`).join("");
@@ -3914,14 +4160,20 @@ function renderCharacterEditorFields(item) {
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       field("name", "标准名", "text", item?.name) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
-      (state.races.length
+      (!canReadModule("races")
+        ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
+        : state.races.length
         ? field("raceId", "种族", "select", item?.raceId ?? "", raceOptions)
         : '<div class="character-editor-empty-field"><b>种族</b><span>尚未创建种族，请先在“种族”模块建立档案。</span></div>') +
-      (organizationOptions.length
+      (!canReadModule("organizations")
+        ? '<div class="character-editor-empty-field"><b>所属组织</b><span>当前账户没有组织模块读取权限，原有绑定不会被修改。</span></div>'
+        : organizationOptions.length
         ? field("organizationIds", "所属组织（可多选）", "chips", item?.organizationIds ?? [], organizationOptions)
         : '<div class="character-editor-empty-field"><b>所属组织</b><span>尚未创建组织，可稍后在“组织”模块中补充。</span></div>') +
       field("visibility", "可见范围", "select", item?.visibility ?? "author", [["author", "仅作者"], ["collaborators", "协作者"], ["public", "公开"]]) +
-      field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)),
+      (canReadModule("editor")
+        ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
+        : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
     characterEditorSection("profile", "人物档案", "记录人物定位、行为动力和便于创作时快速理解的简介。",
       field("identity", "身份与定位", "text", item?.attributes?.identity) +
       field("motivation", "核心动机", "textarea", item?.profile?.motivation) +
@@ -3957,11 +4209,9 @@ function collectCharacterBody(form) {
   const item = characterEditorItem;
   const profile = { ...(item?.profile ?? {}) };
   delete profile.sections;
-  return {
+  const body = {
     name: String(form.get("name") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
-    raceId: form.get("raceId") || null,
-    organizationIds: form.getAll("organizationIds").map(String),
     attributes: {
       ...(item?.attributes ?? {}),
       identity: String(form.get("identity") ?? "").trim(),
@@ -3975,9 +4225,12 @@ function collectCharacterBody(form) {
     currentState: buildCharacterState(form.getAll("stateKey"), form.getAll("stateValue"), item?.currentState ?? {}),
     lockedFields: form.getAll("lockedFields").map((value) => String(value).trim()).filter(Boolean),
     visibility: String(form.get("visibility") ?? "author"),
-    firstChapterId: form.get("firstChapterId") || null,
     changeNote: String(form.get("changeNote") ?? "").trim()
   };
+  if (canReadModule("races")) body.raceId = form.get("raceId") || null;
+  if (canReadModule("organizations")) body.organizationIds = form.getAll("organizationIds").map(String);
+  if (canReadModule("editor")) body.firstChapterId = form.get("firstChapterId") || null;
+  return body;
 }
 
 function renderCharacterHistory() {
@@ -4049,8 +4302,8 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null) {
   [state.races, state.organizations] = await Promise.all([
-    apiAllPages(`/api/works/${state.work.id}/races`),
-    apiAllPages(`/api/works/${state.work.id}/organizations`)
+    canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
@@ -4066,7 +4319,7 @@ async function openCharacterEditor(item = null) {
   $("#character-history-button").title = item ? "查看、比较和回滚历史版本" : "创建人物档案后即可查看版本历史";
   setCharacterHistoryVisible(false);
   renderCharacterEditorFields(item);
-  const viewOnly = !canEditWork();
+  const viewOnly = !canEditModule("characters");
   if (viewOnly) {
     $("#character-editor-eyebrow").textContent = "人物档案";
     $("#character-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
@@ -4078,12 +4331,12 @@ async function openCharacterEditor(item = null) {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
   const relationshipTab = document.querySelector("[data-character-editor-tab='relationships']");
-  relationshipTab.disabled = !item;
-  relationshipTab.title = item ? "查看和编辑人物关系" : "创建人物档案后即可维护人物关系";
+  relationshipTab.disabled = !item || !canReadModule("relationships");
+  relationshipTab.title = !canReadModule("relationships") ? "当前账户没有关系模块读取权限" : item ? "查看和编辑人物关系" : "创建人物档案后即可维护人物关系";
   const form = $("#character-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
-    if (!canEditWork()) return;
+    if (!canEditModule("characters")) return;
     const submit = $("#character-editor-submit");
     submit.disabled = true;
     try {
@@ -4105,13 +4358,13 @@ async function openCharacterEditor(item = null) {
   };
   showEntityEditorPage("character");
   if (item) {
-    void loadCharacterEditorRelationships(item.id);
+    if (canReadModule("relationships")) void loadCharacterEditorRelationships(item.id);
     void loadCharacterMarkdownSections(item.id);
   }
 }
 
 async function openRaceDialog(item) {
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const parentOptions = [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
     .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
@@ -4124,7 +4377,8 @@ async function openRaceDialog(item) {
     (memberOptions.length ? field("memberIds", "属于该种族的角色（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
     async (form) => {
       const settings = form.getAll("settings").map((value) => String(value).trim()).filter(Boolean);
-      const body = { name: form.get("name"), parentRaceId: form.get("parentRaceId") || null, description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };
+      const body = { name: form.get("name"), parentRaceId: form.get("parentRaceId") || null, description: form.get("description"), settings };
+      if (canReadModule("characters")) body.memberIds = form.getAll("memberIds").map(String);
       await api(item ? `/api/races/${item.id}` : `/api/works/${state.work.id}/races`, { method: item ? "PATCH" : "POST", body });
       await renderRaces();
       await loadAiReferences();
@@ -4132,7 +4386,7 @@ async function openRaceDialog(item) {
 }
 
 async function openOrganizationDialog(item) {
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
   const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   openDialog(item ? "编辑组织" : "新建组织",
     field("name", "组织名称", "text", item?.name) +
@@ -4141,7 +4395,8 @@ async function openOrganizationDialog(item) {
     (memberOptions.length ? field("memberIds", "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions) : ""),
     async (form) => {
       const settings = form.getAll("settings").map((value) => String(value).trim()).filter(Boolean);
-      const body = { name: form.get("name"), description: form.get("description"), settings, memberIds: form.getAll("memberIds").map(String) };
+      const body = { name: form.get("name"), description: form.get("description"), settings };
+      if (canReadModule("characters")) body.memberIds = form.getAll("memberIds").map(String);
       await api(item ? `/api/organizations/${item.id}` : `/api/works/${state.work.id}/organizations`, { method: item ? "PATCH" : "POST", body });
       await renderOrganizations();
       await loadAiReferences();
@@ -4238,6 +4493,7 @@ function openTimelineSplitDialog(item) {
 }
 
 async function openRelationshipDialog(item, options = {}) {
+  if (!canReadModule("characters")) return toast("配置人物关系前需要角色模块读取权限", "error");
   state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
@@ -4548,7 +4804,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
 async function showVersions() {
   if (!state.chapter) return;
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
-  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p><button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button></div>`).join("");
+  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm(`将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`)) return;
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
@@ -4562,6 +4818,120 @@ async function showVersions() {
     toast("历史内容已恢复为新版本");
   }));
   $("#versions-dialog").showModal();
+}
+
+function importHistoryRecordLabel(version) {
+  const restorePrefix = "before-restore:";
+  if (version.fileType === "snapshot" && version.fileName.startsWith(restorePrefix)) {
+    return {
+      title: `恢复操作前备份：${version.fileName.slice(restorePrefix.length)}`,
+      kind: "自动备份",
+      action: "恢复此操作前备份"
+    };
+  }
+  return { title: version.fileName, kind: String(version.fileType).toUpperCase(), action: "恢复到此次导入前" };
+}
+
+function renderImportHistory(versions, nextPage = null) {
+  const host = $("#import-history-list");
+  if (!versions.length) {
+    host.innerHTML = '<p class="entity-history-empty">还没有正文导入记录。首次导入后会自动保存导入前快照。</p>';
+    return;
+  }
+  host.innerHTML = versions.map((version) => {
+    const label = importHistoryRecordLabel(version);
+    return `<article class="entity-version-card import-history-card" data-file-version="${esc(version.id)}">
+      <header><strong title="${esc(label.title)}">${esc(label.title)}</strong><span class="import-history-kind">${esc(label.kind)}</span></header>
+      <time>${esc(formatDateTime(version.createdAt))} · ${esc(version.actor || "历史数据")}</time>
+      <p>${version.fileType === "snapshot" ? "恢复操作执行前自动保存的完整正文。" : "保存的是这次文件导入开始前的完整正文。"}</p>
+      <small>自动备份仅包含正文，不能撤销章节关联信息的变化。</small>
+      <button type="button" data-file-version-restore="${esc(version.id)}" data-default-label="${esc(label.action)}">${esc(label.action)}</button>
+    </article>`;
+  }).join("") + (nextPage ? '<button class="import-history-load-more" type="button" data-import-history-load-more>加载更多记录</button>' : "");
+  host.querySelectorAll("[data-file-version-restore]").forEach((button) => button.addEventListener("click", async () => {
+    if (!state.work || !canReplaceProse()) return;
+    const defaultLabel = button.dataset.defaultLabel;
+    if (button.dataset.confirmed !== "true") {
+      host.querySelectorAll("[data-file-version-restore]").forEach((other) => {
+        other.dataset.confirmed = "false";
+        other.classList.remove("is-confirming");
+        other.textContent = other.dataset.defaultLabel;
+      });
+      button.dataset.confirmed = "true";
+      button.classList.add("is-confirming");
+      button.textContent = "再次点击确认恢复";
+      window.setTimeout(() => {
+        if (!button.isConnected || button.dataset.confirmed !== "true") return;
+        button.dataset.confirmed = "false";
+        button.classList.remove("is-confirming");
+        button.textContent = defaultLabel;
+      }, 5000);
+      return;
+    }
+    if (!confirmDiscardChanges("当前章节有未保存修改，恢复正文会丢弃这些本地修改。是否继续？")) return;
+    button.disabled = true;
+    cancelChapterAutoSave();
+    const workId = state.work.id;
+    try {
+      await api(`/api/works/${encodeURIComponent(workId)}/file-versions/${encodeURIComponent(button.dataset.fileVersionRestore)}/restore`, {
+        method: "POST",
+        body: { expectedVersionNo: state.work.versionNo }
+      });
+      state.dirty = false;
+      resetWorkScopedUiCaches();
+      $("#import-history-dialog").close();
+      await loadWorks(workId);
+      toast("正文已恢复；恢复前正文已自动备份");
+    } catch (error) {
+      button.disabled = false;
+      button.dataset.confirmed = "false";
+      button.classList.remove("is-confirming");
+      button.textContent = defaultLabel;
+      if (state.dirty) scheduleChapterAutoSave();
+      toast(error.message, "error");
+    }
+  }));
+  host.querySelector("[data-import-history-load-more]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "正在加载…";
+    try {
+      await loadImportHistoryPage(nextPage);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "加载更多记录";
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function loadImportHistoryPage(page) {
+  const workId = state.work?.id;
+  if (!workId || !page) return;
+  const requestId = ++importHistoryRequestId;
+  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25);
+  if (requestId !== importHistoryRequestId || state.work?.id !== workId || !$("#import-history-dialog").open) return;
+  importHistoryRecords = page === 1 ? result.items : [...importHistoryRecords, ...result.items];
+  importHistoryNextPage = result.nextPage;
+  renderImportHistory(importHistoryRecords, importHistoryNextPage);
+}
+
+async function openImportHistory() {
+  if (!state.work || !canReplaceProse()) {
+    toast("恢复整本正文需要所有受影响模块的编辑权限", "error");
+    return;
+  }
+  importHistoryRecords = [];
+  importHistoryNextPage = null;
+  importHistoryRequestId += 1;
+  $("#import-history-list").innerHTML = '<p class="entity-history-empty">正在读取导入历史…</p>';
+  $("#import-history-dialog").showModal();
+  try {
+    await loadImportHistoryPage(1);
+  } catch (error) {
+    $("#import-history-dialog").close();
+    toast(error.message, "error");
+  }
 }
 
 async function showChapterInsight() {
@@ -4840,18 +5210,34 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   }
 });
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
-$("#members-dialog").addEventListener("close", () => { memberDialogWork = null; });
-$("#member-invite-form").addEventListener("submit", async (event) => {
+$("#members-dialog").addEventListener("close", () => {
+  memberDialogWork = null;
+  memberDialogMembers = [];
+  memberDialogDirectory = [];
+});
+$("#member-user-select").addEventListener("change", () => selectMemberForConfiguration($("#member-user-select").value));
+$("#member-permission-form").querySelectorAll("[data-permission-preset]").forEach((button) => button.addEventListener("click", () => {
+  $("#member-permission-grid").querySelectorAll("[data-member-permission]").forEach((select) => {
+    select.value = button.dataset.permissionPreset;
+  });
+}));
+$("#member-permission-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const userId = $("#member-user-select").value;
   const work = memberDialogWork ?? state.work;
   if (!work || !userId) return;
   try {
-    const role = $("#member-role-select").value;
-    const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId, role } });
+    const existing = memberDialogMembers.some((member) => member.userId === userId && member.role !== "owner");
+    const permissions = selectedMemberPermissions();
+    const members = await api(existing
+      ? `/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(userId)}`
+      : `/api/works/${encodeURIComponent(work.id)}/members`, {
+      method: existing ? "PATCH" : "POST",
+      body: existing ? { permissions } : { userId, permissions }
+    });
     renderMembers(members);
-    await fillMemberCandidates(members);
-    toast(role === "viewer" ? "仅查看成员已邀请" : "协作者已邀请");
+    renderMemberSelector(userId);
+    toast(existing ? "成员模块权限已更新" : "成员已添加并保存模块权限");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
@@ -4864,6 +5250,8 @@ $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
+$("#import-history-button").addEventListener("click", () => openImportHistory());
+$("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
@@ -5002,6 +5390,11 @@ $("#ai-mention-menu").addEventListener("click", (event) => {
 $("#import-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!state.work || !file) return;
+  if (!canEditProse()) {
+    event.target.value = "";
+    toast("当前权限只能编辑设定资料，不能导入正文", "error");
+    return;
+  }
   const mode = await chooseExistingWorkImportMode(file);
   if (!mode) {
     event.target.value = "";
