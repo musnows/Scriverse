@@ -48,7 +48,7 @@ export function createRequestLoggingMiddleware(log: Logger = defaultLogger): Req
     let completed = false;
     response.setHeader("X-Request-Id", requestId);
     return runWithRequestContext({ requestId, actor: null }, () => {
-      log.info("http.request.started", {
+      log.debug("http.request.started", {
         method: request.method,
         path: sanitizeRequestPath(request.path),
         clientNetwork: maskClientAddress(request.ip || request.socket.remoteAddress),
@@ -62,7 +62,7 @@ export function createRequestLoggingMiddleware(log: Logger = defaultLogger): Req
         const fields = responseFields(request, response, startedAt);
         if (response.statusCode >= 500) log.error("http.request.completed", fields);
         else if (response.statusCode >= 400) log.warn("http.request.completed", fields);
-        else log.info("http.request.completed", fields);
+        else log.debug("http.request.completed", fields);
       });
       response.once("close", () => {
         if (!completed) log.warn("http.request.aborted", responseFields(request, response, startedAt));
