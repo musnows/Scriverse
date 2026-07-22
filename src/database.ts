@@ -1487,6 +1487,23 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (33, ?)", new Date().toISOString());
       });
     }
+    if (!applied.has(34)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(work_memberships)").map((row) => String(row.name)));
+        if (!columns.has("permissions_json")) {
+          this.run("ALTER TABLE work_memberships ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '{}'");
+        }
+        this.run(`UPDATE work_memberships SET permissions_json = '{}'
+          WHERE NOT json_valid(permissions_json) OR json_type(permissions_json) <> 'object'`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (34, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {

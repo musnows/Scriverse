@@ -465,6 +465,19 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .member-invite-form .primary-button { min-height: 38px; white-space: nowrap; }
 .app-shell.view-only-mode:not(.shelf-mode) { grid-template-columns: var(--left-panel-width) minmax(480px, 1fr); }
 .app-shell.view-only-mode:not(.shelf-mode) .ai-panel { display: none; }
+.app-shell.settings-only-mode:not(.shelf-mode) { grid-template-columns: var(--left-panel-width) minmax(480px, 1fr); }
+.app-shell.settings-only-mode:not(.shelf-mode) .ai-panel { display: none; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #new-volume-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
+.app-shell.prose-read-only-mode:not(.shelf-mode) #save-button { display: none !important; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
+.app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-title[readonly],
+.app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
+.app-shell.settings-only-mode:not(.shelf-mode) [data-work-settings],
+.app-shell.settings-only-mode:not(.shelf-mode) [data-module="tasks"],
+.app-shell.settings-only-mode:not(.shelf-mode) [data-module="ai-settings"] { display: none !important; }
 .app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-volume-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-chapter-button,
@@ -506,6 +519,11 @@ body.work-viewer-mode [data-item-list-remove],
 body.work-viewer-mode [data-structured-list-add],
 body.work-viewer-mode [data-structured-list-remove],
 body.work-viewer-mode .character-editor-actions { display: none !important; }
+body.work-settings-editor-mode [data-review-id],
+body.work-settings-editor-mode .task-auto-run-panel,
+body.work-settings-editor-mode [data-run-task],
+body.work-settings-editor-mode [data-cancel-task],
+body.work-settings-editor-mode [data-restore-version] { display: none !important; }
 .search-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; margin: 0; }
 .search-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .search-form input {

@@ -81,18 +81,36 @@ function analysisTaskStatusLabel(status) {
 }
 
 function canEditWork(work = state.work) {
+  return ["admin", "owner", "editor", "settings-editor"].includes(String(work?.accessRole));
+}
+
+function canEditProse(work = state.work) {
   return ["admin", "owner", "editor"].includes(String(work?.accessRole));
+}
+
+function canManageWork(work = state.work) {
+  return ["admin", "owner"].includes(String(work?.accessRole));
+}
+
+function canEditModule(module, work = state.work) {
+  if (canEditProse(work)) return true;
+  return canEditWork(work) && ["settings", "characters", "races", "organizations", "timeline", "outlines", "relationships"].includes(module);
 }
 
 function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
+  const settingsOnly = String(state.work?.accessRole) === "settings-editor";
+  const proseReadOnly = Boolean(state.work) && !canEditProse();
   $("#app").classList.toggle("view-only-mode", viewOnly);
+  $("#app").classList.toggle("settings-only-mode", settingsOnly);
+  $("#app").classList.toggle("prose-read-only-mode", proseReadOnly);
   document.body.classList.toggle("work-viewer-mode", viewOnly);
-  $("#chapter-title").readOnly = viewOnly;
-  $("#chapter-content").readOnly = viewOnly;
-  $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
-  $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
-  if (viewOnly) {
+  document.body.classList.toggle("work-settings-editor-mode", settingsOnly);
+  $("#chapter-title").readOnly = proseReadOnly;
+  $("#chapter-content").readOnly = proseReadOnly;
+  $("#chapter-title").setAttribute("aria-readonly", String(proseReadOnly));
+  $("#chapter-content").setAttribute("aria-readonly", String(proseReadOnly));
+  if (proseReadOnly) {
     cancelChapterAutoSave();
     state.dirty = false;
   }
@@ -1616,7 +1634,7 @@ function cancelChapterAutoSave() {
 }
 
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
-  if (!state.chapter || !canEditWork()) return;
+  if (!state.chapter || !canEditProse()) return;
   cancelChapterAutoSave();
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
@@ -1626,7 +1644,7 @@ function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
 }
 
 async function persistChapter({ automatic = false } = {}) {
-  if (!canEditWork()) return null;
+  if (!canEditProse()) return null;
   if (!state.chapter) {
     if (!automatic) toast("请先选择章节", "error");
     return null;
@@ -1886,8 +1904,8 @@ function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
-    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>可编辑</option></select>`}
+    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : member.role === "settings-editor" ? "设定编辑" : "完整协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
+    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="settings-editor" ${member.role === "settings-editor" ? "selected" : ""}>仅编辑设定</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>编辑正文与设定</option></select>`}
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
   bindUserAvatarFallbacks($("#members-list"));
@@ -2090,9 +2108,9 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "settings-editor" ? "设定协作" : work.accessRole === "editor" ? "完整协作" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
-      ${canEditWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
+      ${canManageWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
     </article>`).join("")}
     <button class="book-card book-add-card" id="book-add-card" type="button" aria-label="新建作品" data-testid="book-add-card"><span>＋</span><strong>新建作品</strong><small>从零开始或导入 TXT / DOCX</small></button>`;
   shelf.querySelectorAll("[data-open-work]").forEach((button) => button.addEventListener("click", () => selectWork(button.dataset.openWork)));
@@ -2177,7 +2195,7 @@ function renderTree() {
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditWork()) return;
+      if (!canEditProse()) return;
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
@@ -2185,7 +2203,7 @@ function renderTree() {
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditWork()) return;
+      if (!canEditProse()) return;
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
@@ -2235,7 +2253,7 @@ async function selectChapter(chapterId) {
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  if (!canEditWork()) setSaveState("仅查看");
+  if (!canEditProse()) setSaveState(canEditWork() ? "正文只读" : "仅查看");
   else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
@@ -2293,7 +2311,7 @@ const moduleMeta = {
 
 async function showModule(module) {
   if (!state.work) return showWelcome();
-  if (!canEditWork() && ["tasks", "ai-settings"].includes(module)) module = "editor";
+  if (!canEditProse() && ["tasks", "ai-settings"].includes(module)) module = "editor";
   if (module !== "editor" && state.module === "editor" && !confirmDiscardChanges()) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
@@ -2315,7 +2333,7 @@ async function showModule(module) {
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditWork());
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
@@ -3467,6 +3485,7 @@ function openWorkSettingsDialog(work) {
 
 async function openChapterDialog() {
   if (!state.work) return openWorkDialog();
+  if (!canEditProse()) return toast("当前权限只能编辑设定资料，正文为只读", "error");
   if (!state.work.volumes.length) {
     await api(`/api/works/${state.work.id}/volumes`, { method: "POST", body: { title: "正文", kind: "main" } });
     state.work = await api(`/api/works/${state.work.id}`);
@@ -3481,6 +3500,7 @@ async function openChapterDialog() {
 
 function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
+  if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
   openDialog(item ? "编辑分卷" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
@@ -4527,7 +4547,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
 async function showVersions() {
   if (!state.chapter) return;
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
-  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p><button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button></div>`).join("");
+  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm(`将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`)) return;
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
@@ -4830,7 +4850,7 @@ $("#member-invite-form").addEventListener("submit", async (event) => {
     const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId, role } });
     renderMembers(members);
     await fillMemberCandidates(members);
-    toast(role === "viewer" ? "仅查看成员已邀请" : "协作者已邀请");
+    toast(role === "viewer" ? "仅查看成员已邀请" : role === "settings-editor" ? "设定编辑已邀请" : "完整协作者已邀请");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
@@ -4980,6 +5000,11 @@ $("#ai-mention-menu").addEventListener("click", (event) => {
 });
 $("#import-file").addEventListener("change", async (event) => {
   if (!state.work || !event.target.files[0]) return;
+  if (!canEditProse()) {
+    event.target.value = "";
+    toast("当前权限只能编辑设定资料，不能导入正文", "error");
+    return;
+  }
   if (!confirmDiscardChanges("导入会替换当前作品目录，未保存修改将丢失。是否继续？")) {
     event.target.value = "";
     return;

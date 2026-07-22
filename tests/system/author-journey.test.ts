@@ -231,8 +231,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260722-manual-entity-management');
-    expect(page.text).toContain('/styles.css?v=20260722-manual-entity-management');
+    expect(page.text).toContain('/app.js?v=20260722-settings-editor-access');
+    expect(page.text).toContain('/styles.css?v=20260722-settings-editor-access');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -305,9 +305,13 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('id="work-access-manage"');
     expect(page.text).toContain('id="member-role-select"');
     expect(page.text).toContain('<option value="viewer">仅查看</option>');
+    expect(page.text).toContain('<option value="settings-editor">仅编辑设定</option>');
+    expect(application.text).toContain('"settings-editor"');
     expect(application.text).toContain('classList.toggle("view-only-mode", viewOnly)');
-    expect(application.text).toContain('setSaveState("仅查看")');
+    expect(application.text).toContain('classList.toggle("settings-only-mode", settingsOnly)');
+    expect(application.text).toContain('setSaveState(canEditWork() ? "正文只读" : "仅查看")');
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
+    expect(styles.text).toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
     expect(application.text).toContain('class="book-card-settings"');
     expect(application.text).toContain("function workCoverFieldHtml(work)");
     expect(application.text).toContain('id="work-cover-upload"');

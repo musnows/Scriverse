@@ -1635,13 +1635,17 @@ export class Store {
     const actor = currentRequestActor();
     const ownerUserId = optionalString(row, "owner_user_id");
     const membership = actor
-      ? this.db.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
+      ? this.db.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
       : undefined;
+    const membershipPermissions = json<Record<string, unknown>>(optionalString(membership ?? {}, "permissions_json"), {});
+    const membershipRole = String(membership?.role ?? "");
     const accessRole = ownerUserId === actor?.userId
       ? "owner"
       : actor?.role === "admin"
         ? "admin"
-        : ["editor", "viewer"].includes(String(membership?.role ?? "")) ? String(membership?.role) : null;
+        : membershipRole === "editor" && membershipPermissions.editScope === "settings"
+          ? "settings-editor"
+          : ["editor", "viewer"].includes(membershipRole) ? membershipRole : null;
     const count = this.db.get(
       "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ?",
       requiredString(row, "id")

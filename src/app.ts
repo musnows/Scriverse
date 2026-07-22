@@ -64,8 +64,8 @@ const loginSchema = z.object({
   ...captchaFields
 }).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
-const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "viewer"]) }).strict();
-const memberRoleSchema = z.object({ role: z.enum(["editor", "viewer"]) }).strict();
+const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
+const memberRoleSchema = z.object({ role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 const changeNoteSchema = z.string().trim().max(500).optional();

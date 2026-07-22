@@ -206,6 +206,95 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("设定编辑可维护设定集，但不能修改分卷、正文和作品配置", async () => {
+    const owner = await register(runtime, "settings_owner");
+    const collaborator = await register(runtime, "settings_editor");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "设定协作测试" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "第一章", content: "原始正文。" })
+      .expect(201);
+
+    const invited = await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, role: "settings-editor" })
+      .expect(201);
+    expect(invited.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: collaborator.user.userId, role: "settings-editor" })
+    ]));
+    const storedMembership = runtime.database.get(
+      "SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?",
+      workId,
+      collaborator.user.userId
+    );
+    expect(storedMembership?.role).toBe("editor");
+    expect(JSON.parse(String(storedMembership?.permissions_json))).toEqual({ editScope: "settings" });
+
+    const works = await collaborator.agent.get("/api/works").expect(200);
+    expect(works.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: workId, accessRole: "settings-editor" })
+    ]));
+    const setting = await collaborator.agent.post(`/api/works/${workId}/settings`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ title: "潮汐规则", category: "世界规则", content: "月升时航道开启。" })
+      .expect(201);
+    await collaborator.agent.patch(`/api/settings/${setting.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ content: "双月同时升起时航道开启。", changeNote: "修正开启条件" })
+      .expect(200);
+    await collaborator.agent.put(`/api/chapters/${chapter.body.data.id}/outline`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ goal: "确认航道规则", conflict: "双月并未同时升起", status: "ready" })
+      .expect(200);
+
+    const chapterWrite = await collaborator.agent.patch(`/api/chapters/${chapter.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ content: "不应写入的正文。" })
+      .expect(403);
+    expect(chapterWrite.body.error.code).toBe("WORK_PROSE_EDIT_DENIED");
+    const volumeWrite = await collaborator.agent.patch(`/api/volumes/${volume.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ title: "不应修改的分卷" })
+      .expect(403);
+    expect(volumeWrite.body.error.code).toBe("WORK_PROSE_EDIT_DENIED");
+    const taskWrite = await collaborator.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ taskType: "book-analysis" })
+      .expect(403);
+    expect(taskWrite.body.error.code).toBe("WORK_PROSE_EDIT_DENIED");
+    await collaborator.agent.patch(`/api/works/${workId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ title: "不应修改的作品名" })
+      .expect(403);
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content).toBe("原始正文。");
+
+    const promoted = await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "editor" })
+      .expect(200);
+    expect(promoted.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: collaborator.user.userId, role: "editor" })
+    ]));
+    expect(runtime.database.get(
+      "SELECT permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?",
+      workId,
+      collaborator.user.userId
+    )?.permissions_json).toBe("{}");
+    await collaborator.agent.patch(`/api/chapters/${chapter.body.data.id}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ content: "完整协作权限可以修改正文。" })
+      .expect(200);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {
     const legacyWork = runtime.store.createWork({ title: "既有作品" });
     const admin = await register(runtime, "first_admin");

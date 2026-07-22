@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-manual-entity-management">
+    <link rel="stylesheet" href="/styles.css?v=20260722-settings-editor-access">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -508,7 +508,7 @@
     <dialog id="members-dialog" class="dialog wide-dialog" aria-labelledby="members-dialog-title">
       <div class="dialog-header"><div><span id="members-dialog-eyebrow" class="eyebrow">作品权限</span><h2 id="members-dialog-title">可访问人</h2></div><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="access-dialog-body">
-        <form id="member-invite-form" class="member-invite-form"><label>邀请已注册用户<select id="member-user-select" required></select></label><label>访问权限<select id="member-role-select" required><option value="viewer">仅查看</option><option value="editor">可编辑</option></select></label><button class="primary-button" type="submit">发送邀请</button></form>
+        <form id="member-invite-form" class="member-invite-form"><label>邀请已注册用户<select id="member-user-select" required></select></label><label>访问权限<select id="member-role-select" required><option value="viewer">仅查看</option><option value="settings-editor">仅编辑设定</option><option value="editor">编辑正文与设定</option></select></label><button class="primary-button" type="submit">发送邀请</button></form>
         <div id="members-list" class="access-list"></div>
       </div>
     </dialog>
@@ -575,6 +575,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-manual-entity-management"></script>
+    <script type="module" src="/app.js?v=20260722-settings-editor-access"></script>
   </body>
 </html>
