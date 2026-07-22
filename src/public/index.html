@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-entity-editor-page">
+    <link rel="stylesheet" href="/styles.css?v=20260722-import-mode-dialog">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -316,6 +316,29 @@
       </form>
     </dialog>
 
+    <dialog id="import-mode-dialog" class="dialog import-mode-dialog" aria-labelledby="import-mode-dialog-title" aria-describedby="import-mode-dialog-description" data-testid="import-mode-dialog">
+      <form method="dialog">
+        <div class="dialog-header">
+          <div><span class="eyebrow">已有项目</span><h2 id="import-mode-dialog-title">选择正文导入方式</h2></div>
+          <button class="dialog-close" value="cancel" aria-label="取消导入" type="submit">×</button>
+        </div>
+        <div class="import-mode-body">
+          <p id="import-mode-dialog-description">即将把所选文件导入当前作品。请选择追加还是覆盖正文。</p>
+          <p id="import-mode-file-summary" class="import-mode-file-summary"></p>
+          <p id="import-mode-unsaved-warning" class="import-mode-unsaved-warning hidden" role="alert">当前章节有未保存修改，继续导入会丢失这些本地修改。</p>
+          <div class="import-mode-options" aria-label="导入方式说明">
+            <section><strong>追加正文</strong><span>保留现有卷章，把新文件解析出的卷章添加到目录末尾。</span></section>
+            <section><strong>覆盖正文</strong><span>删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span></section>
+          </div>
+        </div>
+        <div class="dialog-actions">
+          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button id="import-mode-append" class="ghost-button" value="append" type="submit">追加正文</button>
+          <button id="import-mode-overwrite" class="primary-button" value="overwrite" type="submit">覆盖正文</button>
+        </div>
+      </form>
+    </dialog>
+
     <section id="entity-editor-view" class="entity-editor-view hidden" aria-label="全屏资料编辑">
       <form id="setting-editor-form" class="entity-editor-page hidden" aria-labelledby="setting-editor-title">
         <header class="entity-editor-header">
@@ -575,6 +598,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-optimistic-version-lock-v2"></script>
+    <script type="module" src="/app.js?v=20260722-import-mode-version-lock"></script>
   </body>
 </html>

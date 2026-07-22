@@ -667,8 +667,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? await extractDocxText(request.file.buffer)
       : decodeUtf8ImportedText(request.file.buffer));
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
+    const mode = parse(z.enum(["append", "overwrite"]), request.body.mode ?? "overwrite");
     const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
-    data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed, expectedVersionNo), 201);
+    data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed, mode, expectedVersionNo), 201);
   });
 
   app.post("/api/works/:workId/volumes", (request, response) => {

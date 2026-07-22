@@ -26,6 +26,7 @@ type WorkInput = {
 };
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
+type ImportMode = "append" | "overwrite";
 
 type SettingInput = {
   title: string;
@@ -1132,22 +1133,22 @@ export class Store {
     });
   }
 
-  importNovel(workId: string, fileName: string, fileType: string, parsed: ParsedNovel, expectedVersionNo?: number): Record<string, unknown> {
+  importNovel(workId: string, fileName: string, fileType: string, parsed: ParsedNovel, mode: ImportMode = "overwrite", expectedVersionNo?: number): Record<string, unknown> {
     this.getWork(workId);
     let result: Record<string, unknown> = {};
-    this.db.transaction(() => { result = this.importNovelInTransaction(workId, fileName, fileType, parsed, expectedVersionNo); });
+    this.db.transaction(() => { result = this.importNovelInTransaction(workId, fileName, fileType, parsed, mode, expectedVersionNo); });
     return { ...result, tree: this.getWorkDirectory(workId) };
   }
 
   createImportedWork(input: WorkInput, fileName: string, fileType: string, parsed: ParsedNovel): Record<string, unknown> {
     return this.db.transaction(() => {
       const work = this.createWork(input);
-      const imported = this.importNovelInTransaction(String(work.id), fileName, fileType, parsed, undefined, false);
+      const imported = this.importNovelInTransaction(String(work.id), fileName, fileType, parsed, undefined, undefined, false);
       return { ...imported, work: this.getWork(String(work.id)) };
     });
   }
 
-  private importNovelInTransaction(workId: string, fileName: string, fileType: string, parsed: ParsedNovel, expectedVersionNo?: number, bumpWorkVersion = true): Record<string, unknown> {
+  private importNovelInTransaction(workId: string, fileName: string, fileType: string, parsed: ParsedNovel, mode: ImportMode = "overwrite", expectedVersionNo?: number, bumpWorkVersion = true): Record<string, unknown> {
     const current = this.getWork(workId);
     this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
     const fileVersionId = id("file");
@@ -1167,20 +1168,28 @@ export class Store {
       timestamp,
       currentRequestActor()?.userId ?? null
     );
-    for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
-      this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "导入前保存分卷历史");
+    let volumeOrderOffset = 0;
+    if (mode === "overwrite") {
+      for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
+        this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "导入前保存分卷历史");
+      }
+      this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+    } else {
+      const lastVolume = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
+      volumeOrderOffset = numberValue(lastVolume ?? {}, "value") + 1;
     }
-    this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+    let firstImportedChapterId: string | null = null;
     for (const volume of parsed.volumes) {
       const volumeId = id("volume");
       this.insertVolumeWithId(workId, volumeId, {
         title: volume.title,
         kind: volume.kind,
         source: volume.source,
-        sortOrder: volume.order
+        sortOrder: volumeOrderOffset + volume.order
       }, "import", fileVersionId, "导入分卷");
       for (const chapter of volume.chapters) {
-        this.insertChapter(workId, volumeId, chapter.title, chapter.content, chapter.order, "import", fileVersionId, chapter.chapterType);
+        const chapterId = this.insertChapter(workId, volumeId, chapter.title, chapter.content, chapter.order, "import", fileVersionId, chapter.chapterType);
+        firstImportedChapterId ??= chapterId;
       }
     }
     if (bumpWorkVersion) {
@@ -1189,11 +1198,14 @@ export class Store {
     }
     this.audit(workId, "work.imported", "file-version", fileVersionId, {
       fileName,
+      mode,
       volumeCount: parsed.volumes.length,
       chapterCount: parsed.volumes.reduce((sum, volume) => sum + volume.chapters.length, 0)
     });
     return {
       fileVersionId,
+      firstImportedChapterId,
+      mode,
       warnings: parsed.warnings,
       wordCount: parsed.wordCount,
       paragraphCount: parsed.paragraphCount
