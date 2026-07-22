@@ -259,9 +259,13 @@ function parseRestorableFileSnapshot(value: string, workId: string): { volumes: 
   let contentLength = 0;
   const volumes = parsed.volumes.map((volumeValue) => {
     if (!isRecord(volumeValue) || typeof volumeValue.title !== "string" || typeof volumeValue.kind !== "string"
-      || typeof volumeValue.source !== "string" || typeof volumeValue.description !== "string"
-      || !Array.isArray(volumeValue.keywords) || !volumeValue.keywords.every((keyword) => typeof keyword === "string")
-      || typeof volumeValue.sortOrder !== "number" || !Number.isFinite(volumeValue.sortOrder) || !Array.isArray(volumeValue.chapters)) {
+      || typeof volumeValue.source !== "string" || typeof volumeValue.sortOrder !== "number"
+      || !Number.isFinite(volumeValue.sortOrder) || !Array.isArray(volumeValue.chapters)) {
+      return invalidFileSnapshot();
+    }
+    const description = volumeValue.description === undefined ? "" : volumeValue.description;
+    const keywords = volumeValue.keywords === undefined ? [] : volumeValue.keywords;
+    if (typeof description !== "string" || !Array.isArray(keywords) || !keywords.every((keyword) => typeof keyword === "string")) {
       return invalidFileSnapshot();
     }
     const chapters = volumeValue.chapters.map((chapterValue) => {
@@ -284,8 +288,8 @@ function parseRestorableFileSnapshot(value: string, workId: string): { volumes: 
       title: volumeValue.title,
       kind: volumeValue.kind,
       source: volumeValue.source,
-      description: volumeValue.description,
-      keywords: [...volumeValue.keywords] as string[],
+      description,
+      keywords: [...keywords] as string[],
       sortOrder: volumeValue.sortOrder,
       chapters
     };
