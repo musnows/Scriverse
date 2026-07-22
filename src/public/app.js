@@ -1644,6 +1644,47 @@ function toast(message, type = "info") {
   }, 3600);
 }
 
+function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.className = "toast toast-confirmation";
+  element.setAttribute("role", "alertdialog");
+  element.setAttribute("aria-label", title);
+  const heading = document.createElement("strong");
+  heading.textContent = title;
+  const description = document.createElement("p");
+  description.textContent = message;
+  const actions = document.createElement("div");
+  actions.className = "toast-confirmation-actions";
+  const cancel = document.createElement("button");
+  cancel.className = "ghost-button";
+  cancel.type = "button";
+  cancel.textContent = cancelLabel;
+  const confirm = document.createElement("button");
+  confirm.className = "primary-button";
+  confirm.type = "button";
+  confirm.textContent = confirmLabel;
+  actions.append(cancel, confirm);
+  element.append(heading, description, actions);
+  region.append(element);
+  raiseToastRegion();
+  cancel.focus();
+  return new Promise((resolve) => {
+    const finish = (confirmed) => {
+      element.remove();
+      if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+      resolve(confirmed);
+    };
+    cancel.addEventListener("click", () => finish(false), { once: true });
+    confirm.addEventListener("click", () => finish(true), { once: true });
+    element.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      finish(false);
+    });
+  });
+}
+
 document.addEventListener("toggle", (event) => {
   const target = event.target;
   if (target instanceof HTMLDialogElement && target.open && $("#toast-region").childElementCount) {
@@ -1756,13 +1797,20 @@ function confirmDiscardChanges(message = "当前章节有未保存修改，继�
 
 function chooseExistingWorkImportMode(file) {
   const dialog = $("#import-mode-dialog");
+  const form = dialog.querySelector("form");
+  const confirm = $("#import-mode-confirm");
   $("#import-mode-file-summary").textContent = `文件：${file.name}；当前作品：《${state.work.title}》`;
   $("#import-mode-unsaved-warning").classList.toggle("hidden", !state.dirty);
+  form.reset();
+  confirm.disabled = true;
+  form.onchange = () => { confirm.disabled = !form.querySelector('input[name="importMode"]:checked'); };
   dialog.returnValue = "cancel";
   dialog.showModal();
+  $("#import-mode-dialog-title").focus();
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => {
-      resolve(["append", "overwrite"].includes(dialog.returnValue) ? dialog.returnValue : null);
+      const mode = form.querySelector('input[name="importMode"]:checked')?.value;
+      resolve(dialog.returnValue === "confirm" && ["append", "overwrite"].includes(mode) ? mode : null);
     }, { once: true });
   });
 }
@@ -4956,6 +5004,13 @@ $("#import-file").addEventListener("change", async (event) => {
   if (!state.work || !file) return;
   const mode = await chooseExistingWorkImportMode(file);
   if (!mode) {
+    event.target.value = "";
+    return;
+  }
+  if (mode === "overwrite" && !(await confirmToast(
+    `当前选项：覆盖正文。确认后将使用“${file.name}”替换《${state.work.title}》的现有正文目录。`,
+    { title: "覆盖正文二次确认", confirmLabel: "确认覆盖" }
+  ))) {
     event.target.value = "";
     return;
   }

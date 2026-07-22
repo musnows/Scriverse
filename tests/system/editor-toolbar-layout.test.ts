@@ -20,6 +20,7 @@ describe("编辑器工具栏布局", () => {
 
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
+    const application = await request(runtime.app).get("/app.js").expect(200);
 
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
@@ -31,8 +32,14 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('id="import-mode-dialog"');
     expect(page.text).toContain('id="import-mode-append"');
     expect(page.text).toContain('id="import-mode-overwrite"');
+    expect(page.text).toContain('name="importMode" value="append"');
+    expect(page.text).toContain('id="import-mode-confirm"');
+    expect(page.text).toContain('value="confirm" type="submit" disabled>确认</button>');
     expect(page.text).toContain("把新文件解析出的卷章添加到目录末尾");
     expect(styles.text).toContain(".import-mode-options");
+    expect(styles.text).toContain(".import-mode-option input:checked + .import-mode-option-card");
+    expect(application.text).toContain("function confirmToast(message");
+    expect(application.text).toContain("当前选项：覆盖正文");
     expect(styles.text).toContain('@container (max-width: 120px)');
     expect(styles.text).toContain('@container (max-width: 88px)');
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');

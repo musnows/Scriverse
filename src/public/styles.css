@@ -1305,6 +1305,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .toast { max-width: 360px; background: var(--toast-bg); color: var(--toast-fg); padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: toast-appear-top .18s ease; }
 .toast-region[data-position="bottom-right"] .toast { animation-name: toast-appear-bottom; }
 .toast.error { background: var(--toast-error-bg); color: var(--toast-error-fg); }
+.toast-confirmation { display: grid; gap: 8px; width: min(360px, calc(100vw - 48px)); padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); background: var(--panel); color: var(--ink); pointer-events: auto; }
+.toast-confirmation strong { font-size: 12px; }
+.toast-confirmation p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.toast-confirmation-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 3px; }
+.toast-confirmation-actions button { min-height: 30px; padding: 6px 10px; }
 .chapter-type-menu { position: fixed; z-index: 80; width: 176px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
 .chapter-type-menu strong { display: block; overflow: hidden; margin: 0 2px 8px; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-type-menu > div { display: grid; gap: 3px; }
@@ -1385,14 +1390,22 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 24px 20px; }
 .dialog-actions .reset-button { margin-right: auto; }
 .import-mode-dialog { width: min(560px, calc(100vw - 32px)); }
+#import-mode-dialog-title:focus { outline: none; }
 .import-mode-body { display: grid; gap: 14px; padding: 20px 24px 6px; }
 .import-mode-body p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .import-mode-file-summary { overflow-wrap: anywhere; color: var(--ink) !important; font-weight: 600; }
 .import-mode-unsaved-warning { padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--line)); border-radius: 4px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark) !important; }
 .import-mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.import-mode-options section { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
-.import-mode-options strong { color: var(--ink); font-size: 12px; }
-.import-mode-options span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.import-mode-option { position: relative; display: block; min-width: 0; cursor: pointer; }
+.import-mode-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.import-mode-option-card { display: grid; gap: 5px; height: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); transition: border-color .14s ease, background .14s ease, box-shadow .14s ease; }
+.import-mode-option-card strong { color: var(--ink); font-size: 12px; }
+.import-mode-option-card > span { color: var(--muted); font-size: 10px; line-height: 1.55; }
+.import-mode-option:hover .import-mode-option-card { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); }
+.import-mode-option input:checked + .import-mode-option-card { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.import-mode-option input:checked + .import-mode-option-card::after { color: var(--accent-dark); content: "已选择"; font-size: 9px; font-weight: 600; }
+.import-mode-option input:focus-visible + .import-mode-option-card { outline: 2px solid var(--accent); outline-offset: 2px; }
+.import-mode-dialog .primary-button:disabled { cursor: not-allowed; opacity: .42; }
 @media (max-width: 560px) {
   .import-mode-options { grid-template-columns: 1fr; }
   .import-mode-dialog .dialog-actions { flex-wrap: wrap; }
