@@ -222,7 +222,16 @@ function workIdFromPath(database: Database, pathname: string): string | null {
 }
 
 export class UserAuthService {
-  constructor(private readonly database: Database) {}
+  constructor(private readonly database: Database) {
+    const revokedAt = new Date().toISOString();
+    const result = this.database.run(
+      "UPDATE user_sessions SET revoked_at = ? WHERE revoked_at IS NULL",
+      revokedAt
+    );
+    if (result.changes > 0) {
+      logger.info("auth.sessions.invalidated_on_startup", { count: result.changes });
+    }
+  }
 
   resolveWorkId(pathname: string): string | null {
     return workIdFromPath(this.database, pathname);
