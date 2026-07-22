@@ -65,6 +65,48 @@ describe("作品、导入和章节版本 API", () => {
       .expect(415);
   });
 
+  it("按选择追加或覆盖已有作品正文", async () => {
+    const created = await request(runtime.app).post("/api/works").send({ title: "导入方式作品" }).expect(201);
+    const workId = created.body.data.id;
+    const initial = await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .field("mode", "overwrite")
+      .attach("file", Buffer.from("第一卷 旧篇\n第一章 旧章\n旧正文。"), "old.txt")
+      .expect(201);
+    const oldChapterId = initial.body.data.firstImportedChapterId;
+
+    const appended = await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .field("mode", "append")
+      .attach("file", Buffer.from("第二卷 新篇\n第二章 新章\n新正文。"), "append.txt")
+      .expect(201);
+    expect(appended.body.data).toMatchObject({ mode: "append" });
+    expect(appended.body.data.tree.volumes.map((volume: { title: string }) => volume.title)).toEqual(["第一卷 旧篇", "第二卷 新篇"]);
+    await request(runtime.app).get(`/api/chapters/${oldChapterId}`).expect(200);
+    const appendedChapter = await request(runtime.app).get(`/api/chapters/${appended.body.data.firstImportedChapterId}`).expect(200);
+    expect(appendedChapter.body.data.content).toBe("新正文。");
+
+    const overwritten = await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .field("mode", "overwrite")
+      .attach("file", Buffer.from("第三卷 终篇\n第三章 终章\n最终正文。"), "overwrite.txt")
+      .expect(201);
+    expect(overwritten.body.data).toMatchObject({ mode: "overwrite" });
+    expect(overwritten.body.data.tree.volumes.map((volume: { title: string }) => volume.title)).toEqual(["第三卷 终篇"]);
+    await request(runtime.app).get(`/api/chapters/${oldChapterId}`).expect(404);
+  });
+
+  it("拒绝未知的已有作品导入方式", async () => {
+    const created = await request(runtime.app).post("/api/works").send({ title: "导入方式校验" }).expect(201);
+    await request(runtime.app)
+      .post(`/api/works/${created.body.data.id}/import`)
+      .field("mode", "merge")
+      .attach("file", Buffer.from("第一章 无效导入\n正文。"), "invalid-mode.txt")
+      .expect(400);
+    const unchanged = await request(runtime.app).get(`/api/works/${created.body.data.id}`).expect(200);
+    expect(unchanged.body.data.volumes).toHaveLength(0);
+  });
+
   it("拒绝伪装成 DOCX 的普通文件，且不创建或覆盖作品", async () => {
     const before = await request(runtime.app).get("/api/works").expect(200);
     const createResponse = await request(runtime.app)
