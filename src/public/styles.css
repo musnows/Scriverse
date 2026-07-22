@@ -1583,6 +1583,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .import-history-body .entity-history-list { padding-top: 14px; }
 .import-history-card header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .import-history-card .import-history-kind { flex: none; }
+.import-history-load-more { justify-self: center; min-height: 34px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; }
+.import-history-load-more:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-dark); }
 .entity-version-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 18px; padding: 14px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .entity-version-card.is-current { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); box-shadow: inset 3px 0 var(--accent); }
 .entity-version-card header { display: flex; align-items: center; gap: 8px; min-width: 0; }

@@ -359,6 +359,11 @@ describe("作品、导入和章节版本 API", () => {
 
     const fileVersions = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     const v2VersionId = fileVersions.body.data.find((item: { fileName: string }) => item.fileName === "v2.txt").id;
+    const firstPage = await request(runtime.app).get(`/api/works/${workId}/file-versions?page=1&limit=1`).expect(200);
+    expect(firstPage.body.data).toMatchObject({ page: 1, limit: 1, hasMore: true, nextPage: 2 });
+    expect(firstPage.body.data.items[0].fileName).toBe("v2.txt");
+    const secondPage = await request(runtime.app).get(`/api/works/${workId}/file-versions?page=2&limit=1`).expect(200);
+    expect(secondPage.body.data.items[0].fileName).toBe("v1.txt");
 
     const restored = await request(runtime.app)
       .post(`/api/works/${workId}/file-versions/${v2VersionId}/restore`)

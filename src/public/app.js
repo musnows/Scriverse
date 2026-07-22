@@ -203,6 +203,9 @@ let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
 let workScopedUiGeneration = 0;
+let importHistoryRecords = [];
+let importHistoryNextPage = null;
+let importHistoryRequestId = 0;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -4772,7 +4775,7 @@ function importHistoryRecordLabel(version) {
   return { title: version.fileName, kind: String(version.fileType).toUpperCase(), action: "恢复到此次导入前" };
 }
 
-function renderImportHistory(versions) {
+function renderImportHistory(versions, nextPage = null) {
   const host = $("#import-history-list");
   if (!versions.length) {
     host.innerHTML = '<p class="entity-history-empty">还没有正文导入记录。首次导入后会自动保存导入前快照。</p>';
@@ -4787,7 +4790,7 @@ function renderImportHistory(versions) {
       <small>自动备份仅包含正文，不能撤销章节关联信息的变化。</small>
       <button type="button" data-file-version-restore="${esc(version.id)}" data-default-label="${esc(label.action)}">${esc(label.action)}</button>
     </article>`;
-  }).join("");
+  }).join("") + (nextPage ? '<button class="import-history-load-more" type="button" data-import-history-load-more>加载更多记录</button>' : "");
   host.querySelectorAll("[data-file-version-restore]").forEach((button) => button.addEventListener("click", async () => {
     if (!state.work || !canEditProse()) return;
     const defaultLabel = button.dataset.defaultLabel;
@@ -4831,6 +4834,29 @@ function renderImportHistory(versions) {
       toast(error.message, "error");
     }
   }));
+  host.querySelector("[data-import-history-load-more]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "正在加载…";
+    try {
+      await loadImportHistoryPage(nextPage);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "加载更多记录";
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function loadImportHistoryPage(page) {
+  const workId = state.work?.id;
+  if (!workId || !page) return;
+  const requestId = ++importHistoryRequestId;
+  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25);
+  if (requestId !== importHistoryRequestId || state.work?.id !== workId || !$("#import-history-dialog").open) return;
+  importHistoryRecords = page === 1 ? result.items : [...importHistoryRecords, ...result.items];
+  importHistoryNextPage = result.nextPage;
+  renderImportHistory(importHistoryRecords, importHistoryNextPage);
 }
 
 async function openImportHistory() {
@@ -4838,10 +4864,13 @@ async function openImportHistory() {
     toast("需要正文编辑权限才能恢复导入历史", "error");
     return;
   }
+  importHistoryRecords = [];
+  importHistoryNextPage = null;
+  importHistoryRequestId += 1;
   $("#import-history-list").innerHTML = '<p class="entity-history-empty">正在读取导入历史…</p>';
   $("#import-history-dialog").showModal();
   try {
-    renderImportHistory(await api(`/api/works/${encodeURIComponent(state.work.id)}/file-versions`));
+    await loadImportHistoryPage(1);
   } catch (error) {
     $("#import-history-dialog").close();
     toast(error.message, "error");

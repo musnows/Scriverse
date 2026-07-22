@@ -1105,7 +1105,7 @@ export class Store {
       .all(`SELECT version.id, version.work_id, version.file_name, version.file_type, version.word_count, version.paragraph_count,
         version.warnings_json, version.created_at, user.display_name AS actor_display_name, user.username AS actor_username
         FROM file_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
-        WHERE version.work_id = ? ORDER BY version.created_at DESC`, workId)
+        WHERE version.work_id = ? ORDER BY version.created_at DESC, version.id DESC`, workId)
       .map((row) => ({
         id: requiredString(row, "id"),
         workId: requiredString(row, "work_id"),
@@ -1126,7 +1126,7 @@ export class Store {
       `SELECT version.id, version.work_id, version.file_name, version.file_type, version.word_count, version.paragraph_count,
         version.warnings_json, version.created_at, user.display_name AS actor_display_name, user.username AS actor_username
        FROM file_versions version LEFT JOIN users user ON user.id = version.created_by_user_id
-       WHERE version.work_id = ? ORDER BY version.created_at DESC${page.sql}`,
+       WHERE version.work_id = ? ORDER BY version.created_at DESC, version.id DESC${page.sql}`,
       workId,
       ...page.params
     );

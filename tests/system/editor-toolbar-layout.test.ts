@@ -39,10 +39,12 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain("把新文件解析出的卷章添加到目录末尾");
     expect(styles.text).toContain(".import-mode-options");
     expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
+    expect(styles.text).toContain(".import-history-load-more");
     expect(application.text).toContain('$("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);');
     expect(application.text).toContain('$("#import-file").disabled = proseReadOnly;');
     expect(application.text).toContain("resetWorkScopedUiCaches();");
     expect(application.text).toContain("if (state.dirty) scheduleChapterAutoSave();");
+    expect(application.text).toContain('apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25)');
     expect(styles.text).toContain('@container (max-width: 120px)');
     expect(styles.text).toContain('@container (max-width: 88px)');
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');
