@@ -743,14 +743,43 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
 
 const contentPermissionModules = workPermissionModules.filter((module) => !["reviews", "ai", "ai-settings"].includes(module));
 
-function workModuleRequirements(pathname: string, write: boolean): { read?: WorkPermissionModule[]; write?: WorkPermissionModule[] } {
-  const direct = (module: WorkPermissionModule): { read?: WorkPermissionModule[]; write?: WorkPermissionModule[] } => (
-    write ? { write: [module] } : { read: [module] }
+type WorkAuthorizationRequirements = {
+  read?: WorkPermissionModule[];
+  write?: WorkPermissionModule[];
+  ownerOnly?: boolean;
+};
+
+function requestBodyRecord(request: Request): Record<string, unknown> {
+  return request.body && typeof request.body === "object" && !Array.isArray(request.body)
+    ? request.body as Record<string, unknown>
+    : {};
+}
+
+function hasBodyField(request: Request, field: string): boolean {
+  return Object.prototype.hasOwnProperty.call(requestBodyRecord(request), field);
+}
+
+function aiContextReadModules(request: Request): WorkPermissionModule[] {
+  const scope = requestBodyRecord(request).scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope) || (scope as Record<string, unknown>).type === "none") return [];
+  return [...contentPermissionModules];
+}
+
+function workModuleRequirements(request: Request, write: boolean): WorkAuthorizationRequirements {
+  const pathname = request.path;
+  const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
+    write ? { write: [module, ...extraWrite] } : { read: [module] }
   );
+  if (/^\/api\/works\/[^/]+$/u.test(pathname)) return write ? { ownerOnly: true } : {};
+  if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) return write ? { ownerOnly: true } : {};
+  if (/^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(pathname)) return { ownerOnly: true };
+  if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
+  if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { read: ["ai"] };
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
   if (/^\/api\/entity-versions\/[^/]+\/[^/]+(?:\/restore)?$/u.test(pathname)) {
     const entityType = pathname.split("/")[3] ?? "";
     const moduleByEntityType: Record<string, WorkPermissionModule> = {
+      volume: "prose",
       setting: "settings",
       race: "races",
       organization: "organizations",
@@ -761,19 +790,44 @@ function workModuleRequirements(pathname: string, write: boolean): { read?: Work
       foreshadow: "outlines"
     };
     const module = moduleByEntityType[entityType];
-    return module ? direct(module) : {};
+    if (entityType === "work") return { ownerOnly: true };
+    if (!module) return { ownerOnly: true };
+    if (write && (entityType === "race" || entityType === "organization")) return direct(module, ["characters"]);
+    return direct(module);
+  }
+  if (/^\/api\/(?:works\/[^/]+\/characters|characters\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const extraWrite: WorkPermissionModule[] = [];
+    if (write) {
+      const mergeOrRestore = /^\/api\/characters\/[^/]+\/(?:merge|restore)$/u.test(pathname);
+      const deleting = request.method === "DELETE" && /^\/api\/characters\/[^/]+$/u.test(pathname);
+      if (mergeOrRestore || deleting || hasBodyField(request, "raceId") || hasBodyField(request, "species")) extraWrite.push("races");
+      if (mergeOrRestore || deleting || hasBodyField(request, "organizationIds")) extraWrite.push("organizations");
+      if (mergeOrRestore || deleting) extraWrite.push("timeline", "relationships");
+    }
+    return direct("characters", extraWrite);
+  }
+  if (/^\/api\/(?:works\/[^/]+\/races|races\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const body = requestBodyRecord(request);
+    const memberIds = Array.isArray(body.memberIds) ? body.memberIds : [];
+    const createsMembers = request.method === "POST" && /^\/api\/works\/[^/]+\/races$/u.test(pathname) && memberIds.length > 0;
+    const updatesMembers = request.method === "PATCH" && (hasBodyField(request, "memberIds") || hasBodyField(request, "name"));
+    const replacesMembers = request.method === "DELETE" || /^\/api\/races\/[^/]+\/merge$/u.test(pathname);
+    return direct("races", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
+  }
+  if (/^\/api\/(?:works\/[^/]+\/organizations|organizations\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const body = requestBodyRecord(request);
+    const memberIds = Array.isArray(body.memberIds) ? body.memberIds : [];
+    const createsMembers = request.method === "POST" && /^\/api\/works\/[^/]+\/organizations$/u.test(pathname) && memberIds.length > 0;
+    const updatesMembers = request.method === "PATCH" && hasBodyField(request, "memberIds");
+    const replacesMembers = request.method === "DELETE" || /^\/api\/organizations\/[^/]+\/merge$/u.test(pathname);
+    return direct("organizations", write && (createsMembers || updatesMembers || replacesMembers) ? ["characters"] : []);
   }
   const rules: Array<[RegExp, WorkPermissionModule]> = [
     [/^\/api\/works\/[^/]+\/(?:file-versions|import|volumes|chapters)(?:\/|$)/u, "prose"],
     [/^\/api\/(?:volumes|chapters)\/[^/]+(?:\/|$)/u, "prose"],
     [/^\/api\/works\/[^/]+\/(?:settings|attachments)(?:\/|$)/u, "settings"],
     [/^\/api\/(?:settings|attachments)\/[^/]+(?:\/|$)/u, "settings"],
-    [/^\/api\/works\/[^/]+\/characters(?:\/|$)/u, "characters"],
-    [/^\/api\/(?:characters|character-sections)\/[^/]+(?:\/|$)/u, "characters"],
-    [/^\/api\/works\/[^/]+\/races(?:\/|$)/u, "races"],
-    [/^\/api\/races\/[^/]+(?:\/|$)/u, "races"],
-    [/^\/api\/works\/[^/]+\/organizations(?:\/|$)/u, "organizations"],
-    [/^\/api\/organizations\/[^/]+(?:\/|$)/u, "organizations"],
+    [/^\/api\/character-sections\/[^/]+(?:\/|$)/u, "characters"],
     [/^\/api\/works\/[^/]+\/(?:timeline-tracks|timeline)(?:\/|$)/u, "timeline"],
     [/^\/api\/(?:timeline-tracks|timeline)\/[^/]+(?:\/|$)/u, "timeline"],
     [/^\/api\/works\/[^/]+\/relationships(?:\/|$)/u, "relationships"],
@@ -786,19 +840,24 @@ function workModuleRequirements(pathname: string, write: boolean): { read?: Work
   for (const [pattern, module] of rules) if (pattern.test(pathname)) return direct(module);
 
   if (write && /^\/api\/reviews\/[^/]+\/character-resolution$/u.test(pathname)) {
-    return { read: [...contentPermissionModules], write: ["reviews", "characters"] };
+    const merging = requestBodyRecord(request).action === "merge";
+    return merging
+      ? { write: ["reviews", "characters", "races", "organizations", "timeline", "relationships"] }
+      : { write: ["reviews"] };
   }
   if (/^\/api\/(?:works\/[^/]+\/reviews|reviews\/[^/]+)(?:\/|$)/u.test(pathname)) {
-    return write ? { read: [...contentPermissionModules], write: ["reviews"] } : { read: [...contentPermissionModules, "reviews"] };
+    return direct("reviews");
   }
   if (write && /^\/api\/suggestions\/[^/]+\/accept$/u.test(pathname)) {
-    return { read: [...contentPermissionModules], write: ["ai", "prose"] };
+    return { write: ["ai", "prose"] };
   }
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|suggestions|ai-calls|ai-context-usage|ai-conversations|chat)|tasks\/[^/]+|ai-conversations\/[^/]+|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
-    return write ? { read: [...contentPermissionModules], write: ["ai"] } : { read: [...contentPermissionModules, "ai"] };
+    const contextRead = aiContextReadModules(request);
+    if (/^\/api\/works\/[^/]+\/ai-context-usage$/u.test(pathname)) return { read: ["ai", ...contextRead] };
+    return write ? { read: contextRead, write: ["ai"] } : { read: ["ai"] };
   }
   if (/^\/api\/works\/[^/]+\/(?:search|export)$/u.test(pathname)) return { read: [...contentPermissionModules] };
-  return {};
+  return { ownerOnly: true };
 }
 
 export function createWorkAuthorizationMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
@@ -821,12 +880,8 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
     const workId = auth.resolveWorkId(request.path);
     if (!workId) return next();
     const write = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-    const ownerOnly = write && (
-      /^\/api\/works\/[^/]+$/u.test(request.path)
-      || /^\/api\/works\/[^/]+\/cover$/u.test(request.path)
-      || /^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(request.path)
-    );
-    auth.assertWorkAccess(user, workId, workModuleRequirements(request.path, write), ownerOnly, request.authMethod !== "api-key");
+    const requirements = workModuleRequirements(request, write);
+    auth.assertWorkAccess(user, workId, requirements, requirements.ownerOnly === true, request.authMethod !== "api-key");
     next();
   };
 }

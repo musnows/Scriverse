@@ -388,6 +388,104 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("模块权限默认拒绝未知路由，并裁剪跨模块数据与关联写入", async () => {
+    const owner = await register(runtime, "boundary_owner");
+    const collaborator = await register(runtime, "boundary_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "权限边界作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "边界角色" })
+      .expect(201);
+    const characterId = String(character.body.data.id);
+    const race = await owner.agent.post(`/api/works/${workId}/races`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "边界种族", settings: ["不可跨模块泄露"], memberIds: [characterId] })
+      .expect(201);
+    const raceId = String(race.body.data.id);
+    const organization = await owner.agent.post(`/api/works/${workId}/organizations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "边界组织", memberIds: [characterId] })
+      .expect(201);
+    const organizationId = String(organization.body.data.id);
+    const permissions = {
+      prose: "none",
+      settings: "none",
+      characters: "none",
+      races: "write",
+      organizations: "write",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "read",
+      ai: "read",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions })
+      .expect(201);
+
+    await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
+    await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
+    await collaborator.agent.get(`/api/works/${workId}/reviews`).expect(200);
+    await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
+    await collaborator.agent.get(`/api/works/${workId}/models`).expect(200);
+
+    const visibleRaces = await collaborator.agent.get(`/api/works/${workId}/races`).expect(200);
+    expect(visibleRaces.body.data[0]).toMatchObject({ id: raceId, memberIds: [], members: [] });
+    const raceVersions = await collaborator.agent.get(`/api/entity-versions/race/${raceId}`).expect(200);
+    expect(raceVersions.body.data[0].snapshot).toMatchObject({ memberIds: [] });
+    const visibleOrganizations = await collaborator.agent.get(`/api/works/${workId}/organizations`).expect(200);
+    expect(visibleOrganizations.body.data[0]).toMatchObject({ id: organizationId, memberIds: [], members: [] });
+
+    await collaborator.agent.patch(`/api/races/${raceId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ description: "仅修改种族自身字段。" })
+      .expect(200);
+    const raceMemberWrite = await collaborator.agent.patch(`/api/races/${raceId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ memberIds: [] })
+      .expect(403);
+    expect(raceMemberWrite.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    await collaborator.agent.patch(`/api/races/${raceId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ name: "越权更名" })
+      .expect(403);
+    await collaborator.agent.delete(`/api/races/${raceId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({})
+      .expect(403);
+    await collaborator.agent.patch(`/api/organizations/${organizationId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ description: "仅修改组织自身字段。" })
+      .expect(200);
+    await collaborator.agent.patch(`/api/organizations/${organizationId}`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ memberIds: [] })
+      .expect(403);
+
+    const characterOnly = { ...permissions, characters: "read", races: "none", organizations: "none" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: characterOnly })
+      .expect(200);
+    const visibleCharacters = await collaborator.agent.get(`/api/works/${workId}/characters`).expect(200);
+    expect(visibleCharacters.body.data[0]).toMatchObject({
+      id: characterId,
+      raceId: null,
+      race: null,
+      species: "",
+      organizationIds: [],
+      organizations: []
+    });
+    expect(JSON.stringify(visibleCharacters.body.data)).not.toContain("不可跨模块泄露");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {
     const legacyWork = runtime.store.createWork({ title: "既有作品" });
     const admin = await register(runtime, "first_admin");
