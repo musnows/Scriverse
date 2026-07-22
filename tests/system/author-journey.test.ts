@@ -198,12 +198,22 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("/versions`");
     expect(application.text).toContain("/restore`");
     expect(application.text).toContain("buildCharacterState(form.getAll");
+    expect(application.text).toContain("function openEntityMergeDialog(");
+    expect(application.text).toContain("data-merge-character");
+    expect(application.text).toContain("data-delete-character");
+    expect(application.text).toContain("data-merge-race");
+    expect(application.text).toContain("data-delete-race");
+    expect(application.text).toContain("data-merge-organization");
+    expect(application.text).toContain("data-delete-organization");
+    expect(application.text).toContain("/merge`");
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain(".setting-editor-workspace");
     expect(styles.text).toContain(".character-relationship-row");
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
+    expect(styles.text).toContain(".card-actions .danger-button");
+    expect(styles.text).toContain(".merge-dialog-note");
   });
 
   it("首屏书架、大纲伏笔、续写守卫和关系银河图资源完整可达", async () => {
@@ -221,8 +231,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260722-pagination-entity-editor-page');
-    expect(page.text).toContain('/styles.css?v=20260722-entity-editor-page');
+    expect(page.text).toContain('/app.js?v=20260722-manual-entity-management');
+    expect(page.text).toContain('/styles.css?v=20260722-manual-entity-management');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");

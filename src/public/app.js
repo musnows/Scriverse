@@ -2404,6 +2404,36 @@ function bindEntityHistoryButtons(refresh) {
   }));
 }
 
+function openEntityMergeDialog({ typeLabel, source, candidates, endpoint, body, refresh, impact }) {
+  const targetOptions = candidates
+    .filter((candidate) => candidate.id !== source.id)
+    .map((candidate) => [candidate.id, candidate.name]);
+  openDialog(`合并${typeLabel}`,
+    `<p class="merge-dialog-note">“${esc(source.name)}”将合并到所选档案，目标档案会保留。${esc(impact)}</p>` +
+    field("targetId", `目标${typeLabel}`, "select", targetOptions[0]?.[0] ?? "", targetOptions),
+    async (form) => {
+      const target = candidates.find((candidate) => candidate.id === form.get("targetId"));
+      if (!target) throw new Error(`请选择目标${typeLabel}`);
+      await api(endpoint(source), { method: "POST", body: body(target) });
+      await refresh();
+      await loadAiReferences();
+      toast(`已将“${source.name}”合并到“${target.name}”`);
+    }, "人工资料管理", { submitLabel: "确认合并" });
+}
+
+async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning = "" }) {
+  const detail = warning ? `\n${warning}` : "";
+  if (!window.confirm(`确认删除${typeLabel}“${item.name}”吗？${detail}`)) return;
+  try {
+    await api(endpoint(item), { method: "DELETE" });
+    await refresh();
+    await loadAiReferences();
+    toast(`已删除${typeLabel}“${item.name}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
@@ -2439,7 +2469,7 @@ async function renderCharacters() {
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
-    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`;
+    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button>${canEditWork() && state.characters.length > 1 ? `<button data-merge-character="${esc(item.id)}">合并</button>` : ""}${canEditWork() ? `<button class="danger-button" data-delete-character="${esc(item.id)}">删除</button>` : ""}</div></article>`;
   }).join("")}</div>`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   $("#create-character-audit-task")?.addEventListener("click", async () => {
@@ -2464,6 +2494,34 @@ async function renderCharacters() {
     });
   });
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  $("#module-content").querySelectorAll("[data-merge-character]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.characters.find((item) => item.id === button.dataset.mergeCharacter);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "角色",
+      source,
+      candidates: state.characters,
+      endpoint: (item) => `/api/characters/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({
+        targetCharacterId: target.id,
+        expectedTargetVersionNo: target.versionNo,
+        expectedSourceVersionNo: source.versionNo
+      }),
+      refresh: renderCharacters,
+      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-character]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.characters.find((character) => character.id === button.dataset.deleteCharacter);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "角色",
+      item,
+      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}`,
+      refresh: renderCharacters,
+      warning: "相关人物关系会删除，时间线中的参与者引用会移除。"
+    });
+  }));
 }
 
 async function renderRaces() {
@@ -2479,13 +2537,37 @@ async function renderRaces() {
         <p>${esc(item.description || "尚未填写种族简介")}</p>
         <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<span class="pill${setting.inherited ? " inherited" : ""}" title="${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}">${esc(setting.value)}<small>${esc(setting.sourceRaceName)}</small></span>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditWork() && state.races.length > 1 ? `<button data-merge-race="${esc(item.id)}">合并</button>` : ""}${canEditWork() ? `<button class="danger-button" data-delete-race="${esc(item.id)}">删除</button>` : ""}</div>
       </article>
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
   $("#module-content").innerHTML = state.races.length ? `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  $("#module-content").querySelectorAll("[data-merge-race]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.races.find((item) => item.id === button.dataset.mergeRace);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "种族",
+      source,
+      candidates: state.races,
+      endpoint: (item) => `/api/races/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({ targetRaceId: target.id }),
+      refresh: renderRaces,
+      impact: "来源种族的角色、子种族、简介与共同设定会迁移到目标种族。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-race]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.races.find((race) => race.id === button.dataset.deleteRace);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "种族",
+      item,
+      endpoint: (race) => `/api/races/${encodeURIComponent(race.id)}`,
+      refresh: renderRaces,
+      warning: "已绑定角色将变为未指定种族；有子种族时需先迁移或合并。"
+    });
+  }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
@@ -2499,9 +2581,33 @@ async function renderOrganizations() {
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditWork() && state.organizations.length > 1 ? `<button data-merge-organization="${esc(item.id)}">合并</button>` : ""}${canEditWork() ? `<button class="danger-button" data-delete-organization="${esc(item.id)}">删除</button>` : ""}</div>
     </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  $("#module-content").querySelectorAll("[data-merge-organization]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.organizations.find((item) => item.id === button.dataset.mergeOrganization);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "组织",
+      source,
+      candidates: state.organizations,
+      endpoint: (item) => `/api/organizations/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({ targetOrganizationId: target.id }),
+      refresh: renderOrganizations,
+      impact: "来源组织的成员、简介与组织设定会迁移到目标组织。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-organization]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.organizations.find((organization) => organization.id === button.dataset.deleteOrganization);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "组织",
+      item,
+      endpoint: (organization) => `/api/organizations/${encodeURIComponent(organization.id)}`,
+      refresh: renderOrganizations,
+      warning: "角色与该组织的成员关系会一并移除。"
+    });
+  }));
   bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 

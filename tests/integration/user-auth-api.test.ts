@@ -135,6 +135,14 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "潮汐规则", category: "世界规则", content: "月升时开启航道。" })
       .expect(201);
+    const firstCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林舟" })
+      .expect(201);
+    const secondCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "林船长" })
+      .expect(201);
 
     const invited = await owner.agent.post(`/api/works/${workId}/members`)
       .set("X-CSRF-Token", owner.csrfToken)
@@ -165,6 +173,18 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await viewer.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ title: "越权设定", category: "世界规则", content: "不应创建。" })
+      .expect(403);
+    const mergeBody = {
+      targetCharacterId: firstCharacter.body.data.id,
+      expectedTargetVersionNo: firstCharacter.body.data.versionNo,
+      expectedSourceVersionNo: secondCharacter.body.data.versionNo
+    };
+    await viewer.agent.post(`/api/characters/${secondCharacter.body.data.id}/merge`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send(mergeBody)
+      .expect(403);
+    await owner.agent.post(`/api/characters/${secondCharacter.body.data.id}/merge`)
+      .send(mergeBody)
       .expect(403);
     await viewer.agent.patch(`/api/works/${workId}/members/${viewer.user.userId}`)
       .set("X-CSRF-Token", viewer.csrfToken)
