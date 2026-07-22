@@ -377,6 +377,12 @@ describe("作品、导入和章节版本 API", () => {
 
     const fileVersionsAfter = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     expect(fileVersionsAfter.body.data[0].fileType).toBe("snapshot");
+    const restoredCurrent = await request(runtime.app)
+      .post(`/api/works/${workId}/file-versions/${fileVersionsAfter.body.data[0].id}/restore`)
+      .expect(200);
+    const restoredCurrentChapterId = restoredCurrent.body.data.tree.volumes[0].chapters[0].id;
+    const restoredCurrentChapter = await request(runtime.app).get(`/api/chapters/${restoredCurrentChapterId}`).expect(200);
+    expect(restoredCurrentChapter.body.data.content).toBe("改写后的正文。");
   });
 
   it("拒绝损坏的文件版本快照且不改动当前正文", async () => {
