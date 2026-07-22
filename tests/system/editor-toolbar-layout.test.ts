@@ -32,7 +32,7 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>');
     expect(page.text).toContain('id="import-history-button"');
     expect(page.text).toContain('id="import-history-dialog"');
-    expect(page.text).toContain("每条记录都保存了该次导入开始前的正文");
+    expect(page.text).toContain("大纲、伏笔、首次登场等章节关联信息不在快照中");
     expect(page.text).toContain('id="import-mode-dialog"');
     expect(page.text).toContain('id="import-mode-append"');
     expect(page.text).toContain('id="import-mode-overwrite"');
@@ -41,6 +41,8 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(application.text).toContain('$("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);');
     expect(application.text).toContain('$("#import-file").disabled = proseReadOnly;');
+    expect(application.text).toContain("resetWorkScopedUiCaches();");
+    expect(application.text).toContain("if (state.dirty) scheduleChapterAutoSave();");
     expect(styles.text).toContain('@container (max-width: 120px)');
     expect(styles.text).toContain('@container (max-width: 88px)');
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');

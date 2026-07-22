@@ -202,6 +202,7 @@ let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
+let workScopedUiGeneration = 0;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -1110,8 +1111,9 @@ function renderAiConversationHistory() {
 async function loadAiConversations(openLatest = true) {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.aiConversations = conversations;
   loadedAiConversationsWorkId = workId;
   renderAiConversationHistory();
@@ -2261,34 +2263,45 @@ function renderShelf() {
   $("#book-add-card").addEventListener("click", openWorkDialog);
 }
 
+function resetWorkScopedUiCaches() {
+  workScopedUiGeneration += 1;
+  loadedAiModelsWorkId = null;
+  loadedAiReferencesWorkId = null;
+  loadedAiConversationsWorkId = null;
+  aiModelsLoadPromise = null;
+  aiModelsLoadWorkId = null;
+  aiReferencesLoadPromise = null;
+  aiReferencesLoadWorkId = null;
+  aiConversationsLoadPromise = null;
+  aiConversationsLoadWorkId = null;
+  state.models = [];
+  state.characters = [];
+  state.settings = [];
+  state.collapsedVolumeIds.clear();
+  lastSavedChapterSnapshot = null;
+  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
+  aiContextUsageTimer = null;
+  aiContextUsageRequest += 1;
+  state.aiCitations = [];
+  state.aiReferences = [];
+  state.aiPromptSent = false;
+  state.aiConversationId = null;
+  state.aiConversations = [];
+  renderAiCitations();
+  renderAiReferences();
+  renderAiQuickActions();
+  resetAiFeed();
+  $("#ai-conversation-title").textContent = "新对话";
+  $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
+  setAiContextMeter(null);
+  renderAiConversationHistory();
+}
+
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
   const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
-  if (state.work?.id !== nextWork.id) {
-    loadedAiModelsWorkId = null;
-    loadedAiReferencesWorkId = null;
-    loadedAiConversationsWorkId = null;
-    state.models = [];
-    state.characters = [];
-    state.settings = [];
-    if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-    aiContextUsageTimer = null;
-    aiContextUsageRequest += 1;
-    state.aiCitations = [];
-    state.aiReferences = [];
-    state.aiPromptSent = false;
-    state.aiConversationId = null;
-    state.aiConversations = [];
-    renderAiCitations();
-    renderAiReferences();
-    renderAiQuickActions();
-    resetAiFeed();
-    $("#ai-conversation-title").textContent = "新对话";
-    $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
-    setAiContextMeter(null);
-    renderAiConversationHistory();
-  }
+  if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -3245,8 +3258,9 @@ async function renderBookAiSettings() {
 async function loadModels() {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.models = models;
   loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
@@ -3387,11 +3401,12 @@ async function refreshAiContextUsage() {
 async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const [characters, settings] = await Promise.all([
     canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
     canReadModule("settings") ? apiAllPages(`/api/works/${workId}/settings`) : Promise.resolve([])
   ]);
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
   state.settings = settings;
   loadedAiReferencesWorkId = workId;
@@ -4769,7 +4784,7 @@ function renderImportHistory(versions) {
       <header><strong title="${esc(label.title)}">${esc(label.title)}</strong><span class="import-history-kind">${esc(label.kind)}</span></header>
       <time>${esc(formatDateTime(version.createdAt))} · ${esc(version.actor || "历史数据")}</time>
       <p>${version.fileType === "snapshot" ? "恢复操作执行前自动保存的完整正文。" : "保存的是这次文件导入开始前的完整正文。"}</p>
-      <small>恢复会先备份当前正文，可再次撤销。</small>
+      <small>自动备份仅包含正文，不能撤销章节关联信息的变化。</small>
       <button type="button" data-file-version-restore="${esc(version.id)}" data-default-label="${esc(label.action)}">${esc(label.action)}</button>
     </article>`;
   }).join("");
@@ -4803,11 +4818,16 @@ function renderImportHistory(versions) {
         body: { expectedVersionNo: state.work.versionNo }
       });
       state.dirty = false;
+      resetWorkScopedUiCaches();
       $("#import-history-dialog").close();
       await loadWorks(workId);
-      toast("正文已恢复，恢复前内容已自动备份");
+      toast("正文已恢复；恢复前正文已自动备份");
     } catch (error) {
       button.disabled = false;
+      button.dataset.confirmed = "false";
+      button.classList.remove("is-confirming");
+      button.textContent = defaultLabel;
+      if (state.dirty) scheduleChapterAutoSave();
       toast(error.message, "error");
     }
   }));

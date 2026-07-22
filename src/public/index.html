@@ -487,7 +487,7 @@
         <button id="import-history-close" class="dialog-close" aria-label="关闭导入历史" type="button">×</button>
       </div>
       <div class="import-history-body">
-        <p id="import-history-description" class="import-history-note">每条记录都保存了该次导入开始前的正文。恢复时会先自动备份当前正文，再重新建立分卷和章节；恢复后请检查与章节关联的大纲、伏笔和首次登场信息。</p>
+        <p id="import-history-description" class="import-history-note">每条记录都保存了该次导入开始前的正文。恢复仅作用于分卷、章节标题和正文，并会重新建立分卷和章节；大纲、伏笔、首次登场等章节关联信息不在快照中，无法通过这里恢复。</p>
         <div id="import-history-list" class="entity-history-list" aria-live="polite"></div>
       </div>
     </dialog>
@@ -623,6 +623,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-prose-import-permission"></script>
+    <script type="module" src="/app.js?v=20260722-import-history-cr"></script>
   </body>
 </html>
