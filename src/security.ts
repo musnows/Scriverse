@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import type { NextFunction, Request, RequestHandler, Response } from "express";
@@ -302,6 +303,14 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
   };
 }
 
-export function isDevelopmentAuthBypassEnabled(environment: NodeJS.ProcessEnv): boolean {
-  return environment.NODE_ENV !== "production" && environment.APP_DEV_SKIP_AUTH === "true";
+export function isDevelopmentAuthBypassEnabled(environment: NodeJS.ProcessEnv, containerRuntime = detectContainerRuntime(environment)): boolean {
+  return environment.NODE_ENV === "development"
+    && environment.APP_DEV_SKIP_AUTH === "true"
+    && !containerRuntime;
+}
+
+function detectContainerRuntime(environment: NodeJS.ProcessEnv): boolean {
+  return environment.SCRIVERSE_RUNTIME === "container"
+    || existsSync("/.dockerenv")
+    || existsSync("/run/.containerenv");
 }

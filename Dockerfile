@@ -26,6 +26,7 @@ RUN npm run build
 FROM ${NODE_IMAGE} AS runtime
 
 ENV NODE_ENV=production \
+    SCRIVERSE_RUNTIME=container \
     LOG_LEVEL=info \
     HOST=0.0.0.0 \
     PORT=13210 \
