@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-member-permission-options">
+    <link rel="stylesheet" href="/styles.css?v=20260722-module-permissions">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -529,12 +529,21 @@
     </dialog>
 
     <dialog id="members-dialog" class="dialog wide-dialog" aria-labelledby="members-dialog-title">
-      <div class="dialog-header"><div><span id="members-dialog-eyebrow" class="eyebrow">作品权限</span><h2 id="members-dialog-title">可访问人</h2></div><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <div class="dialog-header"><div><span id="members-dialog-eyebrow" class="eyebrow">作品权限</span><h2 id="members-dialog-title">成员模块权限</h2></div><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="access-dialog-body">
-        <form id="member-invite-form" class="member-invite-form">
-          <label>邀请已注册用户<select id="member-user-select" required></select></label>
-          <label>访问权限<select id="member-role-select" aria-describedby="member-role-description" required><option value="viewer">仅查看</option><option value="settings-editor">仅编辑设定</option><option value="editor">编辑正文与设定</option></select><small id="member-role-description" class="member-role-description" aria-live="polite">可查看正文与设定，不能修改任何内容。</small></label>
-          <button class="primary-button" type="submit">发送邀请</button>
+        <form id="member-permission-form" class="member-permission-form">
+          <label class="member-person-field">选择成员<select id="member-user-select" required></select><small>先选择已注册用户，再逐项配置模块权限。</small></label>
+          <fieldset id="member-permission-fieldset" disabled>
+            <legend>模块读写权限</legend>
+            <div class="member-permission-presets" aria-label="权限快捷设置">
+              <button type="button" data-permission-preset="none">全部关闭</button>
+              <button type="button" data-permission-preset="read">全部只读</button>
+              <button type="button" data-permission-preset="write">全部可编辑</button>
+            </div>
+            <div id="member-permission-grid" class="member-permission-grid"></div>
+            <small class="member-permission-help">“可编辑”自动包含读取权限；未授权模块不会显示，也不能通过 API 读取。</small>
+            <button id="member-permission-submit" class="primary-button" type="submit">保存成员权限</button>
+          </fieldset>
         </form>
         <div id="members-list" class="access-list"></div>
       </div>
@@ -602,6 +611,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-member-permission-options"></script>
+    <script type="module" src="/app.js?v=20260722-module-permissions"></script>
   </body>
 </html>

@@ -26,6 +26,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
+import { type WorkModulePermissions } from "./work-permissions.js";
 import {
   clearSessionCookie,
   createCliApiScopeMiddleware,
@@ -64,8 +65,29 @@ const loginSchema = z.object({
   ...captchaFields
 }).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
-const memberSchema = z.object({ userId: identifier, role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
-const memberRoleSchema = z.object({ role: z.enum(["editor", "settings-editor", "viewer"]) }).strict();
+const memberRoleValueSchema = z.enum(["editor", "settings-editor", "viewer"]);
+const moduleAccessSchema = z.enum(["none", "read", "write"]);
+const modulePermissionsSchema = z.object({
+  prose: moduleAccessSchema,
+  settings: moduleAccessSchema,
+  characters: moduleAccessSchema,
+  races: moduleAccessSchema,
+  organizations: moduleAccessSchema,
+  timeline: moduleAccessSchema,
+  relationships: moduleAccessSchema,
+  outlines: moduleAccessSchema,
+  reviews: moduleAccessSchema,
+  ai: moduleAccessSchema,
+  "ai-settings": moduleAccessSchema
+}).strict();
+const memberSchema = z.union([
+  z.object({ userId: identifier, permissions: modulePermissionsSchema }).strict(),
+  z.object({ userId: identifier, role: memberRoleValueSchema }).strict()
+]);
+const memberPermissionSchema = z.union([
+  z.object({ permissions: modulePermissionsSchema }).strict(),
+  z.object({ role: memberRoleValueSchema }).strict()
+]);
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
 const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
 const changeNoteSchema = z.string().trim().max(500).optional();
@@ -595,14 +617,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/works/:workId/members", (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     const input = parse(memberSchema, request.body);
-    const members = auth.addMember(request.params.workId, input.userId, input.role, request.authUser.userId);
-    store.audit(request.params.workId, "work.member-added", "user", input.userId, { role: input.role });
+    const permissionInput = "permissions" in input
+      ? { permissions: input.permissions as WorkModulePermissions }
+      : { role: input.role };
+    const members = auth.addMember(request.params.workId, input.userId, permissionInput, request.authUser.userId);
+    store.audit(request.params.workId, "work.member-added", "user", input.userId, permissionInput);
     data(response, members, 201);
   });
   app.patch("/api/works/:workId/members/:userId", (request, response) => {
-    const input = parse(memberRoleSchema, request.body);
-    const members = auth.updateMemberRole(request.params.workId, request.params.userId, input.role);
-    store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, { role: input.role });
+    const input = parse(memberPermissionSchema, request.body);
+    const permissionInput = "permissions" in input
+      ? { permissions: input.permissions as WorkModulePermissions }
+      : { role: input.role };
+    const members = auth.updateMemberPermissions(request.params.workId, request.params.userId, permissionInput);
+    store.audit(request.params.workId, "work.member-role-updated", "user", request.params.userId, permissionInput);
     data(response, members);
   });
   app.delete("/api/works/:workId/members/:userId", (request, response) => {
