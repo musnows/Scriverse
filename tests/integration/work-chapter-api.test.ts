@@ -359,6 +359,11 @@ describe("作品、导入和章节版本 API", () => {
 
     const fileVersions = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     const v2VersionId = fileVersions.body.data.find((item: { fileName: string }) => item.fileName === "v2.txt").id;
+    const firstPage = await request(runtime.app).get(`/api/works/${workId}/file-versions?page=1&limit=1`).expect(200);
+    expect(firstPage.body.data).toMatchObject({ page: 1, limit: 1, hasMore: true, nextPage: 2 });
+    expect(firstPage.body.data.items[0].fileName).toBe("v2.txt");
+    const secondPage = await request(runtime.app).get(`/api/works/${workId}/file-versions?page=2&limit=1`).expect(200);
+    expect(secondPage.body.data.items[0].fileName).toBe("v1.txt");
 
     const restored = await request(runtime.app)
       .post(`/api/works/${workId}/file-versions/${v2VersionId}/restore`)
@@ -372,5 +377,81 @@ describe("作品、导入和章节版本 API", () => {
 
     const fileVersionsAfter = await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200);
     expect(fileVersionsAfter.body.data[0].fileType).toBe("snapshot");
+    const restoredCurrent = await request(runtime.app)
+      .post(`/api/works/${workId}/file-versions/${fileVersionsAfter.body.data[0].id}/restore`)
+      .expect(200);
+    const restoredCurrentChapterId = restoredCurrent.body.data.tree.volumes[0].chapters[0].id;
+    const restoredCurrentChapter = await request(runtime.app).get(`/api/chapters/${restoredCurrentChapterId}`).expect(200);
+    expect(restoredCurrentChapter.body.data.content).toBe("改写后的正文。");
+  });
+
+  it("拒绝损坏的文件版本快照且不改动当前正文", async () => {
+    const created = await request(runtime.app).post("/api/works").send({ title: "损坏快照保护" }).expect(201);
+    const workId = String(created.body.data.id);
+    await request(runtime.app)
+      .post(`/api/works/${workId}/import`)
+      .attach("file", Buffer.from("第一章\n\n当前正文。"), "broken.txt")
+      .expect(201);
+
+    const directoryBefore = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    const chapterId = String(directoryBefore.body.data.volumes[0].chapters[0].id);
+    const version = (await request(runtime.app).get(`/api/works/${workId}/file-versions`).expect(200)).body.data[0];
+    const versionCountBefore = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count);
+    runtime.database.run("UPDATE file_versions SET snapshot_json = ? WHERE id = ?", "{invalid", version.id);
+
+    const failed = await request(runtime.app)
+      .post(`/api/works/${workId}/file-versions/${version.id}/restore`)
+      .expect(409);
+    expect(failed.body.error.code).toBe("FILE_VERSION_INVALID");
+    const directoryAfter = await request(runtime.app).get(`/api/works/${workId}`).expect(200);
+    expect(directoryAfter.body.data.volumes[0].chapters[0].id).toBe(chapterId);
+    const chapterAfter = await request(runtime.app).get(`/api/chapters/${chapterId}`).expect(200);
+    expect(chapterAfter.body.data.content).toBe("当前正文。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
+      workId
+    )?.count)).toBe(versionCountBefore);
+  });
+
+  it("兼容缺少卷简介和关键词的旧文件版本快照", async () => {
+    const created = await request(runtime.app).post("/api/works").send({ title: "旧快照兼容" }).expect(201);
+    const workId = String(created.body.data.id);
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "旧卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "旧章",
+      content: "旧版正文。"
+    }).expect(201);
+    const snapshot = runtime.store.getWorkTree(workId) as { volumes: Array<Record<string, unknown>> };
+    for (const legacyVolume of snapshot.volumes) {
+      delete legacyVolume.description;
+      delete legacyVolume.keywords;
+    }
+    const fileVersionId = "file_legacy_snapshot";
+    runtime.database.run(
+      `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      fileVersionId,
+      workId,
+      "legacy.txt",
+      "txt",
+      0,
+      0,
+      "[]",
+      JSON.stringify(snapshot),
+      new Date().toISOString()
+    );
+    await request(runtime.app).patch(`/api/chapters/${chapter.body.data.id}`).send({ content: "当前正文。" }).expect(200);
+
+    const restored = await request(runtime.app)
+      .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
+      .expect(200);
+    const restoredChapterId = restored.body.data.tree.volumes[0].chapters[0].id;
+    const restoredChapter = await request(runtime.app).get(`/api/chapters/${restoredChapterId}`).expect(200);
+    expect(restoredChapter.body.data.content).toBe("旧版正文。");
+    expect(restored.body.data.tree.volumes[0]).toMatchObject({ description: "", keywords: [] });
   });
 });

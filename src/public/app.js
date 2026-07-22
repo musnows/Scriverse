@@ -89,6 +89,12 @@ function canEditProse(work = state.work) {
   return canWriteUiModule(work, "editor");
 }
 
+function canReplaceProse(work = state.work) {
+  return WORK_PERMISSION_MODULES
+    .filter((item) => item.id !== "ai-settings")
+    .every((item) => canWriteUiModule(work, item.uiModule));
+}
+
 function canManageWork(work = state.work) {
   return ["admin", "owner"].includes(String(work?.accessRole));
 }
@@ -123,6 +129,10 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
+  $("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);
+  $("#import-file-button").setAttribute("aria-hidden", String(proseReadOnly));
+  $("#import-file").disabled = proseReadOnly;
+  $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canReplaceProse());
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#chapter-title").readOnly = proseReadOnly;
   $("#chapter-content").readOnly = proseReadOnly;
@@ -198,6 +208,10 @@ let aiReferencesLoadPromise = null;
 let aiReferencesLoadWorkId = null;
 let aiConversationsLoadPromise = null;
 let aiConversationsLoadWorkId = null;
+let workScopedUiGeneration = 0;
+let importHistoryRecords = [];
+let importHistoryNextPage = null;
+let importHistoryRequestId = 0;
 
 const shelfOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "这里是你的创作书架", description: "点击左上角的叙界标志，可以随时回到书架，在不同作品之间切换。", placement: "bottom" },
@@ -1106,8 +1120,9 @@ function renderAiConversationHistory() {
 async function loadAiConversations(openLatest = true) {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const conversations = (await apiPage(`/api/works/${workId}/ai-conversations`)).items;
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.aiConversations = conversations;
   loadedAiConversationsWorkId = workId;
   renderAiConversationHistory();
@@ -1798,8 +1813,11 @@ function confirmDiscardChanges(message = "当前章节有未保存修改，继�
 
 function chooseExistingWorkImportMode(file) {
   const dialog = $("#import-mode-dialog");
+  const canOverwrite = canReplaceProse();
   $("#import-mode-file-summary").textContent = `文件：${file.name}；当前作品：《${state.work.title}》`;
   $("#import-mode-unsaved-warning").classList.toggle("hidden", !state.dirty);
+  $("#import-mode-overwrite").disabled = !canOverwrite;
+  $("#import-mode-overwrite-permission").classList.toggle("hidden", canOverwrite);
   dialog.returnValue = "cancel";
   dialog.showModal();
   return new Promise((resolve) => {
@@ -2257,34 +2275,45 @@ function renderShelf() {
   $("#book-add-card").addEventListener("click", openWorkDialog);
 }
 
+function resetWorkScopedUiCaches() {
+  workScopedUiGeneration += 1;
+  loadedAiModelsWorkId = null;
+  loadedAiReferencesWorkId = null;
+  loadedAiConversationsWorkId = null;
+  aiModelsLoadPromise = null;
+  aiModelsLoadWorkId = null;
+  aiReferencesLoadPromise = null;
+  aiReferencesLoadWorkId = null;
+  aiConversationsLoadPromise = null;
+  aiConversationsLoadWorkId = null;
+  state.models = [];
+  state.characters = [];
+  state.settings = [];
+  state.collapsedVolumeIds.clear();
+  lastSavedChapterSnapshot = null;
+  if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
+  aiContextUsageTimer = null;
+  aiContextUsageRequest += 1;
+  state.aiCitations = [];
+  state.aiReferences = [];
+  state.aiPromptSent = false;
+  state.aiConversationId = null;
+  state.aiConversations = [];
+  renderAiCitations();
+  renderAiReferences();
+  renderAiQuickActions();
+  resetAiFeed();
+  $("#ai-conversation-title").textContent = "新对话";
+  $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
+  setAiContextMeter(null);
+  renderAiConversationHistory();
+}
+
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !confirmDiscardChanges()) return false;
   const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
-  if (state.work?.id !== nextWork.id) {
-    loadedAiModelsWorkId = null;
-    loadedAiReferencesWorkId = null;
-    loadedAiConversationsWorkId = null;
-    state.models = [];
-    state.characters = [];
-    state.settings = [];
-    if (aiContextUsageTimer !== null) clearTimeout(aiContextUsageTimer);
-    aiContextUsageTimer = null;
-    aiContextUsageRequest += 1;
-    state.aiCitations = [];
-    state.aiReferences = [];
-    state.aiPromptSent = false;
-    state.aiConversationId = null;
-    state.aiConversations = [];
-    renderAiCitations();
-    renderAiReferences();
-    renderAiQuickActions();
-    resetAiFeed();
-    $("#ai-conversation-title").textContent = "新对话";
-    $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
-    setAiContextMeter(null);
-    renderAiConversationHistory();
-  }
+  if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -3241,8 +3270,9 @@ async function renderBookAiSettings() {
 async function loadModels() {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.models = models;
   loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
@@ -3383,11 +3413,12 @@ async function refreshAiContextUsage() {
 async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
+  const generation = workScopedUiGeneration;
   const [characters, settings] = await Promise.all([
     canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
     canReadModule("settings") ? apiAllPages(`/api/works/${workId}/settings`) : Promise.resolve([])
   ]);
-  if (state.work?.id !== workId) return;
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
   state.settings = settings;
   loadedAiReferencesWorkId = workId;
@@ -4741,6 +4772,120 @@ async function showVersions() {
   $("#versions-dialog").showModal();
 }
 
+function importHistoryRecordLabel(version) {
+  const restorePrefix = "before-restore:";
+  if (version.fileType === "snapshot" && version.fileName.startsWith(restorePrefix)) {
+    return {
+      title: `恢复操作前备份：${version.fileName.slice(restorePrefix.length)}`,
+      kind: "自动备份",
+      action: "恢复此操作前备份"
+    };
+  }
+  return { title: version.fileName, kind: String(version.fileType).toUpperCase(), action: "恢复到此次导入前" };
+}
+
+function renderImportHistory(versions, nextPage = null) {
+  const host = $("#import-history-list");
+  if (!versions.length) {
+    host.innerHTML = '<p class="entity-history-empty">还没有正文导入记录。首次导入后会自动保存导入前快照。</p>';
+    return;
+  }
+  host.innerHTML = versions.map((version) => {
+    const label = importHistoryRecordLabel(version);
+    return `<article class="entity-version-card import-history-card" data-file-version="${esc(version.id)}">
+      <header><strong title="${esc(label.title)}">${esc(label.title)}</strong><span class="import-history-kind">${esc(label.kind)}</span></header>
+      <time>${esc(formatDateTime(version.createdAt))} · ${esc(version.actor || "历史数据")}</time>
+      <p>${version.fileType === "snapshot" ? "恢复操作执行前自动保存的完整正文。" : "保存的是这次文件导入开始前的完整正文。"}</p>
+      <small>自动备份仅包含正文，不能撤销章节关联信息的变化。</small>
+      <button type="button" data-file-version-restore="${esc(version.id)}" data-default-label="${esc(label.action)}">${esc(label.action)}</button>
+    </article>`;
+  }).join("") + (nextPage ? '<button class="import-history-load-more" type="button" data-import-history-load-more>加载更多记录</button>' : "");
+  host.querySelectorAll("[data-file-version-restore]").forEach((button) => button.addEventListener("click", async () => {
+    if (!state.work || !canReplaceProse()) return;
+    const defaultLabel = button.dataset.defaultLabel;
+    if (button.dataset.confirmed !== "true") {
+      host.querySelectorAll("[data-file-version-restore]").forEach((other) => {
+        other.dataset.confirmed = "false";
+        other.classList.remove("is-confirming");
+        other.textContent = other.dataset.defaultLabel;
+      });
+      button.dataset.confirmed = "true";
+      button.classList.add("is-confirming");
+      button.textContent = "再次点击确认恢复";
+      window.setTimeout(() => {
+        if (!button.isConnected || button.dataset.confirmed !== "true") return;
+        button.dataset.confirmed = "false";
+        button.classList.remove("is-confirming");
+        button.textContent = defaultLabel;
+      }, 5000);
+      return;
+    }
+    if (!confirmDiscardChanges("当前章节有未保存修改，恢复正文会丢弃这些本地修改。是否继续？")) return;
+    button.disabled = true;
+    cancelChapterAutoSave();
+    const workId = state.work.id;
+    try {
+      await api(`/api/works/${encodeURIComponent(workId)}/file-versions/${encodeURIComponent(button.dataset.fileVersionRestore)}/restore`, {
+        method: "POST",
+        body: { expectedVersionNo: state.work.versionNo }
+      });
+      state.dirty = false;
+      resetWorkScopedUiCaches();
+      $("#import-history-dialog").close();
+      await loadWorks(workId);
+      toast("正文已恢复；恢复前正文已自动备份");
+    } catch (error) {
+      button.disabled = false;
+      button.dataset.confirmed = "false";
+      button.classList.remove("is-confirming");
+      button.textContent = defaultLabel;
+      if (state.dirty) scheduleChapterAutoSave();
+      toast(error.message, "error");
+    }
+  }));
+  host.querySelector("[data-import-history-load-more]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    button.textContent = "正在加载…";
+    try {
+      await loadImportHistoryPage(nextPage);
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "加载更多记录";
+      toast(error.message, "error");
+    }
+  });
+}
+
+async function loadImportHistoryPage(page) {
+  const workId = state.work?.id;
+  if (!workId || !page) return;
+  const requestId = ++importHistoryRequestId;
+  const result = await apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25);
+  if (requestId !== importHistoryRequestId || state.work?.id !== workId || !$("#import-history-dialog").open) return;
+  importHistoryRecords = page === 1 ? result.items : [...importHistoryRecords, ...result.items];
+  importHistoryNextPage = result.nextPage;
+  renderImportHistory(importHistoryRecords, importHistoryNextPage);
+}
+
+async function openImportHistory() {
+  if (!state.work || !canReplaceProse()) {
+    toast("恢复整本正文需要所有受影响模块的编辑权限", "error");
+    return;
+  }
+  importHistoryRecords = [];
+  importHistoryNextPage = null;
+  importHistoryRequestId += 1;
+  $("#import-history-list").innerHTML = '<p class="entity-history-empty">正在读取导入历史…</p>';
+  $("#import-history-dialog").showModal();
+  try {
+    await loadImportHistoryPage(1);
+  } catch (error) {
+    $("#import-history-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
 async function showChapterInsight() {
   if (!state.chapter) return;
   const panel = $("#chapter-insight");
@@ -5057,6 +5202,8 @@ $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
+$("#import-history-button").addEventListener("click", () => openImportHistory());
+$("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
