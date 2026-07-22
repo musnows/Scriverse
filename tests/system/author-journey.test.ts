@@ -232,8 +232,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260722-module-permissions');
-    expect(page.text).toContain('/styles.css?v=20260722-module-permissions');
+    expect(page.text).toContain('/app.js?v=20260722-module-permissions-cr');
+    expect(page.text).toContain('/styles.css?v=20260722-module-permissions-cr');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -320,6 +320,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('$("#module-nav [data-work-settings]").classList.toggle("permission-hidden"');
     expect(application.text).toContain('$(".ai-panel").classList.toggle("permission-hidden", aiHidden)');
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
+    expect(styles.text).toContain("body.work-viewer-mode [data-merge-review]");
+    expect(application.text).toContain('item.status === "pending" && canResolveReview');
+    expect(application.text).toContain('canReadCharacters ? apiAllPages');
+    expect(application.text).toContain('const canReadAggregate = hasWork && canReadAggregateContent()');
     expect(styles.text).toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
     expect(styles.text).toContain(".member-permission-grid");
     expect(styles.text).toContain(".work-access-options");

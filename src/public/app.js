@@ -101,6 +101,11 @@ function canReadModule(module, work = state.work) {
   return canReadUiModule(work, module);
 }
 
+function canReadAggregateContent(work = state.work) {
+  return ["editor", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"]
+    .every((module) => canReadModule(module, work));
+}
+
 function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
   const proseReadOnly = Boolean(state.work) && !canEditProse();
@@ -1924,13 +1929,14 @@ function captureSettingsReturnContext() {
 function renderSettingsHub() {
   const hasWork = Boolean(state.work);
   const canManageWork = hasWork && ["admin", "owner"].includes(String(state.work.accessRole));
+  const canReadAggregate = hasWork && canReadAggregateContent();
   const isAdmin = state.user?.role === "admin";
   $("#platform-ai-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
-  $("#top-search-button").disabled = !hasWork;
-  $("#export-button").disabled = !hasWork;
+  $("#top-search-button").disabled = !canReadAggregate;
+  $("#export-button").disabled = !canReadAggregate;
   $("#settings-return").textContent = settingsReturnContext?.view === "shelf" || !hasWork ? "返回书架" : "返回当前作品";
   $("#settings-work-note").textContent = hasWork
     ? `当前作品：《${state.work.title}》。导出将作用于这部作品。`
@@ -2292,7 +2298,7 @@ async function selectWork(workId, preferredChapterId = null) {
   applyWorkAccessMode();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
-  $("#top-search-button").disabled = !["editor", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"].every((module) => canReadModule(module));
+  $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
   const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
   const targetChapter = chapters.find((chapter) => chapter.id === preferredChapterId) ?? chapters[0];
@@ -2866,9 +2872,13 @@ async function renderRelationships() {
 }
 
 async function renderReviews() {
+  const canReadCharacters = canReadModule("characters");
+  const canResolveReview = canEditModule("reviews");
+  const canMergeCharacters = canResolveReview
+    && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
   const [reviews, characters] = await Promise.all([
     apiPage(`/api/works/${state.work.id}/reviews`).then((result) => result.items),
-    apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`)
+    canReadCharacters ? apiAllPages(`/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
   ]);
   const characterById = new Map(characters.map((character) => [character.id, character]));
   const duplicateCard = (item) => {
@@ -2876,17 +2886,21 @@ async function renderReviews() {
     const sides = refs.map((reference) => ({ reference, character: characterById.get(reference.id) }));
     const sideHtml = sides.map(({ character }) => `<section><strong>${esc(character.name)}</strong><small>v${esc(String(character.versionNo))} · ${esc(character.species || "种族未知")}</small><div>${character.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("") || '<span class="organization-empty">无别名</span>'}</div><p>${esc(character.attributes?.identity || character.profile?.summary || "尚未记录身份说明")}</p></section>`).join("");
     const evidenceHtml = (item.evidence ?? []).map((evidence) => `<li><strong>${esc(evidence.chapterTitle || evidence.chapterId || "原文")}</strong><q>${esc(evidence.quote || "")}</q>${evidence.supports ? `<small>${esc(evidence.supports)}</small>` : ""}</li>`).join("");
-    const actions = item.status === "pending" && sides.length === 2 ? `<div class="card-actions character-duplicate-actions">
+    const mergeActions = item.status === "pending" && sides.length === 2 && canMergeCharacters ? `
       <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[0].character.id)}" data-merge-source="${esc(sides[1].character.id)}" data-target-version="${esc(String(sides[0].reference.versionNo))}" data-source-version="${esc(String(sides[1].reference.versionNo))}">合并为 ${esc(sides[0].character.name)}</button>
-      <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[1].character.id)}" data-merge-source="${esc(sides[0].character.id)}" data-target-version="${esc(String(sides[1].reference.versionNo))}" data-source-version="${esc(String(sides[0].reference.versionNo))}">合并为 ${esc(sides[1].character.name)}</button>
-      <button data-keep-characters-separate="${esc(item.id)}">确认是不同角色</button>
-    </div>` : "";
+      <button data-merge-review="${esc(item.id)}" data-merge-target="${esc(sides[1].character.id)}" data-merge-source="${esc(sides[0].character.id)}" data-target-version="${esc(String(sides[1].reference.versionNo))}" data-source-version="${esc(String(sides[0].reference.versionNo))}">合并为 ${esc(sides[1].character.name)}</button>` : "";
+    const keepSeparateAction = item.status === "pending" && canResolveReview
+      ? `<button data-keep-characters-separate="${esc(item.id)}">确认是不同角色</button>`
+      : "";
+    const actions = mergeActions || keepSeparateAction
+      ? `<div class="card-actions character-duplicate-actions">${mergeActions}${keepSeparateAction}</div>`
+      : "";
     return `<article class="record-card character-duplicate-review"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
   };
   $("#module-content").innerHTML = reviews.length ? `<div class="card-grid">${reviews.map((item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
     <article class="record-card"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
     <p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>
-    ${item.status === "pending" ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`).join("")}</div>`
+    ${item.status === "pending" && canResolveReview ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`).join("")}</div>`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
