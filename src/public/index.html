@@ -346,30 +346,29 @@
     </dialog>
 
     <section id="entity-editor-view" class="entity-editor-view hidden" aria-label="全屏资料编辑">
-      <form id="setting-editor-form" class="entity-editor-page hidden" aria-labelledby="setting-editor-title">
-        <header class="entity-editor-header">
+      <form id="setting-editor-form" class="entity-editor-page hidden" aria-label="设定编辑器">
+        <header class="entity-editor-header setting-editor-header">
           <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
           <div class="entity-editor-heading">
             <span id="setting-editor-eyebrow" class="eyebrow">作者事实</span>
-            <h1 id="setting-editor-title">新建设定</h1>
+            <input id="setting-editor-name" class="setting-editor-title-input" name="title" maxlength="200" placeholder="新建设定" aria-label="设定标题">
+            <div class="setting-editor-header-fields">
+              <label>分类<select id="setting-editor-category" name="category">
+                <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
+              </select></label>
+              <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
+              <label id="setting-change-note-field" class="setting-editor-change-note">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
+            </div>
           </div>
           <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
         </header>
         <div class="setting-editor-workspace">
-          <aside class="setting-editor-sidebar" aria-label="设定元数据">
-            <label>标题<input id="setting-editor-name" name="title" maxlength="200" required></label>
-            <label>分类<select id="setting-editor-category" name="category">
-              <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
-            </select></label>
-            <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
-            <label id="setting-change-note-field">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
-          </aside>
           <main class="setting-editor-content">
             <div class="setting-markdown-field" data-markdown-editor>
               <div class="setting-markdown-heading"><span>设定正文</span><small>支持标题、列表、引用、表格、链接和图片；适合维护长篇世界观、规则、历史、地点与创作约束。</small></div>
               <div class="markdown-editor-toolbar"><label class="ghost-button" for="setting-editor-attachment">上传并插入图片</label><input id="setting-editor-attachment" class="hidden" data-markdown-attachment type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif"><span>可使用 Mac Command+V 或 Windows、Linux Ctrl+V 粘贴图片</span></div>
               <div class="setting-markdown-compose">
-                <label>Markdown 原文<textarea id="setting-editor-body" name="content" data-markdown-textarea maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容" required></textarea></label>
+                <label>Markdown 原文<textarea id="setting-editor-body" name="content" data-markdown-textarea maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容"></textarea></label>
                 <div><span class="markdown-editor-preview-label">安全预览</span><article class="markdown-editor-preview message-body" data-markdown-preview><p class="markdown-editor-empty">预览区域暂无内容。</p></article></div>
               </div>
             </div>

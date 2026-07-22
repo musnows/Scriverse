@@ -3781,7 +3781,6 @@ function openVolumeDialog(item) {
 function openSettingEditor(item = null) {
   settingEditorItem = item;
   $("#setting-editor-eyebrow").textContent = item ? "人工修正" : "作者事实";
-  $("#setting-editor-title").textContent = item ? `编辑“${item.title}”` : "新建设定";
   $("#setting-editor-name").value = item?.title ?? "";
   $("#setting-editor-category").value = item?.category ?? "世界规则";
   $("#setting-editor-locked").checked = Boolean(item?.locked);
@@ -3801,11 +3800,23 @@ function openSettingEditor(item = null) {
     const submit = $("#setting-editor-submit");
     submit.disabled = true;
     try {
+      const title = String(form.get("title") ?? "").trim();
+      if (!title) {
+        toast("请填写设定标题", "error");
+        $("#setting-editor-name").focus();
+        return;
+      }
+      const content = String(form.get("content") ?? "");
+      if (!content.trim()) {
+        toast("请填写设定正文", "error");
+        $("#setting-editor-body").focus();
+        return;
+      }
       const locked = form.get("locked") === "on";
       const body = {
-        title: String(form.get("title") ?? "").trim(),
+        title,
         category: String(form.get("category") ?? "世界规则"),
-        content: String(form.get("content") ?? ""),
+        content,
         locked,
         status: locked ? "confirmed" : (item?.status ?? "draft"),
         ...(item ? { changeNote: String(form.get("changeNote") ?? "").trim() } : {})
