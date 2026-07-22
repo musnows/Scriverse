@@ -198,12 +198,22 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("/versions`");
     expect(application.text).toContain("/restore`");
     expect(application.text).toContain("buildCharacterState(form.getAll");
+    expect(application.text).toContain("function openEntityMergeDialog(");
+    expect(application.text).toContain("data-merge-character");
+    expect(application.text).toContain("data-delete-character");
+    expect(application.text).toContain("data-merge-race");
+    expect(application.text).toContain("data-delete-race");
+    expect(application.text).toContain("data-merge-organization");
+    expect(application.text).toContain("data-delete-organization");
+    expect(application.text).toContain("/merge`");
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain(".setting-editor-workspace");
     expect(styles.text).toContain(".character-relationship-row");
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
+    expect(styles.text).toContain(".card-actions .danger-button");
+    expect(styles.text).toContain(".merge-dialog-note");
   });
 
   it("首屏书架、大纲伏笔、续写守卫和关系银河图资源完整可达", async () => {
@@ -221,8 +231,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260722-pagination-entity-editor-page');
-    expect(page.text).toContain('/styles.css?v=20260722-entity-editor-page');
+    expect(page.text).toContain('/app.js?v=20260722-settings-import-version-lock');
+    expect(page.text).toContain('/styles.css?v=20260722-settings-import-mode');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -295,9 +305,13 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('id="work-access-manage"');
     expect(page.text).toContain('id="member-role-select"');
     expect(page.text).toContain('<option value="viewer">仅查看</option>');
+    expect(page.text).toContain('<option value="settings-editor">仅编辑设定</option>');
+    expect(application.text).toContain('"settings-editor"');
     expect(application.text).toContain('classList.toggle("view-only-mode", viewOnly)');
-    expect(application.text).toContain('setSaveState("仅查看")');
+    expect(application.text).toContain('classList.toggle("settings-only-mode", settingsOnly)');
+    expect(application.text).toContain('setSaveState(canEditWork() ? "正文只读" : "仅查看")');
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
+    expect(styles.text).toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
     expect(application.text).toContain('class="book-card-settings"');
     expect(application.text).toContain("function workCoverFieldHtml(work)");
     expect(application.text).toContain('id="work-cover-upload"');

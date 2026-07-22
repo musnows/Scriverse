@@ -81,18 +81,36 @@ function analysisTaskStatusLabel(status) {
 }
 
 function canEditWork(work = state.work) {
+  return ["admin", "owner", "editor", "settings-editor"].includes(String(work?.accessRole));
+}
+
+function canEditProse(work = state.work) {
   return ["admin", "owner", "editor"].includes(String(work?.accessRole));
+}
+
+function canManageWork(work = state.work) {
+  return ["admin", "owner"].includes(String(work?.accessRole));
+}
+
+function canEditModule(module, work = state.work) {
+  if (canEditProse(work)) return true;
+  return canEditWork(work) && ["settings", "characters", "races", "organizations", "timeline", "outlines", "relationships"].includes(module);
 }
 
 function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
+  const settingsOnly = String(state.work?.accessRole) === "settings-editor";
+  const proseReadOnly = Boolean(state.work) && !canEditProse();
   $("#app").classList.toggle("view-only-mode", viewOnly);
+  $("#app").classList.toggle("settings-only-mode", settingsOnly);
+  $("#app").classList.toggle("prose-read-only-mode", proseReadOnly);
   document.body.classList.toggle("work-viewer-mode", viewOnly);
-  $("#chapter-title").readOnly = viewOnly;
-  $("#chapter-content").readOnly = viewOnly;
-  $("#chapter-title").setAttribute("aria-readonly", String(viewOnly));
-  $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
-  if (viewOnly) {
+  document.body.classList.toggle("work-settings-editor-mode", settingsOnly);
+  $("#chapter-title").readOnly = proseReadOnly;
+  $("#chapter-content").readOnly = proseReadOnly;
+  $("#chapter-title").setAttribute("aria-readonly", String(proseReadOnly));
+  $("#chapter-content").setAttribute("aria-readonly", String(proseReadOnly));
+  if (proseReadOnly) {
     cancelChapterAutoSave();
     state.dirty = false;
   }
@@ -1424,15 +1442,75 @@ applyTypographySettings(typographySettings);
 applyColorTheme(currentColorTheme());
 applyPanelLayout();
 
+function optimisticVersionForPath(path) {
+  const normalizedPath = String(path).split("?")[0];
+  const find = (items, id) => items.find((item) => String(item?.id ?? item?.chapterId ?? "") === id)?.versionNo;
+  const workMatch = normalizedPath.match(/^\/api\/works\/([^/]+)(?:\/(?:cover|import|file-versions\/[^/]+\/restore))?$/u);
+  if (workMatch) {
+    const workId = decodeURIComponent(workMatch[1]);
+    return state.works.find((item) => item.id === workId)?.versionNo ?? (state.work?.id === workId ? state.work.versionNo : undefined);
+  }
+  const resourceMatch = normalizedPath.match(/^\/api\/(volumes|chapters|settings|races|organizations|timeline-tracks|timeline|relationships|foreshadows|characters|character-sections)\/([^/]+)(?:\/(?:restore|move|split))?$/u);
+  if (resourceMatch) {
+    const resourceId = decodeURIComponent(resourceMatch[2]);
+    const collection = {
+      settings: state.settings,
+      races: state.races,
+      organizations: state.organizations,
+      "timeline-tracks": state.timelineTracks,
+      characters: state.characters
+    }[resourceMatch[1]] ?? [];
+    if (resourceMatch[1] === "chapters" && state.chapter?.id === resourceId) return state.chapter.versionNo;
+    if (resourceMatch[1] === "volumes") return find(state.work?.volumes ?? [], resourceId);
+    if (resourceMatch[1] === "character-sections") return find(characterEditorSections, resourceId);
+    if (resourceMatch[1] === "characters" && characterEditorItem?.id === resourceId) return characterEditorItem.versionNo;
+    return find(collection, resourceId);
+  }
+  const outlineMatch = normalizedPath.match(/^\/api\/chapters\/([^/]+)\/outline$/u);
+  if (outlineMatch) return find(state.outlines ?? [], decodeURIComponent(outlineMatch[1]));
+  const entityRestoreMatch = normalizedPath.match(/^\/api\/entity-versions\/(work|volume|setting|race|organization|timeline-track|timeline-event|relationship|chapter-outline|foreshadow)\/([^/]+)\/restore$/u);
+  if (entityRestoreMatch) {
+    const entityType = entityRestoreMatch[1];
+    const entityId = decodeURIComponent(entityRestoreMatch[2]);
+    if (entityType === "work") return state.works.find((item) => item.id === entityId)?.versionNo ?? (state.work?.id === entityId ? state.work.versionNo : undefined);
+    if (entityType === "volume") return find(state.work?.volumes ?? [], entityId);
+    if (entityType === "chapter-outline") return find(state.outlines ?? [], entityId);
+    const collection = {
+      setting: state.settings,
+      race: state.races,
+      organization: state.organizations,
+      "timeline-track": state.timelineTracks
+    }[entityType] ?? [];
+    return find(collection, entityId);
+  }
+  return undefined;
+}
+
+function attachOptimisticVersion(path, method, body) {
+  if (!["PATCH", "PUT", "DELETE", "POST"].includes(method)) return body;
+  if (body instanceof FormData) {
+    if (!body.has("expectedVersionNo")) {
+      const versionNo = optimisticVersionForPath(path);
+      if (Number.isInteger(versionNo) && versionNo > 0) body.append("expectedVersionNo", String(versionNo));
+    }
+    return body;
+  }
+  const currentBody = body && typeof body === "object" && !Array.isArray(body) ? body : {};
+  if (currentBody.expectedVersionNo !== undefined) return currentBody;
+  const versionNo = optimisticVersionForPath(path);
+  return Number.isInteger(versionNo) && versionNo > 0 ? { ...currentBody, expectedVersionNo: versionNo } : body;
+}
+
 async function api(path, options = {}) {
   const method = String(options.method ?? "GET").toUpperCase();
+  const body = attachOptimisticVersion(path, method, options.body);
   const headers = { ...(options.headers ?? {}) };
   if (state.csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) headers["X-CSRF-Token"] = state.csrfToken;
-  if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, options.body instanceof FormData ? { ...options, headers } : {
+  if (!(body instanceof FormData)) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, body instanceof FormData ? { ...options, body, headers } : {
     ...options,
     headers,
-    body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body
+    body: body && typeof body !== "string" ? JSON.stringify(body) : body
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
@@ -1616,7 +1694,7 @@ function cancelChapterAutoSave() {
 }
 
 function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
-  if (!state.chapter || !canEditWork()) return;
+  if (!state.chapter || !canEditProse()) return;
   cancelChapterAutoSave();
   setSaveState("等待自动保存", true);
   chapterAutoSaveTimer = setTimeout(() => {
@@ -1626,7 +1704,7 @@ function scheduleChapterAutoSave(delay = chapterAutoSaveDelay) {
 }
 
 async function persistChapter({ automatic = false } = {}) {
-  if (!canEditWork()) return null;
+  if (!canEditProse()) return null;
   if (!state.chapter) {
     if (!automatic) toast("请先选择章节", "error");
     return null;
@@ -1692,6 +1770,19 @@ async function persistChapter({ automatic = false } = {}) {
 function confirmDiscardChanges(message = "当前章节有未保存修改，继续将丢弃这些修改。是否继续？") {
   if (!state.dirty) return true;
   return window.confirm(message);
+}
+
+function chooseExistingWorkImportMode(file) {
+  const dialog = $("#import-mode-dialog");
+  $("#import-mode-file-summary").textContent = `文件：${file.name}；当前作品：《${state.work.title}》`;
+  $("#import-mode-unsaved-warning").classList.toggle("hidden", !state.dirty);
+  dialog.returnValue = "cancel";
+  dialog.showModal();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => {
+      resolve(["append", "overwrite"].includes(dialog.returnValue) ? dialog.returnValue : null);
+    }, { once: true });
+  });
 }
 
 function updateDocumentTitle(work = null) {
@@ -1886,8 +1977,8 @@ function renderMembers(members) {
   const work = memberDialogWork ?? state.work;
   const canManage = ["admin", "owner"].includes(String(work?.accessRole));
   $("#members-list").innerHTML = members.map((member) => `<article class="access-row">
-    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : "协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
-    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>可编辑</option></select>`}
+    <div class="access-person">${userAvatarHtml(member, "access-avatar")}<div class="access-person-copy"><strong>${esc(member.displayName)} · @${esc(member.username)}</strong><small>${member.role === "owner" ? "作品创建者" : member.role === "viewer" ? "查看者" : member.role === "settings-editor" ? "设定编辑" : "完整协作者"}${member.status === "disabled" ? " · 已停用" : ""}</small></div></div>
+    ${member.role === "owner" ? "<span>所有者</span>" : `<select data-member-role="${esc(member.userId)}" aria-label="${esc(member.displayName)}的作品权限" ${canManage ? "" : "disabled"}><option value="viewer" ${member.role === "viewer" ? "selected" : ""}>仅查看</option><option value="settings-editor" ${member.role === "settings-editor" ? "selected" : ""}>仅编辑设定</option><option value="editor" ${member.role === "editor" ? "selected" : ""}>编辑正文与设定</option></select>`}
     ${member.role === "owner" || !canManage ? "<span></span>" : `<button type="button" data-remove-member="${esc(member.userId)}">移除</button>`}
   </article>`).join("");
   bindUserAvatarFallbacks($("#members-list"));
@@ -2090,9 +2181,9 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "editor" ? "协作作品" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "仅查看" : work.accessRole === "settings-editor" ? "设定协作" : work.accessRole === "editor" ? "完整协作" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
-      ${canEditWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
+      ${canManageWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
     </article>`).join("")}
     <button class="book-card book-add-card" id="book-add-card" type="button" aria-label="新建作品" data-testid="book-add-card"><span>＋</span><strong>新建作品</strong><small>从零开始或导入 TXT / DOCX</small></button>`;
   shelf.querySelectorAll("[data-open-work]").forEach((button) => button.addEventListener("click", () => selectWork(button.dataset.openWork)));
@@ -2177,7 +2268,7 @@ function renderTree() {
       renderTree();
     });
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditWork()) return;
+      if (!canEditProse()) return;
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
@@ -2185,7 +2276,7 @@ function renderTree() {
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
     button.addEventListener("contextmenu", (event) => {
-      if (!canEditWork()) return;
+      if (!canEditProse()) return;
       event.preventDefault();
       openChapterTypeMenu(button.dataset.chapterId, event.clientX, event.clientY);
     });
@@ -2235,7 +2326,7 @@ async function selectChapter(chapterId) {
   scheduleChapterLineNumbers();
   $("#chapter-insight").classList.add("hidden");
   updateChapterStats();
-  if (!canEditWork()) setSaveState("仅查看");
+  if (!canEditProse()) setSaveState(canEditWork() ? "正文只读" : "仅查看");
   else if (spacingChanged) scheduleChapterAutoSave(120);
   else setSaveState("已保存");
   renderTree();
@@ -2293,7 +2384,7 @@ const moduleMeta = {
 
 async function showModule(module) {
   if (!state.work) return showWelcome();
-  if (!canEditWork() && ["tasks", "ai-settings"].includes(module)) module = "editor";
+  if (!canEditProse() && ["tasks", "ai-settings"].includes(module)) module = "editor";
   if (module !== "editor" && state.module === "editor" && !confirmDiscardChanges()) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
@@ -2315,7 +2406,7 @@ async function showModule(module) {
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditWork());
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   try {
     if (module === "settings") await renderSettings();
@@ -2404,6 +2495,36 @@ function bindEntityHistoryButtons(refresh) {
   }));
 }
 
+function openEntityMergeDialog({ typeLabel, source, candidates, endpoint, body, refresh, impact }) {
+  const targetOptions = candidates
+    .filter((candidate) => candidate.id !== source.id)
+    .map((candidate) => [candidate.id, candidate.name]);
+  openDialog(`合并${typeLabel}`,
+    `<p class="merge-dialog-note">“${esc(source.name)}”将合并到所选档案，目标档案会保留。${esc(impact)}</p>` +
+    field("targetId", `目标${typeLabel}`, "select", targetOptions[0]?.[0] ?? "", targetOptions),
+    async (form) => {
+      const target = candidates.find((candidate) => candidate.id === form.get("targetId"));
+      if (!target) throw new Error(`请选择目标${typeLabel}`);
+      await api(endpoint(source), { method: "POST", body: body(target) });
+      await refresh();
+      await loadAiReferences();
+      toast(`已将“${source.name}”合并到“${target.name}”`);
+    }, "人工资料管理", { submitLabel: "确认合并" });
+}
+
+async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning = "" }) {
+  const detail = warning ? `\n${warning}` : "";
+  if (!window.confirm(`确认删除${typeLabel}“${item.name}”吗？${detail}`)) return;
+  try {
+    await api(endpoint(item), { method: "DELETE" });
+    await refresh();
+    await loadAiReferences();
+    toast(`已删除${typeLabel}“${item.name}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
@@ -2439,7 +2560,7 @@ async function renderCharacters() {
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
-    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button></div></article>`;
+    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button>${canEditWork() && state.characters.length > 1 ? `<button data-merge-character="${esc(item.id)}">合并</button>` : ""}${canEditWork() ? `<button class="danger-button" data-delete-character="${esc(item.id)}">删除</button>` : ""}</div></article>`;
   }).join("")}</div>`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   $("#create-character-audit-task")?.addEventListener("click", async () => {
@@ -2464,6 +2585,34 @@ async function renderCharacters() {
     });
   });
   $("#module-content").querySelectorAll("[data-edit-character]").forEach((button) => button.addEventListener("click", () => openCharacterEditor(state.characters.find((item) => item.id === button.dataset.editCharacter))));
+  $("#module-content").querySelectorAll("[data-merge-character]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.characters.find((item) => item.id === button.dataset.mergeCharacter);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "角色",
+      source,
+      candidates: state.characters,
+      endpoint: (item) => `/api/characters/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({
+        targetCharacterId: target.id,
+        expectedTargetVersionNo: target.versionNo,
+        expectedSourceVersionNo: source.versionNo
+      }),
+      refresh: renderCharacters,
+      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-character]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.characters.find((character) => character.id === button.dataset.deleteCharacter);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "角色",
+      item,
+      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}`,
+      refresh: renderCharacters,
+      warning: "相关人物关系会删除，时间线中的参与者引用会移除。"
+    });
+  }));
 }
 
 async function renderRaces() {
@@ -2479,13 +2628,37 @@ async function renderRaces() {
         <p>${esc(item.description || "尚未填写种族简介")}</p>
         <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<span class="pill${setting.inherited ? " inherited" : ""}" title="${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}">${esc(setting.value)}<small>${esc(setting.sourceRaceName)}</small></span>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditWork() && state.races.length > 1 ? `<button data-merge-race="${esc(item.id)}">合并</button>` : ""}${canEditWork() ? `<button class="danger-button" data-delete-race="${esc(item.id)}">删除</button>` : ""}</div>
       </article>
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
   $("#module-content").innerHTML = state.races.length ? `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  $("#module-content").querySelectorAll("[data-merge-race]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.races.find((item) => item.id === button.dataset.mergeRace);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "种族",
+      source,
+      candidates: state.races,
+      endpoint: (item) => `/api/races/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({ targetRaceId: target.id }),
+      refresh: renderRaces,
+      impact: "来源种族的角色、子种族、简介与共同设定会迁移到目标种族。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-race]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.races.find((race) => race.id === button.dataset.deleteRace);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "种族",
+      item,
+      endpoint: (race) => `/api/races/${encodeURIComponent(race.id)}`,
+      refresh: renderRaces,
+      warning: "已绑定角色将变为未指定种族；有子种族时需先迁移或合并。"
+    });
+  }));
   bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
@@ -2499,9 +2672,33 @@ async function renderOrganizations() {
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settings.map((setting) => `<span class="pill">${esc(setting)}</span>`).join("") || '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div>
+      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditWork() && state.organizations.length > 1 ? `<button data-merge-organization="${esc(item.id)}">合并</button>` : ""}${canEditWork() ? `<button class="danger-button" data-delete-organization="${esc(item.id)}">删除</button>` : ""}</div>
     </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  $("#module-content").querySelectorAll("[data-merge-organization]").forEach((button) => button.addEventListener("click", () => {
+    const source = state.organizations.find((item) => item.id === button.dataset.mergeOrganization);
+    if (!source) return;
+    openEntityMergeDialog({
+      typeLabel: "组织",
+      source,
+      candidates: state.organizations,
+      endpoint: (item) => `/api/organizations/${encodeURIComponent(item.id)}/merge`,
+      body: (target) => ({ targetOrganizationId: target.id }),
+      refresh: renderOrganizations,
+      impact: "来源组织的成员、简介与组织设定会迁移到目标组织。"
+    });
+  }));
+  $("#module-content").querySelectorAll("[data-delete-organization]").forEach((button) => button.addEventListener("click", () => {
+    const item = state.organizations.find((organization) => organization.id === button.dataset.deleteOrganization);
+    if (!item) return;
+    void deleteManagedEntity({
+      typeLabel: "组织",
+      item,
+      endpoint: (organization) => `/api/organizations/${encodeURIComponent(organization.id)}`,
+      refresh: renderOrganizations,
+      warning: "角色与该组织的成员关系会一并移除。"
+    });
+  }));
   bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 
@@ -2527,7 +2724,12 @@ async function renderTimeline() {
     const eventIds = [...$("#module-content").querySelectorAll("[data-event-select]:checked")].map((input) => input.dataset.eventSelect);
     if (eventIds.length < 2) return toast("请至少选择两个时间事件", "error");
     openDialog("合并时间事件", field("name", "合并后的事件名称") + field("description", "合并说明（留空则拼接原说明）", "textarea"), async (form) => {
-      await api(`/api/works/${state.work.id}/timeline/merge`, { method: "POST", body: { eventIds, name: form.get("name"), description: form.get("description") || undefined } });
+      await api(`/api/works/${state.work.id}/timeline/merge`, { method: "POST", body: {
+        eventIds,
+        name: form.get("name"),
+        description: form.get("description") || undefined,
+        expectedVersionNos: Object.fromEntries(eventIds.map((eventId) => [eventId, Number(events.find((event) => event.id === eventId)?.versionNo)]))
+      } });
       await renderTimeline();
     }, "保留参与者与证据");
   });
@@ -3361,6 +3563,7 @@ function openWorkSettingsDialog(work) {
 
 async function openChapterDialog() {
   if (!state.work) return openWorkDialog();
+  if (!canEditProse()) return toast("当前权限只能编辑设定资料，正文为只读", "error");
   if (!state.work.volumes.length) {
     await api(`/api/works/${state.work.id}/volumes`, { method: "POST", body: { title: "正文", kind: "main" } });
     state.work = await api(`/api/works/${state.work.id}`);
@@ -3375,6 +3578,7 @@ async function openChapterDialog() {
 
 function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
+  if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
   openDialog(item ? "编辑分卷" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
@@ -3706,7 +3910,7 @@ async function showCharacterSectionVersions(sectionId) {
     host.querySelectorAll("[data-character-section-restore]").forEach((button) => button.addEventListener("click", async () => {
       button.disabled = true;
       try {
-        await api(`/api/character-sections/${sectionId}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.characterSectionRestore) } });
+      await api(`/api/character-sections/${sectionId}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.characterSectionRestore) } });
         characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
         renderCharacterMarkdownSections();
         await Promise.all([renderCharacters(), loadAiReferences()]);
@@ -4033,7 +4237,7 @@ function openTimelineDialog(item, preferredTrackId = null) {
   const trackOptions = [["", "未分组"], ...state.timelineTracks.map((track) => [track.id, track.name])];
   openDialog(item ? "编辑大事件" : "新建大事件", field("trackId", "所属独立时间轴", "select", item?.trackId ?? preferredTrackId ?? "", trackOptions) + field("name", "事件名称", "text", item?.name) + field("timeLabel", "时间描述", "text", item?.timeLabel ?? "时间待定") + field("timeSort", "排序值（留空表示时间待定）", "number", item?.timeSort ?? "") + field("eventType", "事件类型", "text", item?.eventType ?? "other") + field("location", "地点", "text", item?.location) + field("description", "事件简述", "textarea", item?.description), async (form) => {
     const rawSort = String(form.get("timeSort") ?? "").trim();
-    const body = { trackId: form.get("trackId") || null, name: form.get("name"), timeLabel: form.get("timeLabel"), timeSort: rawSort ? Number(rawSort) : null, eventType: form.get("eventType"), location: form.get("location"), description: form.get("description"), status: item?.status ?? "confirmed" };
+    const body = { trackId: form.get("trackId") || null, name: form.get("name"), timeLabel: form.get("timeLabel"), timeSort: rawSort ? Number(rawSort) : null, eventType: form.get("eventType"), location: form.get("location"), description: form.get("description"), status: item?.status ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) };
     await api(item ? `/api/timeline/${item.id}` : `/api/works/${state.work.id}/timeline`, { method: item ? "PATCH" : "POST", body });
     await renderTimeline();
   }, item ? "人工调整" : "作者确认事件");
@@ -4049,7 +4253,7 @@ function openOutlineDialog(item) {
     field("status", "规划状态", "select", item.status ?? "draft", [["draft", "草稿"], ["ready", "可执行"], ["completed", "已完成"]]),
     async (form) => {
       await api(`/api/chapters/${item.chapterId}/outline`, { method: "PUT", body: {
-        goal: form.get("goal"), conflict: form.get("conflict"), turningPoint: form.get("turningPoint"), notes: form.get("notes"), status: form.get("status")
+        goal: form.get("goal"), conflict: form.get("conflict"), turningPoint: form.get("turningPoint"), notes: form.get("notes"), status: form.get("status"), expectedVersionNo: item.versionNo
       } });
       await renderOutlines();
       toast("章节规划已保存");
@@ -4092,7 +4296,8 @@ function openForeshadowDialog(item) {
       const occurrences = [...preservedOccurrences, ...editedOccurrences];
       const body = {
         title: form.get("title"), description: form.get("description"), importance: form.get("importance"), status: form.get("status"),
-        plannedPayoffChapterId: form.get("payoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences
+        plannedPayoffChapterId: form.get("payoffChapterId") || null, resolutionNote: form.get("resolutionNote"), occurrences,
+        ...(item ? { expectedVersionNo: item.versionNo } : {})
       };
       await api(item ? `/api/foreshadows/${item.id}` : `/api/works/${state.work.id}/foreshadows`, { method: item ? "PATCH" : "POST", body });
       await renderOutlines();
@@ -4105,7 +4310,7 @@ function openTimelineSplitDialog(item) {
     await api(`/api/timeline/${item.id}/split`, { method: "POST", body: { parts: [
       { name: form.get("firstName"), description: form.get("firstDescription") },
       { name: form.get("secondName"), description: form.get("secondDescription") }
-    ] } });
+    ], expectedVersionNo: item.versionNo } });
     await renderTimeline();
   }, "原证据同步保留");
 }
@@ -4118,7 +4323,7 @@ async function openRelationshipDialog(item, options = {}) {
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
   openDialog(item ? "编辑人物关系" : "新建人物关系", field("from", "起点人物", "select", item?.fromCharacterId ?? defaultFrom, characterOptions) + field("to", "终点人物", "select", item?.toCharacterId ?? defaultTo, characterOptions) + field("category", "关系大类", "select", item?.category ?? "social", [["family", "亲属"], ["social", "社交"], ["emotional", "情感"], ["conflict", "冲突"], ["uncertain", "未确定"]]) + field("subtype", "关系子类", "text", item?.subtype) + field("keywords", "关系关键词", "keyword-chips", item?.keywords ?? []) + field("confidence", "置信度（0-1）", "number", item?.confidence ?? "1") + field("directed", "有方向性", "checkbox", item?.directed ?? false), async (form) => {
     const keywords = uniqueRelationshipKeywords(form.getAll("keywords").map(String));
-    await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed" } });
+    await api(item ? `/api/relationships/${item.id}` : `/api/works/${state.work.id}/relationships`, { method: item ? "PATCH" : "POST", body: { fromCharacterId: form.get("from"), toCharacterId: form.get("to"), category: form.get("category"), subtype: form.get("subtype"), keywords, confidence: Number(form.get("confidence")), directed: form.get("directed") === "on", confirmationStatus: item?.confirmationStatus ?? "confirmed", ...(item ? { expectedVersionNo: item.versionNo } : {}) } });
     await refreshRelationshipSurfaces(options.characterId ?? null);
   }, item ? "关系档案" : "人工确认关系");
 }
@@ -4421,7 +4626,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
 async function showVersions() {
   if (!state.chapter) return;
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
-  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p><button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button></div>`).join("");
+  $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm(`将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`)) return;
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
@@ -4724,7 +4929,7 @@ $("#member-invite-form").addEventListener("submit", async (event) => {
     const members = await api(`/api/works/${encodeURIComponent(work.id)}/members`, { method: "POST", body: { userId, role } });
     renderMembers(members);
     await fillMemberCandidates(members);
-    toast(role === "viewer" ? "仅查看成员已邀请" : "协作者已邀请");
+    toast(role === "viewer" ? "仅查看成员已邀请" : role === "settings-editor" ? "设定编辑已邀请" : "完整协作者已邀请");
   } catch (error) { toast(error.message, "error"); }
 });
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
@@ -4873,22 +5078,35 @@ $("#ai-mention-menu").addEventListener("click", (event) => {
   if (button) selectAiMention(button);
 });
 $("#import-file").addEventListener("change", async (event) => {
-  if (!state.work || !event.target.files[0]) return;
-  if (!confirmDiscardChanges("导入会替换当前作品目录，未保存修改将丢失。是否继续？")) {
+  const file = event.target.files[0];
+  if (!state.work || !file) return;
+  if (!canEditProse()) {
+    event.target.value = "";
+    toast("当前权限只能编辑设定资料，不能导入正文", "error");
+    return;
+  }
+  const mode = await chooseExistingWorkImportMode(file);
+  if (!mode) {
     event.target.value = "";
     return;
   }
+  cancelChapterAutoSave();
   const body = new FormData();
-  body.append("file", event.target.files[0]);
+  body.append("file", file);
+  body.append("mode", mode);
+  body.append("expectedVersionNo", String(state.work.versionNo));
   try {
     const result = await api(`/api/works/${state.work.id}/import`, { method: "POST", body });
-    setSaveState("已导入");
+    setSaveState(mode === "append" ? "已追加" : "已覆盖");
     state.work = result.tree;
     renderTree();
-    toast(result.warnings.length ? `导入完成：${result.warnings.join("；")}` : "导入完成");
-    const first = state.work.volumes.flatMap((volume) => volume.chapters)[0];
-    if (first) await selectChapter(first.id);
-  } catch (error) { toast(error.message, "error"); }
+    const completion = mode === "append" ? "正文追加完成" : "正文覆盖完成";
+    toast(result.warnings.length ? `${completion}：${result.warnings.join("；")}` : completion);
+    if (result.firstImportedChapterId) await selectChapter(result.firstImportedChapterId);
+  } catch (error) {
+    toast(error.message, "error");
+    if (state.dirty) scheduleChapterAutoSave();
+  }
   event.target.value = "";
 });
 $("#new-import-file").addEventListener("change", async (event) => {

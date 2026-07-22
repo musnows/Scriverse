@@ -35,6 +35,9 @@ export type AuthApiKey = {
   prefix: string;
 };
 
+export type WorkAccessRole = "admin" | "owner" | "editor" | "settings-editor" | "viewer";
+export type AssignableWorkMemberRole = "editor" | "settings-editor" | "viewer";
+
 export type ApiKeyStatus = {
   configured: boolean;
   prefix: string | null;
@@ -57,6 +60,27 @@ declare global {
 const sessionCookieName = "scriverse_session";
 const sessionLifetimeMs = 30 * 24 * 60 * 60_000;
 const apiKeyPrefix = "scrv_";
+const settingsEditorPermissions = JSON.stringify({ editScope: "settings" });
+
+function membershipAccessRole(row: Row | undefined): "owner" | "editor" | "settings-editor" | "viewer" | null {
+  const role = String(row?.role ?? "");
+  if (role === "owner" || role === "viewer") return role;
+  if (role !== "editor") return null;
+  try {
+    const permissions = JSON.parse(String(row?.permissions_json ?? "{}")) as unknown;
+    if (permissions && typeof permissions === "object" && !Array.isArray(permissions)
+      && (permissions as Record<string, unknown>).editScope === "settings") return "settings-editor";
+  } catch {
+    // 无效权限配置按兼容的完整编辑权限处理。
+  }
+  return "editor";
+}
+
+function storedMembership(role: AssignableWorkMemberRole): { role: "editor" | "viewer"; permissionsJson: string } {
+  return role === "settings-editor"
+    ? { role: "editor", permissionsJson: settingsEditorPermissions }
+    : { role, permissionsJson: "{}" };
+}
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -496,13 +520,13 @@ export class UserAuthService {
 
   listMembers(workId: string): Record<string, unknown>[] {
     return this.database.all(
-      `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
+      `SELECT membership.role, membership.permissions_json, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
        FROM work_memberships membership JOIN users user ON user.id = membership.user_id
        WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user.username`,
       workId
     ).map((row) => ({
       userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
-      role: String(row.role), status: String(row.status), createdAt: String(row.created_at),
+      role: membershipAccessRole(row), status: String(row.status), createdAt: String(row.created_at),
       avatarUrl: row.avatar_sha256
         ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
       : null
@@ -512,7 +536,7 @@ export class UserAuthService {
   listMembersPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     const page = paginationSql(pagination);
     const rows = this.database.all(
-      `SELECT membership.role, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
+      `SELECT membership.role, membership.permissions_json, membership.created_at, user.id, user.username, user.display_name, user.status, user.avatar_sha256
        FROM work_memberships membership JOIN users user ON user.id = membership.user_id
        WHERE membership.work_id = ? ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END, user.username${page.sql}`,
       workId,
@@ -520,35 +544,40 @@ export class UserAuthService {
     );
     return paginated(rows.map((row) => ({
       userId: String(row.id), username: String(row.username), displayName: String(row.display_name),
-      role: String(row.role), status: String(row.status), createdAt: String(row.created_at),
+      role: membershipAccessRole(row), status: String(row.status), createdAt: String(row.created_at),
       avatarUrl: row.avatar_sha256
         ? `/api/user-avatars/${encodeURIComponent(String(row.id))}?v=${encodeURIComponent(String(row.avatar_sha256))}`
         : null
     })), pagination);
   }
 
-  addMember(workId: string, userId: string, role: "editor" | "viewer", invitedByUserId: string): Record<string, unknown>[] {
+  addMember(workId: string, userId: string, role: AssignableWorkMemberRole, invitedByUserId: string): Record<string, unknown>[] {
     const user = this.getUser(userId);
     if (user.status !== "active") throw new AppError(409, "USER_DISABLED", "不能邀请已停用用户");
+    const stored = storedMembership(role);
     this.database.run(
-      `INSERT INTO work_memberships (work_id, user_id, role, invited_by_user_id, created_at)
-       VALUES (?, ?, ?, ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET role = excluded.role, invited_by_user_id = excluded.invited_by_user_id`,
+      `INSERT INTO work_memberships (work_id, user_id, role, permissions_json, invited_by_user_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(work_id, user_id) DO UPDATE SET
+       role = excluded.role, permissions_json = excluded.permissions_json, invited_by_user_id = excluded.invited_by_user_id`,
       workId,
       userId,
-      role,
+      stored.role,
+      stored.permissionsJson,
       invitedByUserId,
       new Date().toISOString()
     );
     return this.listMembers(workId);
   }
 
-  updateMemberRole(workId: string, userId: string, role: "editor" | "viewer"): Record<string, unknown>[] {
+  updateMemberRole(workId: string, userId: string, role: AssignableWorkMemberRole): Record<string, unknown>[] {
     const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === userId) throw new AppError(409, "OWNER_REQUIRED", "不能修改作品创建者权限");
+    const stored = storedMembership(role);
     const result = this.database.run(
-      "UPDATE work_memberships SET role = ? WHERE work_id = ? AND user_id = ? AND role <> 'owner'",
-      role,
+      "UPDATE work_memberships SET role = ?, permissions_json = ? WHERE work_id = ? AND user_id = ? AND role <> 'owner'",
+      stored.role,
+      stored.permissionsJson,
       workId,
       userId
     );
@@ -564,22 +593,24 @@ export class UserAuthService {
     return this.listMembers(workId);
   }
 
-  workRole(user: AuthUser, workId: string, allowAdminAccess = true): "admin" | "owner" | "editor" | "viewer" | null {
+  workRole(user: AuthUser, workId: string, allowAdminAccess = true): WorkAccessRole | null {
     if (allowAdminAccess && user.role === "admin") return "admin";
     const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return "owner";
-    const membership = this.database.get("SELECT role FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
-    const role = String(membership?.role ?? "");
-    return role === "editor" || role === "viewer" ? role : null;
+    const membership = this.database.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
+    return membershipAccessRole(membership);
   }
 
-  assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false, allowAdminAccess = true): void {
+  assertWorkAccess(user: AuthUser, workId: string, write = false, ownerOnly = false, allowAdminAccess = true, settingsWrite = false): void {
     if (workId === PLATFORM_AI_WORK_ID && (!allowAdminAccess || user.role !== "admin")) throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
     const role = this.workRole(user, workId, allowAdminAccess);
     if (!role) throw new AppError(403, "WORK_ACCESS_DENIED", "你没有访问这部作品的权限");
     if (ownerOnly && role !== "admin" && role !== "owner") throw new AppError(403, "WORK_OWNER_REQUIRED", "该操作仅限作品创建者或系统管理员");
-    if (write && !["admin", "owner", "editor"].includes(role)) throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
+    if (write && role === "settings-editor" && !settingsWrite) {
+      throw new AppError(403, "WORK_PROSE_EDIT_DENIED", "你只能编辑设定资料，不能修改正文或作品配置");
+    }
+    if (write && !["admin", "owner", "editor", "settings-editor"].includes(role)) throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
   }
 }
 
@@ -694,7 +725,15 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
       || /^\/api\/works\/[^/]+\/cover$/u.test(request.path)
       || /^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(request.path)
     );
-    auth.assertWorkAccess(user, workId, write, ownerOnly, request.authMethod !== "api-key");
+    const settingsWrite = write && (
+      /^\/api\/works\/[^/]+\/(?:settings|characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows)(?:\/merge)?$/u.test(request.path)
+      || /^\/api\/(?:settings|characters|character-sections|races|organizations|timeline-tracks|timeline|relationships|foreshadows|foreshadow-occurrences)\/[^/]+(?:\/(?:merge|restore|split|sections|occurrences))?$/u.test(request.path)
+      || /^\/api\/chapters\/[^/]+\/outline$/u.test(request.path)
+      || /^\/api\/entity-versions\/(?:setting|race|organization|timeline-track|timeline-event|relationship|chapter-outline|foreshadow)\/[^/]+\/restore$/u.test(request.path)
+      || /^\/api\/works\/[^/]+\/attachments$/u.test(request.path)
+      || /^\/api\/attachments\/[^/]+$/u.test(request.path)
+    );
+    auth.assertWorkAccess(user, workId, write, ownerOnly, request.authMethod !== "api-key", settingsWrite);
     next();
   };
 }

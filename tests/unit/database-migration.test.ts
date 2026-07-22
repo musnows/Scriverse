@@ -68,10 +68,13 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }]);
+    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }, { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }, { version: 20 }, { version: 21 }, { version: 22 }, { version: 23 }, { version: 24 }, { version: 25 }, { version: 26 }, { version: 27 }, { version: 28 }, { version: 29 }, { version: 30 }, { version: 31 }, { version: 32 }, { version: 33 }, { version: 34 }, { version: 35 }]);
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["merged_into_character_id", "merged_at"]));
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_merges'")?.name).toBe("character_merges");
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
+    expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "version_no")).toBe(true);
+    expect(first.all("PRAGMA table_info(volumes)").some((column) => column.name === "version_no")).toBe(true);
+    expect(first.all("PRAGMA table_info(work_memberships)").some((column) => column.name === "permissions_json")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "change_note")).toBe(true);
@@ -156,5 +159,28 @@ describe("数据库版本化迁移", () => {
     expect(database.prepare("SELECT COUNT(*) AS count FROM character_names").get()?.count).toBe(0);
     expect(database.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 2").get()?.count).toBe(0);
     database.close();
+  });
+
+  it("修复迁移编号冲突遗留的作品与分卷版本字段", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-collision-"));
+    roots.push(root);
+    const filename = join(root, "collision.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DELETE FROM schema_migrations WHERE version = 35;
+      ALTER TABLE works DROP COLUMN version_no;
+      ALTER TABLE volumes DROP COLUMN version_no;
+    `);
+    legacy.close();
+
+    const repaired = new Database(filename);
+    expect(repaired.all("PRAGMA table_info(works)").some((column) => column.name === "version_no")).toBe(true);
+    expect(repaired.all("PRAGMA table_info(volumes)").some((column) => column.name === "version_no")).toBe(true);
+    expect(repaired.all("PRAGMA table_info(work_memberships)").some((column) => column.name === "permissions_json")).toBe(true);
+    expect(repaired.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 35")?.count).toBe(1);
+    repaired.close();
   });
 });
