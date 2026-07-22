@@ -527,6 +527,9 @@ let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
 let knowledgeEditorKind = null;
+let knowledgeEditorSections = [];
+let knowledgeSectionEditorIndex = null;
+let knowledgeSectionEditorDirty = false;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
@@ -541,11 +544,13 @@ function showEntityEditorPage(type) {
   entityEditorType = type;
   entityEditorDirty = false;
   characterSectionEditorDirty = false;
+  knowledgeSectionEditorDirty = false;
   $("#entity-editor-view").classList.remove("hidden");
   $("#setting-editor-form").classList.toggle("hidden", type !== "setting");
   $("#character-editor-form").classList.toggle("hidden", type !== "character");
   $("#knowledge-editor-form").classList.toggle("hidden", !["race", "organization"].includes(type));
   $("#character-section-editor-view").classList.add("hidden");
+  $("#knowledge-section-editor-view").classList.add("hidden");
   $("#app").inert = true;
   document.body.classList.add("entity-editor-open");
   replacePageRoute(currentPageRoute());
@@ -563,6 +568,7 @@ function confirmEntityEditorDiscard(message) {
 
 async function closeEntityEditor({ force = false } = {}) {
   if (!$("#character-section-editor-view").classList.contains("hidden")) return closeCharacterSectionEditor({ force });
+  if (!$("#knowledge-section-editor-view").classList.contains("hidden")) return closeKnowledgeSectionEditor({ force });
   if (!force && !confirmEntityEditorDiscard()) return false;
   await discardPendingCharacterAttachments();
   await discardPendingMarkdownAttachments();
@@ -573,10 +579,14 @@ async function closeEntityEditor({ force = false } = {}) {
   characterEditorItem = null;
   knowledgeEditorItem = null;
   knowledgeEditorKind = null;
+  knowledgeEditorSections = [];
+  knowledgeSectionEditorIndex = null;
+  knowledgeSectionEditorDirty = false;
   $("#entity-editor-view").classList.add("hidden");
   $("#setting-editor-form").classList.add("hidden");
   $("#character-editor-form").classList.add("hidden");
   $("#knowledge-editor-form").classList.add("hidden");
+  $("#knowledge-section-editor-view").classList.add("hidden");
   $("#app").inert = false;
   document.body.classList.remove("entity-editor-open");
   await showModule(module);
@@ -3558,57 +3568,32 @@ function normalizeKnowledgeEditorSections(item) {
     : [];
   if (sections.length > 0) return sections;
   const legacy = String(item?.settingsMarkdown ?? (Array.isArray(item?.settings) ? item.settings.join("\n\n") : ""));
-  return [{ title: legacy.trim() ? knowledgeSectionTitleFromMarkdown(legacy, 0) : "", contentMarkdown: legacy, summary: "", sortOrder: 0 }];
+  return legacy.trim() ? [{ title: knowledgeSectionTitleFromMarkdown(legacy, 0), contentMarkdown: legacy, summary: "", sortOrder: 0 }] : [];
 }
 
-function knowledgeSectionEditorHtml(section, index, kind) {
-  const label = kind === "race" ? "种族" : "组织";
-  return `<article class="knowledge-section-card" data-knowledge-section>
-    <header class="knowledge-section-card-header"><label><span>第 ${index + 1} 条标题</span><input name="settingsSectionTitle" data-knowledge-section-title value="${esc(section.title ?? "")}" maxlength="200" placeholder="例如：生理特征、组织章程" aria-label="${label}设定章节标题"></label><button type="button" class="ghost-button" data-knowledge-section-remove aria-label="删除第 ${index + 1} 条设定">删除章节</button></header>
-    <div class="markdown-editor-field" data-markdown-editor><div class="markdown-editor-compose"><label><textarea name="settingsSectionContent" data-markdown-textarea aria-label="${label}设定章节 Markdown 原文" maxlength="200000" spellcheck="true" placeholder="在这里编辑 Markdown 设定">${esc(section.contentMarkdown ?? "")}</textarea></label><div role="region" aria-label="Markdown 预览"><article class="markdown-editor-preview message-body" data-markdown-preview>${renderMarkdown(section.contentMarkdown ?? "") || '<p class="markdown-editor-empty">预览区域暂无内容。</p>'}</article></div></div></div>
-  </article>`;
+function knowledgeSectionPreviewText(section) {
+  const content = String(section.contentMarkdown ?? "").replace(/!\[[^\]]*\]\([^)]*\)/gu, "图片").replace(/[`*_>#-]/gu, "").replace(/\s+/gu, " ").trim();
+  return content ? `${content.slice(0, 180)}${content.length > 180 ? "…" : ""}` : "暂无正文内容";
 }
 
-function knowledgeSectionsField(kind, item) {
-  const sections = normalizeKnowledgeEditorSections(item);
-  return `<div class="knowledge-sections-field" data-knowledge-sections-field data-knowledge-section-kind="${esc(kind)}"><div class="knowledge-sections-toolbar"><strong>${kind === "race" ? "种族设定章节" : "组织设定章节"}</strong><button type="button" class="ghost-button" data-knowledge-section-add>添加章节</button></div><div class="knowledge-section-list" data-knowledge-section-list>${sections.map((section, index) => knowledgeSectionEditorHtml(section, index, kind)).join("")}</div></div>`;
-}
-
-function collectKnowledgeSections(form) {
-  const sections = [];
-  form.querySelectorAll("[data-knowledge-section]").forEach((row, index) => {
-    const title = String(row.querySelector("[data-knowledge-section-title]")?.value ?? "").trim();
-    const contentMarkdown = String(row.querySelector("[data-markdown-textarea]")?.value ?? "");
-    if (!title && !contentMarkdown.trim()) return;
-    if (!title) throw new Error(`请填写第 ${index + 1} 条 Markdown 设定的标题`);
-    sections.push({ title, contentMarkdown, sortOrder: sections.length });
-  });
-  return sections;
-}
-
-function bindKnowledgeSectionControls(container) {
-  const addButton = container.querySelector("[data-knowledge-section-add]");
-  const list = container.querySelector("[data-knowledge-section-list]");
-  if (!addButton || !list) return;
-  addButton.addEventListener("click", () => {
-    const kind = container.dataset.knowledgeSectionKind ?? "organization";
-    list.insertAdjacentHTML("beforeend", knowledgeSectionEditorHtml({ title: "", contentMarkdown: "" }, list.children.length, kind));
-    const row = list.lastElementChild;
-    if (!row) return;
-    bindMarkdownEditors(row);
-    row.querySelector("[data-knowledge-section-title]")?.focus();
+function renderKnowledgeMarkdownSections() {
+  const host = $("#knowledge-markdown-sections");
+  if (!host) return;
+  const label = knowledgeEditorKind === "race" ? "种族" : "组织";
+  const canEdit = canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations");
+  const sections = Array.isArray(knowledgeEditorSections) ? knowledgeEditorSections : [];
+  host.innerHTML = `<div class="knowledge-markdown-list-toolbar"><div><b>${label} Markdown 设定</b><span>将每条设定单独保存为章节，需要编辑时打开大编辑器。</span></div>${canEdit ? '<button type="button" class="ghost-button" data-knowledge-section-create>新建设定</button>' : ""}</div>${sections.length ? `<div class="knowledge-markdown-list">${sections.map((section, index) => `<article class="knowledge-markdown-section" data-knowledge-section-index="${index}"><header><div><span>设定 ${index + 1}</span><h4>${esc(section.title || `未命名设定 ${index + 1}`)}</h4>${section.summary ? `<p>${esc(section.summary)}</p>` : ""}</div><div>${canEdit ? `<button type="button" data-knowledge-section-edit="${index}">编辑</button><button type="button" data-knowledge-section-delete="${index}">删除</button>` : ""}</div></header><p class="knowledge-section-card-preview">${esc(knowledgeSectionPreviewText(section))}</p></article>`).join("")}</div>` : '<p class="knowledge-markdown-empty">还没有 Markdown 设定，点击“新建设定”开始记录。</p>'}`;
+  host.querySelector("[data-knowledge-section-create]")?.addEventListener("click", () => void openKnowledgeSectionEditor());
+  host.querySelectorAll("[data-knowledge-section-edit]").forEach((button) => button.addEventListener("click", () => void openKnowledgeSectionEditor(Number(button.dataset.knowledgeSectionEdit))));
+  host.querySelectorAll("[data-knowledge-section-delete]").forEach((button) => button.addEventListener("click", () => {
+    const index = Number(button.dataset.knowledgeSectionDelete);
+    const section = knowledgeEditorSections[index];
+    if (!section || !window.confirm(`确定删除“${section.title || `设定 ${index + 1}`}”吗？`)) return;
+    knowledgeEditorSections.splice(index, 1);
+    knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
     markEntityEditorDirty();
-  });
-  list.addEventListener("click", (event) => {
-    const removeButton = event.target.closest("[data-knowledge-section-remove]");
-    if (!removeButton) return;
-    removeButton.closest("[data-knowledge-section]")?.remove();
-    list.querySelectorAll("[data-knowledge-section]").forEach((row, index) => {
-      const title = row.querySelector("[data-knowledge-section-title]");
-      if (title?.previousElementSibling) title.previousElementSibling.textContent = `第 ${index + 1} 条标题`;
-    });
-    markEntityEditorDirty();
-  });
+    renderKnowledgeMarkdownSections();
+  }));
 }
 
 function bindDynamicListControls(container) {
@@ -4186,6 +4171,86 @@ async function closeCharacterSectionEditor({ force = false } = {}) {
   return true;
 }
 
+function knowledgeSectionEditorHtml(section = null) {
+  const label = knowledgeEditorKind === "race" ? "种族" : "组织";
+  return `<div class="character-section-editor-shell knowledge-section-editor-shell">
+    <header class="character-section-editor-header">
+      <div><span class="eyebrow">${label} Markdown 设定</span><h2 id="knowledge-section-editor-title">${section ? `编辑“${esc(section.title)}”` : "新建设定"}</h2></div>
+      <button class="entity-editor-back" type="button" data-knowledge-section-edit-close>返回设定列表</button>
+    </header>
+    <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
+      <div class="character-markdown-editor-meta">
+        <label>设定标题<input id="knowledge-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：组织章程、种族特征" required></label>
+      </div>
+      <div class="character-markdown-compose">
+        <label><textarea id="knowledge-section-markdown" aria-label="Markdown 原文" maxlength="500000" spellcheck="true" placeholder="在这里编辑 Markdown 设定">${esc(section?.contentMarkdown ?? "")}</textarea></label>
+        <div role="region" aria-label="Markdown 预览"><article id="knowledge-section-preview" class="character-markdown-document message-body">${renderMarkdown(section?.contentMarkdown ?? "") || '<p class="character-markdown-empty">预览区域暂无内容。</p>'}</article></div>
+      </div>
+      <div class="character-markdown-editor-footer">
+        <span class="knowledge-section-editor-note">支持在 Markdown 原文中使用 Command+V 或 Ctrl+V 粘贴图片</span>
+        <div class="character-markdown-editor-actions"><button type="button" data-knowledge-section-edit-cancel>取消</button><button type="button" class="primary-button" data-knowledge-section-edit-save>${section ? "保存设定" : "添加设定"}</button></div>
+      </div>
+    </section>
+  </div>`;
+}
+
+async function closeKnowledgeSectionEditor({ force = false } = {}) {
+  if (!force && knowledgeSectionEditorDirty && !window.confirm("当前 Markdown 设定有未保存修改，返回设定列表将丢弃这些修改。是否继续？")) return false;
+  knowledgeSectionEditorDirty = false;
+  knowledgeSectionEditorIndex = null;
+  $("#knowledge-section-editor-view").classList.add("hidden");
+  $("#knowledge-editor-form").classList.remove("hidden");
+  $("#knowledge-section-editor-host").innerHTML = "";
+  renderKnowledgeMarkdownSections();
+  replacePageRoute(currentPageRoute());
+  return true;
+}
+
+async function openKnowledgeSectionEditor(index = null) {
+  if (!canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations")) return;
+  const section = Number.isInteger(index) ? knowledgeEditorSections[index] : null;
+  if (Number.isInteger(index) && !section) return;
+  knowledgeSectionEditorIndex = Number.isInteger(index) ? index : null;
+  knowledgeSectionEditorDirty = false;
+  const host = $("#knowledge-section-editor-host");
+  host.innerHTML = knowledgeSectionEditorHtml(section);
+  $("#knowledge-editor-form").classList.add("hidden");
+  $("#knowledge-section-editor-view").classList.remove("hidden");
+  const titleInput = $("#knowledge-section-title");
+  const textarea = $("#knowledge-section-markdown");
+  const preview = $("#knowledge-section-preview");
+  const renderPreview = () => { preview.innerHTML = renderMarkdown(textarea.value) || '<p class="character-markdown-empty">预览区域暂无内容。</p>'; };
+  host.querySelectorAll("input, textarea").forEach((control) => control.addEventListener("input", () => { knowledgeSectionEditorDirty = true; }));
+  textarea.addEventListener("input", renderPreview);
+  textarea.addEventListener("paste", (event) => {
+    const files = clipboardImageFiles(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void pasteMarkdownImages(files, textarea);
+  });
+  host.querySelector("[data-knowledge-section-edit-close]").addEventListener("click", () => void closeKnowledgeSectionEditor());
+  host.querySelector("[data-knowledge-section-edit-cancel]").addEventListener("click", () => void closeKnowledgeSectionEditor());
+  host.querySelector("[data-knowledge-section-edit-save]").addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const wasEditing = knowledgeSectionEditorIndex !== null;
+    const title = titleInput.value.trim();
+    if (!title) {
+      toast("请填写设定标题", "error");
+      titleInput.focus();
+      return;
+    }
+    button.disabled = true;
+    const nextSection = { title, contentMarkdown: textarea.value, summary: String(section?.summary ?? ""), sortOrder: knowledgeSectionEditorIndex ?? knowledgeEditorSections.length };
+    if (knowledgeSectionEditorIndex === null) knowledgeEditorSections.push(nextSection);
+    else knowledgeEditorSections[knowledgeSectionEditorIndex] = nextSection;
+    knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
+    markEntityEditorDirty();
+    await closeKnowledgeSectionEditor({ force: true });
+    toast(wasEditing ? "设定已更新" : "设定已添加");
+  });
+  titleInput.focus();
+}
+
 function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
   return `<div class="character-section-editor-shell">
@@ -4609,12 +4674,12 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
     : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
-    + knowledgeEditorSection("settings", title, "", knowledgeSectionsField(kind, item))
+    + knowledgeEditorSection("settings", title, "", '<div id="knowledge-markdown-sections" class="knowledge-markdown-sections"></div>')
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
   document.querySelectorAll("[data-knowledge-editor-tab]").forEach((button) => {
     button.onclick = () => activateKnowledgeEditorTab(button.dataset.knowledgeEditorTab);
   });
-  bindKnowledgeSectionControls($("[data-knowledge-sections-field]"));
+  renderKnowledgeMarkdownSections();
   activateKnowledgeEditorTab("basic");
 }
 
@@ -4632,6 +4697,9 @@ async function openKnowledgeEditor(kind, item) {
     : [];
   knowledgeEditorItem = item ?? null;
   knowledgeEditorKind = kind;
+  knowledgeEditorSections = normalizeKnowledgeEditorSections(item);
+  knowledgeSectionEditorIndex = null;
+  knowledgeSectionEditorDirty = false;
   $("#knowledge-editor-eyebrow").textContent = item ? `${label}档案` : `建立${label}档案`;
   $("#knowledge-editor-title").textContent = item?.name || `新建${label}`;
   $("#knowledge-editor-version").textContent = item ? `v${item.versionNo ?? 1}` : "新档案";
@@ -4657,7 +4725,11 @@ async function openKnowledgeEditor(kind, item) {
       const data = new FormData(form);
       const name = String(data.get("name") ?? "").trim();
       if (!name) throw new Error(`请填写${label}名称`);
-      const settingsSections = collectKnowledgeSections(form);
+      const settingsSections = knowledgeEditorSections
+        .map((section, index) => ({ title: String(section.title ?? "").trim(), contentMarkdown: String(section.contentMarkdown ?? ""), summary: String(section.summary ?? "").trim(), sortOrder: index }))
+        .filter((section) => section.title || section.contentMarkdown.trim());
+      const untitled = settingsSections.findIndex((section) => !section.title);
+      if (untitled >= 0) throw new Error(`请填写第 ${untitled + 1} 条 Markdown 设定的标题`);
       const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
       const body = isRace
         ? { name, parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
@@ -4677,7 +4749,6 @@ async function openKnowledgeEditor(kind, item) {
     }
   };
   showEntityEditorPage(kind);
-  bindMarkdownEditors($("#knowledge-editor-form"));
   $("#knowledge-editor-fields").querySelector("input:not([type='checkbox']), textarea")?.focus();
 }
 

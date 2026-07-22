@@ -240,8 +240,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260723-import-mode-permission-selection');
-    expect(page.text).toContain('/styles.css?v=20260723-import-mode-permission-selection');
+    expect(page.text).toContain('/app.js?v=20260723-knowledge-editor-5');
+    expect(page.text).toContain('/styles.css?v=20260723-knowledge-editor-5');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -300,12 +300,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('/character-markdown.js?v=20260723-clipboard-images');
     expect(application.text).toContain('Mac Command+V 或 Windows、Linux Ctrl+V');
     expect(page.text).toContain('id="character-section-editor-view"');
+    expect(page.text).toContain('id="knowledge-section-editor-view"');
     expect(application.text).toContain('id="character-section-markdown"');
     expect(application.text).toContain("attachment://${attachment.id}");
     expect(application.text).toContain("read_character_sections");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
     expect(styles.text).toContain(".character-markdown-compose");
     expect(styles.text).toContain("#character-section-editor-view");
+    expect(styles.text).toContain("#knowledge-section-editor-view");
     expect(styles.text).toContain("scrollbar-gutter: stable");
     expect(styles.text).toContain("white-space: nowrap");
     expect(icon.body.toString("utf8")).toContain("一本展开的书与一颗星");
@@ -425,9 +427,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
     expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
-    expect(application.text).toContain("knowledgeSectionsField(kind, item)");
-    expect(application.text).toContain("data-knowledge-section-add");
-    expect(application.text).toContain("collectKnowledgeSections(form)");
+    expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
+    expect(application.text).toContain("data-knowledge-section-create");
+    expect(application.text).toContain("function openKnowledgeSectionEditor");
     expect(application.text).toContain('data.getAll("memberIds")');
     expect(styles.text).toContain(".chip-picker { display: flex; flex-wrap: wrap;");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
