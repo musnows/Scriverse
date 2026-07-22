@@ -313,13 +313,23 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ volumeId: volume.body.data.id, title: "第一章", content: "模块权限正文。" })
       .expect(201);
-    await owner.agent.post(`/api/works/${workId}/import`)
-      .set("X-CSRF-Token", owner.csrfToken)
-      .field("mode", "append")
-      .attach("file", Buffer.from("第二章\n\n追加正文。"), "module-append.txt")
-      .expect(201);
+    const fileVersionId = "file_module_permission_history";
+    runtime.database.run(
+      `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      fileVersionId,
+      workId,
+      "module-permission.txt",
+      "txt",
+      0,
+      0,
+      "[]",
+      JSON.stringify(runtime.store.getWorkTree(workId)),
+      new Date().toISOString(),
+      owner.user.userId
+    );
     const ownerFileVersions = await owner.agent.get(`/api/works/${workId}/file-versions`).expect(200);
-    const fileVersionId = String(ownerFileVersions.body.data[0].id);
+    expect(ownerFileVersions.body.data[0].id).toBe(fileVersionId);
 
     const permissions = {
       prose: "read",
@@ -409,7 +419,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const conflict = await collaborator.agent
       .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
       .set("X-CSRF-Token", collaborator.csrfToken)
-      .send({ expectedVersionNo: Number(currentWork.body.data.versionNo) - 1 })
+      .send({ expectedVersionNo: Number(currentWork.body.data.versionNo) + 1 })
       .expect(409);
     expect(conflict.body.error.code).toBe("VERSION_CONFLICT");
     expect(Number(runtime.database.get(
