@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, projectGalaxyPoint, resolveRelationshipNodeGroup, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -136,6 +136,24 @@ describe("人物关系图数据与布局", () => {
     const hub = first.nodes.find((node: { id: string }) => node.id === "n-0");
     const leaf = first.nodes.find((node: { id: string }) => node.id === "n-1");
     expect(hub?.radius).toBeGreaterThan(leaf?.radius ?? 0);
+  });
+
+  it("高密度关系网络会保留节点间距并对默认视图进行缩放", () => {
+    const characters = Array.from({ length: 219 }, (_, index) => ({ id: `n-${index}`, name: `角色 ${index}` }));
+    const graph = buildRelationshipGraph(characters, []);
+    const layout = layoutRelationshipNetwork(graph, "dense-layout");
+    let minimumGap = Infinity;
+    for (let leftIndex = 0; leftIndex < layout.nodes.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < layout.nodes.length; rightIndex += 1) {
+        const left = layout.nodes[leftIndex];
+        const right = layout.nodes[rightIndex];
+        minimumGap = Math.min(minimumGap, Math.hypot(left.x - right.x, left.y - right.y) - left.radius - right.radius);
+      }
+    }
+    expect(minimumGap).toBeGreaterThan(11.5);
+    expect(getRelationshipNetworkInitialScale(80)).toBe(1);
+    expect(getRelationshipNetworkInitialScale(219)).toBe(1.35);
+    expect(getRelationshipNetworkInitialScale(219, true)).toBe(1);
   });
 
   it("拖拽节点时用弹簧与斥力带动关联节点并产生惯性位移", () => {

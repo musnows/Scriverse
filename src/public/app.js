@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260721-release-0.3.6";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260724-relationship-density";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260722-inline-code";
 import { buildAiReferenceScope, findAiMention, listAiMentionOptions } from "/ai-mentions.js?v=20260716-chapter-references";
@@ -52,6 +52,8 @@ const state = {
   collapsedVolumeIds: new Set(),
   contextChapterId: null
 };
+
+let timelineMultiSelectEnabled = false;
 
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
@@ -624,14 +626,19 @@ function syncChapterLineNumberScroll() {
   }
 }
 
+function syncChapterWhitespaceControls() {
+  document.querySelectorAll("[data-toggle-whitespace]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
+    button.textContent = chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符";
+  });
+}
+
 function renderChapterWhitespaceMarkers(input, style) {
   const overlay = $("#chapter-whitespace-overlay");
   const inner = $("#chapter-whitespace-inner");
-  const button = $("#toggle-whitespace-button");
-  if (!overlay || !inner || !button) return;
+  syncChapterWhitespaceControls();
+  if (!overlay || !inner) return;
   overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
-  button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
-  button.textContent = chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符";
   if (!chapterWhitespaceVisible) {
     inner.replaceChildren();
     return;
@@ -2318,7 +2325,7 @@ async function returnFromSettings() {
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
   updateDocumentTitle(state.work);
-  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
+  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   if (context.view === "module") return showModule(context.module);
   if (context.view === "editor" && context.chapterId) return selectChapter(context.chapterId);
   return showWelcome(true);
@@ -2352,7 +2359,7 @@ function renderShelf() {
           <span class="book-cover-fallback">${esc(Array.from(work.title)[0] ?? "书")}</span>
           ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面">` : ""}
         </span>
-        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${work.wordCount} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "全部只读" : work.accessRole === "settings-editor" ? "设定协作" : work.accessRole === "editor" ? "全部可编辑" : work.accessRole === "custom" ? "自定义权限" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
+        <span class="book-info"><strong>${esc(work.title)}</strong><small>${esc(work.author || "未署名")} · ${work.chapterCount} 章 · ${Number(work.wordCount ?? 0).toLocaleString("zh-CN")} 字</small><span>${esc(work.description || "尚未填写作品简介")}</span><em class="book-access-badge">${work.accessRole === "viewer" ? "全部只读" : work.accessRole === "settings-editor" ? "设定协作" : work.accessRole === "editor" ? "全部可编辑" : work.accessRole === "custom" ? "自定义权限" : work.accessRole === "admin" ? "管理员访问" : "我的作品"}</em></span>
       </button>
       ${canManageWork(work) ? `<button class="book-card-settings" type="button" data-edit-work="${esc(work.id)}" aria-label="作品设置" title="作品设置">设置</button>` : ""}
     </article>`).join("")}
@@ -2416,7 +2423,7 @@ async function selectWork(workId, preferredChapterId = null) {
   if (!canReadModule(state.module)) state.module = firstReadableUiModule(state.work) ?? "editor";
   applyWorkAccessMode();
   updateDocumentTitle(state.work);
-  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
+  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
   const chapters = state.work.volumes.flatMap((volume) => volume.chapters);
@@ -2605,6 +2612,7 @@ async function showModule(module) {
   $("#module-eyebrow").textContent = meta[0];
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
+  $("#module-header-actions").querySelectorAll("[data-module-header-action]").forEach((action) => action.remove());
   $("#module-create-button").textContent = meta[3];
   $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
@@ -2800,7 +2808,7 @@ function moduleRowPreview(text, max = 180) {
 }
 
 function renderModuleLayoutToggle(layout, ariaLabel = "列表样式") {
-  return `<div class="module-layout-toolbar">
+  return `<div class="module-layout-toolbar" data-module-header-action="layout-toggle">
     <div class="module-layout-toggle" role="group" aria-label="${esc(ariaLabel)}">
       <button type="button" data-module-layout="cards" aria-pressed="${layout === "cards"}">卡片</button>
       <button type="button" data-module-layout="rows" aria-pressed="${layout === "rows"}">列表</button>
@@ -2809,8 +2817,13 @@ function renderModuleLayoutToggle(layout, ariaLabel = "列表样式") {
   </div>`;
 }
 
+function mountModuleLayoutToggle(layout, ariaLabel) {
+  $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("beforeend", renderModuleLayoutToggle(layout, ariaLabel));
+}
+
 function bindModuleLayoutToggle(refresh) {
-  $("#module-content").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
+  $("#module-header-actions").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
     saveModuleLayout(button.dataset.moduleLayout);
     await refresh();
   }));
@@ -2841,8 +2854,9 @@ async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
   const layout = readModuleLayout();
+  if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
   $("#module-content").innerHTML = records.length
-    ? `${renderModuleLayoutToggle(layout, "设定列表样式")}${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
+    ? `${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
   bindModuleLayoutToggle(renderSettings);
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
@@ -2869,7 +2883,7 @@ async function renderCharacters() {
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
-    <div class="card-actions">${characterActions(item)}</div></article>`;
+    </article>`;
   }).join("")}</div>`;
   const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join(" ") || "尚未记录当前状态");
@@ -2889,8 +2903,9 @@ async function renderCharacters() {
     </article>`;
   }).join("")}</div>`;
   const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>` : "";
+  if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
   $("#module-content").innerHTML = auditPanel + (state.characters.length
-    ? `${renderModuleLayoutToggle(layout, "角色列表样式")}${layout === "rows" ? characterRows() : characterCards()}`
+    ? `${layout === "rows" ? characterRows() : characterCards()}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
   $("#create-character-audit-task")?.addEventListener("click", async () => {
@@ -2947,8 +2962,9 @@ async function renderRaces() {
       <div class="card-actions">${raceActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
+  if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   $("#module-content").innerHTML = state.races.length
-    ? `${renderModuleLayoutToggle(layout, "种族列表样式")}${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
@@ -2966,7 +2982,6 @@ async function renderOrganizations() {
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsSections?.length ? item.settingsSections.map((section) => `<article class="knowledge-markdown-block"><div class="knowledge-markdown-block-heading"><h4>${esc(section.title || "未命名章节")}</h4></div><div class="message-body">${renderMarkdown(section.contentMarkdown) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></article>`).join("") : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-    </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
     </article>`).join("")}</div>`;
   const organizationRows = () => `<div class="module-row-list">${state.organizations.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写组织简介");
@@ -2979,11 +2994,34 @@ async function renderOrganizations() {
       <div class="card-actions">${organizationActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
+  if (state.organizations.length) mountModuleLayoutToggle(layout, "组织列表样式");
   $("#module-content").innerHTML = state.organizations.length
-    ? `${renderModuleLayoutToggle(layout, "组织列表样式")}${layout === "rows" ? organizationRows() : organizationCards()}`
+    ? `${layout === "rows" ? organizationRows() : organizationCards()}`
     : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   bindModuleLayoutToggle(renderOrganizations);
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+}
+
+function updateTimelineMultiSelectControls() {
+  const toggle = $("#timeline-multi-select-toggle");
+  if (!toggle) return;
+  const selectedCount = $("#module-content").querySelectorAll("[data-event-select]:checked").length;
+  toggle.setAttribute("aria-pressed", String(timelineMultiSelectEnabled));
+  toggle.textContent = timelineMultiSelectEnabled ? "退出多选" : "多选";
+  $("#module-content").querySelectorAll("[data-event-select]").forEach((input) => {
+    input.hidden = !timelineMultiSelectEnabled;
+    if (!timelineMultiSelectEnabled) input.checked = false;
+  });
+  const merge = $("#merge-events");
+  if (merge) {
+    merge.hidden = !timelineMultiSelectEnabled;
+    merge.disabled = !timelineMultiSelectEnabled || selectedCount < 2;
+  }
+}
+
+function setTimelineMultiSelectMode(enabled) {
+  timelineMultiSelectEnabled = enabled;
+  updateTimelineMultiSelectControls();
 }
 
 async function renderTimeline() {
@@ -2991,14 +3029,20 @@ async function renderTimeline() {
     apiPage(`/api/works/${state.work.id}/timeline`).then((result) => result.items),
     apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
+  timelineMultiSelectEnabled = false;
+  $("#timeline-tools")?.remove();
+  $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
   state.timelineTracks = tracks;
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
-  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
-  $("#module-content").innerHTML = `<div class="timeline-tools"><button id="create-timeline-track" class="primary-button" type="button">新建独立时间轴</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button">合并所选事件</button>' : ""}</div><div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
+  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
+  $("#module-content").innerHTML = `<div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
     const laneEvents = events.filter((item) => (item.trackId ?? "") === track.id);
     return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(track.id)}" data-entity-title="${esc(track.name)}" type="button">历史</button></div>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
   }).join("")}</div>`;
   $("#create-timeline-track").addEventListener("click", () => openTimelineTrackDialog());
+  $("#timeline-multi-select-toggle").addEventListener("click", () => setTimelineMultiSelectMode(!timelineMultiSelectEnabled));
+  $("#module-content").querySelectorAll("[data-event-select]").forEach((input) => input.addEventListener("change", updateTimelineMultiSelectControls));
+  setTimelineMultiSelectMode(false);
   $("#module-content").querySelectorAll("[data-edit-timeline-track]").forEach((button) => button.addEventListener("click", () => openTimelineTrackDialog(tracks.find((track) => track.id === button.dataset.editTimelineTrack))));
   $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));
@@ -3052,8 +3096,9 @@ async function renderOutlines() {
     </article>`;
   }).join("")}</div>`;
   const foreshadowHtml = foreshadows.length
-    ? `${renderModuleLayoutToggle(layout, "伏笔列表样式")}${layout === "rows" ? foreshadowRows() : foreshadowCards()}`
+    ? `${layout === "rows" ? foreshadowRows() : foreshadowCards()}`
     : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
+  if (foreshadows.length) mountModuleLayoutToggle(layout, "伏笔列表样式");
   const outlineHtml = outlines.length ? `<div class="outline-list">${outlines.map((item) => `
     <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
       <div><small>${esc(item.volumeTitle)} · ${esc(item.status)}</small><h3>${esc(item.chapterTitle)}</h3></div>
@@ -3080,7 +3125,7 @@ async function renderRelationships() {
   state.relationshipGraph = graph;
   $("#module-content").innerHTML = `<div id="relationship-map-host"></div>${relationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${relationships.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
-    <td>${esc(item.category)} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length} 条</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(item.confirmationStatus)}</td><td class="relationship-actions"><button data-edit-relationship="${esc(item.id)}">编辑</button><button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
+    <td>${esc(item.category)} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(item.confirmationStatus)}</td><td class="relationship-actions"><button data-edit-relationship="${esc(item.id)}">编辑</button><button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>'}`;
   const openGalaxy = () => {
     state.galaxy?.destroy();
     state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
@@ -3144,8 +3189,9 @@ async function renderReviews() {
       <div class="card-actions">${item.status === "pending" && canResolveReview ? `<button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button>` : ""}</div>
     </article>`;
   };
+  if (reviews.length) mountModuleLayoutToggle(layout, "审核列表样式");
   $("#module-content").innerHTML = reviews.length
-    ? `${renderModuleLayoutToggle(layout, "审核列表样式")}${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
+    ? `${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
   bindModuleLayoutToggle(renderReviews);
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
@@ -3945,8 +3991,12 @@ function openWorkSettingsDialog(work) {
     <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
+  const whitespaceField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="whitespace-settings-title">
+    <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
+    <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
+  </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField + importHistoryField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -3958,12 +4008,17 @@ function openWorkSettingsDialog(work) {
         state.work.description = String(form.get("description") ?? state.work.description);
         if (updated?.coverUrl !== undefined) state.work.coverUrl = updated.coverUrl;
         updateDocumentTitle(state.work);
-        $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${state.work.wordCount} 字`;
+        $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
       }
       renderShelf();
       toast("作品信息已保存");
     }, "作品设置");
   bindWorkCoverControls(work);
+  $("#toggle-whitespace-settings")?.addEventListener("click", () => {
+    chapterWhitespaceVisible = !chapterWhitespaceVisible;
+    syncChapterWhitespaceControls();
+    scheduleChapterLineNumbers();
+  });
   $("#import-history-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openImportHistory();
@@ -5972,10 +6027,6 @@ $("#chapter-content").addEventListener("input", (event) => {
 });
 $("#chapter-content").addEventListener("select", scheduleAiContextUsage);
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
-$("#toggle-whitespace-button").addEventListener("click", () => {
-  chapterWhitespaceVisible = !chapterWhitespaceVisible;
-  scheduleChapterLineNumbers();
-});
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;

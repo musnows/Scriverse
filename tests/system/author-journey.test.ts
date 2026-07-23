@@ -73,7 +73,7 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
     expect(page.text).toContain('id="chapter-line-numbers"');
-    expect(page.text).toContain('id="toggle-whitespace-button"');
+    expect(page.text).not.toContain('id="toggle-whitespace-button"');
     expect(page.text).toContain('id="chapter-whitespace-overlay"');
     expect(page.text).toContain('id="new-volume-button" class="add-button"');
     expect(page.text).not.toContain('id="new-chapter-button"');
@@ -90,6 +90,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterLineNumbers()");
     expect(application.text).toContain("syncChapterLineNumberScroll");
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
+    expect(application.text).toContain('data-toggle-whitespace');
+    expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
     expect(application.text).toContain('/whitespace-visualization.js?v=20260718-visible-whitespace');
     expect(application.text).toContain("function setupPanelResize(handle, side)");
     expect(application.text).toContain("function ensureAiPanelExpanded()");
@@ -262,14 +264,16 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260723-entity-action-safety');
-    expect(page.text).toContain('/styles.css?v=20260723-entity-action-safety');
+    expect(page.text).toContain('/app.js?v=20260724-word-count-separators');
+    expect(page.text).toContain('/styles.css?v=20260724-compact-ai-number-inputs');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
-    expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
+    expect(application.text).toContain('/relationship-graph.js?v=20260724-relationship-density');
+    expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
+    expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
     expect(graph.text).toContain('statuses.push("待确认")');
@@ -279,6 +283,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
     expect(styles.text).toContain(".relationship-galaxy-icon {");
+    expect(styles.text).toContain(".relationship-table .relationship-actions button");
     expect(page.text).toContain('id="avatar-file"');
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
@@ -301,6 +306,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("结果进入审核状态");
     expect(styles.text).toContain("--toast-bg:");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
+    expect(styles.text).toContain("--relationship-network-surface: #eef2f7");
+    expect(styles.text).toContain("--relationship-network-surface: #12121a");
+    expect(styles.text).toContain(".relationship-network-card .relationship-map-toolbar");
     expect(styles.text).toContain("background: var(--toast-bg)");
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
@@ -426,6 +434,13 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('openDialog("开始 AI 分析"');
     expect(application.text).toContain('selector: "[data-module=\\"tasks\\"]"');
     expect(styles.text).toContain(".module-nav .ai-analysis-entry");
+    expect(styles.text).toContain(".module-nav .ai-analysis-entry,\n.module-nav .ai-analysis-entry:hover,\n.module-nav .ai-analysis-entry.active { background: transparent;");
+    expect(styles.text).toContain('.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: 100%; padding: 9px 0 9px 20px;');
+    expect(styles.text).toContain('.record-markdown-preview { display: -webkit-box;');
+    expect(styles.text).toContain('-webkit-line-clamp: 12;');
+    expect(styles.text).toContain('.module-header-actions > [data-module-header-action] { order: 1; }');
+    expect(styles.text).toContain('.module-header-actions > #module-create-button { order: 2; min-height: 36px; }');
+    expect(styles.text).toContain('.settings-layout-toggle button, .module-layout-toggle button { min-height: 34px;');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
     expect(page.text).toContain('class="relationship-map-floating-close"');
@@ -482,6 +497,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('field("organizationIds", "所属组织（可多选）", "chips"');
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
+    expect(application.text).toContain('Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")');
+    expect(application.text).toContain('Number(work.wordCount ?? 0).toLocaleString("zh-CN")');
     expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
     expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
     expect(application.text).toContain("data-knowledge-section-create");
