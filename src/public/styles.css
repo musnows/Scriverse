@@ -806,6 +806,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-content { padding: 24px 0 80px; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 13px; }
 .record-card { position: relative; border: 1px solid var(--line); background: var(--surface-soft); padding: 18px; min-height: 130px; border-radius: 4px; }
+.record-card.has-card-edit h3 { padding-right: 34px; }
+.record-card-edit { position: absolute; top: 12px; right: 12px; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); }
+.record-card-edit:hover, .record-card-edit:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
+.record-card-edit svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
@@ -826,6 +830,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-duplicate-actions { flex-wrap: wrap; }
 .card-actions { display: flex; gap: 6px; margin-top: 15px; }
 .card-actions button { border: 1px solid var(--line); background: transparent; border-radius: 3px; font-size: 10px; padding: 5px 8px; }
+.danger-button { border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--line)); border-radius: 4px; background: transparent; color: var(--accent-dark); padding: 8px 13px; font-size: 12px; }
+.danger-button:hover, .danger-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); outline: none; }
 .card-actions .danger-button { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); color: var(--accent-dark); }
 .card-actions .danger-button:hover, .card-actions .danger-button:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .card-actions .primary-button { border-color: var(--accent); background: var(--accent); color: #fff; padding: 8px 13px; font-size: 12px; }
@@ -853,6 +859,17 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .race-settings .pill { display: inline-flex; align-items: center; gap: 5px; }
 .race-settings .pill small { color: inherit; font-size: 8px; letter-spacing: 0; text-transform: none; opacity: .72; }
 .race-settings .pill.inherited { border-style: dashed; }
+.entity-dialog-management, .entity-editor-management { display: grid; gap: 10px; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 4%, var(--surface)); }
+.entity-dialog-management > div:first-child, .entity-editor-management > div:first-child { display: grid; gap: 4px; }
+.entity-dialog-management strong, .entity-editor-management strong { color: var(--ink); font-size: 11px; }
+.entity-dialog-management small, .entity-editor-management small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.entity-dialog-management-actions, .entity-editor-management-actions { display: flex; flex-wrap: wrap; gap: 7px; }
+.entity-dialog-management-actions button, .entity-editor-management-actions button { min-height: 32px; }
+.danger-confirm-field { display: grid !important; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 9px !important; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); }
+.danger-confirm-field input { width: auto !important; margin-top: 3px; }
+.danger-confirm-field span { display: grid; gap: 4px; }
+.danger-confirm-field strong { color: var(--ink); font-size: 11px; }
+.danger-confirm-field small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .platform-system-prompt-section { margin-bottom: 36px; }

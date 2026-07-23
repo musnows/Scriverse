@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260723-character-card-layout">
+    <link rel="stylesheet" href="/styles.css?v=20260723-entity-action-safety">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -363,6 +363,10 @@
             </select></label>
             <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
             <label id="setting-change-note-field">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
+            <section id="setting-editor-management" class="entity-editor-management hidden" aria-label="设定档案操作">
+              <div><strong>档案操作</strong><small>版本历史和删除操作集中在编辑面板内。</small></div>
+              <div class="entity-editor-management-actions"><button id="setting-editor-confirm" class="ghost-button hidden" type="button">确认候选</button><button id="setting-editor-deprecate" class="ghost-button hidden" type="button">弃用</button><button id="setting-editor-history" class="ghost-button" type="button">版本历史</button><button id="setting-editor-delete" class="danger-button" type="button">删除设定</button></div>
+            </section>
           </aside>
           <main class="setting-editor-content">
             <label for="setting-editor-body"><span>设定正文</span><small>适合维护长篇世界观、规则、历史、地点与创作约束。</small></label>
@@ -380,6 +384,8 @@
           </div>
           <div class="character-editor-header-actions">
             <button id="character-history-button" class="ghost-button" type="button" aria-controls="character-history-panel" aria-expanded="false">版本历史</button>
+            <button id="character-merge-button" class="ghost-button hidden" type="button">合并角色</button>
+            <button id="character-delete-button" class="danger-button hidden" type="button">删除角色</button>
           </div>
         </header>
         <div class="character-editor-workspace">
@@ -628,6 +634,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260723-character-card-layout"></script>
+    <script type="module" src="/app.js?v=20260723-entity-action-safety"></script>
   </body>
 </html>
