@@ -400,6 +400,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const evolvedRace = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "进化泰坦" }).expect(201);
     const created = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "哥斯拉",
+      code: "MON-001",
       aliases: ["吾王"],
       raceId: originalRace.body.data.id,
       organizationIds: [organization.body.data.id],
@@ -408,27 +409,34 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       currentState: { location: "地球" },
       lockedFields: ["raceId", "location"]
     }).expect(201);
-    expect(created.body.data.versionNo).toBe(1);
+    expect(created.body.data).toMatchObject({ code: "MON-001", versionNo: 1 });
+
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "超长编号角色",
+      code: "A".repeat(201)
+    }).expect(400);
 
     const updated = await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({
       name: "燃烧哥斯拉",
+      code: "MON-002",
       raceId: evolvedRace.body.data.id,
       organizationIds: [],
       profile: { summary: "能量过载形态", sections: [{ title: "形态", content: "红莲状态" }] },
       changeNote: "补充红莲形态"
     }).expect(200);
-    expect(updated.body.data.versionNo).toBe(2);
+    expect(updated.body.data).toMatchObject({ code: "MON-002", versionNo: 2 });
 
     await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ raceId: evolvedRace.body.data.id }).expect(200);
     const versions = await request(runtime.app).get(`/api/characters/${created.body.data.id}/versions`).expect(200);
     expect(versions.body.data).toHaveLength(2);
     expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "manual", changeNote: "补充红莲形态" });
-    expect(versions.body.data[0].snapshot).toMatchObject({ name: "燃烧哥斯拉", raceId: evolvedRace.body.data.id, species: "进化泰坦", organizationIds: [] });
-    expect(versions.body.data[1].snapshot).toMatchObject({ name: "哥斯拉", raceId: originalRace.body.data.id, species: "原生泰坦", organizationIds: [organization.body.data.id] });
+    expect(versions.body.data[0].snapshot).toMatchObject({ name: "燃烧哥斯拉", code: "MON-002", raceId: evolvedRace.body.data.id, species: "进化泰坦", organizationIds: [] });
+    expect(versions.body.data[1].snapshot).toMatchObject({ name: "哥斯拉", code: "MON-001", raceId: originalRace.body.data.id, species: "原生泰坦", organizationIds: [organization.body.data.id] });
 
     const restored = await request(runtime.app).post(`/api/characters/${created.body.data.id}/restore`).send({ versionNo: 1 }).expect(200);
     expect(restored.body.data).toMatchObject({
       name: "哥斯拉",
+      code: "MON-001",
       raceId: originalRace.body.data.id,
       species: "原生泰坦",
       organizationIds: [organization.body.data.id],
@@ -442,6 +450,20 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(afterRaceRename.body.data).toMatchObject({ raceId: originalRace.body.data.id, species: "原初泰坦", versionNo: 4 });
     const versionsAfterRaceRename = await request(runtime.app).get(`/api/characters/${created.body.data.id}/versions`).expect(200);
     expect(versionsAfterRaceRename.body.data[0]).toMatchObject({ versionNo: 4, source: "race", changeNote: "种族更名为“原初泰坦”" });
+  });
+
+  it("回滚升级前人物版本时清空快照中缺失的编号", async () => {
+    const { workId } = await seedWork(runtime);
+    const created = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "旧档案角色" }).expect(201);
+    const version = runtime.database.get("SELECT id, snapshot_json FROM character_versions WHERE character_id = ? AND version_no = 1", created.body.data.id);
+    const snapshot = JSON.parse(String(version?.snapshot_json)) as Record<string, unknown>;
+    delete snapshot.code;
+    runtime.database.run("UPDATE character_versions SET snapshot_json = ? WHERE id = ?", JSON.stringify(snapshot), String(version?.id));
+
+    const updated = await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ code: "EMP-099" }).expect(200);
+    expect(updated.body.data.code).toBe("EMP-099");
+    const restored = await request(runtime.app).post(`/api/characters/${created.body.data.id}/restore`).send({ versionNo: 1 }).expect(200);
+    expect(restored.body.data.code).toBe("");
   });
 
   it("支持原子导入新建、上传替换和删除书籍封面", async () => {

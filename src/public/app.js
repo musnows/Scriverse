@@ -2813,6 +2813,7 @@ async function renderCharacters() {
     return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
     <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
+    ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
     ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
@@ -2824,6 +2825,7 @@ async function renderCharacters() {
   const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
+      item.code ? `编号 ${item.code}` : "",
       item.species ? (racePathLabel(item.race) || item.species) : "",
       ...(item.aliases ?? []).slice(0, 3),
       (item.organizations ?? []).length ? (item.organizations ?? []).map((organization) => organization.name).join("、") : ""
@@ -4654,6 +4656,7 @@ function renderCharacterEditorFields(item) {
         ? field("firstChapterId", "首次登场章节", "select", item?.firstChapterId ?? "", chapterOptions)
         : '<div class="character-editor-empty-field"><b>首次登场章节</b><span>当前账户没有正文读取权限，原有绑定不会被修改。</span></div>')),
     characterEditorSection("profile", "人物档案", "记录人物定位、行为动力和便于创作时快速理解的简介。",
+      field("code", "编号", "text", item?.code) +
       field("identity", "身份与定位", "text", item?.attributes?.identity) +
       field("motivation", "核心动机", "textarea", item?.profile?.motivation) +
       field("summary", "人物简介", "textarea", item?.profile?.summary)),
@@ -4690,6 +4693,7 @@ function collectCharacterBody(form) {
   delete profile.sections;
   const body = {
     name: String(form.get("name") ?? "").trim(),
+    code: String(form.get("code") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
     attributes: {
       ...(item?.attributes ?? {}),

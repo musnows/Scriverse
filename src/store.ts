@@ -49,6 +49,7 @@ type SettingInput = {
 
 type CharacterInput = {
   name: string;
+  code?: string;
   aliases?: string[];
   raceId?: string | null;
   species?: string;
@@ -88,6 +89,7 @@ export type AttachmentInput = {
 
 type CharacterSnapshot = {
   name: string;
+  code?: string;
   aliases: string[];
   raceId: string | null;
   species: string;
@@ -3163,6 +3165,7 @@ export class Store {
     delete profile.sections;
     return {
       name: String(character.name),
+      code: String(character.code),
       aliases: [...(character.aliases as string[])],
       raceId: character.raceId as string | null,
       species: String(character.species),
@@ -3244,12 +3247,13 @@ export class Store {
     this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          locked_fields_json, visibility, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
+        input.code?.trim() ?? "",
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -3783,9 +3787,10 @@ export class Store {
       const lockedCurrent = this.getCharacter(characterId);
       this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       this.db.run(
-        `UPDATE characters SET name = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
+        `UPDATE characters SET name = ?, code = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
          locked_fields_json = ?, visibility = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
+        input.code === undefined ? String(current.code) : input.code.trim(),
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -3874,7 +3879,7 @@ export class Store {
     }
     return this.updateCharacter(
       characterId,
-      snapshot,
+      { ...snapshot, code: snapshot.code ?? "" },
       "restore",
       requiredString(version, "id"),
       `恢复至 v${versionNo}`,
@@ -3905,12 +3910,13 @@ export class Store {
     ) + 1;
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          locked_fields_json, visibility, first_chapter_id, version_no, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
+        snapshot.code ?? "",
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -4013,6 +4019,7 @@ export class Store {
       id: characterId,
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
+      code: requiredString(row, "code"),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
       raceId: race ? String(race.id) : null,
       race: race ? {
@@ -4116,6 +4123,7 @@ export class Store {
         .filter((alias) => normalizeCharacterName(alias) !== normalizeCharacterName(String(target.name)))
         .map((alias) => [normalizeCharacterName(alias), alias])).values()];
       this.updateCharacter(targetId, {
+        code: String(target.code) || String(source.code),
         aliases: uniqueAliases,
         raceId: (target.raceId as string | null) ?? (source.raceId as string | null),
         organizationIds: [...new Set([...(target.organizationIds as string[]), ...(source.organizationIds as string[])])],

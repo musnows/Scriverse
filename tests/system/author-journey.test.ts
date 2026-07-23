@@ -188,6 +188,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-character-editor-tab="relationships"');
     expect(page.text).toContain("保存新版本");
     expect(application.text).toContain("function renderCharacterEditorFields(item)");
+    expect(application.text).toContain('field("code", "编号", "text", item?.code)');
+    expect(application.text).toContain('class="character-code"><b>编号</b>');
     expect(application.text).toContain("function openSettingEditor(item = null)");
     expect(application.text).toContain("function openCharacterEditor(item = null)");
     expect(application.text).toContain("function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions)");
@@ -246,8 +248,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260723-character-save-hint');
-    expect(page.text).toContain('/styles.css?v=20260723-open-prs-6');
+    expect(page.text).toContain('/app.js?v=20260723-character-code');
+    expect(page.text).toContain('/styles.css?v=20260723-character-code');
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
