@@ -3379,17 +3379,19 @@ let aiContextUsageTimer = null;
 let aiContextUsageRequest = 0;
 
 function currentAiRequestScope() {
-  if (!state.work || !state.chapter) return null;
+  if (!state.work) return null;
   const taskType = $("#ai-task").value;
   const scopeType = $("#ai-scope").value;
-  const selection = $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd);
-  const volume = state.work.volumes.find((item) => item.id === state.chapter.volumeId);
+  const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";
+  if (requiresChapter && !state.chapter) return null;
+  const selection = state.chapter ? $("#chapter-content").value.slice($("#chapter-content").selectionStart, $("#chapter-content").selectionEnd) : "";
+  const volume = state.chapter ? state.work.volumes.find((item) => item.id === state.chapter.volumeId) : null;
   const includeBookSummary = scopeType === "chapter-summary";
-  const scope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter.id, selection }
-    : scopeType === "none" ? { type: "none", ...(taskType === "continue" ? { chapterId: state.chapter.id } : {}) }
+  const scope = taskType === "polish" ? { type: "chapter", chapterId: state.chapter?.id, selection }
+    : scopeType === "none" ? { type: "none", ...(taskType === "continue" && state.chapter ? { chapterId: state.chapter.id } : {}) }
     : scopeType === "book" ? { type: "book" }
     : scopeType === "volume" ? { type: "volume", volumeId: volume?.id }
-    : { type: "chapter", chapterId: state.chapter.id };
+    : { type: "chapter", chapterId: state.chapter?.id };
   Object.assign(scope, buildAiReferenceScope(state.aiReferences));
   if (includeBookSummary) scope.includeBookSummary = true;
   return { taskType, scope, selection };
@@ -4923,7 +4925,7 @@ function openModelDialog(providerId, item = null) {
 }
 
 async function sendAi() {
-  if (!state.work || !state.chapter) return toast("请先选择章节", "error");
+  if (!state.work) return toast("请先选择作品", "error");
   try {
     await Promise.all([ensureAiModelsLoaded(), ensureAiConversationsLoaded()]);
   } catch (error) {
