@@ -3018,7 +3018,7 @@ async function renderReviews() {
 
 async function renderTasks() {
   const [tasks, settings] = await Promise.all([
-    apiPage(`/api/works/${state.work.id}/tasks`).then((result) => result.items),
+    apiPage(`/api/works/${state.work.id}/tasks?view=summary`).then((result) => result.items),
     canReadModule("ai-settings")
       ? api(`/api/works/${state.work.id}/ai-settings`)
       : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 })
@@ -3089,9 +3089,13 @@ async function renderTasks() {
     }
   });
 
-  const taskById = new Map(tasks.map((item) => [item.id, item]));
   $("#module-content").querySelectorAll("[data-task-detail]").forEach((button) => button.addEventListener("click", () => {
-    openTaskDetailDialog(taskById.get(button.dataset.taskDetail));
+    if (button.disabled) return;
+    button.disabled = true;
+    api(`/api/tasks/${encodeURIComponent(button.dataset.taskDetail)}`)
+      .then((task) => openTaskDetailDialog(task))
+      .catch((error) => toast(error.message, "error"))
+      .finally(() => { button.disabled = false; });
   }));
   $("#module-content").querySelectorAll("[data-run-task]").forEach((button) => button.addEventListener("click", async () => {
     const workId = state.work.id;

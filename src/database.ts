@@ -1527,6 +1527,12 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(36)) {
+      this.transaction(() => {
+        this.run("CREATE INDEX IF NOT EXISTS idx_tasks_work_created ON analysis_tasks(work_id, created_at DESC, id DESC)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?)", new Date().toISOString());
+      });
+    }
   }
 
   private normalizeCharacterName(value: string): string {

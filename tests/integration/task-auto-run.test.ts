@@ -126,6 +126,20 @@ describe("分析任务自动运行", () => {
       scopeSummary: expect.stringContaining("第一卷"),
       scopeDetails: expect.any(Array)
     }));
+
+    const summaries = await request(runtime.app).get(`/api/works/${workId}/tasks?view=summary&page=1&limit=5`).expect(200);
+    expect(summaries.body.data.items).toHaveLength(5);
+    expect(summaries.body.data.items[0]).toEqual(expect.objectContaining({
+      id: expect.stringMatching(/^task_/u),
+      scopeSummary: expect.stringContaining("第一卷")
+    }));
+    expect(summaries.body.data.items[0]).not.toHaveProperty("result");
+    expect(summaries.body.data.items[0]).not.toHaveProperty("scopeDetails");
+    const detail = await request(runtime.app).get(`/api/tasks/${summaries.body.data.items[0].id}`).expect(200);
+    expect(detail.body.data).toEqual(expect.objectContaining({
+      result: expect.anything(),
+      scopeDetails: expect.any(Array)
+    }));
   });
 
   it("开启自动运行后遵守并发与单次上限", async () => {

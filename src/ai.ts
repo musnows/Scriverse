@@ -94,6 +94,47 @@ type GenerateResult = {
   processSteps: AiProcessStep[];
 };
 
+type CharacterExtractionEvidence = {
+  chapterId: string;
+  chapterTitle: string;
+  quote: string;
+};
+
+type CharacterExtractionGroup = {
+  name: string;
+  aliases: Set<string>;
+  species: string;
+  identity: string;
+  firstChapterId: string | null;
+  firstEvidence: CharacterExtractionEvidence;
+  references: Set<string>;
+};
+
+type CharacterVerificationSubject = {
+  key: string;
+  kind: "candidate" | "existing";
+  characterId?: string;
+  name: string;
+  aliases: string[];
+  species: string;
+  identity: string;
+  firstChapterId: string | null;
+  evidence: CharacterExtractionEvidence | null;
+};
+
+type CharacterVerificationPair = {
+  key: string;
+  left: CharacterVerificationSubject;
+  right: CharacterVerificationSubject;
+};
+
+type CharacterVerificationDecision = {
+  pairKey: string;
+  verdict: "same" | "separate" | "uncertain";
+  confidence: number;
+  reason: string;
+};
+
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -395,6 +436,25 @@ const unsafeGlobalAliases = new Set([
   "怪兽之王", "怪兽女王", "君王", "女王", "吾王", "博士", "陈博士", "玲博士", "老师", "舰长", "上尉", "司令", "族长",
   "父亲", "母亲", "爸爸", "妈妈", "哥哥", "姐姐", "大哥", "妹妹", "先生", "小姐", "陛下", "尔森"
 ]);
+
+const characterTitleSuffixPattern = /^(?<base>.+?)(?:博士|教授|老师|舰长|上尉|司令|族长|将军|队长|船长|院士|主任)$/u;
+
+function normalizeCharacterReference(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("zh-CN");
+}
+
+export function stripCharacterTitleSuffix(value: string): string | null {
+  const normalized = normalizeCharacterReference(value);
+  const base = normalized.match(characterTitleSuffixPattern)?.groups?.base?.trim();
+  return base && base !== normalized ? base : null;
+}
+
+export function areCharacterTitleVariants(left: string, right: string): boolean {
+  const normalizedLeft = normalizeCharacterReference(left);
+  const normalizedRight = normalizeCharacterReference(right);
+  return stripCharacterTitleSuffix(normalizedLeft) === normalizedRight
+    || stripCharacterTitleSuffix(normalizedRight) === normalizedLeft;
+}
 
 export function isSafeGlobalAlias(value: string): boolean {
   const normalized = value.normalize("NFKC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("zh-CN");
@@ -2828,6 +2888,54 @@ export class AiManager {
     };
   }
 
+  private async verifyCharacterTitlePairs(
+    workId: string,
+    pairs: CharacterVerificationPair[],
+    modelId?: string,
+    taskId?: string
+  ): Promise<{ decisions: Map<string, CharacterVerificationDecision>; callId: string }> {
+    const generated = await this.generateTaggedJson({
+      workId,
+      taskType: "book-analysis",
+      signal: this.taskSignal(taskId),
+      scope: { type: "none" },
+      ...(modelId ? { modelId } : {}),
+      parameters: { temperature: 0.1 },
+      instruction: [
+        "对下面列出的角色候选对进行第二次身份确认。只有确认是同一人或确认是不同人，服务端才会允许这组候选继续写入数据库。",
+        "请结合候选的主名、别名、身份、种族、首次章节和原文证据判断。不能仅因为名字相似就判定 same；职称后缀相同也不是充分证据。",
+        "如果信息不足、身份冲突未解决或无法确认，必须返回 uncertain。",
+        "输出 JSON 数组，每项字段：pairKey、verdict（same/separate/uncertain）、confidence（0到1）、reason。必须逐项覆盖输入中的所有 pairKey，不得创造 pairKey。",
+        `候选对：${JSON.stringify(pairs.map((pair) => ({
+          pairKey: pair.key,
+          left: pair.left,
+          right: pair.right
+        })))}`
+      ].join("\n"),
+      extraSystemPrompt: "你是角色身份二次确认器。你的输出只用于服务端写入门禁；证据不足时宁可 uncertain，不得为了减少角色数量而强行合并。"
+    });
+    const extracted = extractJson<unknown>(generated.content);
+    if (!Array.isArray(extracted)) throw new AppError(502, "AI_INVALID_JSON", "角色身份二次确认结果必须是数组");
+    const allowedPairKeys = new Set(pairs.map((pair) => pair.key));
+    const decisions = new Map<string, CharacterVerificationDecision>();
+    for (const item of extracted) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const candidate = item as Record<string, unknown>;
+      const pairKey = typeof candidate.pairKey === "string" ? candidate.pairKey : "";
+      if (!allowedPairKeys.has(pairKey) || decisions.has(pairKey)) continue;
+      const verdict = candidate.verdict === "same" || candidate.verdict === "separate" || candidate.verdict === "uncertain"
+        ? candidate.verdict
+        : "uncertain";
+      decisions.set(pairKey, {
+        pairKey,
+        verdict,
+        confidence: clamp(typeof candidate.confidence === "number" ? candidate.confidence : 0, 0, 1),
+        reason: typeof candidate.reason === "string" && candidate.reason.trim() ? candidate.reason.trim() : "AI 未提供充分确认理由"
+      });
+    }
+    return { decisions, callId: generated.callId };
+  }
+
   private async runCharacterExtraction(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
     const chapters = this.getScopeChapters(workId, scope);
     if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "人物抽取范围内没有章节");
@@ -2847,7 +2955,7 @@ export class AiManager {
         instruction: [
           "抽取本批原文中有名字且对跨章节剧情有意义的人物或具有人格的生物。输出 JSON 数组。",
           "每项字段：canonicalName、aliases（仅无歧义昵称或拼写变体）、species（仅原文明确说明时填写）、identity、firstEvidence（chapterId、chapterTitle、quote）。",
-          "规则：合并明显拼写变体；不能把怪兽之王、怪兽女王、君王、女王、吾王、博士、舰长、上尉、司令、族长、老师、父亲、母亲、哥哥、姐姐等称号作为全局别名；不能把单字母简称作为别名；梦境或作品内虚构角色需在 identity 标明；不得创造人物；quote 必须是原文连续引文且不超过 80 字。",
+          "规则：合并明显拼写变体；不能把怪兽之王、怪兽女王、君王、女王、吾王、博士、舰长、上尉、司令、族长、老师、父亲、母亲、哥哥、姐姐等单独称号作为全局别名；带具体人名的‘X博士’、‘X教授’等形式不能仅因职称后缀拆成两个角色，保留无职称姓名作为 canonicalName，并将带职称形式作为待确认的候选称呼；不能把单字母简称作为别名；梦境或作品内虚构角色需在 identity 标明；不得创造人物；quote 必须是原文连续引文且不超过 80 字。",
           "没有合格人物时输出 []，不得使用 Markdown 代码块。"
         ].join("\n"),
         extraSystemPrompt: [
@@ -2897,7 +3005,7 @@ export class AiManager {
     if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds };
 
     const byChapterId = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
-    const groups: Array<{ name: string; aliases: Set<string>; species: string; identity: string; firstChapterId: string | null; references: Set<string> }> = [];
+    const groups: CharacterExtractionGroup[] = [];
     for (const candidate of rawCandidates) {
       if (typeof candidate.canonicalName !== "string" || !candidate.canonicalName.trim()) continue;
       const name = candidate.canonicalName.normalize("NFKC").trim();
@@ -2920,6 +3028,11 @@ export class AiManager {
         species: typeof candidate.species === "string" ? candidate.species.trim() : "",
         identity: typeof candidate.identity === "string" ? candidate.identity : "",
         firstChapterId: chapterId,
+        firstEvidence: {
+          chapterId,
+          chapterTitle: typeof evidence?.chapterTitle === "string" ? evidence.chapterTitle : "",
+          quote
+        },
         references: new Set<string>()
       };
       if (!matches.length) groups.push(group);
@@ -2938,25 +3051,190 @@ export class AiManager {
       }
     }
 
-    const characterIds: string[] = [];
+    const existingCharacters = this.store.listCharacters(workId);
+    const existingIdByGroupIndex = new Map<number, string>();
+    const candidateSubjects: CharacterVerificationSubject[] = groups.map((group, index) => ({
+      key: `candidate:${index}`,
+      kind: "candidate",
+      name: group.name,
+      aliases: [...group.aliases],
+      species: group.species,
+      identity: group.identity,
+      firstChapterId: group.firstChapterId,
+      evidence: group.firstEvidence
+    }));
+    for (const [index, group] of groups.entries()) {
+      const existingId = [group.name, ...group.aliases]
+        .map((value) => this.store.resolveCharacterReference(workId, value))
+        .find((value): value is string => Boolean(value));
+      if (existingId) existingIdByGroupIndex.set(index, existingId);
+    }
+    const existingSubjects: CharacterVerificationSubject[] = existingCharacters.map((character) => ({
+      key: `existing:${String(character.id)}`,
+      kind: "existing",
+      characterId: String(character.id),
+      name: String(character.name),
+      aliases: (character.aliases as string[]).slice(),
+      species: String(character.species ?? ""),
+      identity: String((character.attributes as Record<string, unknown>).identity ?? ""),
+      firstChapterId: (character.firstChapterId as string | null) ?? null,
+      evidence: null
+    }));
+    const subjectNames = (subject: CharacterVerificationSubject): string[] => [subject.name, ...subject.aliases];
+    const hasTitleVariant = (left: CharacterVerificationSubject, right: CharacterVerificationSubject): boolean =>
+      subjectNames(left).some((leftName) => subjectNames(right).some((rightName) => areCharacterTitleVariants(leftName, rightName)));
+    const verificationPairs = new Map<string, CharacterVerificationPair>();
+    const addVerificationPair = (left: CharacterVerificationSubject, right: CharacterVerificationSubject): void => {
+      if (left.key === right.key || !hasTitleVariant(left, right)) return;
+      if (left.kind === "existing" && right.kind === "existing") return;
+      const ordered = [left, right].sort((first, second) => first.key.localeCompare(second.key));
+      const pairKey = `${ordered[0]?.key}|${ordered[1]?.key}`;
+      if (!verificationPairs.has(pairKey)) verificationPairs.set(pairKey, { key: pairKey, left: ordered[0]!, right: ordered[1]! });
+    };
+    for (let leftIndex = 0; leftIndex < candidateSubjects.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < candidateSubjects.length; rightIndex += 1) {
+        if (existingIdByGroupIndex.get(leftIndex) && existingIdByGroupIndex.get(leftIndex) === existingIdByGroupIndex.get(rightIndex)) continue;
+        addVerificationPair(candidateSubjects[leftIndex]!, candidateSubjects[rightIndex]!);
+      }
+      const existingId = existingIdByGroupIndex.get(leftIndex);
+      for (const existing of existingSubjects) {
+        if (existing.characterId === existingId) continue;
+        addVerificationPair(candidateSubjects[leftIndex]!, existing);
+      }
+    }
+
     const skipped: Array<{ name: string; reason: string }> = [];
-    for (const group of groups) {
+    let verificationCallId: string | null = null;
+    let confirmedSameCount = 0;
+    let confirmedSeparateCount = 0;
+    let unresolvedCount = 0;
+    const blockedGroups = new Set<number>();
+    const blockedReasons = new Map<number, string>();
+    const forcedExistingIds = new Map<number, string>();
+    const parent = groups.map((_, index) => index);
+    const findRoot = (index: number): number => {
+      let root = index;
+      while (parent[root] !== root) root = parent[root]!;
+      while (parent[index] !== index) {
+        const next = parent[index]!;
+        parent[index] = root;
+        index = next;
+      }
+      return root;
+    };
+    const unionGroups = (left: number, right: number): void => {
+      const leftRoot = findRoot(left);
+      const rightRoot = findRoot(right);
+      if (leftRoot !== rightRoot) parent[rightRoot] = leftRoot;
+    };
+    const candidateIndexByKey = new Map(candidateSubjects.map((subject, index) => [subject.key, index]));
+    const verificationResults = verificationPairs.size > 0
+      ? await this.verifyCharacterTitlePairs(workId, [...verificationPairs.values()], modelId, taskId)
+      : { decisions: new Map<string, CharacterVerificationDecision>(), callId: null };
+    verificationCallId = verificationResults.callId;
+    for (const pair of verificationPairs.values()) {
+      const decision = verificationResults.decisions.get(pair.key);
+      const leftIndex = candidateIndexByKey.get(pair.left.key);
+      const rightIndex = candidateIndexByKey.get(pair.right.key);
+      const candidateIndexes = [leftIndex, rightIndex].filter((value): value is number => value !== undefined);
+      const confirmed = decision && decision.confidence >= 0.8 && (decision.verdict === "same" || decision.verdict === "separate");
+      if (!confirmed) {
+        unresolvedCount += 1;
+        for (const candidateIndex of candidateIndexes) {
+          blockedGroups.add(candidateIndex);
+          blockedReasons.set(candidateIndex, `角色身份二次确认未通过：${decision?.reason ?? "AI 未返回确认结果"}`);
+        }
+        continue;
+      }
+      if (decision.verdict === "same") {
+        confirmedSameCount += 1;
+        if (leftIndex !== undefined && rightIndex !== undefined) {
+          unionGroups(leftIndex, rightIndex);
+        } else if (leftIndex !== undefined || rightIndex !== undefined) {
+          const candidateIndex = leftIndex ?? rightIndex!;
+          const existingSubject = pair.left.kind === "existing" ? pair.left : pair.right;
+          const existingId = String(existingSubject.characterId);
+          const root = findRoot(candidateIndex);
+          const previous = forcedExistingIds.get(root);
+          if (previous && previous !== existingId) {
+            blockedGroups.add(root);
+            blockedReasons.set(root, "角色身份二次确认指向了多个已有角色");
+          } else {
+            forcedExistingIds.set(root, existingId);
+          }
+        }
+      } else {
+        confirmedSeparateCount += 1;
+      }
+    }
+
+    const mergedGroups = new Map<number, CharacterExtractionGroup>();
+    for (const [index, group] of groups.entries()) {
+      const root = findRoot(index);
+      const target = mergedGroups.get(root);
+      if (!target) {
+        mergedGroups.set(root, group);
+        continue;
+      }
+      const titleFreeTarget = stripCharacterTitleSuffix(target.name);
+      if (titleFreeTarget === this.normalizeReference(group.name)) target.name = group.name;
+      for (const alias of [group.name, ...group.aliases]) {
+        if (this.normalizeReference(alias) !== this.normalizeReference(target.name) && this.isSafeGlobalAlias(alias)) target.aliases.add(alias);
+      }
+      for (const reference of group.references) target.references.add(reference);
+      if (!target.identity && group.identity) target.identity = group.identity;
+      if (!target.species && group.species) target.species = group.species;
+      if (!target.firstChapterId && group.firstChapterId) target.firstChapterId = group.firstChapterId;
+    }
+    const existingIdByRoot = new Map<number, string>();
+    for (const [index, existingId] of existingIdByGroupIndex) {
+      const root = findRoot(index);
+      const previous = existingIdByRoot.get(root);
+      if (previous && previous !== existingId) {
+        blockedGroups.add(root);
+        blockedReasons.set(root, "同一候选组匹配到多个已有角色");
+      } else {
+        existingIdByRoot.set(root, existingId);
+      }
+    }
+    for (const [index, existingId] of forcedExistingIds) {
+      const root = findRoot(index);
+      const previous = existingIdByRoot.get(root);
+      if (previous && previous !== existingId) {
+        blockedGroups.add(root);
+        blockedReasons.set(root, "角色身份二次确认指向了多个已有角色");
+      } else {
+        existingIdByRoot.set(root, existingId);
+      }
+    }
+    for (const index of [...blockedGroups]) {
+      const root = findRoot(index);
+      blockedGroups.add(root);
+      if (!blockedReasons.has(root) && blockedReasons.has(index)) blockedReasons.set(root, blockedReasons.get(index)!);
+    }
+
+    const characterIds: string[] = [];
+    for (const [root, group] of mergedGroups) {
+      if (blockedGroups.has(root)) {
+        skipped.push({ name: group.name, reason: blockedReasons.get(root) ?? "角色身份二次确认未通过" });
+        continue;
+      }
       const aliases = [...group.aliases].filter((alias) => this.isSafeGlobalAlias(alias));
       const extractedRaceId = group.species ? this.store.resolveRaceReference(workId, group.species) : null;
-      const existingId = [group.name, ...aliases]
+      const existingId = existingIdByRoot.get(root) ?? [group.name, ...aliases]
         .map((value) => this.store.resolveCharacterReference(workId, value))
         .find((value): value is string => Boolean(value));
       try {
         if (existingId) {
           const existing = this.store.getCharacter(existingId);
-          const mergedAliases = [...new Set([...(existing.aliases as string[]), ...aliases])]
+          const mergedAliases = [...new Set([...(existing.aliases as string[]), group.name, ...aliases])]
             .filter((alias) => this.isSafeGlobalAlias(alias) && this.normalizeReference(alias) !== this.normalizeReference(String(existing.name)));
           const updated = this.store.updateCharacter(existingId, {
             aliases: mergedAliases,
             raceId: (existing.raceId as string | null) ?? extractedRaceId,
             attributes: { ...(existing.attributes as Record<string, unknown>), ...(group.identity ? { identity: group.identity } : {}) },
             firstChapterId: existing.firstChapterId as string | null ?? group.firstChapterId
-          });
+          }, "ai", taskId ?? null, "全书角色抽取及身份二次确认");
           characterIds.push(String(updated.id));
         } else {
           const created = this.store.createCharacter(workId, {
@@ -2974,14 +3252,21 @@ export class AiManager {
     }
     return {
       characterIds: [...new Set(characterIds)],
-      candidateCount: groups.length,
+      candidateCount: mergedGroups.size,
       savedCount: new Set(characterIds).size,
       skipped,
       batchCount: chunks.length,
       coveredChapterCount: chapters.length,
       fallbackSegmentCount,
       policyOmittedSegmentCount,
-      callIds
+      callIds,
+      verification: {
+        pairCount: verificationPairs.size,
+        confirmedSameCount,
+        confirmedSeparateCount,
+        unresolvedCount,
+        callId: verificationCallId
+      }
     };
   }
 
