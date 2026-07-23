@@ -24,7 +24,7 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260724-relationship-table-cell');
-    expect(page.text).toContain('/app.js?v=20260724-character-card-edit');
+    expect(page.text).toContain('/app.js?v=20260724-relationship-evidence-count');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
