@@ -215,6 +215,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("buildCharacterState(form.getAll");
     expect(application.text).toContain("function openEntityMergeDialog(");
     expect(application.text).toContain("function recordCardEditButton(");
+    expect(application.text).toContain("function recordHistoryButton(");
+    expect(application.text).toContain('recordHistoryButton("setting", item.id, item.title)');
+    expect(application.text).toContain('recordHistoryButton("race", item.id, item.name)');
+    expect(application.text).toContain('recordHistoryButton("organization", item.id, item.name)');
     expect(application.text).toContain("function entityDialogManagementHtml(");
     expect(application.text).toContain("data-dialog-entity-merge");
     expect(application.text).toContain("data-dialog-entity-delete");
@@ -267,7 +271,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-word-count-separators');
+    expect(page.text).toContain('/app.js?v=20260724-readonly-history');
     expect(page.text).toContain('/styles.css?v=20260724-setting-editor-layout');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
