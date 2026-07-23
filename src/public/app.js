@@ -53,6 +53,8 @@ const state = {
   contextChapterId: null
 };
 
+let timelineMultiSelectEnabled = false;
+
 const chapterTypes = ["正文", "设定", "作者的话", "其他"];
 
 const taskTypeLabels = MODEL_PURPOSE_OPTIONS;
@@ -2995,21 +2997,47 @@ async function renderOrganizations() {
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
 }
 
+function updateTimelineMultiSelectControls() {
+  const toggle = $("#timeline-multi-select-toggle");
+  if (!toggle) return;
+  const selectedCount = $("#module-content").querySelectorAll("[data-event-select]:checked").length;
+  toggle.setAttribute("aria-pressed", String(timelineMultiSelectEnabled));
+  toggle.textContent = timelineMultiSelectEnabled ? "退出多选" : "多选";
+  $("#module-content").querySelectorAll("[data-event-select]").forEach((input) => {
+    input.hidden = !timelineMultiSelectEnabled;
+    if (!timelineMultiSelectEnabled) input.checked = false;
+  });
+  const merge = $("#merge-events");
+  if (merge) {
+    merge.hidden = !timelineMultiSelectEnabled;
+    merge.disabled = !timelineMultiSelectEnabled || selectedCount < 2;
+  }
+}
+
+function setTimelineMultiSelectMode(enabled) {
+  timelineMultiSelectEnabled = enabled;
+  updateTimelineMultiSelectControls();
+}
+
 async function renderTimeline() {
   const [events, tracks] = await Promise.all([
     apiPage(`/api/works/${state.work.id}/timeline`).then((result) => result.items),
     apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
+  timelineMultiSelectEnabled = false;
   $("#timeline-tools")?.remove();
-  $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button">合并所选事件</button>' : ""}</div>`);
+  $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
   state.timelineTracks = tracks;
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
-  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
+  const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
   $("#module-content").innerHTML = `<div class="timeline-kanban" data-testid="timeline-kanban">${lanes.map((track) => {
     const laneEvents = events.filter((item) => (item.trackId ?? "") === track.id);
     return `<section class="timeline-lane" data-track-id="${esc(track.id)}"><header><div><small>${laneEvents.length} 个节点</small><h3>${esc(track.name)}</h3></div>${track.id ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(track.id)}" data-entity-title="${esc(track.name)}" type="button">历史</button></div>` : ""}</header><p class="timeline-track-description">${esc(track.description || "暂无说明")}</p><div class="timeline-lane-events">${laneEvents.map(eventCard).join("") || '<div class="timeline-lane-empty">还没有时间节点</div>'}</div><button class="timeline-add-event" data-add-event-track="${esc(track.id)}" type="button">添加事件</button></section>`;
   }).join("")}</div>`;
   $("#create-timeline-track").addEventListener("click", () => openTimelineTrackDialog());
+  $("#timeline-multi-select-toggle").addEventListener("click", () => setTimelineMultiSelectMode(!timelineMultiSelectEnabled));
+  $("#module-content").querySelectorAll("[data-event-select]").forEach((input) => input.addEventListener("change", updateTimelineMultiSelectControls));
+  setTimelineMultiSelectMode(false);
   $("#module-content").querySelectorAll("[data-edit-timeline-track]").forEach((button) => button.addEventListener("click", () => openTimelineTrackDialog(tracks.find((track) => track.id === button.dataset.editTimelineTrack))));
   $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));
