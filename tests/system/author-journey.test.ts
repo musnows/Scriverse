@@ -246,7 +246,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260723-open-prs-6');
+    expect(page.text).toContain('/app.js?v=20260723-character-save-hint');
     expect(page.text).toContain('/styles.css?v=20260723-open-prs-6');
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
@@ -320,6 +320,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function normalizeVditorAttachmentImages");
     expect(application.text).toContain("editor.__attachmentObserver = attachmentObserver");
     expect(application.text).toContain("read_character_sections");
+    expect(application.text).toContain('role="note" aria-label="保存角色提示"');
+    expect(application.text).toContain("请先保存当前角色");
+    expect(application.text).toContain("保存成功后即可新建 Markdown 档案章节");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
     expect(styles.text).toContain("#character-section-editor-view");
