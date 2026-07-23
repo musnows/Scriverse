@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-timeline-multiselect');
-    expect(page.text).toContain('/app.js?v=20260724-timeline-multiselect');
+    expect(page.text).toContain('/styles.css?v=20260724-character-card-edit');
+    expect(page.text).toContain('/app.js?v=20260724-character-card-edit');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -33,6 +33,11 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('class="card-grid"');
     expect(application.text).toContain('class="module-row-list"');
     expect(application.text).toContain("MODULE_LAYOUT_STORAGE_KEY");
+    const characterCardsStart = application.text.indexOf("const characterCards = () =>");
+    const characterRowsStart = application.text.indexOf("const characterRows = () =>", characterCardsStart);
+    const characterCardsSource = application.text.slice(characterCardsStart, characterRowsStart);
+    expect(characterCardsSource).toContain('recordCardEditButton("edit-character", item.id');
+    expect(characterCardsSource).not.toContain('<div class="card-actions">${characterActions(item)}</div>');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "设定列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "角色列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "种族列表样式")');

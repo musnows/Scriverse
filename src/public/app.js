@@ -2878,7 +2878,7 @@ async function renderCharacters() {
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
-    <div class="card-actions">${characterActions(item)}</div></article>`;
+    </article>`;
   }).join("")}</div>`;
   const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join(" ") || "尚未记录当前状态");
