@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="README.md">中文</a> | <a href="README.en.md">English</a>
+  中文 | <a href="README.en.md">English</a>
 </p>
 
 <p align="center">
@@ -137,6 +137,8 @@ npm start
 生产环境必须在可信反向代理后启用 HTTPS。首次初始化时，将 `APP_ALLOW_REGISTRATION` 设为 `true`，创建的第一个用户会自动成为系统管理员；完成后应删除该环境变量或设为 `false` 并重启服务。后续如需添加用户，再临时显式开启注册。可选的 HTTP Basic Auth 仅作为额外部署网关，其凭据只是 Base64 编码，未使用 HTTPS 时不能防止链路窃听。`/api/health` 保持免认证以供探活，业务 API 需要应用内登录。
 
 ## AI 供应商配置
+
+配置前请先阅读 [AI 供应商兼容性与配置指南](docs/AI-PROVIDER-COMPATIBILITY.md)，其中列出了已验证的服务商、基础地址、模型标识符和已知差异。
 
 1. 启动项目后，点击顶部“AI 管理”进入平台级配置。
 2. 新建兼容 OpenAI Chat Completions 的供应商，填写基础地址、API 密钥、并发数、RPM 与最大输出 Token。
