@@ -1632,7 +1632,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-editor-lock b { color: var(--ink); font-size: 10px; }
 .setting-editor-lock small { display: none; }
 .setting-editor-change-note { align-items: center; gap: 6px; }
-.setting-editor-workspace { min-height: 0; }
+.setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }
 .setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }
 .setting-markdown-field { display: grid; grid-template-rows: minmax(0, 1fr); height: 100%; min-height: 0; }
 .setting-markdown-heading, .markdown-editor-field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; color: var(--ink); font-size: 14px; }
@@ -1866,7 +1866,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .setting-editor-header { min-height: 102px; }
   .setting-editor-header-fields { flex-wrap: wrap; gap: 8px 12px; }
   .setting-editor-title-input { font-size: 18px; }
-  .setting-editor-content { min-height: 70dvh; padding: 16px; }
+  .setting-editor-workspace { overflow-y: auto; }
+  .setting-editor-content { height: auto; min-height: 70dvh; padding: 16px; }
   .setting-markdown-field { height: 70dvh; }
   .setting-markdown-heading, .markdown-editor-field-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
   .setting-markdown-field > .vditor-editor-host, .markdown-editor-field .vditor-editor-host { min-height: 42dvh; }

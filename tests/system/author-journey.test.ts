@@ -229,6 +229,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain("#setting-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr);");
+    expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }");
+    expect(styles.text).toContain(".setting-editor-content { height: auto; min-height: 70dvh; padding: 16px; }");
     expect(styles.text).toContain("#knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }");
     expect(styles.text).toContain(".vditor-editor-host .vditor");
     expect(styles.text).toContain(".setting-editor-title-input");
@@ -266,7 +268,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260724-word-count-separators');
-    expect(page.text).toContain('/styles.css?v=20260724-compact-ai-number-inputs');
+    expect(page.text).toContain('/styles.css?v=20260724-setting-editor-layout');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');

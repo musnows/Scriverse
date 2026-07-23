@@ -23,7 +23,7 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260724-compact-ai-number-inputs');
+    expect(page.text).toContain('/styles.css?v=20260724-setting-editor-layout');
     expect(page.text).toContain('/app.js?v=20260724-word-count-separators');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
