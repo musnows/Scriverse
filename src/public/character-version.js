@@ -1,5 +1,6 @@
 const fieldLabels = Object.freeze({
   name: "标准名",
+  code: "编号",
   aliases: "别名",
   raceId: "种族",
   species: "种族",
@@ -15,7 +16,8 @@ const fieldLabels = Object.freeze({
 export function describeCharacterVersionChanges(snapshot, previousSnapshot) {
   if (!previousSnapshot) return ["建立人物档案"];
   return [...new Set(Object.entries(fieldLabels).filter(([key]) => (
-    JSON.stringify(snapshot?.[key] ?? null) !== JSON.stringify(previousSnapshot?.[key] ?? null)
+    JSON.stringify(key === "code" ? String(snapshot?.[key] ?? "") : (snapshot?.[key] ?? null))
+      !== JSON.stringify(key === "code" ? String(previousSnapshot?.[key] ?? "") : (previousSnapshot?.[key] ?? null))
   )).map(([, label]) => label))];
 }
 
