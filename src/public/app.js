@@ -21,7 +21,7 @@ import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hiera
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadUiModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260722-module-permissions";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260723-clipboard-images";
-import { SETTINGS_LAYOUT_STORAGE_KEY, normalizeSettingsLayout, settingsLayoutLabel } from "/settings-layout.js?v=20260723-settings-layout-toggle";
+import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout, moduleLayoutLabel } from "/module-layout.js?v=20260723-module-layout-toggle";
 
 const state = {
   user: null,
@@ -2697,22 +2697,45 @@ async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning
   }
 }
 
-function readSettingsLayout() {
+function readModuleLayout() {
   try {
-    return normalizeSettingsLayout(localStorage.getItem(SETTINGS_LAYOUT_STORAGE_KEY));
+    const stored = localStorage.getItem(MODULE_LAYOUT_STORAGE_KEY) ?? localStorage.getItem(LEGACY_SETTINGS_LAYOUT_STORAGE_KEY);
+    return normalizeModuleLayout(stored);
   } catch {
     return "cards";
   }
 }
 
-function saveSettingsLayout(layout) {
-  const normalized = normalizeSettingsLayout(layout);
+function saveModuleLayout(layout) {
+  const normalized = normalizeModuleLayout(layout);
   try {
-    localStorage.setItem(SETTINGS_LAYOUT_STORAGE_KEY, normalized);
+    localStorage.setItem(MODULE_LAYOUT_STORAGE_KEY, normalized);
   } catch {
     /* 浏览器禁用存储时仅保留当前会话选择 */
   }
   return normalized;
+}
+
+function moduleRowPreview(text, max = 180) {
+  const preview = String(text ?? "").replace(/\s+/g, " ").trim();
+  return preview.length > max ? `${preview.slice(0, max)}…` : preview;
+}
+
+function renderModuleLayoutToggle(layout, ariaLabel = "列表样式") {
+  return `<div class="module-layout-toolbar">
+    <div class="module-layout-toggle" role="group" aria-label="${esc(ariaLabel)}">
+      <button type="button" data-module-layout="cards" aria-pressed="${layout === "cards"}">卡片</button>
+      <button type="button" data-module-layout="rows" aria-pressed="${layout === "rows"}">列表</button>
+    </div>
+    <span class="module-layout-hint">当前：${esc(moduleLayoutLabel(layout))}</span>
+  </div>`;
+}
+
+function bindModuleLayoutToggle(refresh) {
+  $("#module-content").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
+    saveModuleLayout(button.dataset.moduleLayout);
+    await refresh();
+  }));
 }
 
 function settingRecordActions(item) {
@@ -2727,37 +2750,23 @@ function renderSettingCards(records) {
 }
 
 function renderSettingRows(records) {
-  return `<div class="settings-row-list">${records.map((item) => {
-    const preview = String(item.content ?? "").replace(/\s+/g, " ").trim();
-    const title = preview.length > 180 ? `${preview.slice(0, 180)}…` : preview;
+  return `<div class="module-row-list">${records.map((item) => {
+    const preview = moduleRowPreview(item.content);
     return `
-    <article class="record-card setting-row"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
-    <h3>${esc(item.title)}</h3><p title="${esc(title)}">${esc(preview)}</p>
+    <article class="record-card module-row"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
+    <h3>${esc(item.title)}</h3><p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
     <div class="card-actions">${settingRecordActions(item)}</div></article>`;
   }).join("")}</div>`;
-}
-
-function renderSettingsLayoutToggle(layout) {
-  return `<div class="settings-layout-toolbar">
-    <div class="settings-layout-toggle" role="group" aria-label="设定列表样式">
-      <button type="button" data-settings-layout="cards" aria-pressed="${layout === "cards"}">卡片</button>
-      <button type="button" data-settings-layout="rows" aria-pressed="${layout === "rows"}">列表</button>
-    </div>
-    <span class="settings-layout-hint">当前：${esc(settingsLayoutLabel(layout))}</span>
-  </div>`;
 }
 
 async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
-  const layout = readSettingsLayout();
+  const layout = readModuleLayout();
   $("#module-content").innerHTML = records.length
-    ? `${renderSettingsLayoutToggle(layout)}${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
+    ? `${renderModuleLayoutToggle(layout, "设定列表样式")}${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
-  $("#module-content").querySelectorAll("[data-settings-layout]").forEach((button) => button.addEventListener("click", async () => {
-    saveSettingsLayout(button.dataset.settingsLayout);
-    await renderSettings();
-  }));
+  bindModuleLayoutToggle(renderSettings);
   $("#module-content").querySelectorAll("[data-setting-status]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/settings/${button.dataset.settingId}`, { method: "PATCH", body: { status: button.dataset.settingStatus, changeNote: button.dataset.settingStatus === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
     await renderSettings();
@@ -2767,17 +2776,15 @@ async function renderSettings() {
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
-bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
-}
-
 async function renderCharacters() {
   [state.characters, state.races, state.organizations] = await Promise.all([
     apiPage(`/api/works/${state.work.id}/characters`).then((result) => result.items),
     canReadModule("races") ? apiAllPages(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
     canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
-  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>` : "";
-  $("#module-content").innerHTML = auditPanel + (state.characters.length ? `<div class="card-grid">${state.characters.map((item) => {
+  const layout = readModuleLayout();
+  const characterActions = (item) => `<button data-edit-character="${esc(item.id)}">编辑</button>${canEditModule("characters") && state.characters.length > 1 ? `<button data-merge-character="${esc(item.id)}">合并</button>` : ""}${canEditModule("characters") ? `<button class="danger-button" data-delete-character="${esc(item.id)}">删除</button>` : ""}`;
+  const characterCards = () => `<div class="card-grid">${state.characters.map((item) => {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
@@ -2788,9 +2795,29 @@ async function renderCharacters() {
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}
     ${item.profileSectionCount ? `<small class="character-section-count">${item.profileSectionCount} 个设定章节</small>` : ""}
-    <div class="card-actions"><button data-edit-character="${esc(item.id)}">编辑</button>${canEditModule("characters") && state.characters.length > 1 ? `<button data-merge-character="${esc(item.id)}">合并</button>` : ""}${canEditModule("characters") ? `<button class="danger-button" data-delete-character="${esc(item.id)}">删除</button>` : ""}</div></article>`;
-  }).join("")}</div>`
+    <div class="card-actions">${characterActions(item)}</div></article>`;
+  }).join("")}</div>`;
+  const characterRows = () => `<div class="module-row-list">${state.characters.map((item) => {
+    const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join(" ") || "尚未记录当前状态");
+    const meta = [
+      item.species ? (racePathLabel(item.race) || item.species) : "",
+      ...(item.aliases ?? []).slice(0, 3),
+      (item.organizations ?? []).length ? (item.organizations ?? []).map((organization) => organization.name).join("、") : ""
+    ].filter(Boolean).join(" · ");
+    const line = meta ? `${meta} · ${preview}` : preview;
+    return `
+    <article class="record-card module-row character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
+      <small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
+      <h3>${esc(item.name)}</h3>
+      <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
+      <div class="card-actions">${characterActions(item)}</div>
+    </article>`;
+  }).join("")}</div>`;
+  const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>` : "";
+  $("#module-content").innerHTML = auditPanel + (state.characters.length
+    ? `${renderModuleLayoutToggle(layout, "角色列表样式")}${layout === "rows" ? characterRows() : characterCards()}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
+  bindModuleLayoutToggle(renderCharacters);
   $("#create-character-audit-task")?.addEventListener("click", async () => {
     const button = $("#create-character-audit-task");
     button.disabled = true;
@@ -2848,6 +2875,8 @@ async function renderRaces() {
     apiAllPages(`/api/works/${state.work.id}/races`),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
+  const layout = readModuleLayout();
+  const raceActions = (item) => `<button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("races") && state.races.length > 1 ? `<button data-merge-race="${esc(item.id)}">合并</button>` : ""}${canEditModule("races") ? `<button class="danger-button" data-delete-race="${esc(item.id)}">删除</button>` : ""}`;
   const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
     <div class="race-tree-branch">
@@ -2856,12 +2885,26 @@ async function renderRaces() {
         <p>${esc(item.description || "尚未填写种族简介")}</p>
         <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<section class="knowledge-markdown-block${setting.inherited ? " inherited" : ""}"><div class="knowledge-markdown-block-heading"><h4>${esc(setting.title || "未命名章节")}</h4><small>${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}</small></div><div class="message-body">${renderMarkdown(setting.value) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></section>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-        <div class="card-actions"><button data-edit-race="${esc(item.id)}">编辑</button><button data-entity-history="race" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("races") && state.races.length > 1 ? `<button data-merge-race="${esc(item.id)}">合并</button>` : ""}${canEditModule("races") ? `<button class="danger-button" data-delete-race="${esc(item.id)}">删除</button>` : ""}</div>
+        <div class="card-actions">${raceActions(item)}</div>
       </article>
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
   </details>`;
-  $("#module-content").innerHTML = state.races.length ? `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>` : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
+  const raceRows = () => `<div class="module-row-list">${state.races.map((item) => {
+    const preview = moduleRowPreview(item.description || "尚未填写种族简介");
+    const meta = `${item.memberIds.length} 位直接角色 · ${item.settings.length ? "已填写共同设定" : "暂无共同设定"}`;
+    return `
+    <article class="record-card module-row race-card">
+      <small>${esc(meta)}</small>
+      <h3>${esc(item.name)}<span class="module-row-path">${esc(racePathLabel(item))}</span></h3>
+      <p class="module-row-preview" title="${esc(preview)}">${esc(preview)}${item.members.length ? ` · ${esc(item.members.map((member) => member.name).join("、"))}` : ""}</p>
+      <div class="card-actions">${raceActions(item)}</div>
+    </article>`;
+  }).join("")}</div>`;
+  $("#module-content").innerHTML = state.races.length
+    ? `${renderModuleLayoutToggle(layout, "种族列表样式")}${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
+    : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
+  bindModuleLayoutToggle(renderRaces);
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
   $("#module-content").querySelectorAll("[data-merge-race]").forEach((button) => button.addEventListener("click", () => {
     const source = state.races.find((item) => item.id === button.dataset.mergeRace);
@@ -2895,13 +2938,30 @@ async function renderOrganizations() {
     apiAllPages(`/api/works/${state.work.id}/organizations`),
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
-  $("#module-content").innerHTML = state.organizations.length ? `<div class="card-grid organization-grid">${state.organizations.map((item) => `
+  const layout = readModuleLayout();
+  const organizationActions = (item) => `<button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("organizations") && state.organizations.length > 1 ? `<button data-merge-organization="${esc(item.id)}">合并</button>` : ""}${canEditModule("organizations") ? `<button class="danger-button" data-delete-organization="${esc(item.id)}">删除</button>` : ""}`;
+  const organizationCards = () => `<div class="card-grid organization-grid">${state.organizations.map((item) => `
     <article class="record-card organization-card"><small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsSections?.length ? item.settingsSections.map((section) => `<article class="knowledge-markdown-block"><div class="knowledge-markdown-block-heading"><h4>${esc(section.title || "未命名章节")}</h4></div><div class="message-body">${renderMarkdown(section.contentMarkdown) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></article>`).join("") : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
-      <div class="card-actions"><button data-edit-organization="${esc(item.id)}">编辑</button><button data-entity-history="organization" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button>${canEditModule("organizations") && state.organizations.length > 1 ? `<button data-merge-organization="${esc(item.id)}">合并</button>` : ""}${canEditModule("organizations") ? `<button class="danger-button" data-delete-organization="${esc(item.id)}">删除</button>` : ""}</div>
-    </article>`).join("")}</div>` : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
+      <div class="card-actions">${organizationActions(item)}</div>
+    </article>`).join("")}</div>`;
+  const organizationRows = () => `<div class="module-row-list">${state.organizations.map((item) => {
+    const preview = moduleRowPreview(item.description || "尚未填写组织简介");
+    const members = item.members.length ? item.members.map((member) => member.name).join("、") : "暂无绑定角色";
+    return `
+    <article class="record-card module-row organization-card">
+      <small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
+      <h3>${esc(item.name)}</h3>
+      <p class="module-row-preview" title="${esc(`${preview} · 成员：${members}`)}">${esc(preview)} · ${esc(members)}</p>
+      <div class="card-actions">${organizationActions(item)}</div>
+    </article>`;
+  }).join("")}</div>`;
+  $("#module-content").innerHTML = state.organizations.length
+    ? `${renderModuleLayoutToggle(layout, "组织列表样式")}${layout === "rows" ? organizationRows() : organizationCards()}`
+    : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
+  bindModuleLayoutToggle(renderOrganizations);
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
   $("#module-content").querySelectorAll("[data-merge-organization]").forEach((button) => button.addEventListener("click", () => {
     const source = state.organizations.find((item) => item.id === button.dataset.mergeOrganization);
@@ -2969,17 +3029,35 @@ async function renderOutlines() {
     apiPage(`/api/works/${state.work.id}/outlines`).then((result) => result.items),
     apiPage(`/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`).then((result) => result.items)
   ]);
+  const layout = readModuleLayout();
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
   const navButton = $("#module-nav [data-module=outlines] .nav-label");
   if (navButton) navButton.textContent = unresolved.length ? `大纲与伏笔 · ${unresolved.length}` : "大纲与伏笔";
-  const foreshadowHtml = foreshadows.length ? `<div class="card-grid foreshadow-grid">${foreshadows.map((item) => `
+  const foreshadowActions = (item) => `<button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
+  const foreshadowCards = () => `<div class="card-grid foreshadow-grid">${foreshadows.map((item) => `
     <article class="record-card foreshadow-card ${item.overdue ? "is-overdue" : ""}">
       <small>${esc(item.importance)} · ${esc(item.status)}${item.overdue ? " · 已逾期" : ""}</small>
       <h3>${esc(item.title)}</h3><p>${esc(item.description || "暂无说明")}</p>
       <div class="foreshadow-links">${item.occurrences.length ? item.occurrences.map((link) => `<span class="pill">${esc({ setup: "埋设", reminder: "提醒", payoff: "回收" }[link.role] ?? link.role)} · ${esc(link.volumeTitle)} / ${esc(link.chapterTitle)}</span>`).join("") : '<span class="pill">尚未关联章节</span>'}</div>
-      <div class="card-actions"><button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div>
-    </article>`).join("")}</div>` : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
+      <div class="card-actions">${foreshadowActions(item)}</div>
+    </article>`).join("")}</div>`;
+  const foreshadowRows = () => `<div class="module-row-list">${foreshadows.map((item) => {
+    const preview = moduleRowPreview(item.description || "暂无说明");
+    const links = item.occurrences.length
+      ? item.occurrences.map((link) => `${({ setup: "埋设", reminder: "提醒", payoff: "回收" }[link.role] ?? link.role)} · ${link.volumeTitle} / ${link.chapterTitle}`).join("；")
+      : "尚未关联章节";
+    return `
+    <article class="record-card module-row foreshadow-card ${item.overdue ? "is-overdue" : ""}">
+      <small>${esc(item.importance)} · ${esc(item.status)}${item.overdue ? " · 已逾期" : ""}</small>
+      <h3>${esc(item.title)}</h3>
+      <p class="module-row-preview" title="${esc(`${preview} · ${links}`)}">${esc(preview)} · ${esc(links)}</p>
+      <div class="card-actions">${foreshadowActions(item)}</div>
+    </article>`;
+  }).join("")}</div>`;
+  const foreshadowHtml = foreshadows.length
+    ? `${renderModuleLayoutToggle(layout, "伏笔列表样式")}${layout === "rows" ? foreshadowRows() : foreshadowCards()}`
+    : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
   const outlineHtml = outlines.length ? `<div class="outline-list">${outlines.map((item) => `
     <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
       <div><small>${esc(item.volumeTitle)} · ${esc(item.status)}</small><h3>${esc(item.chapterTitle)}</h3></div>
@@ -2989,6 +3067,7 @@ async function renderOutlines() {
       <div class="outline-actions">${item.unresolvedForeshadowCount ? `<span>${item.unresolvedForeshadowCount} 个未回收伏笔</span>` : ""}<button data-edit-outline="${esc(item.chapterId)}">编辑</button><button data-entity-history="chapter-outline" data-entity-id="${esc(item.chapterId)}" data-entity-title="${esc(item.chapterTitle)}">版本历史</button></div>
     </article>`).join("")}</div>` : emptyModule("还没有章节", "先创建章节，再为每章维护目标、冲突和转折。\n");
   $("#module-content").innerHTML = `<div class="outline-summary"><article><strong>${outlines.length}</strong><span>章节规划</span></article><article><strong>${unresolved.length}</strong><span>未回收伏笔</span></article><article class="${overdue.length ? "danger-text" : ""}"><strong>${overdue.length}</strong><span>已逾期</span></article></div><section class="planning-section"><div class="section-title"><div><span class="eyebrow">伏笔追踪</span><h2>尚未回收与历史伏笔</h2></div></div>${foreshadowHtml}</section><section class="planning-section"><div class="section-title"><div><span class="eyebrow">逐章规划</span><h2>章节目标、冲突与转折</h2></div></div>${outlineHtml}</section>`;
+  bindModuleLayoutToggle(renderOutlines);
   $("#module-content").querySelectorAll("[data-edit-outline]").forEach((button) => button.addEventListener("click", () => openOutlineDialog(outlines.find((item) => item.chapterId === button.dataset.editOutline))));
   $("#module-content").querySelectorAll("[data-edit-foreshadow]").forEach((button) => button.addEventListener("click", () => openForeshadowDialog(foreshadows.find((item) => item.id === button.dataset.editForeshadow))));
   bindEntityHistoryButtons(renderOutlines);
@@ -3051,11 +3130,28 @@ async function renderReviews() {
       : "";
     return `<article class="record-card character-duplicate-review"><small>角色查重 · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3><div class="character-duplicate-pair">${sideHtml}</div><p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>${evidenceHtml ? `<ul class="character-duplicate-evidence">${evidenceHtml}</ul>` : ""}${actions}${item.resolutionNote ? `<p class="review-resolution-note">处理结果：${esc(item.resolutionNote)}</p>` : ""}</article>`;
   };
-  $("#module-content").innerHTML = reviews.length ? `<div class="card-grid">${reviews.map((item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
+  const layout = readModuleLayout();
+  const reviewCard = (item) => item.itemType === "character-duplicate" ? duplicateCard(item) : `
     <article class="record-card"><small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small><h3>${esc(item.title)}</h3>
     <p>${esc(item.description)}${item.suggestion ? `\n建议：${esc(item.suggestion)}` : ""}</p>
-    ${item.status === "pending" && canResolveReview ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`).join("")}</div>`
+    ${item.status === "pending" && canResolveReview ? `<div class="card-actions"><button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button></div>` : ""}</article>`;
+  const reviewRow = (item) => {
+    if (item.itemType === "character-duplicate") {
+      return `<div class="module-row-span">${duplicateCard(item)}</div>`;
+    }
+    const preview = moduleRowPreview(`${item.description || ""}${item.suggestion ? ` 建议：${item.suggestion}` : ""}`);
+    return `
+    <article class="record-card module-row">
+      <small>${esc(item.itemType)} · ${esc(item.severity)} · ${esc(item.status)}</small>
+      <h3>${esc(item.title)}</h3>
+      <p class="module-row-preview" title="${esc(preview)}">${esc(preview)}</p>
+      <div class="card-actions">${item.status === "pending" && canResolveReview ? `<button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button>` : ""}</div>
+    </article>`;
+  };
+  $("#module-content").innerHTML = reviews.length
+    ? `${renderModuleLayoutToggle(layout, "审核列表样式")}${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
+  bindModuleLayoutToggle(renderReviews);
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
     await renderReviews();
