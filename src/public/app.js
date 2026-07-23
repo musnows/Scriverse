@@ -626,14 +626,19 @@ function syncChapterLineNumberScroll() {
   }
 }
 
+function syncChapterWhitespaceControls() {
+  document.querySelectorAll("[data-toggle-whitespace]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
+    button.textContent = chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符";
+  });
+}
+
 function renderChapterWhitespaceMarkers(input, style) {
   const overlay = $("#chapter-whitespace-overlay");
   const inner = $("#chapter-whitespace-inner");
-  const button = $("#toggle-whitespace-button");
-  if (!overlay || !inner || !button) return;
+  syncChapterWhitespaceControls();
+  if (!overlay || !inner) return;
   overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
-  button.setAttribute("aria-pressed", String(chapterWhitespaceVisible));
-  button.textContent = chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符";
   if (!chapterWhitespaceVisible) {
     inner.replaceChildren();
     return;
@@ -3986,8 +3991,12 @@ function openWorkSettingsDialog(work) {
     <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
+  const whitespaceField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="whitespace-settings-title">
+    <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
+    <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
+  </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField + importHistoryField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -4005,6 +4014,11 @@ function openWorkSettingsDialog(work) {
       toast("作品信息已保存");
     }, "作品设置");
   bindWorkCoverControls(work);
+  $("#toggle-whitespace-settings")?.addEventListener("click", () => {
+    chapterWhitespaceVisible = !chapterWhitespaceVisible;
+    syncChapterWhitespaceControls();
+    scheduleChapterLineNumbers();
+  });
   $("#import-history-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openImportHistory();
@@ -6013,10 +6027,6 @@ $("#chapter-content").addEventListener("input", (event) => {
 });
 $("#chapter-content").addEventListener("select", scheduleAiContextUsage);
 $("#chapter-content").addEventListener("scroll", syncChapterLineNumberScroll);
-$("#toggle-whitespace-button").addEventListener("click", () => {
-  chapterWhitespaceVisible = !chapterWhitespaceVisible;
-  scheduleChapterLineNumbers();
-});
 $("#chapter-line-numbers-inner").addEventListener("pointerdown", (event) => {
   const row = event.target.closest(".chapter-line-number");
   if (!row || event.button !== 0) return;
