@@ -189,6 +189,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openSettingEditor(item = null)");
     expect(application.text).toContain("function openCharacterEditor(item = null)");
     expect(application.text).toContain("function renderCharacterEditorRelationships()");
+    expect(application.text).toContain('class="character-aliases"');
+    expect(application.text).toContain('class="character-species"');
     expect(application.text).toContain("refreshRelationshipSurfaces");
     expect(application.text).toContain("data-character-relationship-edit");
     expect(application.text).toContain('field("keywords", "关系关键词", "keyword-chips"');
@@ -212,6 +214,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-relationship-row");
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
+    expect(styles.text).toContain(".character-aliases { display: flex;");
+    expect(styles.text).toContain(".character-species { display: grid;");
     expect(styles.text).toContain(".card-actions .danger-button");
     expect(styles.text).toContain(".merge-dialog-note");
   });
@@ -232,8 +236,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260723-import-mode-permission-selection');
-    expect(page.text).toContain('/styles.css?v=20260723-import-mode-permission-selection');
+    expect(page.text).toContain('/app.js?v=20260723-character-card-layout');
+    expect(page.text).toContain('/styles.css?v=20260723-character-card-layout');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");

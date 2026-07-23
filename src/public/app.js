@@ -2704,9 +2704,10 @@ async function renderCharacters() {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
     <article class="record-card character-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}"><small>${item.lockedFields.length ? `锁定 ${item.lockedFields.length} 项` : esc(item.visibility)}</small>
-    <h3>${esc(item.name)}</h3><div>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>
-    ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
+    <h3>${esc(item.name)}</h3>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
+    ${item.aliases.length ? `<div class="character-aliases">${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
+    ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
     ${details.length ? `<dl class="character-detail-list">${details.slice(0, 4).map((detail) => `<div><dt>${esc(detail.label)}</dt><dd>${esc(detail.value)}</dd></div>`).join("")}</dl>` : ""}
     <div class="organization-links"><b>所属组织</b>${(item.organizations ?? []).length ? item.organizations.map((organization) => `<span class="pill organization-pill">${esc(organization.name)}</span>`).join("") : '<span class="organization-empty">未加入组织</span>'}</div>
     ${item.profile?.summary ? `<p class="character-summary">${esc(item.profile.summary)}</p>` : `<p>${esc(Object.entries(item.currentState).map(([key, value]) => `${key}：${value}`).join("\n") || "尚未记录当前状态")}</p>`}

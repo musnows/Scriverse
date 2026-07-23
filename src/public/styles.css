@@ -1397,8 +1397,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .section-list-row { grid-template-columns: minmax(0, 1fr) auto; }
 .section-list-row textarea { grid-column: 1 / -1; min-height: 130px; }
 .structured-list-row button { grid-column: -2 / -1; grid-row: 1; border: 1px solid var(--line); border-radius: 4px; padding: 0 10px; background: var(--panel); color: var(--muted); font-size: 10px; }
-.character-identity { color: var(--ink) !important; font-weight: 600; }
-.character-species { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 10px; }
+.character-card h3 { margin-bottom: 5px; }
+.character-identity { margin: 0 0 6px !important; color: var(--ink) !important; font-weight: 600; line-height: 1.55 !important; }
+.character-aliases { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.character-aliases .pill { margin: 0; }
+.character-species { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 10px; }
+.character-species b { font-weight: 500; }
+.character-species .pill { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .character-detail-list { display: grid; gap: 5px; margin: 12px 0; }
 .character-detail-list div { display: grid; grid-template-columns: minmax(70px, .42fr) minmax(0, 1fr); gap: 8px; font-size: 10px; }
 .character-detail-list dt { color: var(--muted); }
