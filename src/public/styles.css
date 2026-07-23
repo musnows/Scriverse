@@ -806,6 +806,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.settings-layout-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+.settings-layout-hint { color: var(--muted); font-size: 10px; }
+.settings-layout-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--surface); }
+.settings-layout-toggle button { min-height: 30px; padding: 0 12px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; }
+.settings-layout-toggle button:last-child { border-right: 0; }
+.settings-layout-toggle button:hover, .settings-layout-toggle button:focus-visible { color: var(--ink); background: var(--paper-deep); }
+.settings-layout-toggle button[aria-pressed="true"] { color: #fff; background: var(--accent); }
+.settings-layout-toggle button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
+.settings-row-list { display: grid; gap: 8px; }
+.setting-row { display: grid; grid-template-columns: minmax(108px, .2fr) minmax(120px, .24fr) minmax(0, 1fr) auto; gap: 10px 16px; align-items: center; min-height: 0; padding: 12px 16px; }
+.setting-row h3 { margin: 0; font-size: 14px; line-height: 1.35; }
+.setting-row p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setting-row .card-actions { margin-top: 0; flex-wrap: wrap; justify-content: flex-end; }
 .character-card { cursor: pointer; }
 .character-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .character-audit-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 15px 17px; border: 1px solid var(--line); background: var(--surface-soft); }
@@ -1692,6 +1705,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .top-actions .ghost-button:not(.settings-button) { display: none; }
   .book-shelf { grid-template-columns: repeat(3, minmax(180px, 1fr)); }
   .settings-hub-grid { grid-template-columns: 1fr; }
+  .settings-layout-toolbar { justify-content: stretch; }
+  .settings-layout-toggle { width: 100%; }
+  .settings-layout-toggle button { flex: 1; }
+  .setting-row { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .setting-row .card-actions { justify-content: flex-start; }
   .entity-editor-header, .character-editor-header { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; padding-inline: 12px; }
   .entity-editor-heading h1, .character-editor-title-row h1 { font-size: 18px; }
   .entity-editor-back { overflow: hidden; width: 40px; min-width: 40px; padding-inline: 11px; white-space: nowrap; }

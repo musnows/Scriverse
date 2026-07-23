@@ -21,6 +21,7 @@ import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hiera
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadUiModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260722-module-permissions";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260723-clipboard-images";
+import { SETTINGS_LAYOUT_STORAGE_KEY, normalizeSettingsLayout, settingsLayoutLabel } from "/settings-layout.js?v=20260723-settings-layout-toggle";
 
 const state = {
   user: null,
@@ -2696,14 +2697,67 @@ async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning
   }
 }
 
+function readSettingsLayout() {
+  try {
+    return normalizeSettingsLayout(localStorage.getItem(SETTINGS_LAYOUT_STORAGE_KEY));
+  } catch {
+    return "cards";
+  }
+}
+
+function saveSettingsLayout(layout) {
+  const normalized = normalizeSettingsLayout(layout);
+  try {
+    localStorage.setItem(SETTINGS_LAYOUT_STORAGE_KEY, normalized);
+  } catch {
+    /* 浏览器禁用存储时仅保留当前会话选择 */
+  }
+  return normalized;
+}
+
+function settingRecordActions(item) {
+  return `${item.status === "pending" ? `<button data-setting-status="confirmed" data-setting-id="${esc(item.id)}">确认候选</button><button data-setting-status="deprecated" data-setting-id="${esc(item.id)}">弃用</button>` : ""}<button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
+}
+
+function renderSettingCards(records) {
+  return `<div class="card-grid">${records.map((item) => `
+    <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
+    <h3>${esc(item.title)}</h3><div class="record-markdown-preview message-body">${renderMarkdown(item.content) || '<p class="markdown-editor-empty">暂无正文</p>'}</div>
+    <div class="card-actions">${settingRecordActions(item)}</div></article>`).join("")}</div>`;
+}
+
+function renderSettingRows(records) {
+  return `<div class="settings-row-list">${records.map((item) => {
+    const preview = String(item.content ?? "").replace(/\s+/g, " ").trim();
+    const title = preview.length > 180 ? `${preview.slice(0, 180)}…` : preview;
+    return `
+    <article class="record-card setting-row"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
+    <h3>${esc(item.title)}</h3><p title="${esc(title)}">${esc(preview)}</p>
+    <div class="card-actions">${settingRecordActions(item)}</div></article>`;
+  }).join("")}</div>`;
+}
+
+function renderSettingsLayoutToggle(layout) {
+  return `<div class="settings-layout-toolbar">
+    <div class="settings-layout-toggle" role="group" aria-label="设定列表样式">
+      <button type="button" data-settings-layout="cards" aria-pressed="${layout === "cards"}">卡片</button>
+      <button type="button" data-settings-layout="rows" aria-pressed="${layout === "rows"}">列表</button>
+    </div>
+    <span class="settings-layout-hint">当前：${esc(settingsLayoutLabel(layout))}</span>
+  </div>`;
+}
+
 async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
-  $("#module-content").innerHTML = records.length ? `<div class="card-grid">${records.map((item) => `
-    <article class="record-card"><small>${esc(item.category)} · ${item.locked ? "已锁定" : esc(item.status)}</small>
-    <h3>${esc(item.title)}</h3><div class="record-markdown-preview message-body">${renderMarkdown(item.content) || '<p class="markdown-editor-empty">暂无正文</p>'}</div>
-    <div class="card-actions">${item.status === "pending" ? `<button data-setting-status="confirmed" data-setting-id="${esc(item.id)}">确认候选</button><button data-setting-status="deprecated" data-setting-id="${esc(item.id)}">弃用</button>` : ""}<button data-edit-setting="${esc(item.id)}">编辑</button><button data-entity-history="setting" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button></div></article>`).join("")}</div>`
+  const layout = readSettingsLayout();
+  $("#module-content").innerHTML = records.length
+    ? `${renderSettingsLayoutToggle(layout)}${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
+  $("#module-content").querySelectorAll("[data-settings-layout]").forEach((button) => button.addEventListener("click", async () => {
+    saveSettingsLayout(button.dataset.settingsLayout);
+    await renderSettings();
+  }));
   $("#module-content").querySelectorAll("[data-setting-status]").forEach((button) => button.addEventListener("click", async () => {
     await api(`/api/settings/${button.dataset.settingId}`, { method: "PATCH", body: { status: button.dataset.settingStatus, changeNote: button.dataset.settingStatus === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
     await renderSettings();
@@ -2711,6 +2765,9 @@ async function renderSettings() {
   }));
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
   bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
+}
+
+bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
 async function renderCharacters() {
