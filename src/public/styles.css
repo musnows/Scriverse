@@ -1165,7 +1165,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   font-weight: 400;
   letter-spacing: .01em;
   text-shadow: var(--relationship-node-text-shadow);
+  opacity: 0;
+  transition: opacity .12s ease, color .12s ease;
 }
+.relationship-network .mind-node.is-label-visible span,
+.relationship-network .mind-node:hover span,
+.relationship-network .mind-node:focus-visible span,
+.relationship-network .mind-node.is-hovered span,
+.relationship-network .mind-node.is-selected span,
+.relationship-network .mind-node.is-related span,
+.relationship-network .mind-node.is-edge-endpoint span { opacity: 1; }
 .relationship-network .mind-node:hover,
 .relationship-network .mind-node:focus-visible,
 .relationship-network .mind-node.is-hovered {

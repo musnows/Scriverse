@@ -23,6 +23,16 @@ const NETWORK_LAYOUTS = Object.freeze({
 });
 const RELATIONSHIP_EDGE_GAP = 24;
 let relationshipRendererSequence = 0;
+
+export function getRelationshipNetworkInitialScale(nodeCount, expanded = false) {
+  if (expanded) return 1;
+  const count = Math.max(0, Number(nodeCount) || 0);
+  if (count > 180) return 1.35;
+  if (count > 120) return 1.25;
+  if (count > 80) return 1.16;
+  return 1;
+}
+
 const GALAXY_CELESTIAL_PALETTES = Object.freeze([
   Object.freeze({ key: "solar", hue: 42, saturation: 96, lightness: 68, color: "#ffc95f", core: "#fff8d4", rim: "#9f3c18", atmosphere: "rgba(255,184,72,.58)", ring: "rgba(255,222,151,.72)" }),
   Object.freeze({ key: "azure", hue: 211, saturation: 94, lightness: 68, color: "#61b8ff", core: "#effaff", rim: "#173b85", atmosphere: "rgba(79,156,255,.56)", ring: "rgba(164,214,255,.68)" }),
@@ -296,6 +306,44 @@ export function buildRelationshipGraph(characters, relationships) {
   return { nodes, edges, nodeById, warnings, stats: { nodeCount: nodes.length, edgeCount: edges.length, maxDegree } };
 }
 
+function separateOverlappingNetworkNodes(nodes, layout) {
+  const iterations = nodes.length > 150 ? 44 : 24;
+  const padding = nodes.length > 120 ? 12 : 9;
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    let overlapCount = 0;
+    for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
+      const left = nodes[leftIndex];
+      for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
+        const right = nodes[rightIndex];
+        let dx = right.x - left.x;
+        let dy = right.y - left.y;
+        let distance = Math.hypot(dx, dy);
+        if (distance < 0.001) {
+          const angle = (hashString(`${left.id}:${right.id}`) / 4294967296) * Math.PI * 2;
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+        const minimumDistance = left.radius + right.radius + padding;
+        if (distance >= minimumDistance) continue;
+        overlapCount += 1;
+        const correction = (minimumDistance - distance) * 0.52;
+        const nx = dx / distance;
+        const ny = dy / distance;
+        left.x -= nx * correction;
+        left.y -= ny * correction;
+        right.x += nx * correction;
+        right.y += ny * correction;
+      }
+    }
+    for (const node of nodes) {
+      node.x = clamp(node.x, layout.marginX + node.radius, layout.width - layout.marginX - node.radius);
+      node.y = clamp(node.y, layout.marginY + node.radius, layout.height - layout.marginY - node.radius);
+    }
+    if (!overlapCount) break;
+  }
+}
+
 export function layoutRelationshipNetwork(graph, seed = "relationship-network", options = {}) {
   const layout = options.expanded ? NETWORK_LAYOUTS.expanded : NETWORK_LAYOUTS.standard;
   const random = seededRandom(hashString(`${seed}:${graph.nodes.map((node) => node.id).join("|")}`));
@@ -390,6 +438,7 @@ export function layoutRelationshipNetwork(graph, seed = "relationship-network", 
       node.x = layout.marginX + (node.x - minX) / width * (layout.width - layout.marginX * 2);
       node.y = layout.marginY + (node.y - minY) / height * (layout.height - layout.marginY * 2);
     }
+    separateOverlappingNetworkNodes(nodes, layout);
   }
   return { nodes, byId, width: layout.width, height: layout.height };
 }
@@ -694,7 +743,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   let selectedId = null;
   let selectedEdgeId = null;
   let hoveredId = null;
-  let viewScale = 1;
+  let viewScale = getRelationshipNetworkInitialScale(graph.nodes.length, options.expanded);
   let viewX = 0;
   let viewY = 0;
   let animationFrame = null;
@@ -880,6 +929,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   stage.append(svg);
 
   const nodeElements = new Map();
+  const defaultLabelLimit = graph.nodes.length > 180 ? 36 : graph.nodes.length > 120 ? 48 : graph.nodes.length > 80 ? 64 : graph.nodes.length;
   const updateNodePosition = (nodeId) => {
     const position = positions.get(nodeId);
     const button = nodeElements.get(nodeId);
@@ -1201,6 +1251,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     button.className = `mind-node network-node obsidian-node${node.locked ? " is-locked" : ""}${node.degree === 0 ? " is-isolated" : ""}`;
     button.dataset.nodeId = node.id;
     button.dataset.groupKey = node.groupKey || appearance.group.key;
+    button.classList.toggle("is-label-visible", graph.nodes.indexOf(node) < defaultLabelLimit || node.degree >= 4);
     button.style.setProperty("--node-size", `${nodeSize}px`);
     button.style.setProperty("--node-color", node.color || appearance.color);
     button.style.setProperty("--node-glow", node.glow || appearance.glow);
@@ -1304,6 +1355,14 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     viewY = 0;
     updateViewTransform(true);
   };
+  const setDefaultView = (animate = false) => {
+    viewScale = getRelationshipNetworkInitialScale(graph.nodes.length, options.expanded);
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
+    viewX = width ? (width - width * viewScale) / 2 : 0;
+    viewY = height ? (height - height * viewScale) / 2 : 0;
+    updateViewTransform(animate);
+  };
   const animatePositions = (targets, duration = 650) => {
     freezePhysics();
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
@@ -1342,7 +1401,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     hoveredId = null;
     freezePhysics();
     refreshHighlight();
-    fitView();
+    setDefaultView(true);
     animatePositions(originalPositions);
   });
 
@@ -1393,6 +1452,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   clearGraphHighlight();
   shell.append(toolbar, viewport);
   container.append(shell);
+  setDefaultView();
   return {
     destroy() {
       destroyed = true;
