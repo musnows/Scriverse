@@ -264,7 +264,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-whitespace-settings');
+    expect(page.text).toContain('/app.js?v=20260724-word-count-separators');
     expect(page.text).toContain('/styles.css?v=20260724-compact-ai-number-inputs');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
@@ -497,6 +497,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('field("organizationIds", "所属组织（可多选）", "chips"');
     expect(application.text).toContain('input.setAttribute("aria-label", rows.dataset.label || "列表项目")');
     expect(application.text).toContain('Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")}</small>');
+    expect(application.text).toContain('Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")');
+    expect(application.text).toContain('Number(work.wordCount ?? 0).toLocaleString("zh-CN")');
     expect(application.text).toContain('<span>${volume.chapters.length} 章</span>');
     expect(application.text).toContain("function renderKnowledgeMarkdownSections()");
     expect(application.text).toContain("data-knowledge-section-create");
