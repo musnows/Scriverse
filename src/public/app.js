@@ -20,7 +20,6 @@ import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-v
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadUiModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260722-module-permissions";
-import { clipboardImageFiles } from "/character-markdown.js?v=20260723-clipboard-images";
 
 const state = {
   user: null,
@@ -534,10 +533,12 @@ let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
 let characterEditorSections = [];
-let characterSectionPreviewTimer = null;
 let characterSectionPendingAttachments = [];
 let markdownEditorPendingAttachments = [];
 let characterSectionEditorDirty = false;
+let settingEditorVditor = null;
+let knowledgeSectionVditor = null;
+let characterSectionVditor = null;
 let entityHistoryContext = null;
 
 function showEntityEditorPage(type) {
@@ -572,6 +573,8 @@ async function closeEntityEditor({ force = false } = {}) {
   if (!force && !confirmEntityEditorDiscard()) return false;
   await discardPendingCharacterAttachments();
   await discardPendingMarkdownAttachments();
+  destroyVditorEditor(settingEditorVditor);
+  settingEditorVditor = null;
   const module = entityEditorType === "setting" ? "settings" : entityEditorType === "character" ? "characters" : entityEditorType === "race" ? "races" : "organizations";
   entityEditorType = null;
   entityEditorDirty = false;
@@ -1426,6 +1429,7 @@ function applyColorTheme(theme) {
   button.setAttribute("aria-pressed", String(normalized === "dark"));
   const themeColor = document.querySelector('meta[name="theme-color"]');
   if (themeColor) themeColor.content = normalized === "dark" ? "#171714" : "#8b3d2c";
+  [settingEditorVditor, knowledgeSectionVditor, characterSectionVditor].forEach((editor) => editor?.setTheme(normalized === "dark" ? "dark" : "classic"));
 }
 
 function saveColorTheme(theme) {
@@ -3511,7 +3515,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-markdown-editor><div class="markdown-editor-compose"><label><textarea name="${esc(name)}" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}">${esc(value)}</textarea></label><div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview>${renderMarkdown(value) || '<p class="markdown-editor-empty">预览区域暂无内容。</p>'}</article></div></div></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><div class="vditor-editor-host" data-vditor-editor data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="Markdown 原文">${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -3686,7 +3690,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   $("#form-dialog").classList.toggle("wide-dialog", Boolean(options.wide));
   bindDynamicListControls($("#dialog-fields"));
   bindRelationshipKeywordControls($("#dialog-fields"));
-  bindMarkdownEditors($("#dialog-fields"));
+  bindVditorEditors($("#dialog-fields"));
   const form = $("#dynamic-form");
   form.onsubmit = async (event) => {
     if (event.submitter?.value === "cancel") {
@@ -3699,7 +3703,7 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
     try {
       commitRelationshipKeywordInputs(form);
       await onSubmit(new FormData(form));
-      const markdown = [...form.querySelectorAll("[data-markdown-textarea]")].map((textarea) => textarea.value).join("\n\n");
+      const markdown = [...form.querySelectorAll("[data-vditor-value]")].map((textarea) => textarea.value).join("\n\n");
       await cleanupPendingMarkdownAttachments(markdown);
       $("#form-dialog").close();
     } catch (error) {
@@ -3840,6 +3844,8 @@ function openVolumeDialog(item) {
 }
 
 function openSettingEditor(item = null) {
+  destroyVditorEditor(settingEditorVditor);
+  settingEditorVditor = null;
   settingEditorItem = item;
   $("#setting-editor-eyebrow").textContent = item ? "人工修正" : "作者事实";
   $("#setting-editor-name").value = item?.title ?? "";
@@ -3852,7 +3858,6 @@ function openSettingEditor(item = null) {
   const viewOnly = !canEditModule("settings");
   $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
-  $("#setting-editor-form").querySelectorAll("[data-markdown-attachment]").forEach((control) => { control.disabled = viewOnly; });
   $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
   $("#setting-editor-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -3895,7 +3900,11 @@ function openSettingEditor(item = null) {
     }
   };
   showEntityEditorPage("setting");
-  bindMarkdownEditors($("#setting-editor-form"));
+  settingEditorVditor = createVditorEditor($("#setting-editor-markdown"), item?.content ?? "", {
+    onInput: (markdown) => { $("#setting-editor-body").value = markdown; markEntityEditorDirty(); },
+    placeholder: "在这里完整记录设定内容",
+    readOnly: viewOnly
+  });
   $("#setting-editor-name").focus();
 }
 
@@ -4046,73 +4055,83 @@ async function uploadMarkdownAttachment(file) {
   return { attachment, imageLabel: markdownImageLabel(file) };
 }
 
-function insertMarkdownAttachment(textarea, attachment, imageLabel) {
-  const insertion = `![${imageLabel}](attachment://${attachment.id})`;
-  const start = textarea.selectionStart ?? textarea.value.length;
-  const end = textarea.selectionEnd ?? start;
-  const prefix = start > 0 && !textarea.value.slice(0, start).endsWith("\n") ? "\n\n" : "";
-  const suffix = end < textarea.value.length && !textarea.value.slice(end).startsWith("\n") ? "\n\n" : "";
-  textarea.setRangeText(`${prefix}${insertion}${suffix}`, start, end, "end");
-  textarea.dispatchEvent(new Event("input", { bubbles: true }));
-  textarea.focus();
-}
-
-async function pasteMarkdownImages(files, textarea) {
-  let insertedCount = 0;
-  for (const file of files) {
-    try {
-      const { attachment, imageLabel } = await uploadMarkdownAttachment(file);
-      insertMarkdownAttachment(textarea, attachment, imageLabel);
-      insertedCount += 1;
-    } catch (error) {
-      toast(error.message, "error");
-    }
-  }
-  if (insertedCount > 0) toast(insertedCount === 1 ? "剪贴板图片已插入" : `已插入 ${insertedCount} 张剪贴板图片`);
-}
-
-function bindMarkdownEditors(container) {
-  container.querySelectorAll("[data-markdown-editor]").forEach((editor) => {
-    const textarea = editor.querySelector("[data-markdown-textarea]");
-    const preview = editor.querySelector("[data-markdown-preview]");
-    if (!textarea || !preview) return;
-    const renderPreview = () => { preview.innerHTML = renderMarkdown(textarea.value) || '<p class="markdown-editor-empty">预览区域暂无内容。</p>'; };
-    textarea.addEventListener("input", renderPreview);
-    textarea.addEventListener("paste", (event) => {
-      if (textarea.readOnly || textarea.disabled) return;
-      const files = clipboardImageFiles(event.clipboardData);
-      if (files.length === 0) return;
-      event.preventDefault();
-      void pasteMarkdownImages(files, textarea);
-    });
-    editor.querySelector("[data-markdown-attachment]")?.addEventListener("change", async (event) => {
-      const input = event.currentTarget;
-      const file = input.files?.[0];
-      if (!file || textarea.readOnly || textarea.disabled) return;
-      input.disabled = true;
+function createVditorUploadHandler(uploadAttachment, getEditor) {
+  return async (files) => {
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    const insertions = [];
+    for (const file of files) {
       try {
-        const { attachment, imageLabel } = await uploadMarkdownAttachment(file);
-        insertMarkdownAttachment(textarea, attachment, imageLabel);
-        toast(attachment.storedMimeType === "image/webp" ? "图片已转换为无损 WebP 并插入" : "图片已插入；转换后未变小，因此保留原格式");
+        const { attachment, imageLabel } = await uploadAttachment(file);
+        insertions.push(`![${imageLabel}](attachment://${attachment.id})`);
       } catch (error) {
         toast(error.message, "error");
-      } finally {
-        input.disabled = false;
-        input.value = "";
       }
-    });
-    renderPreview();
-  });
+    }
+    const editor = getEditor();
+    if (editor && insertions.length > 0) {
+      if (range && editor.vditor?.element?.contains(range.startContainer)) {
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
+      editor.insertMD(insertions.join("\n\n"));
+    }
+    return null;
+  };
 }
 
-function scheduleCharacterSectionPreview() {
-  if (characterSectionPreviewTimer !== null) clearTimeout(characterSectionPreviewTimer);
-  characterSectionPreviewTimer = window.setTimeout(() => {
-    characterSectionPreviewTimer = null;
-    const preview = $("#character-section-preview");
-    const content = $("#character-section-markdown");
-    if (preview && content) preview.innerHTML = renderMarkdown(content.value) || '<p class="character-markdown-empty">预览区域暂无内容。</p>';
-  }, 260);
+function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = uploadMarkdownAttachment, placeholder = "", readOnly = false } = {}) {
+  if (!window.Vditor) {
+    toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
+    return null;
+  }
+  let editor = null;
+  editor = new window.Vditor(host, {
+    cdn: "/vendor/vditor",
+    lang: "zh_CN",
+    theme: currentColorTheme() === "dark" ? "dark" : "classic",
+    mode: "ir",
+    value: String(value ?? ""),
+    height: "100%",
+    minHeight: 260,
+    placeholder,
+    cache: { enable: false },
+    toolbar: ["headings", "bold", "italic", "strike", "|", "line", "quote", "list", "ordered-list", "check", "|", "code", "inline-code", "link", "table", "upload", "|", "undo", "redo", "edit-mode", "fullscreen"],
+    upload: {
+      accept: "image/*",
+      max: 10 * 1024 * 1024,
+      multiple: true,
+      handler: createVditorUploadHandler(uploadAttachment, () => editor)
+    },
+    input: onInput,
+    after: () => {
+      if (readOnly) editor?.disabled();
+    }
+  });
+  host.__vditor = editor;
+  if (readOnly) editor.disabled();
+  return editor;
+}
+
+function destroyVditorEditor(editor) {
+  if (!editor) return;
+  const host = editor.vditor?.element;
+  editor.destroy();
+  if (host) delete host.__vditor;
+}
+
+function bindVditorEditors(container) {
+  container.querySelectorAll("[data-vditor-editor]").forEach((host) => {
+    const valueField = host.parentElement?.querySelector("[data-vditor-value]");
+    const editor = createVditorEditor(host, valueField?.value ?? "", {
+      onInput: (markdown) => {
+        if (valueField) valueField.value = markdown;
+        markEntityEditorDirty();
+      },
+      placeholder: host.dataset.placeholder ?? "在这里编辑 Markdown",
+      readOnly: Boolean(valueField?.readOnly)
+    });
+  });
 }
 
 function characterSectionImageLabel(file, fallback = "图片附件") {
@@ -4130,38 +4149,10 @@ async function uploadCharacterSectionAttachment(file) {
   };
 }
 
-function insertCharacterSectionAttachment(textarea, attachment, imageLabel) {
-  const insertion = `![${imageLabel}](attachment://${attachment.id})`;
-  const start = textarea.selectionStart ?? textarea.value.length;
-  const end = textarea.selectionEnd ?? start;
-  const prefix = start > 0 && !textarea.value.slice(0, start).endsWith("\n") ? "\n\n" : "";
-  const suffix = end < textarea.value.length && !textarea.value.slice(end).startsWith("\n") ? "\n\n" : "";
-  textarea.setRangeText(`${prefix}${insertion}${suffix}`, start, end, "end");
-  textarea.focus();
-  characterSectionEditorDirty = true;
-  scheduleCharacterSectionPreview();
-}
-
-async function pasteCharacterSectionImages(files, textarea) {
-  let insertedCount = 0;
-  for (const file of files) {
-    try {
-      const { attachment, imageLabel } = await uploadCharacterSectionAttachment(file);
-      insertCharacterSectionAttachment(textarea, attachment, imageLabel);
-      insertedCount += 1;
-    } catch (error) {
-      toast(error.message, "error");
-    }
-  }
-  if (insertedCount > 0) toast(insertedCount === 1 ? "剪贴板图片已插入" : `已插入 ${insertedCount} 张剪贴板图片`);
-}
-
 async function closeCharacterSectionEditor({ force = false } = {}) {
   if (!force && characterSectionEditorDirty && !window.confirm("当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？")) return false;
-  if (characterSectionPreviewTimer !== null) {
-    clearTimeout(characterSectionPreviewTimer);
-    characterSectionPreviewTimer = null;
-  }
+  destroyVditorEditor(characterSectionVditor);
+  characterSectionVditor = null;
   await discardPendingCharacterAttachments();
   characterSectionEditorDirty = false;
   $("#character-section-editor-view").classList.add("hidden");
@@ -4182,12 +4173,8 @@ function knowledgeSectionEditorHtml(section = null) {
       <div class="character-markdown-editor-meta">
         <label>设定标题<input id="knowledge-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：组织章程、种族特征" required></label>
       </div>
-      <div class="character-markdown-compose">
-        <label><textarea id="knowledge-section-markdown" aria-label="Markdown 原文" maxlength="500000" spellcheck="true" placeholder="在这里编辑 Markdown 设定">${esc(section?.contentMarkdown ?? "")}</textarea></label>
-        <div role="region" aria-label="Markdown 预览"><article id="knowledge-section-preview" class="character-markdown-document message-body">${renderMarkdown(section?.contentMarkdown ?? "") || '<p class="character-markdown-empty">预览区域暂无内容。</p>'}</article></div>
-      </div>
+      <div id="knowledge-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
       <div class="character-markdown-editor-footer">
-        <span class="knowledge-section-editor-note">支持在 Markdown 原文中使用 Command+V 或 Ctrl+V 粘贴图片</span>
         <div class="character-markdown-editor-actions"><button type="button" data-knowledge-section-edit-cancel>取消</button><button type="button" class="primary-button" data-knowledge-section-edit-save>${section ? "保存设定" : "添加设定"}</button></div>
       </div>
     </section>
@@ -4196,6 +4183,8 @@ function knowledgeSectionEditorHtml(section = null) {
 
 async function closeKnowledgeSectionEditor({ force = false } = {}) {
   if (!force && knowledgeSectionEditorDirty && !window.confirm("当前 Markdown 设定有未保存修改，返回设定列表将丢弃这些修改。是否继续？")) return false;
+  destroyVditorEditor(knowledgeSectionVditor);
+  knowledgeSectionVditor = null;
   knowledgeSectionEditorDirty = false;
   knowledgeSectionEditorIndex = null;
   $("#knowledge-section-editor-view").classList.add("hidden");
@@ -4208,6 +4197,8 @@ async function closeKnowledgeSectionEditor({ force = false } = {}) {
 
 async function openKnowledgeSectionEditor(index = null) {
   if (!canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations")) return;
+  destroyVditorEditor(knowledgeSectionVditor);
+  knowledgeSectionVditor = null;
   const section = Number.isInteger(index) ? knowledgeEditorSections[index] : null;
   if (Number.isInteger(index) && !section) return;
   knowledgeSectionEditorIndex = Number.isInteger(index) ? index : null;
@@ -4217,16 +4208,10 @@ async function openKnowledgeSectionEditor(index = null) {
   $("#knowledge-editor-form").classList.add("hidden");
   $("#knowledge-section-editor-view").classList.remove("hidden");
   const titleInput = $("#knowledge-section-title");
-  const textarea = $("#knowledge-section-markdown");
-  const preview = $("#knowledge-section-preview");
-  const renderPreview = () => { preview.innerHTML = renderMarkdown(textarea.value) || '<p class="character-markdown-empty">预览区域暂无内容。</p>'; };
   host.querySelectorAll("input, textarea").forEach((control) => control.addEventListener("input", () => { knowledgeSectionEditorDirty = true; }));
-  textarea.addEventListener("input", renderPreview);
-  textarea.addEventListener("paste", (event) => {
-    const files = clipboardImageFiles(event.clipboardData);
-    if (files.length === 0) return;
-    event.preventDefault();
-    void pasteMarkdownImages(files, textarea);
+  knowledgeSectionVditor = createVditorEditor($("#knowledge-section-markdown"), section?.contentMarkdown ?? "", {
+    onInput: () => { knowledgeSectionEditorDirty = true; },
+    placeholder: "在这里编辑 Markdown 设定"
   });
   host.querySelector("[data-knowledge-section-edit-close]").addEventListener("click", () => void closeKnowledgeSectionEditor());
   host.querySelector("[data-knowledge-section-edit-cancel]").addEventListener("click", () => void closeKnowledgeSectionEditor());
@@ -4240,7 +4225,7 @@ async function openKnowledgeSectionEditor(index = null) {
       return;
     }
     button.disabled = true;
-    const nextSection = { title, contentMarkdown: textarea.value, summary: String(section?.summary ?? ""), sortOrder: knowledgeSectionEditorIndex ?? knowledgeEditorSections.length };
+    const nextSection = { title, contentMarkdown: knowledgeSectionVditor?.getValue() ?? "", summary: String(section?.summary ?? ""), sortOrder: knowledgeSectionEditorIndex ?? knowledgeEditorSections.length };
     if (knowledgeSectionEditorIndex === null) knowledgeEditorSections.push(nextSection);
     else knowledgeEditorSections[knowledgeSectionEditorIndex] = nextSection;
     knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
@@ -4264,15 +4249,7 @@ function characterSectionEditorHtml(section = null) {
       <label>章节标题<input id="character-section-title" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="例如：背景故事" required></label>
       <label class="character-markdown-summary-field">章节摘要<textarea id="character-section-summary" maxlength="20000" placeholder="用于角色列表和 AI 快速定位，不会替代正文">${esc(section?.summary ?? "")}</textarea></label>
     </div>
-    <div class="character-markdown-toolbar">
-      <label class="ghost-button" for="character-section-attachment">上传并插入图片</label>
-      <input id="character-section-attachment" class="hidden" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,image/png,image/jpeg,image/webp,image/gif">
-      <span>图片会优先转换为体积更小的无损 WebP，也可使用 Mac Command+V 或 Windows、Linux Ctrl+V 粘贴</span>
-    </div>
-    <div class="character-markdown-compose">
-      <label><textarea id="character-section-markdown" aria-label="Markdown 原文" maxlength="500000" spellcheck="true" placeholder="支持标题、列表、引用、表格、链接和图片">${esc(section?.contentMarkdown ?? "")}</textarea></label>
-      <div role="region" aria-label="安全预览"><article id="character-section-preview" class="character-markdown-document message-body">${renderMarkdown(section?.contentMarkdown ?? "") || '<p class="character-markdown-empty">预览区域暂无内容。</p>'}</article></div>
-    </div>
+    <div id="character-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
     <div class="character-markdown-editor-footer">
       <label class="character-markdown-change-note">版本说明<input id="character-section-change-note" maxlength="500" placeholder="可选，例如：补充远古时期经历"></label>
       <div class="character-markdown-editor-actions"><button type="button" data-character-section-edit-cancel>取消</button><button type="button" class="primary-button" data-character-section-edit-save>${section ? "保存章节版本" : "创建章节"}</button></div>
@@ -4283,35 +4260,18 @@ function characterSectionEditorHtml(section = null) {
 
 async function openCharacterSectionEditor(section = null) {
   await discardPendingCharacterAttachments();
+  destroyVditorEditor(characterSectionVditor);
+  characterSectionVditor = null;
   const host = $("#character-section-editor-host");
   host.innerHTML = characterSectionEditorHtml(section);
   characterSectionEditorDirty = false;
   $("#character-editor-form").classList.add("hidden");
   $("#character-section-editor-view").classList.remove("hidden");
-  const textarea = $("#character-section-markdown");
   host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
-  textarea.addEventListener("input", scheduleCharacterSectionPreview);
-  textarea.addEventListener("paste", (event) => {
-    const files = clipboardImageFiles(event.clipboardData);
-    if (files.length === 0) return;
-    event.preventDefault();
-    void pasteCharacterSectionImages(files, textarea);
-  });
-  $("#character-section-attachment").addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    const input = event.currentTarget;
-    input.disabled = true;
-    try {
-      const { attachment, imageLabel } = await uploadCharacterSectionAttachment(file);
-      insertCharacterSectionAttachment(textarea, attachment, imageLabel);
-      toast(attachment.storedMimeType === "image/webp" ? "图片已转换为无损 WebP 并插入" : "图片已插入；转换后未变小，因此保留原格式");
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      input.disabled = false;
-      input.value = "";
-    }
+  characterSectionVditor = createVditorEditor($("#character-section-markdown"), section?.contentMarkdown ?? "", {
+    uploadAttachment: uploadCharacterSectionAttachment,
+    onInput: () => { characterSectionEditorDirty = true; },
+    placeholder: "支持标题、列表、引用、表格、链接和图片"
   });
   host.querySelector("[data-character-section-edit-close]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());
@@ -4324,7 +4284,7 @@ async function openCharacterSectionEditor(section = null) {
       return;
     }
     button.disabled = true;
-    const contentMarkdown = textarea.value;
+    const contentMarkdown = characterSectionVditor?.getValue() ?? "";
     try {
       const saved = await api(section ? `/api/character-sections/${section.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
         method: section ? "PATCH" : "POST",
@@ -4713,7 +4673,6 @@ async function openKnowledgeEditor(kind, item) {
     $("#knowledge-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
     $("#knowledge-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
   }
-  $("#knowledge-editor-fields").querySelectorAll("[data-markdown-attachment]").forEach((control) => { control.disabled = viewOnly; });
   $("#knowledge-editor-submit").classList.toggle("hidden", viewOnly);
   const form = $("#knowledge-editor-form");
   form.onsubmit = async (event) => {

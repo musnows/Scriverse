@@ -9,7 +9,8 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260723-knowledge-editor-5">
+    <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
+    <link rel="stylesheet" href="/styles.css?v=20260723-vditor-1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -364,12 +365,10 @@
         </header>
         <div class="setting-editor-workspace">
           <main class="setting-editor-content">
-            <div class="setting-markdown-field" data-markdown-editor>
+            <div class="setting-markdown-field" data-vditor-editor-field>
               <div class="setting-markdown-heading"><span>设定正文</span></div>
-              <div class="setting-markdown-compose">
-                <label><textarea id="setting-editor-body" name="content" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容"></textarea></label>
-                <div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview><p class="markdown-editor-empty">预览区域暂无内容。</p></article></div>
-              </div>
+              <div id="setting-editor-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
+              <textarea id="setting-editor-body" class="hidden" name="content" data-vditor-value maxlength="200000" aria-label="Markdown 原文"></textarea>
             </div>
           </main>
         </div>
@@ -654,6 +653,7 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260723-knowledge-editor-5"></script>
+    <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
+    <script type="module" src="/app.js?v=20260723-vditor-1"></script>
   </body>
 </html>
