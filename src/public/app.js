@@ -4085,6 +4085,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
     return null;
   }
+  ensureVditorIconScript();
   let editor = null;
   editor = new window.Vditor(host, {
     cdn: "/vendor/vditor",
@@ -4111,6 +4112,14 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   host.__vditor = editor;
   if (readOnly) editor.disabled();
   return editor;
+}
+
+function ensureVditorIconScript() {
+  if (document.getElementById("vditorIconScript")) return;
+  const script = document.createElement("script");
+  script.id = "vditorIconScript";
+  script.src = "/vendor/vditor/dist/js/icons/ant.js?v=3.11.2";
+  document.body.appendChild(script);
 }
 
 function destroyVditorEditor(editor) {
