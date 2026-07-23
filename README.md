@@ -138,6 +138,8 @@ npm start
 
 ## AI 供应商配置
 
+配置前请先阅读 [AI 供应商兼容性与配置指南](docs/AI-PROVIDER-COMPATIBILITY.md)，其中列出了已验证的服务商、基础地址、模型标识符和已知差异。
+
 1. 启动项目后，点击顶部“AI 管理”进入平台级配置。
 2. 新建兼容 OpenAI Chat Completions 的供应商，填写基础地址、API 密钥、并发数、RPM 与最大输出 Token。
 3. 为模型填写其支持的上下文总量（Token），再添加模型。
