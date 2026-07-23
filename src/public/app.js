@@ -633,6 +633,12 @@ function syncChapterWhitespaceControls() {
   });
 }
 
+function toggleChapterWhitespaceVisibility() {
+  chapterWhitespaceVisible = !chapterWhitespaceVisible;
+  syncChapterWhitespaceControls();
+  scheduleChapterLineNumbers();
+}
+
 function renderChapterWhitespaceMarkers(input, style) {
   const overlay = $("#chapter-whitespace-overlay");
   const inner = $("#chapter-whitespace-inner");
@@ -1512,6 +1518,7 @@ function renderTypographyPreview() {
 function openAppearanceDialog() {
   fillAppearanceForm(typographySettings);
   renderTypographyPreview();
+  syncChapterWhitespaceControls();
   $("#appearance-dialog").showModal();
 }
 
@@ -4037,11 +4044,7 @@ function openWorkSettingsDialog(work) {
       toast("作品信息已保存");
     }, "作品设置");
   bindWorkCoverControls(work);
-  $("#toggle-whitespace-settings")?.addEventListener("click", () => {
-    chapterWhitespaceVisible = !chapterWhitespaceVisible;
-    syncChapterWhitespaceControls();
-    scheduleChapterLineNumbers();
-  });
+  $("#toggle-whitespace-settings")?.addEventListener("click", toggleChapterWhitespaceVisibility);
   $("#import-history-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openImportHistory();
@@ -6021,6 +6024,7 @@ function cleanupExpandedRelationshipMap() {
 $("#relationship-map-close").addEventListener("click", () => $("#relationship-map-dialog").close());
 $("#relationship-map-dialog").addEventListener("close", cleanupExpandedRelationshipMap);
 $("#appearance-button").addEventListener("click", openAppearanceDialog);
+$("#toggle-whitespace-appearance").addEventListener("click", toggleChapterWhitespaceVisibility);
 $("#theme-toggle").addEventListener("click", () => {
   const theme = nextTheme(currentColorTheme());
   const persisted = saveColorTheme(theme);

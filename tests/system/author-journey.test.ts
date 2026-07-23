@@ -92,6 +92,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
     expect(application.text).toContain('data-toggle-whitespace');
     expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
+    expect(page.text).toContain('id="toggle-whitespace-appearance"');
+    expect(application.text).toContain("function toggleChapterWhitespaceVisibility()");
     expect(application.text).toContain('/whitespace-visualization.js?v=20260718-visible-whitespace');
     expect(application.text).toContain("function setupPanelResize(handle, side)");
     expect(application.text).toContain("function ensureAiPanelExpanded()");
@@ -271,8 +273,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-search-shortcut-scope');
-    expect(page.text).toContain('/styles.css?v=20260724-setting-editor-layout');
+    expect(page.text).toContain('/app.js?v=20260724-whitespace-access');
+    expect(page.text).toContain('/styles.css?v=20260724-whitespace-access');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');

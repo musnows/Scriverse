@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260724-setting-editor-layout">
+    <link rel="stylesheet" href="/styles.css?v=20260724-whitespace-access">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -500,6 +500,10 @@
               <option value="relaxed">宽松</option>
             </select>
           </label>
+          <section class="work-access-field appearance-whitespace-field" aria-labelledby="appearance-whitespace-title">
+            <div><strong id="appearance-whitespace-title">正文空白符</strong><small>即时显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
+            <button id="toggle-whitespace-appearance" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="true">隐藏空白符</button>
+          </section>
           <div id="font-preview" class="font-preview" aria-live="polite">
             <strong>字体预览 Typography 0123</strong>
             <span>中文默认使用黑体，English letters always use monospace.</span>
@@ -666,6 +670,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260724-search-shortcut-scope"></script>
+    <script type="module" src="/app.js?v=20260724-whitespace-access"></script>
   </body>
 </html>
