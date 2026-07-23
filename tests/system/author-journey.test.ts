@@ -235,6 +235,7 @@ describe("作者完整创作流程", () => {
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const workPermissions = await request(runtime.app).get("/work-permissions.js").expect(200);
+    const keyboardShortcuts = await request(runtime.app).get("/keyboard-shortcuts.js").expect(200);
     const markdown = await request(runtime.app).get("/markdown.js").expect(200);
     const vditorCss = await request(runtime.app).get("/vendor/vditor/dist/index.css").expect(200);
     const vditorScript = await request(runtime.app).get("/vendor/vditor/dist/index.min.js").expect(200);
@@ -248,8 +249,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260723-character-code');
+    expect(page.text).toContain('/app.js?v=20260723-global-search-shortcut');
     expect(page.text).toContain('/styles.css?v=20260723-character-code');
+    expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
@@ -297,8 +299,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).not.toContain(".task-table .task-id");
     expect(application.text).not.toContain("<th>ID</th><th>任务</th>");
     expect(page.text).toContain('id="top-search-button"');
+    expect(page.text).toContain('title="全文检索（Command/Ctrl+F）"');
     expect(page.text).toContain('id="user-management-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="search-dialog"');
+    expect(application.text).toContain('isGlobalSearchShortcut(event)');
+    expect(application.text).toContain('{ capture: true }');
     expect(page.text).not.toContain('id="search-button"');
     expect(page.text).toContain('class="prompt-composer"');
     expect(page.text).toContain('class="ai-send-button"');

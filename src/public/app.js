@@ -21,6 +21,7 @@ import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hiera
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260723-ai-analysis-permission";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout, moduleLayoutLabel } from "/module-layout.js?v=20260723-module-layout-toggle";
+import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 
 const state = {
   user: null,
@@ -2207,6 +2208,11 @@ const searchResultTypeLabels = {
 async function openSearchDialog() {
   if (!state.work) {
     toast("请先打开一部作品", "error");
+    return;
+  }
+  if ($("#search-dialog").open) {
+    $("#search-query").focus();
+    $("#search-query").select();
     return;
   }
   $("#search-dialog .eyebrow").textContent = `当前作品 · 《${state.work.title}》`;
@@ -6107,6 +6113,13 @@ document.addEventListener("keydown", (event) => {
     hideAiMentionMenu();
   }
 });
+document.addEventListener("keydown", (event) => {
+  if (!isGlobalSearchShortcut(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.repeat) return;
+  openSearchDialog().catch((error) => toast(error.message, "error"));
+}, { capture: true });
 $("#ai-send").addEventListener("click", sendAi);
 $("#ai-new-conversation").addEventListener("click", async () => {
   const button = $("#ai-new-conversation");
