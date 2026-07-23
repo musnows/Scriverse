@@ -263,7 +263,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260724-relationship-evidence-count');
-    expect(page.text).toContain('/styles.css?v=20260724-setting-preview-clamp');
+    expect(page.text).toContain('/styles.css?v=20260724-module-header-actions');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
@@ -436,6 +436,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: 100%; padding: 9px 0 9px 20px;');
     expect(styles.text).toContain('.record-markdown-preview { display: -webkit-box;');
     expect(styles.text).toContain('-webkit-line-clamp: 12;');
+    expect(styles.text).toContain('.module-header-actions > [data-module-header-action] { order: 1; }');
+    expect(styles.text).toContain('.module-header-actions > #module-create-button { order: 2; min-height: 36px; }');
+    expect(styles.text).toContain('.settings-layout-toggle button, .module-layout-toggle button { min-height: 34px;');
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
     expect(page.text).toContain('class="relationship-map-floating-close"');
