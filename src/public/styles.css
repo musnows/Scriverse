@@ -1815,8 +1815,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-version-card > button.is-confirming { border-color: var(--accent); background: var(--accent); color: #fff; }
 .entity-version-card > button:disabled { cursor: default; opacity: .68; }
 .entity-history-empty { margin: 0; padding: 28px 12px; color: var(--muted); font-size: 11px; text-align: center; }
-.relationship-table .relationship-actions { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.relationship-table .relationship-actions button { min-height: 30px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font: inherit; font-size: 10px; line-height: 1.2; appearance: none; transition: border-color .14s ease, background .14s ease, color .14s ease; }
+.relationship-table .relationship-actions { white-space: nowrap; vertical-align: middle; }
+.relationship-table .relationship-actions button { display: inline-block; min-height: 30px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font: inherit; font-size: 10px; line-height: 1.2; vertical-align: middle; appearance: none; transition: border-color .14s ease, background .14s ease, color .14s ease; }
+.relationship-table .relationship-actions button + button { margin-left: 6px; }
 .relationship-table .relationship-actions button:hover, .relationship-table .relationship-actions button:focus-visible { border-color: var(--accent); background: var(--surface-hover); color: var(--accent-dark); outline: none; }
 .relationship-table .relationship-actions button[data-edit-relationship] { color: var(--ink); }
 
