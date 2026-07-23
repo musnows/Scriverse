@@ -130,6 +130,8 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
+  $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
+  $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));
   $("#import-file-button").setAttribute("title", proseReadOnly ? "当前权限不能导入正文" : "导入 TXT / DOCX");
   $("#import-file").disabled = proseReadOnly;
@@ -226,7 +228,7 @@ const shelfOnboardingSteps = [
 const workspaceOnboardingSteps = [
   { selector: "#home-button", eyebrow: "作品入口", title: "随时返回书架", description: "点击叙界标志返回书架，切换作品或创建新的故事世界。", placement: "bottom" },
   { selector: ".file-button", eyebrow: "稿件导入", title: "导入 TXT 或 DOCX", description: "已有稿件可以直接导入，系统会解析分卷与章节结构。", placement: "right" },
-  { selector: "#new-chapter-button", eyebrow: "正文结构", title: "新建章节", description: "使用分卷和章节组织长篇正文，章节会自动保存并保留版本。", placement: "right" },
+  { selector: "[data-new-chapter-volume]", eyebrow: "正文结构", title: "新建章节", description: "使用分卷和章节组织长篇正文，章节会自动保存并保留版本。", placement: "right" },
   { selector: "#versions-button", eyebrow: "版本安全", title: "查看章节版本", description: "每次保存都会生成可恢复版本，误改内容时可以随时回溯。", placement: "bottom" },
   { selector: "[data-module=\"characters\"]", eyebrow: "作品知识", title: "维护角色与世界资料", description: "角色、种族、组织、设定和时间线共同构成 AI 可引用的作品知识。", placement: "right" },
   { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲与伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
@@ -2415,11 +2417,15 @@ async function selectWork(workId, preferredChapterId = null) {
 function renderTree() {
   if (!state.work) return;
   const count = state.work.volumes.reduce((total, volume) => total + volume.chapters.length, 0);
+  const proseEditable = canEditProse();
   $("#chapter-count").textContent = `${count} 章`;
   $("#novel-tree").classList.remove("empty-copy");
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => `
     <div class="volume-node ${state.collapsedVolumeIds.has(volume.id) ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
-      <button class="volume-title" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+      <div class="volume-title">
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${state.collapsedVolumeIds.has(volume.id) ? "false" : "true"}" title="左键折叠，右键设置分卷"><span>${esc(volume.title)}</span><span>${volume.chapters.length} 章</span></button>
+        ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
+      </div>
       <div class="volume-chapters">
       ${volume.chapters.map((chapter) => `
         <button class="chapter-node ${state.chapter?.id === chapter.id ? "active" : ""}" type="button" data-chapter-id="${esc(chapter.id)}">
@@ -2439,6 +2445,9 @@ function renderTree() {
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
+  });
+  $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
+    button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", () => selectChapter(button.dataset.chapterId));
@@ -3976,7 +3985,7 @@ function openWorkSettingsDialog(work) {
   });
 }
 
-async function openChapterDialog() {
+async function openChapterDialog(volumeId = null) {
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，正文为只读", "error");
   if (!state.work.volumes.length) {
@@ -3984,7 +3993,8 @@ async function openChapterDialog() {
     state.work = await api(`/api/works/${state.work.id}`);
     renderTree();
   }
-  openDialog("新建章节", field("title", "章节标题") + field("volumeId", "所属卷", "select", state.work.volumes[0].id, state.work.volumes.map((volume) => [volume.id, volume.title])) + field("chapterType", "章节类型", "select", "正文", chapterTypes.map((value) => [value, value])), async (form) => {
+  const selectedVolumeId = state.work.volumes.some((volume) => volume.id === volumeId) ? volumeId : state.work.volumes[0].id;
+  openDialog("新建章节", field("title", "章节标题") + field("volumeId", "所属卷", "select", selectedVolumeId, state.work.volumes.map((volume) => [volume.id, volume.title])) + field("chapterType", "章节类型", "select", "正文", chapterTypes.map((value) => [value, value])), async (form) => {
     const chapter = await api(`/api/works/${state.work.id}/chapters`, { method: "POST", body: { title: form.get("title"), volumeId: form.get("volumeId"), chapterType: form.get("chapterType"), content: "" } });
     state.work = await api(`/api/works/${state.work.id}`);
     await selectChapter(chapter.id);
@@ -3999,13 +4009,13 @@ function openVolumeDialog(item) {
     field("title", "分卷名称", "text", item?.title) +
     field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
     field("description", "分卷简介", "textarea", item?.description) +
-    field("keywords", "分卷关键词（逐条填写）", "item-list", item?.keywords ?? []),
+    field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []),
     async (form) => {
       const body = {
         title: form.get("title"),
         kind: form.get("kind"),
         description: form.get("description"),
-        keywords: form.getAll("keywords").map((value) => String(value).trim()).filter(Boolean)
+        keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))
       };
       await api(item ? `/api/volumes/${item.id}` : `/api/works/${state.work.id}/volumes`, { method: item ? "PATCH" : "POST", body });
       state.work = await api(`/api/works/${state.work.id}`);
@@ -5778,7 +5788,6 @@ $("#member-permission-form").addEventListener("submit", async (event) => {
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
-$("#new-chapter-button").addEventListener("click", openChapterDialog);
 $("#save-button").addEventListener("click", saveChapter);
 $("#tidy-blank-lines-button").addEventListener("click", tidyChapterBlankLines);
 $("#new-volume-button").addEventListener("click", () => openVolumeDialog());

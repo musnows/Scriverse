@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260723-open-prs-2">
+    <link rel="stylesheet" href="/styles.css?v=20260723-open-prs-3">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -100,8 +100,6 @@
             </label>
             <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
           </div>
-          <button id="new-volume-button" class="secondary-button" type="button">新建分卷</button>
-          <button id="new-chapter-button" class="secondary-button" type="button">新建章节</button>
         </div>
         <nav id="module-nav" class="module-nav" aria-label="作品模块">
           <button type="button" data-module="editor" class="active"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>正文</button>
@@ -120,7 +118,10 @@
         </nav>
         <div class="panel-heading">
           <span>作品目录</span>
-          <span id="chapter-count">0 章</span>
+          <div class="panel-heading-actions">
+            <span id="chapter-count">0 章</span>
+            <button id="new-volume-button" class="add-button" type="button" aria-label="新建分卷" title="新建分卷">+</button>
+          </div>
         </div>
         <div id="novel-tree" class="novel-tree empty-copy">创建或选择作品后开始写作</div>
       </aside>
@@ -653,6 +654,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260723-open-prs-2"></script>
+    <script type="module" src="/app.js?v=20260723-open-prs-3"></script>
   </body>
 </html>
