@@ -701,7 +701,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .left-primary-actions .file-button { flex: 1 1 auto; width: auto; min-width: 0; }
 .left-primary-actions #left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }
 .file-button, .add-button { display: grid; place-items: center; border: 1px solid var(--line); border-radius: 4px; background: transparent; }
-.file-button { container-type: inline-size; overflow: hidden; white-space: nowrap; }
+.file-button { min-height: 30px; font-size: 11px; container-type: inline-size; overflow: hidden; white-space: nowrap; }
 .add-button { width: 24px; height: 24px; padding: 0; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 16px; line-height: 1; }
 .add-button:hover, .add-button:focus-visible { border-color: var(--accent); color: var(--accent-dark); outline: none; }
 .import-file-label-compact, .import-file-label-short { display: none; }
@@ -721,7 +721,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-nav button.active, .module-nav button:hover { background: var(--paper-deep); color: var(--ink); }
 .module-nav .ai-analysis-entry { background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-weight: 650; }
 #module-more-button { grid-column: 1 / -1; color: var(--accent-dark); text-align: center; }
-.panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 7px 9px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 .panel-heading-actions { display: flex; align-items: center; gap: 7px; margin-left: auto; }
 .novel-tree { font-size: 13px; }
 .empty-copy { color: var(--muted); padding: 14px 7px; line-height: 1.5; }

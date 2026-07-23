@@ -241,8 +241,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260723-volume-keyword-chips');
-    expect(page.text).toContain('/styles.css?v=20260723-volume-keyword-chips');
+    expect(page.text).toContain('/app.js?v=20260723-ui-comment-fixes');
+    expect(page.text).toContain('/styles.css?v=20260723-ui-comment-fixes');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -408,6 +408,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("padding: 2px 6px;");
     expect(styles.text).toContain(".left-panel { border-right: 1px solid var(--line); padding: 18px 14px 16px; overflow-y: auto; }");
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
+    expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
+    expect(styles.text).toContain(".panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px;");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
