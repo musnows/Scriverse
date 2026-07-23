@@ -31,6 +31,8 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="ai-agent-tools"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
+    expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || scopeType !== "none";');
+    expect(application.text).toContain('if (!state.work) return toast("请先选择作品", "error");');
     expect(application.text).toContain('scopeType === "none" ? { type: "none"');
     expect(application.text).toContain("if (includeBookSummary) scope.includeBookSummary = true;");
     expect(application.text).toContain('body.append("expectedVersionNo", String(state.work.versionNo));');

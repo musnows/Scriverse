@@ -140,6 +140,100 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(remaining.body.data.organizations).toEqual([expect.objectContaining({ name: "深空同盟" })]);
   });
 
+  it("为设定库、种族和组织保存 Markdown 正文并保持旧设定数组兼容", async () => {
+    const { workId } = await seedWork(runtime);
+    const markdown = "## 共同规律\n\n- 只能在月光下显现\n- 不得跨越旧约边界";
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "月光规则",
+      category: "世界规则",
+      content: markdown
+    }).expect(201);
+    expect(setting.body.data.content).toBe(markdown);
+
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "月裔",
+      settingsMarkdown: markdown
+    }).expect(201);
+    expect(race.body.data).toMatchObject({ settings: [markdown], settingsMarkdown: markdown });
+
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "月下议会",
+      settingsMarkdown: markdown
+    }).expect(201);
+    expect(organization.body.data).toMatchObject({ settings: [markdown], settingsMarkdown: markdown });
+
+    const updatedRace = await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({
+      settingsMarkdown: "### 更新后的共同规律\n\n已完成登记。"
+    }).expect(200);
+    expect(updatedRace.body.data.settingsMarkdown).toContain("更新后的共同规律");
+    const updatedOrganization = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      settingsMarkdown: "### 更新后的组织章程\n\n全员需遵守。"
+    }).expect(200);
+    expect(updatedOrganization.body.data.settingsMarkdown).toContain("更新后的组织章程");
+  });
+
+  it("按标题分别保存种族和组织 Markdown 设定章节", async () => {
+    const { workId } = await seedWork(runtime);
+    const sections = [
+      { title: "生理特征", contentMarkdown: "体型会随月相变化。", sortOrder: 0 },
+      { title: "社会结构", contentMarkdown: "由长老会维护旧约。", sortOrder: 1 }
+    ];
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "月裔章节版",
+      settingsSections: sections
+    }).expect(201);
+    expect(race.body.data).toMatchObject({
+      settings: ["体型会随月相变化。", "由长老会维护旧约。"],
+      settingsSections: sections
+    });
+
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "月下议会章节版",
+      settingsSections: sections
+    }).expect(201);
+    expect(organization.body.data.settingsSections).toEqual(sections.map((section) => ({ ...section, summary: "" })));
+
+    const updated = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      settingsSections: [{ title: "新章程", contentMarkdown: "成员必须遵守月下议会的誓约。", sortOrder: 0 }]
+    }).expect(200);
+    expect(updated.body.data.settingsSections).toEqual([
+      { title: "新章程", contentMarkdown: "成员必须遵守月下议会的誓约。", summary: "", sortOrder: 0 }
+    ]);
+  });
+
+  it("允许旧版大体量种族和组织设定升级后继续保存", async () => {
+    const { workId } = await seedWork(runtime);
+    const legacySettings = Array.from({ length: 11 }, (_, index) => `## 旧设定 ${index + 1}\n\n${"旧".repeat(19_900)}`);
+    const legacyLength = legacySettings.reduce((total, item) => total + item.length, 0);
+    expect(legacyLength).toBeGreaterThan(200_000);
+
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "旧版大体量种族",
+      settings: legacySettings
+    }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "旧版大体量组织",
+      settings: legacySettings
+    }).expect(201);
+
+    const loadedRace = await request(runtime.app).get(`/api/races/${race.body.data.id}`).expect(200);
+    const updatedRace = await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({
+      name: "升级后的大体量种族",
+      settingsSections: loadedRace.body.data.settingsSections
+    }).expect(200);
+    expect(updatedRace.body.data.settings).toEqual(legacySettings);
+
+    const loadedOrganization = await request(runtime.app).get(`/api/organizations/${organization.body.data.id}`).expect(200);
+    const updatedOrganization = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      name: "升级后的大体量组织",
+      settingsSections: loadedOrganization.body.data.settingsSections.map((section: Record<string, unknown>, index: number) => (
+        index === 0 ? { ...section, summary: "升级后补充摘要" } : section
+      ))
+    }).expect(200);
+    expect(updatedOrganization.body.data.settings).toEqual(legacySettings);
+    expect(updatedOrganization.body.data.settingsSections[0].summary).toBe("升级后补充摘要");
+  });
+
   it("先维护种族主数据，再由人物引用并与组织保持独立", async () => {
     const { workId } = await seedWork(runtime);
     const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);
@@ -306,6 +400,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const evolvedRace = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "进化泰坦" }).expect(201);
     const created = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "哥斯拉",
+      code: "MON-001",
       aliases: ["吾王"],
       raceId: originalRace.body.data.id,
       organizationIds: [organization.body.data.id],
@@ -314,27 +409,34 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       currentState: { location: "地球" },
       lockedFields: ["raceId", "location"]
     }).expect(201);
-    expect(created.body.data.versionNo).toBe(1);
+    expect(created.body.data).toMatchObject({ code: "MON-001", versionNo: 1 });
+
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "超长编号角色",
+      code: "A".repeat(201)
+    }).expect(400);
 
     const updated = await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({
       name: "燃烧哥斯拉",
+      code: "MON-002",
       raceId: evolvedRace.body.data.id,
       organizationIds: [],
       profile: { summary: "能量过载形态", sections: [{ title: "形态", content: "红莲状态" }] },
       changeNote: "补充红莲形态"
     }).expect(200);
-    expect(updated.body.data.versionNo).toBe(2);
+    expect(updated.body.data).toMatchObject({ code: "MON-002", versionNo: 2 });
 
     await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ raceId: evolvedRace.body.data.id }).expect(200);
     const versions = await request(runtime.app).get(`/api/characters/${created.body.data.id}/versions`).expect(200);
     expect(versions.body.data).toHaveLength(2);
     expect(versions.body.data[0]).toMatchObject({ versionNo: 2, source: "manual", changeNote: "补充红莲形态" });
-    expect(versions.body.data[0].snapshot).toMatchObject({ name: "燃烧哥斯拉", raceId: evolvedRace.body.data.id, species: "进化泰坦", organizationIds: [] });
-    expect(versions.body.data[1].snapshot).toMatchObject({ name: "哥斯拉", raceId: originalRace.body.data.id, species: "原生泰坦", organizationIds: [organization.body.data.id] });
+    expect(versions.body.data[0].snapshot).toMatchObject({ name: "燃烧哥斯拉", code: "MON-002", raceId: evolvedRace.body.data.id, species: "进化泰坦", organizationIds: [] });
+    expect(versions.body.data[1].snapshot).toMatchObject({ name: "哥斯拉", code: "MON-001", raceId: originalRace.body.data.id, species: "原生泰坦", organizationIds: [organization.body.data.id] });
 
     const restored = await request(runtime.app).post(`/api/characters/${created.body.data.id}/restore`).send({ versionNo: 1 }).expect(200);
     expect(restored.body.data).toMatchObject({
       name: "哥斯拉",
+      code: "MON-001",
       raceId: originalRace.body.data.id,
       species: "原生泰坦",
       organizationIds: [organization.body.data.id],
@@ -348,6 +450,20 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(afterRaceRename.body.data).toMatchObject({ raceId: originalRace.body.data.id, species: "原初泰坦", versionNo: 4 });
     const versionsAfterRaceRename = await request(runtime.app).get(`/api/characters/${created.body.data.id}/versions`).expect(200);
     expect(versionsAfterRaceRename.body.data[0]).toMatchObject({ versionNo: 4, source: "race", changeNote: "种族更名为“原初泰坦”" });
+  });
+
+  it("回滚升级前人物版本时清空快照中缺失的编号", async () => {
+    const { workId } = await seedWork(runtime);
+    const created = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "旧档案角色" }).expect(201);
+    const version = runtime.database.get("SELECT id, snapshot_json FROM character_versions WHERE character_id = ? AND version_no = 1", created.body.data.id);
+    const snapshot = JSON.parse(String(version?.snapshot_json)) as Record<string, unknown>;
+    delete snapshot.code;
+    runtime.database.run("UPDATE character_versions SET snapshot_json = ? WHERE id = ?", JSON.stringify(snapshot), String(version?.id));
+
+    const updated = await request(runtime.app).patch(`/api/characters/${created.body.data.id}`).send({ code: "EMP-099" }).expect(200);
+    expect(updated.body.data.code).toBe("EMP-099");
+    const restored = await request(runtime.app).post(`/api/characters/${created.body.data.id}/restore`).send({ versionNo: 1 }).expect(200);
+    expect(restored.body.data.code).toBe("");
   });
 
   it("支持原子导入新建、上传替换和删除书籍封面", async () => {

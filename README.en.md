@@ -223,6 +223,8 @@ Read the [contribution guide](docs/CONTRIBUTING.md) before submitting code or do
 
 ## 🌟 Special Thanks
 
+Thanks to the open-source [Vditor](https://github.com/Vanessa219/vditor) project for providing the Markdown editor, instant rendering, and split preview capabilities used by Scriverse.
+
 <p align="center">
   <a href="https://linux.do">
     <img src="showcase/public/linuxdo.png" alt="LINUX DO" width="420" />
