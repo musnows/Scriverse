@@ -106,6 +106,59 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
   });
 
+  it("Gemini endpoint 或模型名命中时不发送 thinking 字段", async () => {
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { model?: string; stream?: boolean; thinking?: unknown };
+      expect(body).not.toHaveProperty("thinking");
+      if (body.stream) {
+        return new Response("data: {\"choices\":[{\"delta\":{\"content\":\"Gemini\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "Gemini" } }] }), { status: 200 });
+    });
+
+    const endpointProvider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Gemini endpoint 测试",
+      baseUrl: "https://gemini-compatible.test/v1",
+      apiKey: "sk-gemini-endpoint-test",
+      status: "enabled"
+    }).expect(201);
+    const endpointModel = await request(runtime.app).post(`/api/providers/${endpointProvider.body.data.id}/models`).send({
+      displayName: "兼容模型",
+      modelId: "mock-model"
+    }).expect(201);
+    await request(runtime.app).post(`/api/providers/${endpointProvider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "测试 Gemini endpoint 参数",
+      scope: { type: "chapter", chapterId },
+      modelId: endpointModel.body.data.id
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    const modelProvider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Gemini model 测试",
+      baseUrl: "https://generic-ai.test/v1",
+      apiKey: "sk-gemini-model-test",
+      status: "enabled"
+    }).expect(201);
+    const model = await request(runtime.app).post(`/api/providers/${modelProvider.body.data.id}/models`).send({
+      displayName: "Gemini 模型",
+      modelId: "gemini-2.5-flash"
+    }).expect(201);
+    await request(runtime.app).post(`/api/providers/${modelProvider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "测试 Gemini model 参数",
+      scope: { type: "chapter", chapterId },
+      modelId: model.body.data.id
+    }).expect(201);
+  });
+
   it("平台供应商可被多本书复用，并在内置提示词后追加平台和书籍提示词", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

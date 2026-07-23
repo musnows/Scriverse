@@ -138,6 +138,18 @@ type CharacterVerificationDecision = {
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+function isGeminiProviderOrModel(provider: Row, model: Row): boolean {
+  const endpoint = stringValue(provider, "base_url").toLowerCase();
+  const modelId = stringValue(model, "model_id").toLowerCase();
+  return endpoint.includes("gemini") || endpoint.includes("generativelanguage.googleapis.com") || modelId.includes("gemini");
+}
+
+function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
+  if (isGeminiProviderOrModel(provider, model)) return {};
+  return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
+}
+
 const AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "query_story_knowledge", "read_character_sections"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type CompletionToolCall = { id: string; type: "function"; function: { name: string; arguments: unknown } };
@@ -1998,7 +2010,7 @@ export class AiManager {
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(model, messages, {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
-      thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" }
+      ...thinkingParameters(provider, model)
     });
     const callId = id("call");
     const timestamp = now();
@@ -2218,7 +2230,7 @@ export class AiManager {
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(model, messages, {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
-      thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" }
+      ...thinkingParameters(provider, model)
     });
     const callId = id("call");
     this.store.db.run(
