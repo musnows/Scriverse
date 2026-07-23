@@ -195,6 +195,7 @@ export class Database {
         id TEXT PRIMARY KEY,
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
+        code TEXT NOT NULL DEFAULT '',
         aliases_json TEXT NOT NULL DEFAULT '[]',
         species TEXT NOT NULL DEFAULT '',
         race_id TEXT REFERENCES races(id) ON DELETE SET NULL,
@@ -1556,6 +1557,21 @@ export class Database {
         }
         this.run("CREATE INDEX IF NOT EXISTS idx_tasks_work_created ON analysis_tasks(work_id, created_at DESC, id DESC)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(37)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("code")) {
+          this.run("ALTER TABLE characters ADD COLUMN code TEXT NOT NULL DEFAULT ''");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (37, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

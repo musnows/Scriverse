@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260723-open-prs-6">
+    <link rel="stylesheet" href="/styles.css?v=20260724-whitespace-access">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -75,7 +75,7 @@
             <button id="account-settings-button" type="button" role="menuitem">账户设置</button>
             <button id="logout-button" type="button" role="menuitem">退出登录</button>
           </div>
-          <button id="top-search-button" class="topbar-icon-button" type="button" aria-label="全文检索" title="全文检索" disabled>
+          <button id="top-search-button" class="topbar-icon-button" type="button" aria-label="全文检索" title="全文检索（Command/Ctrl+F）" disabled>
             <svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16.2 16.2 4.3 4.3"/></svg>
           </button>
           <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换到黑夜模式" title="切换到黑夜模式" aria-pressed="false">
@@ -180,7 +180,6 @@
               <button id="insight-button" class="ghost-button" type="button">章节概览</button>
               <button id="versions-button" class="ghost-button" type="button">版本</button>
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
-              <button id="toggle-whitespace-button" class="ghost-button" type="button" aria-pressed="true" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">隐藏空白符</button>
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
           </div>
@@ -202,7 +201,9 @@
               <h1 id="module-title">模块</h1>
               <p id="module-description"></p>
             </div>
-            <button id="module-create-button" class="primary-button" type="button">新建</button>
+            <div id="module-header-actions" class="module-header-actions">
+              <button id="module-create-button" class="primary-button" type="button">新建</button>
+            </div>
           </div>
           <div id="module-content" class="module-content"></div>
         </section>
@@ -364,6 +365,10 @@
           <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
         </header>
         <div class="setting-editor-workspace">
+          <section id="setting-editor-management" class="entity-editor-management hidden" aria-label="设定档案操作">
+            <div><strong>档案操作</strong><small>版本历史和高风险操作集中在编辑面板内。</small></div>
+            <div class="entity-editor-management-actions"><button id="setting-editor-confirm" class="ghost-button hidden" type="button">确认候选</button><button id="setting-editor-deprecate" class="ghost-button hidden" type="button">弃用</button><button id="setting-editor-history" class="ghost-button" type="button">版本历史</button><button id="setting-editor-delete" class="danger-button" type="button">删除设定</button></div>
+          </section>
           <main class="setting-editor-content">
             <div class="setting-markdown-field" data-vditor-editor-field>
               <div id="setting-editor-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
@@ -382,6 +387,8 @@
           </div>
           <div class="character-editor-header-actions">
             <button id="character-history-button" class="ghost-button" type="button" aria-controls="character-history-panel" aria-expanded="false">版本历史</button>
+            <button id="character-merge-button" class="ghost-button hidden" type="button">合并角色</button>
+            <button id="character-delete-button" class="danger-button hidden" type="button">删除角色</button>
           </div>
         </header>
         <div class="character-editor-workspace">
@@ -411,7 +418,12 @@
             <span id="knowledge-editor-eyebrow" class="eyebrow">世界档案</span>
             <div class="character-editor-title-row"><h1 id="knowledge-editor-title">新建档案</h1><span id="knowledge-editor-version" class="character-version-badge">新档案</span></div>
           </div>
-          <div class="character-editor-header-actions"><span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span></div>
+          <div class="character-editor-header-actions">
+            <span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span>
+            <button id="knowledge-editor-history" class="ghost-button hidden" type="button">版本历史</button>
+            <button id="knowledge-editor-merge" class="ghost-button hidden" type="button">合并档案</button>
+            <button id="knowledge-editor-delete" class="danger-button hidden" type="button">删除档案</button>
+          </div>
         </header>
         <div class="character-editor-workspace knowledge-editor-workspace">
           <nav id="knowledge-editor-nav" class="character-editor-nav" role="tablist" aria-label="世界档案编辑分区"></nav>
@@ -488,6 +500,10 @@
               <option value="relaxed">宽松</option>
             </select>
           </label>
+          <section class="work-access-field appearance-whitespace-field" aria-labelledby="appearance-whitespace-title">
+            <div><strong id="appearance-whitespace-title">正文空白符</strong><small>即时显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
+            <button id="toggle-whitespace-appearance" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="true">隐藏空白符</button>
+          </section>
           <div id="font-preview" class="font-preview" aria-live="polite">
             <strong>字体预览 Typography 0123</strong>
             <span>中文默认使用黑体，English letters always use monospace.</span>
@@ -654,6 +670,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260723-character-save-hint"></script>
+    <script type="module" src="/app.js?v=20260724-whitespace-access"></script>
   </body>
 </html>

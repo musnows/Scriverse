@@ -137,6 +137,7 @@ const settingSchema = z.object({
 
 const characterSchema = z.object({
   name: nonEmpty.max(200),
+  code: z.string().trim().max(200).optional(),
   aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   raceId: identifier.nullable().optional(),
   organizationIds: z.array(identifier).max(100).optional(),

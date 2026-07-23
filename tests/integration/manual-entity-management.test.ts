@@ -19,6 +19,7 @@ describe("组织、角色与种族人工管理", () => {
     }).expect(201);
     const source = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "林船长",
+      code: "EMP-042",
       aliases: ["阿舟"],
       profile: { summary: "林舟的另一份档案" }
     }).expect(201);
@@ -45,7 +46,7 @@ describe("组织、角色与种族人工管理", () => {
       expectedSourceVersionNo: source.body.data.versionNo
     }).expect(200);
     expect(merged.body.data).toMatchObject({
-      target: { id: target.body.data.id },
+      target: { id: target.body.data.id, code: "EMP-042" },
       source: { id: source.body.data.id, mergedIntoCharacterId: target.body.data.id },
       review: null
     });
