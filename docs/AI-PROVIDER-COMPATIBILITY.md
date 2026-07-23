@@ -18,9 +18,9 @@
 
 | 供应商 | Chat Completions 基础地址 | 模型标识符 | 验证内容 |
 | --- | --- | --- | --- |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro`、`deepseek-v4-flash` | v4-pro 已验证普通请求、Thinking、SSE 流式、工具调用和工具结果回传；两个模型均在官方模型列表可用 |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro`、`deepseek-v4-flash` | 支持普通请求、Thinking、SSE 流式和工具调用 |
 | SiliconFlow | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-8B` | 普通请求、Thinking、SSE 流式、工具调用和项目自身调用链 |
-| LongCat | `https://api.longcat.chat/openai/v1` | `LongCat-2.0` | 主目录数据库真实 E2E 配置，连接测试成功并启用 |
+| LongCat | `https://api.longcat.chat/openai/v1` | `LongCat-2.0` | OpenAI Chat Completions、Thinking 和 SSE 流式 |
 
 ### DeepSeek
 
@@ -35,7 +35,7 @@ Chat Completions 基础地址：https://api.deepseek.com
 Thinking：开启
 ```
 
-不要把 Claude Code 配置中的以下值直接填写到本项目：
+不要把其他客户端的以下协议地址或模型标记直接填写到本项目：
 
 ```text
 https://api.deepseek.com/anthropic
@@ -65,16 +65,16 @@ Thinking：按需要开启
 
 ### LongCat
 
-主目录数据库中当前实际可用的配置是：
+推荐填写：
 
 ```text
-显示名称：LongCat 真实 E2E
+显示名称：LongCat
 Chat Completions 基础地址：https://api.longcat.chat/openai/v1
 模型标识符：LongCat-2.0
 Thinking：开启
 ```
 
-本项目应填写 LongCat 的 OpenAI 兼容入口 `https://api.longcat.chat/openai/v1`。不要填写 Claude Code 配置中的 Anthropic 地址 `https://api.longcat.chat/anthropic`；该地址对应另一套消息协议。本项目主目录数据库的供应商连接状态为 `success`，模型已启用。
+本项目应填写 LongCat 的 OpenAI 兼容入口 `https://api.longcat.chat/openai/v1`。不要填写 `https://api.longcat.chat/anthropic`；该地址对应另一套消息协议。
 
 官方资料：[API 概述](https://longcat.chat/platform/docs/APIDocs.html)、[Chat Completions](https://longcat.chat/platform/docs/api/chat.html)、[中文快速开始](https://longcat.chat/platform/docs/zh/)。
 
@@ -89,7 +89,7 @@ Chat Completions 基础地址：https://generativelanguage.googleapis.com/v1beta
 
 Gemini 不接受本项目原先通用发送的 `thinking` 字段。本项目现在会在供应商地址包含 `gemini` 或 `generativelanguage.googleapis.com`，或者模型标识符包含 `gemini` 时，自动省略该字段。Gemini 的 Thinking 参数应使用其官方支持的 `reasoning_effort` 或 Google 专用 `thinking_config`。
 
-本项目目前只对 Gemini 的错误字段规避做了代码级验证，未使用真实 Gemini API key 完成在线联调。
+本项目目前只省略 Gemini 不支持的 `thinking` 字段，Gemini 专用 Thinking 参数仍需按官方接口单独配置。
 
 官方资料：[Gemini OpenAI 兼容性](https://ai.google.dev/gemini-api/docs/openai)。
 
