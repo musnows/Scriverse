@@ -30,7 +30,7 @@ export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = 
   organizations: "组织",
   timeline: "时间轴",
   relationships: "关系",
-  outlines: "大纲与伏笔",
+  outlines: "大纲/伏笔",
   reviews: "审核",
   "ai-chat": "AI 对话",
   "ai-analysis": "AI 分析",

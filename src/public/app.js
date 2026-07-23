@@ -19,7 +19,7 @@ import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelatio
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260723-ai-analysis-permission";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260724-outline-title";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout, moduleLayoutLabel } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 
@@ -235,7 +235,7 @@ const workspaceOnboardingSteps = [
   { selector: "[data-new-chapter-volume]", eyebrow: "正文结构", title: "新建章节", description: "使用分卷和章节组织长篇正文，章节会自动保存并保留版本。", placement: "right" },
   { selector: "#versions-button", eyebrow: "版本安全", title: "查看章节版本", description: "每次保存都会生成可恢复版本，误改内容时可以随时回溯。", placement: "bottom" },
   { selector: "[data-module=\"characters\"]", eyebrow: "作品知识", title: "维护角色与世界资料", description: "角色、种族、组织、设定和时间线共同构成 AI 可引用的作品知识。", placement: "right" },
-  { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲与伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
+  { selector: "[data-module=\"outlines\"]", eyebrow: "创作规划", title: "跟踪大纲/伏笔", description: "记录剧情目标、冲突、转折和伏笔回收，避免长线遗漏。", placement: "right" },
   { selector: "[data-module=\"tasks\"]", eyebrow: "AI 分析中心", title: "从这里理解整部小说", description: "运行人物、关系、世界观、设定、事件和一致性分析，并查看每次分析的结果与进度。", placement: "right" },
   { selector: "#top-search-button", eyebrow: "全文检索", title: "搜索整部作品", description: "一次检索正文、角色、设定、种族与组织，快速定位创作依据。", placement: "bottom" },
   { selector: ".quick-actions button[data-task=\"continue\"]", eyebrow: "AI 快捷指令", title: "让创作助手基于正文工作", description: "总结、续写、剧情方向和冲突检查都以已保存内容为依据。", placement: "left" },
@@ -2581,7 +2581,7 @@ const moduleMeta = {
   races: ["物种档案", "种族与共同设定", "先维护种族档案，再由角色选择引用；角色不能临时填写种族。", "新建种族"],
   organizations: ["世界阵营", "组织与成员", "维护组织简介、设定清单，并将角色绑定到所属组织。", "新建组织"],
   timeline: ["剧情脉络", "大事件时间轴", "候选事件经作者确认后，才进入正式时间线。", "新建事件"],
-  outlines: ["创作规划", "大纲与伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
+  outlines: ["创作规划", "大纲/伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
@@ -3102,8 +3102,6 @@ async function renderOutlines() {
   const layout = readModuleLayout();
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
-  const navButton = $("#module-nav [data-module=outlines] .nav-label");
-  if (navButton) navButton.textContent = unresolved.length ? `大纲与伏笔 · ${unresolved.length}` : "大纲与伏笔";
   const foreshadowActions = (item) => `<button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
   const foreshadowCards = () => `<div class="card-grid foreshadow-grid">${foreshadows.map((item) => `
     <article class="record-card foreshadow-card ${item.overdue ? "is-overdue" : ""}">
