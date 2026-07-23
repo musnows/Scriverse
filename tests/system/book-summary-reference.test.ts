@@ -37,7 +37,7 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain("if (includeBookSummary) scope.includeBookSummary = true;");
     expect(application.text).toContain('body.append("expectedVersionNo", String(state.work.versionNo));');
     expect(styles.text).not.toContain(".ai-book-summary-reference");
-    expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input { min-height: 40px;");
+    expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
     expect(styles.text).toContain(".ai-agent-tools { display: grid; gap: 8px; }");
     expect(styles.text).toContain(".card-actions .primary-button { border-color: var(--accent);");
   });
