@@ -263,7 +263,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260724-relationship-evidence-count');
-    expect(page.text).toContain('/styles.css?v=20260724-relationship-table-cell');
+    expect(page.text).toContain('/styles.css?v=20260724-ai-nav-color');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
@@ -432,6 +432,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('openDialog("开始 AI 分析"');
     expect(application.text).toContain('selector: "[data-module=\\"tasks\\"]"');
     expect(styles.text).toContain(".module-nav .ai-analysis-entry");
+    expect(styles.text).toContain(".module-nav .ai-analysis-entry,\n.module-nav .ai-analysis-entry:hover,\n.module-nav .ai-analysis-entry.active { background: transparent;");
     expect(page.text).toContain('data-testid="relationship-fullscreen"');
     expect(page.text).toContain('data-testid="relationship-map-expanded"');
     expect(page.text).toContain('class="relationship-map-floating-close"');
