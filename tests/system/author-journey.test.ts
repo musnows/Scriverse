@@ -199,6 +199,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openCharacterEditor(item = null)");
     expect(application.text).toContain("function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions)");
     expect(application.text).toContain("async function openKnowledgeEditor(kind, item)");
+    expect(application.text.match(/if \(!\(await closeEntityEditor\(\)\)\) return;/gu)).toHaveLength(2);
     expect(application.text).toContain("async function openOrganizationDialog(item)");
     expect(application.text).toContain("function renderCharacterEditorRelationships()");
     expect(application.text).toContain('class="character-aliases"');

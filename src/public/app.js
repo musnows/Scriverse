@@ -4089,8 +4089,9 @@ function openSettingEditor(item = null) {
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
   $("#setting-editor-confirm").classList.toggle("hidden", item?.status !== "pending");
   $("#setting-editor-deprecate").classList.toggle("hidden", item?.status !== "pending");
-  $("#setting-editor-history").onclick = () => {
+  $("#setting-editor-history").onclick = async () => {
     if (!item) return;
+    if (!(await closeEntityEditor())) return;
     openEntityHistory("setting", item.id, item.title, async () => { await renderSettings(); await loadAiReferences(); });
   };
   $("#setting-editor-delete").onclick = () => {
@@ -5002,8 +5003,9 @@ async function openKnowledgeEditor(kind, item) {
   historyButton.classList.toggle("hidden", !item);
   mergeButton.classList.toggle("hidden", !item || !canEditModule(module) || candidates.length < 2);
   deleteButton.classList.toggle("hidden", !item || !canEditModule(module));
-  historyButton.onclick = () => {
+  historyButton.onclick = async () => {
     if (!item) return;
+    if (!(await closeEntityEditor())) return;
     openEntityHistory(kind, item.id, item.name, async () => { await refresh(); await loadAiReferences(); });
   };
   mergeButton.onclick = async () => {
