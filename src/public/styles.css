@@ -803,7 +803,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-add-button { flex: none; }
 .volume-chapters { display: block; }
 .volume-node.is-collapsed .volume-chapters { display: none; }
-.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: 100%; padding: 9px 10px 9px 20px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }
+.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: 100%; padding: 9px 0 9px 20px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }
 .chapter-node:hover, .chapter-node.active { background: var(--row-active); }
 .chapter-node.active { color: var(--accent-dark); font-weight: 700; }
 .chapter-node > span:first-child { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; white-space: normal; }
