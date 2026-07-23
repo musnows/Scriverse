@@ -12,6 +12,16 @@ afterEach(() => {
 });
 
 describe("Docker 依赖清单规范化", () => {
+  it("保留 Linux ARM64 干净安装所需的跨平台可选依赖", () => {
+    const lock = JSON.parse(readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8")) as {
+      packages: Record<string, { version?: string; dependencies?: Record<string, string> }>;
+    };
+
+    expect(lock.packages["node_modules/@img/sharp-wasm32"]?.dependencies).toHaveProperty("@emnapi/runtime");
+    expect(lock.packages["node_modules/@emnapi/runtime"]?.version).toBe("1.11.2");
+    expect(lock.packages["node_modules/@emnapi/core"]?.version).toBe("1.11.2");
+  });
+
   it("只移除会随发版变化的根包版本并固定文件时间", () => {
     const directory = mkdtempSync(join(tmpdir(), "scriverse-docker-manifests-"));
     temporaryDirectories.push(directory);
