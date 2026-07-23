@@ -21,6 +21,7 @@
 | DeepSeek | `https://api.deepseek.com` | `deepseek-v4-pro`、`deepseek-v4-flash` | 支持普通请求、Thinking、SSE 流式和工具调用 |
 | SiliconFlow | `https://api.siliconflow.cn/v1` | `Qwen/Qwen3-8B` | 普通请求、Thinking、SSE 流式、工具调用和项目自身调用链 |
 | LongCat | `https://api.longcat.chat/openai/v1` | `LongCat-2.0` | OpenAI Chat Completions、Thinking 和 SSE 流式 |
+| Kimi Coding | `https://api.kimi.com/coding/v1` | `kimi-for-coding`、`kimi-for-coding-highspeed` | 普通请求、Thinking、SSE 流式和工具调用；默认温度为 1 |
 
 ### DeepSeek
 
@@ -77,6 +78,24 @@ Thinking：开启
 本项目应填写 LongCat 的 OpenAI 兼容入口 `https://api.longcat.chat/openai/v1`。不要填写 `https://api.longcat.chat/anthropic`；该地址对应另一套消息协议。
 
 官方资料：[API 概述](https://longcat.chat/platform/docs/APIDocs.html)、[Chat Completions](https://longcat.chat/platform/docs/api/chat.html)、[中文快速开始](https://longcat.chat/platform/docs/zh/)。
+
+### Kimi Coding
+
+推荐填写：
+
+```text
+显示名称：Kimi Coding
+Chat Completions 基础地址：https://api.kimi.com/coding/v1
+模型标识符：kimi-for-coding
+模型上下文总量：按 Kimi 官方模型信息填写
+默认 max_tokens：建议从 8192 或更低开始
+默认温度：1
+Thinking：开启
+```
+
+本项目会在模型标识符包含 `kimi` 且未填写有效温度时默认填入 `1`，并在前端显示提示。温度仍可手动修改；Kimi Coding 接口对不支持的温度值会返回参数错误。
+
+官方资料：[Kimi Code 第三方 Agent 配置](https://www.kimi.com/help/kimi-code/third-party-agents)、[Kimi OpenAI 兼容接口](https://platform.kimi.com/docs/guide/migrating-from-openai-to-kimi)。
 
 ### Gemini OpenAI 兼容接口
 

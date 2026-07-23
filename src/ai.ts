@@ -145,6 +145,10 @@ function isGeminiProviderOrModel(provider: Row, model: Row): boolean {
   return endpoint.includes("gemini") || endpoint.includes("generativelanguage.googleapis.com") || modelId.includes("gemini");
 }
 
+function isKimiModelId(modelId: string): boolean {
+  return modelId.toLowerCase().includes("kimi");
+}
+
 function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
   if (isGeminiProviderOrModel(provider, model)) return {};
   return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
@@ -363,11 +367,15 @@ export function resolveOutputTokens(usage: unknown, content: string): number {
   return estimateAiTokens(content);
 }
 
-function normalizeModelPreset(input: Record<string, unknown>): Record<string, unknown> {
+function normalizeModelPreset(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
   const maxTokens = typeof input.max_tokens === "number" && Number.isFinite(input.max_tokens)
     ? Math.round(clamp(input.max_tokens, 1, 32_768))
     : DEFAULT_MAX_TOKENS;
-  return { ...input, max_tokens: maxTokens };
+  const temperature = input.temperature;
+  const defaultTemperature = isKimiModelId(modelId) && !(typeof temperature === "number" && Number.isFinite(temperature))
+    ? { temperature: 1 }
+    : {};
+  return { ...input, ...defaultTemperature, max_tokens: maxTokens };
 }
 
 function stringValue(row: Row, key: string): string {
@@ -1163,7 +1171,7 @@ export class AiManager {
       input.contextNote ?? "",
       input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
       input.outputNote ?? "",
-      JSON.stringify(normalizeModelPreset(input.preset ?? {})),
+      JSON.stringify(normalizeModelPreset(input.preset ?? {}, input.modelId)),
       (input.thinkingEnabled ?? true) ? 1 : 0,
       (input.enabled ?? true) ? 1 : 0,
       input.note ?? "",
@@ -1220,12 +1228,13 @@ export class AiManager {
 
   updateModel(modelId: string, input: Partial<ModelInput>): Record<string, unknown> {
     const row = this.getModelRow(modelId);
-    const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")));
+    const nextModelId = input.modelId ?? stringValue(row, "model_id");
+    const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")), nextModelId);
     this.store.db.run(
       `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
        preset_json = ?, thinking_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.displayName ?? stringValue(row, "display_name"),
-      input.modelId ?? stringValue(row, "model_id"),
+      nextModelId,
       JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
       input.contextNote ?? stringValue(row, "context_note"),
       input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
@@ -2009,7 +2018,7 @@ export class AiManager {
     const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     });
     const callId = id("call");
@@ -2229,7 +2238,7 @@ export class AiManager {
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }),
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     });
     const callId = id("call");
@@ -4284,13 +4293,14 @@ export class AiManager {
     if (!boolValue(model, "enabled")) throw new AppError(409, "MODEL_DISABLED", "模型已停用，不能创建新任务");
   }
 
-  private sanitizeParameters(input: Record<string, unknown>): Record<string, unknown> {
+  private sanitizeParameters(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
     const output: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
       if (!allowedParameters.has(key)) continue;
       if (typeof value === "number" && Number.isFinite(value)) output[key] = value;
     }
     if (typeof output.temperature === "number") output.temperature = clamp(output.temperature, 0, 2);
+    if (isKimiModelId(modelId) && typeof output.temperature !== "number") output.temperature = 1;
     if (typeof output.top_p === "number") output.top_p = clamp(output.top_p, 0, 1);
     output.max_tokens = typeof output.max_tokens === "number"
       ? Math.round(clamp(output.max_tokens, 1, 32_768))
@@ -4353,7 +4363,7 @@ export class AiManager {
       contextNote: stringValue(row, "context_note"),
       contextWindow: numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW,
       outputNote: stringValue(row, "output_note"),
-      preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json"))),
+      preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json")), stringValue(row, "model_id")),
       thinkingEnabled: boolValue(row, "thinking_enabled"),
       enabled: boolValue(row, "enabled"),
       note: stringValue(row, "note"),

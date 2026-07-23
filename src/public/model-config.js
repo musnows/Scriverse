@@ -21,13 +21,21 @@ export function normalizeModelPurposes(purposes) {
   return [...new Set(values.map((value) => purposeAliases.get(String(value).trim())).filter(Boolean))];
 }
 
+export function isKimiModelId(modelId) {
+  return String(modelId ?? "").toLowerCase().includes("kimi");
+}
+
 export function modelFormValues(model = null) {
+  const modelId = String(model?.modelId ?? "");
+  const configuredTemperature = model?.preset?.temperature;
   return {
     displayName: model?.displayName ?? "",
-    modelId: model?.modelId ?? "",
+    modelId,
     purposes: model ? normalizeModelPurposes(model.purposes) : ["chat", "continue"],
     contextWindow: model?.contextWindow ?? 128000,
-    temperature: model?.preset?.temperature ?? 0.7,
+    temperature: isKimiModelId(modelId) && !(typeof configuredTemperature === "number" && Number.isFinite(configuredTemperature))
+      ? 1
+      : (configuredTemperature ?? 0.7),
     maxTokens: model?.preset?.max_tokens ?? 32000,
     thinkingEnabled: model?.thinkingEnabled ?? true,
     enabled: model?.enabled ?? true
@@ -35,9 +43,10 @@ export function modelFormValues(model = null) {
 }
 
 export function modelPayload(values, existingPreset = {}) {
+  const modelId = String(values.modelId);
   return {
     displayName: String(values.displayName),
-    modelId: String(values.modelId),
+    modelId,
     purposes: normalizeModelPurposes(values.purposes),
     contextWindow: Number(values.contextWindow),
     preset: {

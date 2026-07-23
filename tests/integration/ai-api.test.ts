@@ -106,6 +106,41 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
   });
 
+  it("Kimi 模型默认温度为 1 并保留用户手动设置", async () => {
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Kimi 测试供应商",
+      baseUrl: "https://api.kimi.com/coding/v1",
+      apiKey: "sk-kimi-test-value",
+      status: "enabled"
+    }).expect(201);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "Kimi Coding",
+      modelId: "kimi-for-coding"
+    }).expect(201);
+    expect(model.body.data.preset.temperature).toBe(1);
+
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "使用 Kimi 默认温度",
+      scope: { type: "chapter", chapterId },
+      modelId: model.body.data.id
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "使用 Kimi 自定义温度",
+      scope: { type: "chapter", chapterId },
+      modelId: model.body.data.id,
+      parameters: { temperature: 0.2 }
+    }).expect(201);
+
+    const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
+    const temperatures: number[] = calls.body.data
+      .filter((call: { model: { id: string }; taskType: string }) => call.model.id === model.body.data.id && call.taskType === "chat")
+      .map((call: { parameters: { temperature?: number } }) => Number(call.parameters.temperature));
+    expect(temperatures.sort((left, right) => left - right)).toEqual([0.2, 1]);
+  });
+
   it("Gemini endpoint 或模型名命中时不发送 thinking 字段", async () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     fetchMock.mockImplementation(async (input, init) => {
