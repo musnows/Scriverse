@@ -246,8 +246,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260723-open-prs-5');
-    expect(page.text).toContain('/styles.css?v=20260723-open-prs-4');
+    expect(page.text).toContain('/app.js?v=20260723-open-prs-6');
+    expect(page.text).toContain('/styles.css?v=20260723-open-prs-6');
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
@@ -469,6 +469,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("maxTokens", "最大输出 Token 数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('field("contextWindow", "模型上下文总量（Token）", "number", values.contextWindow)');
+    expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
     expect(application.text).toContain('field("thinkingEnabled", "开启 Thinking（供应商需支持 thinking 参数）", "checkbox", values.thinkingEnabled)');
     expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
     expect(modelConfig.text).toContain("thinkingEnabled: model?.thinkingEnabled ?? true");

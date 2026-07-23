@@ -12,6 +12,7 @@ export type ModelFormValues = {
 };
 
 export function normalizeModelPurposes(purposes: unknown): string[];
+export function isKimiModelId(modelId: unknown): boolean;
 export function modelFormValues(model?: Record<string, unknown> | null): ModelFormValues;
 export function modelPayload(values: ModelFormValues, existingPreset?: Record<string, unknown>): Record<string, unknown> & { thinkingEnabled: boolean };
 export function modelOptionLabel(model: Record<string, unknown> | null | undefined): string;
