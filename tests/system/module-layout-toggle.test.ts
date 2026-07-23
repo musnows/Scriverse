@@ -23,8 +23,8 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260723-entity-action-safety');
-    expect(page.text).toContain('/app.js?v=20260723-entity-action-safety');
+    expect(page.text).toContain('/styles.css?v=20260724-timeline-header-actions');
+    expect(page.text).toContain('/app.js?v=20260724-timeline-header-actions');
 
     expect(layoutModule.text).toContain('export const MODULE_LAYOUTS = ["cards", "rows"]');
     expect(application.text).toContain('/module-layout.js?v=20260723-module-layout-toggle');
@@ -38,10 +38,14 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('renderModuleLayoutToggle(layout, "组织列表样式")');
     expect(application.text).toContain('renderModuleLayoutToggle(layout, "伏笔列表样式")');
     expect(application.text).toContain('renderModuleLayoutToggle(layout, "审核列表样式")');
+    expect(page.text).toContain('id="module-header-actions"');
+    expect(application.text).toContain('$("#module-header-actions").insertAdjacentHTML');
+    expect(application.text).toContain('id="timeline-tools" class="timeline-tools"');
 
     expect(styles.text).toContain(".card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 13px; }");
     expect(styles.text).toContain(".settings-row-list, .module-row-list { display: grid; gap: 8px; }");
     expect(styles.text).toContain(".setting-row, .module-row {");
     expect(styles.text).toContain(".settings-layout-toggle, .module-layout-toggle");
+    expect(styles.text).toContain(".module-header-actions { display: flex;");
   });
 });
