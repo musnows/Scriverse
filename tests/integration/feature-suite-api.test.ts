@@ -201,6 +201,39 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     ]);
   });
 
+  it("允许旧版大体量种族和组织设定升级后继续保存", async () => {
+    const { workId } = await seedWork(runtime);
+    const legacySettings = Array.from({ length: 11 }, (_, index) => `## 旧设定 ${index + 1}\n\n${"旧".repeat(19_900)}`);
+    const legacyLength = legacySettings.reduce((total, item) => total + item.length, 0);
+    expect(legacyLength).toBeGreaterThan(200_000);
+
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "旧版大体量种族",
+      settings: legacySettings
+    }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "旧版大体量组织",
+      settings: legacySettings
+    }).expect(201);
+
+    const loadedRace = await request(runtime.app).get(`/api/races/${race.body.data.id}`).expect(200);
+    const updatedRace = await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({
+      name: "升级后的大体量种族",
+      settingsSections: loadedRace.body.data.settingsSections
+    }).expect(200);
+    expect(updatedRace.body.data.settings).toEqual(legacySettings);
+
+    const loadedOrganization = await request(runtime.app).get(`/api/organizations/${organization.body.data.id}`).expect(200);
+    const updatedOrganization = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      name: "升级后的大体量组织",
+      settingsSections: loadedOrganization.body.data.settingsSections.map((section: Record<string, unknown>, index: number) => (
+        index === 0 ? { ...section, summary: "升级后补充摘要" } : section
+      ))
+    }).expect(200);
+    expect(updatedOrganization.body.data.settings).toEqual(legacySettings);
+    expect(updatedOrganization.body.data.settingsSections[0].summary).toBe("升级后补充摘要");
+  });
+
   it("先维护种族主数据，再由人物引用并与组织保持独立", async () => {
     const { workId } = await seedWork(runtime);
     const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);

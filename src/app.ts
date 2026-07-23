@@ -44,6 +44,7 @@ const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
 const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const maximumImportedTextLength = 20_000_000;
+const maximumKnowledgeSectionsLength = 4_000_000;
 
 const captchaFields = {
   captchaId: z.string().trim().min(1).max(200),
@@ -231,7 +232,9 @@ const knowledgeSectionSchema = z.object({
 
 const knowledgeSectionsSchema = knowledgeSectionSchema.array().max(200).superRefine((sections, context) => {
   const totalLength = sections.reduce((total, section) => total + (section.contentMarkdown?.length ?? 0) + (section.summary?.length ?? 0), 0);
-  if (totalLength > 200_000) context.addIssue({ code: z.ZodIssueCode.custom, message: "Markdown 章节总长度不能超过 200000 个字符" });
+  if (totalLength > maximumKnowledgeSectionsLength) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Markdown 章节总长度不能超过 4000000 个字符" });
+  }
 });
 
 const organizationSchema = z.object({
