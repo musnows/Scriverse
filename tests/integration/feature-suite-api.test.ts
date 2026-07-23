@@ -529,6 +529,113 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect((byName.get("沈星") as { aliases: string[] }).aliases).toEqual(["沈博士"]);
   });
 
+  it("角色职称变体在落库前经 AI 确认同一人后合并", async () => {
+    let verificationCalls = 0;
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      const chapters = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)"[^>]*>/gu)];
+      if (prompt.includes("第二次身份确认")) {
+        verificationCalls += 1;
+        expect(prompt).toContain("candidate:0|candidate:1");
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify([{
+          pairKey: "candidate:0|candidate:1",
+          verdict: "same",
+          confidence: 0.96,
+          reason: "正文中的马克博士是马克的职称称呼，身份和行动连续。"
+        }])}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapter = chapters[0];
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { canonicalName: "马克", aliases: [], identity: "帝王组织研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克在实验室" } },
+        { canonicalName: "马克博士", aliases: [], identity: "帝王组织研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克博士说" } }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "马克在实验室记录数据。马克博士说：实验已经完成。"
+    }).expect(200);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 1,
+      candidateCount: 1,
+      verification: { pairCount: 1, confirmedSameCount: 1, confirmedSeparateCount: 0, unresolvedCount: 0 }
+    });
+    expect(verificationCalls).toBe(1);
+    const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(characters.body.data).toHaveLength(1);
+    expect(characters.body.data[0]).toMatchObject({ name: "马克", aliases: ["马克博士"] });
+  });
+
+  it("角色职称变体未通过二次确认时不落库", async () => {
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      if (prompt.includes("第二次身份确认")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify([{
+          pairKey: "candidate:0|candidate:1",
+          verdict: "uncertain",
+          confidence: 0.55,
+          reason: "原文不足以确认两种称呼是否属于同一人。"
+        }])}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapter = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)"[^>]*>/gu)][0];
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { canonicalName: "马克", aliases: [], identity: "研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克在实验室" } },
+        { canonicalName: "马克博士", aliases: [], identity: "研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克博士说" } }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "马克在实验室记录数据。马克博士说：实验已经完成。"
+    }).expect(200);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 0,
+      verification: { pairCount: 1, confirmedSameCount: 0, confirmedSeparateCount: 0, unresolvedCount: 1 }
+    });
+    expect(result.body.data.result.skipped[0].reason).toContain("二次确认未通过");
+    const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(characters.body.data).toEqual([]);
+  });
+
+  it("角色职称变体命中已有角色时经确认后只更新原档案", async () => {
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      if (prompt.includes("第二次身份确认")) {
+        const pairKey = prompt.match(/"pairKey":"([^"]+)"/u)?.[1] ?? "";
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify([{
+          pairKey,
+          verdict: "same",
+          confidence: 0.94,
+          reason: "带职称的称呼与已有角色的身份和原文证据一致。"
+        }])}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapter = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)"[^>]*>/gu)][0];
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { canonicalName: "马克博士", aliases: [], identity: "帝王组织研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克博士说" } }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const existing = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "马克" }).expect(201);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({ content: "马克博士说：实验已经完成。" }).expect(200);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({ savedCount: 1, verification: { pairCount: 1, confirmedSameCount: 1 } });
+    const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(characters.body.data).toHaveLength(1);
+    expect(characters.body.data[0]).toMatchObject({ id: existing.body.data.id, name: "马克", aliases: ["马克博士"] });
+  });
+
   it("取消运行中的分批任务后不会被后台结果改回完成状态", async () => {
     let requestStarted = false;
     fetchMock = vi.fn<typeof fetch>((_input, init) => new Promise<Response>((_resolve, reject) => {

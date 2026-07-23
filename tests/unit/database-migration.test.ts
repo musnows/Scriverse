@@ -93,6 +93,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(races)").some((index) => index.name === "idx_races_parent")).toBe(true);
     expect(first.all("PRAGMA table_info(races)").some((column) => column.name === "settings_sections_json")).toBe(true);
     expect(first.all("PRAGMA table_info(organizations)").some((column) => column.name === "settings_sections_json")).toBe(true);
+    expect(first.all("PRAGMA index_list(analysis_tasks)").some((index) => index.name === "idx_tasks_work_created")).toBe(true);
     expect(first.get("SELECT race_id FROM characters WHERE id = 'character-a'")?.race_id).toBe("race_migration_1");
     expect(first.get("SELECT race_id FROM characters WHERE id = 'character-b'")?.race_id).toBeNull();
     expect(first.all("SELECT character_id, version_no, source, change_note FROM character_versions ORDER BY character_id")).toEqual([

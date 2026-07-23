@@ -1554,6 +1554,7 @@ export class Database {
             this.run(`UPDATE ${table} SET settings_sections_json = ? WHERE id = ?`, JSON.stringify(sections), row.id);
           }
         }
+        this.run("CREATE INDEX IF NOT EXISTS idx_tasks_work_created ON analysis_tasks(work_id, created_at DESC, id DESC)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");

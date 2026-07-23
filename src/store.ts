@@ -5264,14 +5264,39 @@ export class Store {
 
   listTasks(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC", workId).map((row) => this.mapTask(row));
+    return this.db.all("SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC", workId).map((row) => this.mapTask(row));
   }
 
   listTasksPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`, workId, ...page.params);
     return paginated(rows.map((row) => this.mapTask(row)), pagination);
+  }
+
+  listTaskSummariesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT id, work_id, task_type, scope_json, status, progress, created_at, updated_at
+       FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`,
+      workId,
+      ...page.params
+    );
+    const chapterSummaries = new Map(this.db.all(
+      `SELECT chapter.id, chapter.title, volume.title AS volume_title
+       FROM chapters chapter JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ?`,
+      workId
+    ).map((row) => [
+      requiredString(row, "id"),
+      `${requiredString(row, "volume_title")} · ${requiredString(row, "title")}`
+    ] as const));
+    const volumeTitles = new Map(this.db.all(
+      "SELECT id, title FROM volumes WHERE work_id = ?",
+      workId
+    ).map((row) => [requiredString(row, "id"), requiredString(row, "title")] as const));
+    return paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles)), pagination);
   }
 
   getTask(taskId: string): Record<string, unknown> {
@@ -5384,6 +5409,31 @@ export class Store {
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  private mapTaskSummary(row: Row, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): Record<string, unknown> {
+    const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      taskType: requiredString(row, "task_type"),
+      scope,
+      scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles),
+      status: requiredString(row, "status"),
+      progress: numberValue(row, "progress"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private taskScopeSummaryFromMaps(scope: Record<string, unknown>, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): string {
+    if (typeof scope.chapterId === "string") return chapterSummaries.get(scope.chapterId) ?? "章节已删除";
+    if (scope.type === "volume" && typeof scope.volumeId === "string") {
+      const title = volumeTitles.get(scope.volumeId);
+      return title ? `分卷 · ${title}` : "分卷已删除";
+    }
+    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    return "未指定范围";
   }
 
   private taskScopeSummary(workId: string, scope: Record<string, unknown>): string {

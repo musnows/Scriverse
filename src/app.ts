@@ -90,7 +90,10 @@ const memberPermissionSchema = z.union([
   z.object({ role: memberRoleValueSchema }).strict()
 ]);
 const profileSchema = z.object({ displayName: z.string().trim().min(1).max(80) }).strict();
-const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema }).strict();
+const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), newPassword: passwordSchema, passwordConfirmation: passwordSchema }).strict().refine((input) => input.newPassword === input.passwordConfirmation, {
+  path: ["passwordConfirmation"],
+  message: "两次输入的密码不一致"
+});
 const changeNoteSchema = z.string().trim().max(500).optional();
 const expectedVersionNoSchema = z.coerce.number().int().positive().optional();
 
@@ -1249,7 +1252,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/tasks", (request, response) => {
     const pagination = parsePagination(request.query);
-    data(response, pagination ? store.listTasksPage(request.params.workId, pagination) : store.listTasks(request.params.workId));
+    const summary = request.query.view === "summary";
+    data(response, pagination
+      ? (summary ? store.listTaskSummariesPage(request.params.workId, pagination) : store.listTasksPage(request.params.workId, pagination))
+      : store.listTasks(request.params.workId));
   });
   app.post("/api/works/:workId/tasks", (request, response) => {
     const input = parse(z.object({ taskType: z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "relationship-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]), scope: jsonObject.optional() }), request.body);
