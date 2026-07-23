@@ -811,7 +811,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .record-card h3 { font-size: 16px; margin: 5px 0 10px; font-weight: 600; }
 .record-card p { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0; white-space: pre-wrap; }
 .record-card small { color: var(--accent); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
-.settings-layout-toolbar, .module-layout-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 14px; }
+.settings-layout-toolbar, .module-layout-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-bottom: 0; }
 .settings-layout-hint, .module-layout-hint { color: var(--muted); font-size: 10px; }
 .settings-layout-toggle, .module-layout-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--surface); }
 .settings-layout-toggle button, .module-layout-toggle button { min-height: 30px; padding: 0 12px; border: 0; border-right: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 11px; }

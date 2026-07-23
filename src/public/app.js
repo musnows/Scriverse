@@ -2605,7 +2605,7 @@ async function showModule(module) {
   $("#module-eyebrow").textContent = meta[0];
   $("#module-title").textContent = meta[1];
   $("#module-description").textContent = meta[2];
-  $("#timeline-tools")?.remove();
+  $("#module-header-actions").querySelectorAll("[data-module-header-action]").forEach((action) => action.remove());
   $("#module-create-button").textContent = meta[3];
   $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
@@ -2801,7 +2801,7 @@ function moduleRowPreview(text, max = 180) {
 }
 
 function renderModuleLayoutToggle(layout, ariaLabel = "列表样式") {
-  return `<div class="module-layout-toolbar">
+  return `<div class="module-layout-toolbar" data-module-header-action="layout-toggle">
     <div class="module-layout-toggle" role="group" aria-label="${esc(ariaLabel)}">
       <button type="button" data-module-layout="cards" aria-pressed="${layout === "cards"}">卡片</button>
       <button type="button" data-module-layout="rows" aria-pressed="${layout === "rows"}">列表</button>
@@ -2810,8 +2810,13 @@ function renderModuleLayoutToggle(layout, ariaLabel = "列表样式") {
   </div>`;
 }
 
+function mountModuleLayoutToggle(layout, ariaLabel) {
+  $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("beforeend", renderModuleLayoutToggle(layout, ariaLabel));
+}
+
 function bindModuleLayoutToggle(refresh) {
-  $("#module-content").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
+  $("#module-header-actions").querySelectorAll("[data-module-layout]").forEach((button) => button.addEventListener("click", async () => {
     saveModuleLayout(button.dataset.moduleLayout);
     await refresh();
   }));
@@ -2842,8 +2847,9 @@ async function renderSettings() {
   const records = (await apiPage(`/api/works/${state.work.id}/settings`)).items;
   state.settings = records;
   const layout = readModuleLayout();
+  if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
   $("#module-content").innerHTML = records.length
-    ? `${renderModuleLayoutToggle(layout, "设定列表样式")}${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
+    ? `${layout === "rows" ? renderSettingRows(records) : renderSettingCards(records)}`
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
   bindModuleLayoutToggle(renderSettings);
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
@@ -2890,8 +2896,9 @@ async function renderCharacters() {
     </article>`;
   }).join("")}</div>`;
   const auditPanel = canEditModule("tasks") ? `<section class="character-audit-panel"><div><strong>角色身份确认</strong><small>让 AI 查询角色档案并搜索正文，找出可能被误建成两个档案的同一角色。AI 只提交审核建议，不会自动合并。</small></div><button id="create-character-audit-task" class="ghost-button" type="button" ${state.characters.length < 2 ? "disabled" : ""}>AI 角色查重</button></section>` : "";
+  if (state.characters.length) mountModuleLayoutToggle(layout, "角色列表样式");
   $("#module-content").innerHTML = auditPanel + (state.characters.length
-    ? `${renderModuleLayoutToggle(layout, "角色列表样式")}${layout === "rows" ? characterRows() : characterCards()}`
+    ? `${layout === "rows" ? characterRows() : characterCards()}`
     : emptyModule("还没有角色档案", "创建主要人物，并维护别名、身份、动机和当前状态。"));
   bindModuleLayoutToggle(renderCharacters);
   $("#create-character-audit-task")?.addEventListener("click", async () => {
@@ -2948,8 +2955,9 @@ async function renderRaces() {
       <div class="card-actions">${raceActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
+  if (state.races.length) mountModuleLayoutToggle(layout, "种族列表样式");
   $("#module-content").innerHTML = state.races.length
-    ? `${renderModuleLayoutToggle(layout, "种族列表样式")}${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
+    ? `${layout === "rows" ? raceRows() : `<section class="race-tree" aria-label="种族层级">${buildRaceForest(state.races).map(renderRaceNode).join("")}</section>`}`
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
@@ -2979,8 +2987,9 @@ async function renderOrganizations() {
       <div class="card-actions">${organizationActions(item)}</div>
     </article>`;
   }).join("")}</div>`;
+  if (state.organizations.length) mountModuleLayoutToggle(layout, "组织列表样式");
   $("#module-content").innerHTML = state.organizations.length
-    ? `${renderModuleLayoutToggle(layout, "组织列表样式")}${layout === "rows" ? organizationRows() : organizationCards()}`
+    ? `${layout === "rows" ? organizationRows() : organizationCards()}`
     : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   bindModuleLayoutToggle(renderOrganizations);
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
@@ -2992,7 +3001,7 @@ async function renderTimeline() {
     apiAllPages(`/api/works/${state.work.id}/timeline-tracks`)
   ]);
   $("#timeline-tools")?.remove();
-  $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button">合并所选事件</button>' : ""}</div>`);
+  $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button">合并所选事件</button>' : ""}</div>`);
   state.timelineTracks = tracks;
   const lanes = [...tracks, { id: "", name: "未分组时间轴", description: "尚未归入独立大事件的时间节点。", sortOrder: Number.MAX_SAFE_INTEGER }];
   const eventCard = (item) => `<article class="timeline-kanban-card"><div class="timeline-card-meta"><input type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}"><small>${esc(item.timeLabel)} · ${esc(item.status)}</small></div><h4>${esc(item.name)}</h4><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span>地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}">编辑与排序</button><button data-split-event="${esc(item.id)}">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}">版本历史</button></div></article>`;
@@ -3054,8 +3063,9 @@ async function renderOutlines() {
     </article>`;
   }).join("")}</div>`;
   const foreshadowHtml = foreshadows.length
-    ? `${renderModuleLayoutToggle(layout, "伏笔列表样式")}${layout === "rows" ? foreshadowRows() : foreshadowCards()}`
+    ? `${layout === "rows" ? foreshadowRows() : foreshadowCards()}`
     : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
+  if (foreshadows.length) mountModuleLayoutToggle(layout, "伏笔列表样式");
   const outlineHtml = outlines.length ? `<div class="outline-list">${outlines.map((item) => `
     <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
       <div><small>${esc(item.volumeTitle)} · ${esc(item.status)}</small><h3>${esc(item.chapterTitle)}</h3></div>
@@ -3146,8 +3156,9 @@ async function renderReviews() {
       <div class="card-actions">${item.status === "pending" && canResolveReview ? `<button data-review-status="fixed" data-review-id="${esc(item.id)}">标为已修复</button><button data-review-status="ignored" data-review-id="${esc(item.id)}">忽略</button>` : ""}</div>
     </article>`;
   };
+  if (reviews.length) mountModuleLayoutToggle(layout, "审核列表样式");
   $("#module-content").innerHTML = reviews.length
-    ? `${renderModuleLayoutToggle(layout, "审核列表样式")}${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
+    ? `${layout === "rows" ? `<div class="module-row-list">${reviews.map(reviewRow).join("")}</div>` : `<div class="card-grid">${reviews.map(reviewCard).join("")}</div>`}`
     : emptyModule("没有待审核事项", "候选设定、冲突与低置信度结论会集中显示在这里。");
   bindModuleLayoutToggle(renderReviews);
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
