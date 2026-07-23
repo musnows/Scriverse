@@ -1338,15 +1338,61 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-citation-card.is-expanded pre { display: block; }
 .message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
 
-.toast-region { position: fixed; inset: auto 24px 24px auto; z-index: 2147483647; display: grid; max-width: calc(100vw - 48px); margin: 0; padding: 0; gap: 8px; overflow: visible; border: 0; background: transparent; color: inherit; pointer-events: none; }
-.toast-region[data-position="top-right"] { top: 78px; bottom: auto; }
-.toast-region[data-position="bottom-right"] { top: auto; bottom: 24px; }
-.toast { max-width: 360px; background: var(--toast-bg); color: var(--toast-fg); padding: 11px 15px; border-radius: 4px; box-shadow: var(--shadow); font-size: 12px; animation: toast-appear-top .18s ease; }
+/* Toast 使用 Popover Top Layer；必须覆盖 UA 默认居中/系统边框/Canvas 背景 */
+.toast-region,
+.toast-region:popover-open {
+  position: fixed;
+  inset: auto 24px 24px auto;
+  width: max-content;
+  max-width: calc(100vw - 48px);
+  height: fit-content;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  display: grid;
+  gap: 8px;
+  z-index: 2147483647;
+  pointer-events: none;
+  box-shadow: none;
+}
+.toast-region::backdrop { display: none; }
+.toast-region[data-position="top-right"],
+.toast-region[data-position="top-right"]:popover-open { top: 78px; right: 24px; bottom: auto; left: auto; }
+.toast-region[data-position="bottom-right"],
+.toast-region[data-position="bottom-right"]:popover-open { top: auto; right: 24px; bottom: 24px; left: auto; }
+.toast {
+  max-width: 360px;
+  padding: 11px 15px;
+  border: 1px solid color-mix(in srgb, var(--toast-fg) 12%, transparent);
+  border-radius: 6px;
+  background: var(--toast-bg);
+  color: var(--toast-fg);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.55;
+  animation: toast-appear-top .18s ease;
+}
 .toast-region[data-position="bottom-right"] .toast { animation-name: toast-appear-bottom; }
-.toast.error { background: var(--toast-error-bg); color: var(--toast-error-fg); }
-.toast-confirmation { display: grid; gap: 8px; width: min(360px, calc(100vw - 48px)); padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); background: var(--panel); color: var(--ink); pointer-events: auto; }
+.toast.error {
+  border-color: color-mix(in srgb, var(--toast-error-fg) 16%, transparent);
+  background: var(--toast-error-bg);
+  color: var(--toast-error-fg);
+}
+.toast-confirmation {
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100vw - 48px));
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--panel);
+  color: var(--ink);
+  pointer-events: auto;
+}
 .toast-confirmation strong { font-size: 12px; }
-.toast-confirmation p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.toast-confirmation p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; white-space: pre-line; }
 .toast-confirmation-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 3px; }
 .toast-confirmation-actions button { min-height: 30px; padding: 6px 10px; }
 .chapter-type-menu { position: fixed; z-index: 80; width: 176px; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
