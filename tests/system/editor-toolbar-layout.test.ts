@@ -30,7 +30,7 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span class="import-file-label import-file-label-full" aria-hidden="true">导入 TXT / DOCX</span>');
     expect(page.text).toContain('<span class="import-file-label import-file-label-compact" aria-hidden="true">导入TXT/DOCX</span>');
     expect(page.text).toContain('<span class="import-file-label import-file-label-short" aria-hidden="true">导入</span>');
-    expect(page.text).toContain('id="import-history-button"');
+    expect(page.text).not.toContain('id="import-history-button"');
     expect(page.text).toContain('id="import-history-dialog"');
     expect(page.text).toContain("大纲、伏笔、首次登场等章节关联信息不在快照中");
     expect(page.text).toContain('id="import-mode-dialog"');
@@ -45,12 +45,17 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".import-mode-option input:checked + .import-mode-option-card");
     expect(application.text).toContain("function confirmToast(message");
     expect(application.text).toContain("当前选项：覆盖正文");
-    expect(styles.text).toContain(".import-history-button { grid-column: 1 / -1; }");
     expect(styles.text).toContain(".import-history-load-more");
-    expect(application.text).toContain('$("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);');
+    expect(application.text).toContain('$("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));');
+    expect(application.text).toContain('$("#import-file-button").addEventListener("click", (event) => {');
     expect(application.text).toContain('$("#import-file").disabled = proseReadOnly;');
+    expect(application.text).toContain('toast("当前权限只能编辑设定资料，不能导入正文", "error");');
+    expect(styles.text).not.toContain('.prose-read-only-mode:not(.shelf-mode) .left-primary-actions .file-button');
+    expect(styles.text).not.toContain('.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button');
     expect(application.text).toContain('$("#import-mode-overwrite").disabled = !canOverwrite;');
     expect(application.text).toContain("function canReplaceProse(work = state.work)");
+    expect(application.text).toContain("正文导入历史");
+    expect(application.text).toContain('$("#form-dialog").close();');
     expect(application.text).toContain("resetWorkScopedUiCaches();");
     expect(application.text).toContain("if (state.dirty) scheduleChapterAutoSave();");
     expect(application.text).toContain('apiPage(`/api/works/${encodeURIComponent(workId)}/file-versions`, page, 25)');

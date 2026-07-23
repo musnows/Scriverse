@@ -32,5 +32,9 @@ describe("注册入口状态", () => {
     expect(application.text).not.toContain('$("#auth-register-tab").classList.toggle("hidden", !canRegister);');
     expect(styles.text).toContain(".auth-tabs button:disabled {");
     expect(styles.text).toContain("cursor: not-allowed;");
+    expect(page.text).toContain('<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required>');
+    expect(application.text).toContain("function validatePasswordChangeConfirmation()");
+    expect(application.text).toContain("passwordConfirmation");
+    expect(styles.text).toContain(".password-settings-form { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }");
   });
 });

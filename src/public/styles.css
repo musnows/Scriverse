@@ -477,7 +477,6 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.prose-hidden-mode:not(.shelf-mode) .left-actions,
 .app-shell.prose-hidden-mode:not(.shelf-mode) .panel-heading,
 .app-shell.prose-hidden-mode:not(.shelf-mode) #novel-tree { display: none !important; }
-.app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #new-volume-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button,
 .app-shell.prose-read-only-mode:not(.shelf-mode) #tidy-blank-lines-button,
@@ -485,7 +484,6 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) .left-primary-actions { justify-content: flex-end; }
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-title[readonly],
 .app-shell.prose-read-only-mode:not(.shelf-mode) #chapter-content[readonly] { cursor: default; }
-.app-shell.view-only-mode:not(.shelf-mode) .left-primary-actions .file-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-volume-button,
 .app-shell.view-only-mode:not(.shelf-mode) #new-chapter-button,
 .app-shell.view-only-mode:not(.shelf-mode) #module-create-button,
@@ -615,7 +613,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .account-settings-form label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 11px; }
 .account-settings-form input { width: 100%; min-height: 38px; padding: 9px 10px; background: var(--surface); font-size: 12px; }
 .account-settings-form .primary-button { min-height: 38px; white-space: nowrap; }
-.password-settings-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.password-settings-form { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
 .api-key-settings { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; margin-top: 16px; }
 .api-key-settings > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .api-key-result { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
@@ -706,7 +704,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .left-primary-actions { display: flex; grid-column: 1 / -1; width: 100%; align-items: center; gap: 8px; }
 .left-primary-actions .file-button { flex: 1 1 auto; width: auto; min-width: 0; }
 .left-primary-actions #left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }
-.import-history-button { grid-column: 1 / -1; }
 .file-button, .secondary-button { display: grid; place-items: center; min-height: 30px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; background: transparent; }
 .file-button { container-type: inline-size; overflow: hidden; white-space: nowrap; }
 .import-file-label-compact, .import-file-label-short { display: none; }

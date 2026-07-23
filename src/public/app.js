@@ -129,10 +129,9 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
-  $("#import-file-button").classList.toggle("permission-hidden", proseReadOnly);
-  $("#import-file-button").setAttribute("aria-hidden", String(proseReadOnly));
+  $("#import-file-button").setAttribute("aria-disabled", String(proseReadOnly));
+  $("#import-file-button").setAttribute("title", proseReadOnly ? "当前权限不能导入正文" : "导入 TXT / DOCX");
   $("#import-file").disabled = proseReadOnly;
-  $("#import-history-button").classList.toggle("permission-hidden", Boolean(state.work) && !canReplaceProse());
   $(".ai-panel").classList.toggle("permission-hidden", aiHidden);
   $("#chapter-title").readOnly = proseReadOnly;
   $("#chapter-content").readOnly = proseReadOnly;
@@ -3700,12 +3699,21 @@ function bindWorkCoverControls(work) {
 function openWorkSettingsDialog(work) {
   if (!work) return;
   const canManageAccess = ["admin", "owner"].includes(String(work.accessRole));
+  const isCurrentWork = state.work?.id === work.id;
+  const canOpenImportHistory = isCurrentWork && canReplaceProse(work);
+  const importHistoryAction = isCurrentWork
+    ? canOpenImportHistory ? "查看导入历史" : "需要完整编辑权限"
+    : "打开作品后可用";
   const accessField = `<section class="work-access-field" aria-labelledby="work-access-title">
     <div><strong id="work-access-title">成员权限</strong><small>选择成员后，可为每个作品模块单独设置无权限、只读或可编辑。</small><div class="work-access-options" aria-label="成员权限配置方式"><span>按成员配置</span><span>按模块授权</span><span>读写分离</span></div></div>
     ${canManageAccess ? '<button id="work-access-manage" class="ghost-button" type="button">配置成员权限</button>' : '<small>仅作品创建者或系统管理员可以调整访问权限。</small>'}
   </section>`;
+  const importHistoryField = `<section class="work-access-field" aria-labelledby="import-history-settings-title">
+    <div><strong id="import-history-settings-title">正文导入历史</strong><small>查看导入前快照并恢复被覆盖的分卷、章节标题和正文；大纲、伏笔等章节关联资料不在快照中。</small></div>
+    <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
+  </section>`;
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + accessField + importHistoryField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -3723,6 +3731,10 @@ function openWorkSettingsDialog(work) {
       toast("作品信息已保存");
     }, "作品设置");
   bindWorkCoverControls(work);
+  $("#import-history-button")?.addEventListener("click", () => {
+    $("#form-dialog").close();
+    void openImportHistory();
+  });
   $("#work-access-manage")?.addEventListener("click", () => {
     $("#form-dialog").close();
     openMembersDialog(work);
@@ -5062,12 +5074,30 @@ $("#profile-form").addEventListener("submit", async (event) => {
 $("#password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const newPassword = String(form.get("newPassword") ?? "");
+  const passwordConfirmation = String(form.get("passwordConfirmation") ?? "");
+  if (newPassword !== passwordConfirmation) {
+    const confirmationInput = $("#password-form input[name='passwordConfirmation']");
+    confirmationInput.setCustomValidity("两次输入的密码不一致");
+    confirmationInput.reportValidity();
+    confirmationInput.focus();
+    return;
+  }
   try {
-    await api("/api/auth/password", { method: "PATCH", body: { currentPassword: form.get("currentPassword"), newPassword: form.get("newPassword") } });
+    await api("/api/auth/password", { method: "PATCH", body: { currentPassword: form.get("currentPassword"), newPassword, passwordConfirmation } });
     event.currentTarget.reset();
     toast("密码已更新，其他设备的会话已退出");
   } catch (error) { toast(error.message, "error"); }
 });
+function validatePasswordChangeConfirmation() {
+  const newPasswordInput = $("#password-form input[name='newPassword']");
+  const confirmationInput = $("#password-form input[name='passwordConfirmation']");
+  const matches = !confirmationInput.value || newPasswordInput.value === confirmationInput.value;
+  confirmationInput.setCustomValidity(matches ? "" : "两次输入的密码不一致");
+  return matches;
+}
+$("#password-form input[name='newPassword']").addEventListener("input", validatePasswordChangeConfirmation);
+$("#password-form input[name='passwordConfirmation']").addEventListener("input", validatePasswordChangeConfirmation);
 $("#api-key-reset-button").addEventListener("click", async () => {
   if ($("#api-key-reset-button").textContent.includes("重置") && !window.confirm("重置后，所有使用旧 API Key 的 CLI 会立即退出登录。确定继续吗？")) return;
   try {
@@ -5250,7 +5280,6 @@ $("#new-volume-button").addEventListener("click", () => openVolumeDialog());
 $("#insight-button").addEventListener("click", () => showChapterInsight().catch((error) => toast(error.message, "error")));
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
-$("#import-history-button").addEventListener("click", () => openImportHistory());
 $("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
@@ -5386,6 +5415,13 @@ $("#ai-scope").addEventListener("change", scheduleAiContextUsage);
 $("#ai-mention-menu").addEventListener("click", (event) => {
   const button = event.target.closest("[data-ai-reference-id]");
   if (button) selectAiMention(button);
+});
+$("#import-file-button").addEventListener("click", (event) => {
+  if (!state.work || canEditProse()) return;
+  event.preventDefault();
+  event.stopPropagation();
+  $("#import-file").value = "";
+  toast("当前权限只能编辑设定资料，不能导入正文", "error");
 });
 $("#import-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];

@@ -786,7 +786,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(profile.body.data.displayName).toBe("新名称");
     await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
       currentPassword: "secure-password-123",
-      newPassword: "new-secure-password-456"
+      newPassword: "new-secure-password-456",
+      passwordConfirmation: "new-secure-password-456"
     }).expect(204);
     const staleLogin = await solveCaptcha(runtime.app);
     await request(runtime.app).post("/api/auth/login").send({
@@ -800,6 +801,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
       password: "new-secure-password-456",
       ...loginCaptcha
     }).expect(200);
+  });
+
+  it("修改密码必须二次确认且两次新密码相同", async () => {
+    const user = await register(runtime, "password_change_confirm_user");
+    const response = await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
+      currentPassword: "secure-password-123",
+      newPassword: "new-secure-password-456",
+      passwordConfirmation: "different-password-456"
+    }).expect(400);
+    expect(response.body.error.details).toContainEqual(expect.objectContaining({
+      path: "passwordConfirmation",
+      message: "两次输入的密码不一致"
+    }));
   });
 
   it("用户可安全上传、读取、替换和移除自己的头像", async () => {
