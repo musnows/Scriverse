@@ -92,6 +92,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
     expect(application.text).toContain('data-toggle-whitespace');
     expect(application.text).toContain('document.querySelectorAll("[data-toggle-whitespace]")');
+    expect(page.text).toContain('id="toggle-whitespace-appearance"');
+    expect(application.text).toContain("function toggleChapterWhitespaceVisibility()");
     expect(application.text).toContain('/whitespace-visualization.js?v=20260718-visible-whitespace');
     expect(application.text).toContain("function setupPanelResize(handle, side)");
     expect(application.text).toContain("function ensureAiPanelExpanded()");
@@ -199,6 +201,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function openCharacterEditor(item = null)");
     expect(application.text).toContain("function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions)");
     expect(application.text).toContain("async function openKnowledgeEditor(kind, item)");
+    expect(application.text.match(/if \(!\(await closeEntityEditor\(\)\)\) return;/gu)).toHaveLength(2);
     expect(application.text).toContain("async function openOrganizationDialog(item)");
     expect(application.text).toContain("function renderCharacterEditorRelationships()");
     expect(application.text).toContain('class="character-aliases"');
@@ -214,6 +217,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("buildCharacterState(form.getAll");
     expect(application.text).toContain("function openEntityMergeDialog(");
     expect(application.text).toContain("function recordCardEditButton(");
+    expect(application.text).toContain("function recordHistoryButton(");
+    expect(application.text).toContain('recordHistoryButton("setting", item.id, item.title)');
+    expect(application.text).toContain('recordHistoryButton("race", item.id, item.name)');
+    expect(application.text).toContain('recordHistoryButton("organization", item.id, item.name)');
     expect(application.text).toContain("function entityDialogManagementHtml(");
     expect(application.text).toContain("data-dialog-entity-merge");
     expect(application.text).toContain("data-dialog-entity-delete");
@@ -228,6 +235,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-editor-workspace");
     expect(styles.text).toContain(".entity-editor-view");
     expect(styles.text).toContain("#setting-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr);");
+    expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }");
+    expect(styles.text).toContain(".setting-editor-content { height: auto; min-height: 70dvh; padding: 16px; }");
     expect(styles.text).toContain("#knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }");
     expect(styles.text).toContain(".vditor-editor-host .vditor");
     expect(styles.text).toContain(".setting-editor-title-input");
@@ -264,9 +273,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-word-count-separators');
-    expect(page.text).toContain('/styles.css?v=20260724-compact-ai-number-inputs');
+    expect(page.text).toContain('/app.js?v=20260724-whitespace-access');
+    expect(page.text).toContain('/styles.css?v=20260724-whitespace-access');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
+    expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');

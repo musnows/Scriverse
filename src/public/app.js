@@ -633,6 +633,12 @@ function syncChapterWhitespaceControls() {
   });
 }
 
+function toggleChapterWhitespaceVisibility() {
+  chapterWhitespaceVisible = !chapterWhitespaceVisible;
+  syncChapterWhitespaceControls();
+  scheduleChapterLineNumbers();
+}
+
 function renderChapterWhitespaceMarkers(input, style) {
   const overlay = $("#chapter-whitespace-overlay");
   const inner = $("#chapter-whitespace-inner");
@@ -1512,6 +1518,7 @@ function renderTypographyPreview() {
 function openAppearanceDialog() {
   fillAppearanceForm(typographySettings);
   renderTypographyPreview();
+  syncChapterWhitespaceControls();
   $("#appearance-dialog").showModal();
 }
 
@@ -2711,6 +2718,10 @@ function recordCardEditButton(attribute, id, label) {
   return `<button class="record-card-edit" type="button" data-${attribute}="${esc(id)}" aria-label="编辑${esc(label)}" title="编辑">${pencilIconMarkup()}</button>`;
 }
 
+function recordHistoryButton(type, id, title) {
+  return `<button type="button" data-entity-history="${esc(type)}" data-entity-id="${esc(id)}" data-entity-title="${esc(title)}">版本历史</button>`;
+}
+
 function entityDialogManagementHtml({ typeLabel, canMerge, canDelete }) {
   return `<section class="entity-dialog-management" aria-label="${esc(typeLabel)}档案操作">
     <div><strong>档案操作</strong><small>版本历史和高风险操作集中在编辑面板内。</small></div>
@@ -2830,7 +2841,9 @@ function bindModuleLayoutToggle(refresh) {
 }
 
 function settingRecordActions(item) {
-  return recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`);
+  return canEditModule("settings")
+    ? recordCardEditButton("edit-setting", item.id, `设定“${item.title}”`)
+    : recordHistoryButton("setting", item.id, item.title);
 }
 
 function renderSettingCards(records) {
@@ -2860,6 +2873,7 @@ async function renderSettings() {
     : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
   bindModuleLayoutToggle(renderSettings);
   $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => openSettingEditor(records.find((item) => item.id === button.dataset.editSetting))));
+  bindEntityHistoryButtons(async () => { await renderSettings(); await loadAiReferences(); });
 }
 
 async function renderCharacters() {
@@ -2938,15 +2952,22 @@ async function renderRaces() {
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   const layout = readModuleLayout();
-  const raceActions = (item) => recordCardEditButton("edit-race", item.id, `种族“${item.name}”`);
+  const canEditRaces = canEditModule("races");
+  const raceActions = (item) => canEditRaces
+    ? recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)
+    : recordHistoryButton("race", item.id, item.name);
+  const raceCardActions = (item) => canEditRaces
+    ? raceActions(item)
+    : `<div class="card-actions">${raceActions(item)}</div>`;
   const renderRaceNode = (item) => `<details class="race-tree-node" open data-race-node="${esc(item.id)}">
     <summary><span>${esc(item.name)}</span><small>${item.children.length} 个直接子种族</small></summary>
     <div class="race-tree-branch">
-      <article class="record-card race-card has-card-edit">${recordCardEditButton("edit-race", item.id, `种族“${item.name}”`)}<small>${item.memberIds.length} 位直接角色 · ${item.settings.length} 条自身设定</small>
+      <article class="record-card race-card${canEditRaces ? " has-card-edit" : ""}"><small>${item.memberIds.length} 位直接角色 · ${item.settings.length} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
         <p>${esc(item.description || "尚未填写种族简介")}</p>
         <div class="race-settings">${item.effectiveSettings.length ? item.effectiveSettings.map((setting) => `<section class="knowledge-markdown-block${setting.inherited ? " inherited" : ""}"><div class="knowledge-markdown-block-heading"><h4>${esc(setting.title || "未命名章节")}</h4><small>${esc(setting.inherited ? `继承自 ${setting.sourceRaceName}` : `定义于 ${setting.sourceRaceName}`)}</small></div><div class="message-body">${renderMarkdown(setting.value) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></section>`).join("") : '<span class="pill">暂无共同设定</span>'}</div>
         <p class="race-members">直接角色：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
+        ${raceCardActions(item)}
       </article>
       ${item.children.length ? `<div class="race-tree-children">${item.children.map(renderRaceNode).join("")}</div>` : ""}
     </div>
@@ -2968,6 +2989,7 @@ async function renderRaces() {
     : emptyModule("还没有种族档案", "先创建种族及共同设定，之后角色编辑器才能选择该种族。");
   bindModuleLayoutToggle(renderRaces);
   $("#module-content").querySelectorAll("[data-edit-race]").forEach((button) => button.addEventListener("click", () => openRaceDialog(state.races.find((item) => item.id === button.dataset.editRace))));
+  bindEntityHistoryButtons(async () => { await renderRaces(); await loadAiReferences(); });
 }
 
 async function renderOrganizations() {
@@ -2976,12 +2998,19 @@ async function renderOrganizations() {
     canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
   ]);
   const layout = readModuleLayout();
-  const organizationActions = (item) => recordCardEditButton("edit-organization", item.id, `组织“${item.name}”`);
+  const canEditOrganizations = canEditModule("organizations");
+  const organizationActions = (item) => canEditOrganizations
+    ? recordCardEditButton("edit-organization", item.id, `组织“${item.name}”`)
+    : recordHistoryButton("organization", item.id, item.name);
+  const organizationCardActions = (item) => canEditOrganizations
+    ? organizationActions(item)
+    : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${state.organizations.map((item) => `
-    <article class="record-card organization-card has-card-edit">${recordCardEditButton("edit-organization", item.id, `组织“${item.name}”`)}<small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
+    <article class="record-card organization-card${canEditOrganizations ? " has-card-edit" : ""}"><small>${item.memberIds.length} 位成员 · ${item.settings.length ? "已填写组织设定" : "暂无组织设定"}</small>
       <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsSections?.length ? item.settingsSections.map((section) => `<article class="knowledge-markdown-block"><div class="knowledge-markdown-block-heading"><h4>${esc(section.title || "未命名章节")}</h4></div><div class="message-body">${renderMarkdown(section.contentMarkdown) || '<p class="markdown-editor-empty">暂无内容</p>'}</div></article>`).join("") : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
+      ${organizationCardActions(item)}
     </article>`).join("")}</div>`;
   const organizationRows = () => `<div class="module-row-list">${state.organizations.map((item) => {
     const preview = moduleRowPreview(item.description || "尚未填写组织简介");
@@ -3000,6 +3029,7 @@ async function renderOrganizations() {
     : emptyModule("还没有组织", "创建国家、机构、阵营或团队，并维护组织设定与成员。");
   bindModuleLayoutToggle(renderOrganizations);
   $("#module-content").querySelectorAll("[data-edit-organization]").forEach((button) => button.addEventListener("click", () => openOrganizationDialog(state.organizations.find((item) => item.id === button.dataset.editOrganization))));
+  bindEntityHistoryButtons(async () => { await renderOrganizations(); await loadAiReferences(); });
 }
 
 function updateTimelineMultiSelectControls() {
@@ -4014,11 +4044,7 @@ function openWorkSettingsDialog(work) {
       toast("作品信息已保存");
     }, "作品设置");
   bindWorkCoverControls(work);
-  $("#toggle-whitespace-settings")?.addEventListener("click", () => {
-    chapterWhitespaceVisible = !chapterWhitespaceVisible;
-    syncChapterWhitespaceControls();
-    scheduleChapterLineNumbers();
-  });
+  $("#toggle-whitespace-settings")?.addEventListener("click", toggleChapterWhitespaceVisibility);
   $("#import-history-button")?.addEventListener("click", () => {
     $("#form-dialog").close();
     void openImportHistory();
@@ -4089,8 +4115,9 @@ function openSettingEditor(item = null) {
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
   $("#setting-editor-confirm").classList.toggle("hidden", item?.status !== "pending");
   $("#setting-editor-deprecate").classList.toggle("hidden", item?.status !== "pending");
-  $("#setting-editor-history").onclick = () => {
+  $("#setting-editor-history").onclick = async () => {
     if (!item) return;
+    if (!(await closeEntityEditor())) return;
     openEntityHistory("setting", item.id, item.title, async () => { await renderSettings(); await loadAiReferences(); });
   };
   $("#setting-editor-delete").onclick = () => {
@@ -5002,8 +5029,9 @@ async function openKnowledgeEditor(kind, item) {
   historyButton.classList.toggle("hidden", !item);
   mergeButton.classList.toggle("hidden", !item || !canEditModule(module) || candidates.length < 2);
   deleteButton.classList.toggle("hidden", !item || !canEditModule(module));
-  historyButton.onclick = () => {
+  historyButton.onclick = async () => {
     if (!item) return;
+    if (!(await closeEntityEditor())) return;
     openEntityHistory(kind, item.id, item.name, async () => { await refresh(); await loadAiReferences(); });
   };
   mergeButton.onclick = async () => {
@@ -5996,6 +6024,7 @@ function cleanupExpandedRelationshipMap() {
 $("#relationship-map-close").addEventListener("click", () => $("#relationship-map-dialog").close());
 $("#relationship-map-dialog").addEventListener("close", cleanupExpandedRelationshipMap);
 $("#appearance-button").addEventListener("click", openAppearanceDialog);
+$("#toggle-whitespace-appearance").addEventListener("click", toggleChapterWhitespaceVisibility);
 $("#theme-toggle").addEventListener("click", () => {
   const theme = nextTheme(currentColorTheme());
   const persisted = saveColorTheme(theme);
@@ -6229,7 +6258,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (!isGlobalSearchShortcut(event)) return;
+  if (!isGlobalSearchShortcut(event) || !state.work) return;
   event.preventDefault();
   event.stopPropagation();
   if (event.repeat) return;
