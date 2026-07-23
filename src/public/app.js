@@ -3850,13 +3850,13 @@ function openVolumeDialog(item) {
     field("title", "分卷名称", "text", item?.title) +
     field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
     field("description", "分卷简介", "textarea", item?.description) +
-    field("keywords", "分卷关键词（逐条填写）", "item-list", item?.keywords ?? []),
+    field("keywords", "分卷关键词", "keyword-chips", item?.keywords ?? []),
     async (form) => {
       const body = {
         title: form.get("title"),
         kind: form.get("kind"),
         description: form.get("description"),
-        keywords: form.getAll("keywords").map((value) => String(value).trim()).filter(Boolean)
+        keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))
       };
       await api(item ? `/api/volumes/${item.id}` : `/api/works/${state.work.id}/volumes`, { method: item ? "PATCH" : "POST", body });
       state.work = await api(`/api/works/${state.work.id}`);

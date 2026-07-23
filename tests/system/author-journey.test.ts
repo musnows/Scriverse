@@ -241,8 +241,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260723-prose-create-actions');
-    expect(page.text).toContain('/styles.css?v=20260723-prose-create-actions');
+    expect(page.text).toContain('/app.js?v=20260723-volume-keyword-chips');
+    expect(page.text).toContain('/styles.css?v=20260723-volume-keyword-chips');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -412,7 +412,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");
-    expect(application.text).toContain('field("keywords", "分卷关键词（逐条填写）", "item-list"');
+    expect(application.text).toContain('field("keywords", "分卷关键词", "keyword-chips"');
+    expect(application.text).toContain('keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))');
+    expect(styles.text).toContain(".keyword-chip:hover button, .keyword-chip:focus-within button");
+    expect(styles.text).toContain("opacity: 0; pointer-events: none; transition: opacity .15s ease");
     expect(application.text).not.toContain("data-edit-volume");
     expect(application.text).toContain('title="左键折叠，右键设置分卷"');
     expect(application.text).toContain("const proseEditable = canEditProse();");
