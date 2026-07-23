@@ -4576,7 +4576,7 @@ function renderCharacterMarkdownSections() {
   const host = $("#character-markdown-sections");
   if (!host) return;
   if (!characterEditorItem?.id) {
-    host.innerHTML = '<div class="character-editor-empty-field"><b>Markdown 档案章节</b><span>创建人物档案后即可添加背景故事、能力、经历和研究记录。</span></div>';
+    host.innerHTML = '<div class="character-editor-empty-field" role="note" aria-label="保存角色提示"><b>请先保存当前角色</b><span>完成基础资料后，请点击页面底部的“创建人物档案”。保存成功后即可新建 Markdown 档案章节。</span></div>';
     return;
   }
   const toolbar = `<div class="character-markdown-list-toolbar"><div><b>Markdown 档案章节</b><span>长篇内容独立保存、渲染、检索和版本管理。</span></div>${canEditModule("characters") ? '<button type="button" class="primary-button" data-character-section-create>新建章节</button>' : ""}</div>`;
