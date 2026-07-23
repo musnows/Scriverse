@@ -1403,7 +1403,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-aliases .pill { margin: 0; }
 .character-species { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 10px; }
 .character-species b { font-weight: 500; }
-.character-species .pill { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.character-species .pill { justify-self: start; min-width: 0; max-width: 100%; margin: 0; overflow-wrap: anywhere; }
 .character-detail-list { display: grid; gap: 5px; margin: 12px 0; }
 .character-detail-list div { display: grid; grid-template-columns: minmax(70px, .42fr) minmax(0, 1fr); gap: 8px; font-size: 10px; }
 .character-detail-list dt { color: var(--muted); }

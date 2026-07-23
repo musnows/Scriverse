@@ -216,6 +216,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-version-card");
     expect(styles.text).toContain(".character-aliases { display: flex;");
     expect(styles.text).toContain(".character-species { display: grid;");
+    expect(styles.text).toContain(".character-species .pill { justify-self: start;");
     expect(styles.text).toContain(".card-actions .danger-button");
     expect(styles.text).toContain(".merge-dialog-note");
   });
