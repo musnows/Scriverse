@@ -329,7 +329,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     );
     expect(storedMembership?.role).toBe("editor");
     expect(JSON.parse(String(storedMembership?.permissions_json))).toMatchObject({
-      modules: { prose: "read", settings: "write", characters: "write", ai: "read" }
+      modules: { prose: "read", settings: "write", characters: "write", "ai-chat": "read", "ai-analysis": "read" }
     });
 
     const works = await collaborator.agent.get("/api/works").expect(200);
@@ -381,7 +381,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       "SELECT permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?",
       workId,
       collaborator.user.userId
-    )?.permissions_json))).toMatchObject({ modules: { prose: "write", settings: "write", ai: "write" } });
+    )?.permissions_json))).toMatchObject({ modules: { prose: "write", settings: "write", "ai-chat": "write", "ai-analysis": "write" } });
     await collaborator.agent.patch(`/api/chapters/${chapter.body.data.id}`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ content: "完整协作权限可以修改正文。" })
@@ -433,7 +433,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       relationships: "none",
       outlines: "read",
       reviews: "none",
-      ai: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
       "ai-settings": "none"
     };
     const invited = await owner.agent.post(`/api/works/${workId}/members`)
@@ -602,7 +603,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       relationships: "none",
       outlines: "none",
       reviews: "read",
-      ai: "read",
+      "ai-chat": "none",
+      "ai-analysis": "read",
       "ai-settings": "none"
     };
     await owner.agent.post(`/api/works/${workId}/members`)
@@ -626,6 +628,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await collaborator.agent.get(`/api/works/${workId}/reviews`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/models`).expect(200);
+    const chatDenied = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
+    expect(chatDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
 
     const visibleRaces = await collaborator.agent.get(`/api/works/${workId}/races`).expect(200);
     expect(visibleRaces.body.data[0]).toMatchObject({ id: raceId, memberIds: [], members: [] });
@@ -676,6 +680,61 @@ describe("用户、作品权限与操作者追踪 API", () => {
     });
     expect(JSON.stringify(visibleCharacters.body.data)).not.toContain("不可跨模块泄露");
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("可单独授权 AI 对话或 AI 分析，互不影响", async () => {
+    const owner = await register(runtime, "ai_split_owner");
+    const chatOnly = await register(runtime, "ai_chat_only");
+    const analysisOnly = await register(runtime, "ai_analysis_only");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 权限拆分作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const basePermissions = {
+      prose: "read",
+      settings: "read",
+      characters: "read",
+      races: "read",
+      organizations: "read",
+      timeline: "read",
+      relationships: "read",
+      outlines: "read",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: chatOnly.user.userId, permissions: { ...basePermissions, "ai-chat": "write" } })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: analysisOnly.user.userId, permissions: { ...basePermissions, "ai-analysis": "write" } })
+      .expect(201);
+
+    await chatOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
+    await chatOnly.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", chatOnly.csrfToken)
+      .send({})
+      .expect(201);
+    await chatOnly.agent.get(`/api/works/${workId}/models`).expect(200);
+    const chatTasksDenied = await chatOnly.agent.get(`/api/works/${workId}/tasks`).expect(403);
+    expect(chatTasksDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await chatOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", chatOnly.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "book" } })
+      .expect(403);
+
+    await analysisOnly.agent.get(`/api/works/${workId}/tasks`).expect(200);
+    await analysisOnly.agent.get(`/api/works/${workId}/models`).expect(200);
+    const analysisChatDenied = await analysisOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
+    expect(analysisChatDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await analysisOnly.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(403);
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {

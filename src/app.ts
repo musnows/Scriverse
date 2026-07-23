@@ -3,7 +3,7 @@ import multer from "multer";
 import mammoth from "mammoth";
 import { randomUUID } from "node:crypto";
 import { dirname, extname, join } from "node:path";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { z, ZodError } from "zod";
@@ -78,7 +78,8 @@ const modulePermissionsSchema = z.object({
   relationships: moduleAccessSchema,
   outlines: moduleAccessSchema,
   reviews: moduleAccessSchema,
-  ai: moduleAccessSchema,
+  "ai-chat": moduleAccessSchema,
+  "ai-analysis": moduleAccessSchema,
   "ai-settings": moduleAccessSchema
 }).strict();
 const memberSchema = z.union([
@@ -1559,6 +1560,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       response.type("text/html").send(html);
     };
     app.get(["/", "/index.html"], sendIndexHtml);
+    const vditorPath = join(process.cwd(), "node_modules", "vditor", "dist");
+    if (existsSync(vditorPath)) {
+      app.use("/vendor/vditor/dist", express.static(vditorPath, {
+        index: false,
+        maxAge: 0,
+        setHeaders: (response) => response.setHeader("Cache-Control", "no-store")
+      }));
+    }
     app.use(express.static(publicPath, {
       index: false,
       maxAge: 0,
