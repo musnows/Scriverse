@@ -263,7 +263,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260724-character-card-edit');
-    expect(page.text).toContain('/styles.css?v=20260724-relationship-light-theme');
+    expect(page.text).toContain('/styles.css?v=20260724-relationship-table-actions');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
@@ -279,6 +279,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain('class="relationship-galaxy-icon"');
     expect(graph.text).toContain('aria-label", "全屏银河图"');
     expect(styles.text).toContain(".relationship-galaxy-icon {");
+    expect(styles.text).toContain(".relationship-table .relationship-actions button");
     expect(page.text).toContain('id="avatar-file"');
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
