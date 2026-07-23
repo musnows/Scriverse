@@ -21,4 +21,23 @@ describe("系统 Toast 图层", () => {
     expect(styles).toContain("z-index: 2147483647");
     expect(styles).toContain("pointer-events: none");
   });
+
+  it("使用自定义 confirmToast，并覆盖浏览器 Popover 默认样式", async () => {
+    const publicPath = join(process.cwd(), "src", "public");
+    const [application, styles] = await Promise.all([
+      readFile(join(publicPath, "app.js"), "utf8"),
+      readFile(join(publicPath, "styles.css"), "utf8")
+    ]);
+
+    expect(application).not.toContain("window.confirm(");
+    expect(application).toContain("function confirmToast(message");
+    expect(application).toContain("async function confirmDiscardChanges(");
+    expect(application).toContain('title: "放弃未保存修改"');
+    expect(application).toContain('role", "alertdialog"');
+    expect(styles).toContain(".toast-region:popover-open");
+    expect(styles).toContain(".toast-region::backdrop { display: none; }");
+    expect(styles).toContain("background: var(--toast-bg)");
+    expect(styles).toContain(".toast-confirmation");
+    expect(styles).toContain("white-space: pre-line");
+  });
 });

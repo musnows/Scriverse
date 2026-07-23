@@ -560,15 +560,19 @@ function markEntityEditorDirty() {
   if (entityEditorType && canEditModule(module)) entityEditorDirty = true;
 }
 
-function confirmEntityEditorDiscard(message) {
+async function confirmEntityEditorDiscard(message) {
   if (!entityEditorDirty) return true;
-  return window.confirm(message ?? "当前资料有未保存修改，返回列表将丢弃这些修改。是否继续？");
+  return confirmToast(message ?? "当前资料有未保存修改，返回列表将丢弃这些修改。是否继续？", {
+    title: "放弃未保存修改",
+    confirmLabel: "放弃并继续",
+    cancelLabel: "继续编辑"
+  });
 }
 
 async function closeEntityEditor({ force = false } = {}) {
   if (!$("#character-section-editor-view").classList.contains("hidden")) return closeCharacterSectionEditor({ force });
   if (!$("#knowledge-section-editor-view").classList.contains("hidden")) return closeKnowledgeSectionEditor({ force });
-  if (!force && !confirmEntityEditorDiscard()) return false;
+  if (!force && !(await confirmEntityEditorDiscard())) return false;
   await discardPendingCharacterAttachments();
   await discardPendingMarkdownAttachments();
   const module = entityEditorType === "setting" ? "settings" : entityEditorType === "character" ? "characters" : entityEditorType === "race" ? "races" : "organizations";
@@ -1865,9 +1869,13 @@ async function persistChapter({ automatic = false } = {}) {
   }
 }
 
-function confirmDiscardChanges(message = "当前章节有未保存修改，继续将丢弃这些修改。是否继续？") {
+async function confirmDiscardChanges(message = "当前章节有未保存修改，继续将丢弃这些修改。是否继续？") {
   if (!state.dirty) return true;
-  return window.confirm(message);
+  return confirmToast(message, {
+    title: "放弃未保存修改",
+    confirmLabel: "放弃并继续",
+    cancelLabel: "继续编辑"
+  });
 }
 
 function chooseExistingWorkImportMode(file) {
@@ -1968,7 +1976,7 @@ async function initializePage() {
       return;
     }
     if (route.view === "settings") {
-      showSettingsHub();
+      await showSettingsHub();
       settingsReturnContext = restoredSettingsReturnContext(route);
       renderSettingsHub();
       return;
@@ -2263,10 +2271,10 @@ async function openSearchResult(result) {
   }
 }
 
-function showSettingsHub() {
+async function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden") || !$("#platform-ai-view").classList.contains("hidden");
   if (!alreadyInSettings) {
-    if (state.dirty && !confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？")) return false;
+    if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
     settingsReturnContext = captureSettingsReturnContext();
     state.dirty = false;
   }
@@ -2303,7 +2311,7 @@ async function returnFromSettings() {
 }
 
 async function showPlatformAi() {
-  if (state.dirty && !confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？")) return false;
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
@@ -2379,7 +2387,7 @@ function resetWorkScopedUiCaches() {
 
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
-  if (discarding && !confirmDiscardChanges()) return false;
+  if (discarding && !(await confirmDiscardChanges())) return false;
   const nextWork = await api(`/api/works/${workId}?page=1&limit=100`);
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   if (discarding) setSaveState("就绪");
@@ -2467,7 +2475,7 @@ function openChapterTypeMenu(chapterId, clientX, clientY) {
 }
 
 async function selectChapter(chapterId) {
-  if (state.chapter?.id !== chapterId && !confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？")) return;
+  if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
   cancelChapterAutoSave();
   state.chapter = await api(`/api/chapters/${chapterId}`);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
@@ -2555,7 +2563,7 @@ async function showModule(module) {
     }
     module = fallback;
   }
-  if (module !== "editor" && state.module === "editor" && !confirmDiscardChanges()) return;
+  if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
   applyWorkAccessMode();
@@ -2684,8 +2692,10 @@ function openEntityMergeDialog({ typeLabel, source, candidates, endpoint, body, 
 }
 
 async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning = "" }) {
-  const detail = warning ? `\n${warning}` : "";
-  if (!window.confirm(`确认删除${typeLabel}“${item.name}”吗？${detail}`)) return;
+  const message = warning
+    ? `确认删除${typeLabel}“${item.name}”吗？\n${warning}`
+    : `确认删除${typeLabel}“${item.name}”吗？`;
+  if (!(await confirmToast(message, { title: `删除${typeLabel}`, confirmLabel: "确认删除" }))) return;
   try {
     await api(endpoint(item), { method: "DELETE" });
     await refresh();
@@ -3006,7 +3016,10 @@ async function renderReviews() {
   $("#module-content").querySelectorAll("[data-merge-review]").forEach((button) => button.addEventListener("click", async () => {
     const target = characterById.get(button.dataset.mergeTarget);
     const source = characterById.get(button.dataset.mergeSource);
-    if (!target || !source || !window.confirm(`确认把“${source.name}”合并到“${target.name}”？来源角色的别名、组织、时间线和关系会迁移到目标角色。`)) return;
+    if (!target || !source || !(await confirmToast(
+      `确认把“${source.name}”合并到“${target.name}”？来源角色的别名、组织、时间线和关系会迁移到目标角色。`,
+      { title: "确认合并角色", confirmLabel: "确认合并" }
+    ))) return;
     button.disabled = true;
     try {
       await api(`/api/reviews/${button.dataset.mergeReview}/character-resolution`, { method: "POST", body: {
@@ -3588,10 +3601,13 @@ function renderKnowledgeMarkdownSections() {
   host.innerHTML = `<div class="knowledge-markdown-list-toolbar"><div><b>${label} Markdown 设定</b><span>将每条设定单独保存为章节，需要编辑时打开大编辑器。</span></div>${canEdit ? '<button type="button" class="ghost-button" data-knowledge-section-create>新建设定</button>' : ""}</div>${sections.length ? `<div class="knowledge-markdown-list">${sections.map((section, index) => `<article class="knowledge-markdown-section" data-knowledge-section-index="${index}"><header><div><span>设定 ${index + 1}</span><h4>${esc(section.title || `未命名设定 ${index + 1}`)}</h4>${section.summary ? `<p>${esc(section.summary)}</p>` : ""}</div><div>${canEdit ? `<button type="button" data-knowledge-section-edit="${index}">编辑</button><button type="button" data-knowledge-section-delete="${index}">删除</button>` : ""}</div></header><p class="knowledge-section-card-preview">${esc(knowledgeSectionPreviewText(section))}</p></article>`).join("")}</div>` : '<p class="knowledge-markdown-empty">还没有 Markdown 设定，点击“新建设定”开始记录。</p>'}`;
   host.querySelector("[data-knowledge-section-create]")?.addEventListener("click", () => void openKnowledgeSectionEditor());
   host.querySelectorAll("[data-knowledge-section-edit]").forEach((button) => button.addEventListener("click", () => void openKnowledgeSectionEditor(Number(button.dataset.knowledgeSectionEdit))));
-  host.querySelectorAll("[data-knowledge-section-delete]").forEach((button) => button.addEventListener("click", () => {
+  host.querySelectorAll("[data-knowledge-section-delete]").forEach((button) => button.addEventListener("click", async () => {
     const index = Number(button.dataset.knowledgeSectionDelete);
     const section = knowledgeEditorSections[index];
-    if (!section || !window.confirm(`确定删除“${section.title || `设定 ${index + 1}`}”吗？`)) return;
+    if (!section || !(await confirmToast(
+      `确定删除“${section.title || `设定 ${index + 1}`}”吗？`,
+      { title: "删除设定", confirmLabel: "确认删除" }
+    ))) return;
     knowledgeEditorSections.splice(index, 1);
     knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
     markEntityEditorDirty();
@@ -4173,7 +4189,10 @@ async function pasteCharacterSectionImages(files, textarea) {
 }
 
 async function closeCharacterSectionEditor({ force = false } = {}) {
-  if (!force && characterSectionEditorDirty && !window.confirm("当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？")) return false;
+  if (!force && characterSectionEditorDirty && !(await confirmToast(
+    "当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？",
+    { title: "放弃未保存修改", confirmLabel: "放弃并继续", cancelLabel: "继续编辑" }
+  ))) return false;
   if (characterSectionPreviewTimer !== null) {
     clearTimeout(characterSectionPreviewTimer);
     characterSectionPreviewTimer = null;
@@ -4211,7 +4230,10 @@ function knowledgeSectionEditorHtml(section = null) {
 }
 
 async function closeKnowledgeSectionEditor({ force = false } = {}) {
-  if (!force && knowledgeSectionEditorDirty && !window.confirm("当前 Markdown 设定有未保存修改，返回设定列表将丢弃这些修改。是否继续？")) return false;
+  if (!force && knowledgeSectionEditorDirty && !(await confirmToast(
+    "当前 Markdown 设定有未保存修改，返回设定列表将丢弃这些修改。是否继续？",
+    { title: "放弃未保存修改", confirmLabel: "放弃并继续", cancelLabel: "继续编辑" }
+  ))) return false;
   knowledgeSectionEditorDirty = false;
   knowledgeSectionEditorIndex = null;
   $("#knowledge-section-editor-view").classList.add("hidden");
@@ -5179,7 +5201,10 @@ async function showVersions() {
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
   $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(version.source)} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
-    if (!window.confirm(`将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`)) return;
+    if (!(await confirmToast(
+      `将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`,
+      { title: "恢复历史版本", confirmLabel: "确认恢复" }
+    ))) return;
     state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
     lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
     $("#chapter-title").value = state.chapter.title;
@@ -5241,7 +5266,7 @@ function renderImportHistory(versions, nextPage = null) {
       }, 5000);
       return;
     }
-    if (!confirmDiscardChanges("当前章节有未保存修改，恢复正文会丢弃这些本地修改。是否继续？")) return;
+    if (!(await confirmDiscardChanges("当前章节有未保存修改，恢复正文会丢弃这些本地修改。是否继续？"))) return;
     button.disabled = true;
     cancelChapterAutoSave();
     const workId = state.work.id;
@@ -5322,11 +5347,13 @@ async function showChapterInsight() {
   panel.innerHTML = `<strong>章节概览${esc(stale)}</strong>${esc(insight.summary || "暂无梗概")}${eventNames.length ? `<br><strong>事件</strong>${esc(eventNames.join("；"))}` : ""}${insight.uncertainties.length ? `<br><strong>待确认</strong>${esc(insight.uncertainties.map((item) => typeof item === "string" ? item : JSON.stringify(item)).join("；"))}` : ""}`;
 }
 
-$("#home-button").addEventListener("click", () => {
-  if (!confirmDiscardChanges()) return;
+$("#home-button").addEventListener("click", async () => {
+  if (!(await confirmDiscardChanges())) return;
   loadWorks().catch((error) => toast(error.message, "error"));
 });
-$("#settings-button").addEventListener("click", showSettingsHub);
+$("#settings-button").addEventListener("click", () => {
+  void showSettingsHub();
+});
 $("#account-button").addEventListener("click", () => {
   const expanded = $("#account-menu").classList.toggle("hidden") === false;
   $("#account-button").setAttribute("aria-expanded", String(expanded));
@@ -5407,7 +5434,7 @@ $("#avatar-file").addEventListener("change", async (event) => {
   }
 });
 $("#avatar-remove-button").addEventListener("click", async () => {
-  if (!state.user?.avatarUrl || !window.confirm("确定移除当前头像吗？")) return;
+  if (!state.user?.avatarUrl || !(await confirmToast("确定移除当前头像吗？", { title: "移除头像", confirmLabel: "确认移除" }))) return;
   $("#avatar-upload-button").disabled = true;
   $("#avatar-remove-button").disabled = true;
   try {
@@ -5460,7 +5487,10 @@ function validatePasswordChangeConfirmation() {
 $("#password-form input[name='newPassword']").addEventListener("input", validatePasswordChangeConfirmation);
 $("#password-form input[name='passwordConfirmation']").addEventListener("input", validatePasswordChangeConfirmation);
 $("#api-key-reset-button").addEventListener("click", async () => {
-  if ($("#api-key-reset-button").textContent.includes("重置") && !window.confirm("重置后，所有使用旧 API Key 的 CLI 会立即退出登录。确定继续吗？")) return;
+  if ($("#api-key-reset-button").textContent.includes("重置") && !(await confirmToast(
+    "重置后，所有使用旧 API Key 的 CLI 会立刻退出登录。确定继续吗？",
+    { title: "重置 API Key", confirmLabel: "确认重置" }
+  ))) return;
   try {
     const result = await api("/api/auth/api-key/reset", { method: "POST", body: {} });
     $("#api-key-status").textContent = `已配置 ${result.prefix}…，尚未使用`;
