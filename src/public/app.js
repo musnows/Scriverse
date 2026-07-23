@@ -4074,6 +4074,7 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
         selection?.addRange(range);
       }
       editor.insertMD(insertions.join("\n\n"));
+      normalizeVditorAttachmentImages(editor);
     }
     return null;
   };
@@ -4113,6 +4114,9 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       if (readOnly) editor?.disabled();
     }
   });
+  const attachmentObserver = new MutationObserver(() => normalizeVditorAttachmentImages(editor));
+  attachmentObserver.observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ["src"] });
+  editor.__attachmentObserver = attachmentObserver;
   host.__vditor = editor;
   if (readOnly) editor.disabled();
   return editor;
@@ -4142,6 +4146,7 @@ function ensureVditorIconScript() {
 
 function destroyVditorEditor(editor) {
   if (!editor) return;
+  editor.__attachmentObserver?.disconnect();
   const host = editor.vditor?.element;
   editor.destroy();
   if (host) delete host.__vditor;
