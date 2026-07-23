@@ -25,7 +25,11 @@ describe("编辑器工具栏布局", () => {
     expect(page.text).toContain('<span id="chapter-path" class="eyebrow">未选择章节</span>\n            <input id="chapter-title"');
     expect(styles.text).toContain('grid-template-areas: "path path" "title actions"');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
-    expect(styles.text).toContain('.file-button, .secondary-button { display: grid; place-items: center; min-height: 30px;');
+    expect(styles.text).toContain('.file-button, .add-button { display: grid; place-items: center;');
+    expect(page.text).toContain('id="new-volume-button" class="add-button"');
+    expect(page.text).not.toContain('id="new-chapter-button"');
+    expect(application.text).toContain('data-new-chapter-volume');
+    expect(application.text).toContain('async function openChapterDialog(volumeId = null)');
     expect(page.text).toContain('<label id="import-file-button" class="file-button" aria-label="导入 TXT / DOCX">');
     expect(page.text).toContain('<span class="import-file-label import-file-label-full" aria-hidden="true">导入 TXT / DOCX</span>');
     expect(page.text).toContain('<span class="import-file-label import-file-label-compact" aria-hidden="true">导入TXT/DOCX</span>');

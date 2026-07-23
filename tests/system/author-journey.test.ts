@@ -75,7 +75,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="chapter-line-numbers"');
     expect(page.text).toContain('id="toggle-whitespace-button"');
     expect(page.text).toContain('id="chapter-whitespace-overlay"');
-    expect(page.text).toContain('id="new-volume-button"');
+    expect(page.text).toContain('id="new-volume-button" class="add-button"');
+    expect(page.text).not.toContain('id="new-chapter-button"');
     expect(application.text).toContain("选择第 ${index + 1} 行");
     expect(page.text).toContain('id="left-panel-resize"');
     expect(page.text).toContain('id="ai-panel-resize"');
@@ -161,7 +162,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("const shelfOnboardingSteps = [");
     expect(application.text).toContain("const workspaceOnboardingSteps = [");
     expect(application.text).toContain("function positionOnboardingElements()");
-    expect(application.text).toContain('selector: "#new-chapter-button"');
+    expect(application.text).toContain('selector: "[data-new-chapter-volume]"');
     expect(application.text).toContain('selector: ".quick-actions button[data-task=\\"continue\\"]"');
     expect(application.text).toContain("function scheduleFirstUseOnboarding()");
     expect(application.text).toContain('api("/api/auth/onboarding/complete", { method: "POST", body: {} })');
@@ -240,8 +241,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ai-button"');
     expect(page.text).toContain('rel="icon" href="/icon.svg?v=20260712"');
     expect(page.text).toContain('rel="manifest" href="/site.webmanifest"');
-    expect(page.text).toContain('/app.js?v=20260723-knowledge-editor-5');
-    expect(page.text).toContain('/styles.css?v=20260723-knowledge-editor-5');
+    expect(page.text).toContain('/app.js?v=20260723-prose-create-actions');
+    expect(page.text).toContain('/styles.css?v=20260723-prose-create-actions');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
@@ -330,13 +331,16 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('classList.toggle("prose-hidden-mode", proseHidden)');
     expect(application.text).toContain('classList.toggle("permission-hidden", !canReadModule(item.uiModule))');
     expect(application.text).toContain('$("#module-nav [data-work-settings]").classList.toggle("permission-hidden"');
+    expect(application.text).toContain('$("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly)');
+    expect(application.text).toContain('$("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly)');
     expect(application.text).toContain('$(".ai-panel").classList.toggle("permission-hidden", aiHidden)');
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
     expect(styles.text).toContain("body.work-viewer-mode [data-merge-review]");
     expect(application.text).toContain('item.status === "pending" && canResolveReview');
     expect(application.text).toContain('canReadCharacters ? apiAllPages');
     expect(application.text).toContain('const canReadAggregate = hasWork && canReadAggregateContent()');
-    expect(styles.text).toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
+    expect(styles.text).not.toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
+    expect(styles.text).toContain(".add-button { width: 24px; height: 24px;");
     expect(styles.text).toContain(".member-permission-grid");
     expect(styles.text).toContain(".work-access-options");
     expect(application.text).toContain('class="book-card-settings"');
@@ -403,7 +407,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".book-card-settings {");
     expect(styles.text).toContain("padding: 2px 6px;");
     expect(styles.text).toContain(".left-panel { border-right: 1px solid var(--line); padding: 18px 14px 16px; overflow-y: auto; }");
-    expect(styles.text).toContain(".left-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 0 0 15px; }");
+    expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
@@ -411,6 +415,10 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('field("keywords", "分卷关键词（逐条填写）", "item-list"');
     expect(application.text).not.toContain("data-edit-volume");
     expect(application.text).toContain('title="左键折叠，右键设置分卷"');
+    expect(application.text).toContain("const proseEditable = canEditProse();");
+    expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
+    expect(application.text).toContain('class="add-button chapter-add-button"');
+    expect(application.text).toContain('aria-label="在“${esc(volume.title)}”中新建章节"');
     expect(application.text).toContain('button.dataset.volumeToggle));');
     expect(application.text).toContain('class="record-card character-card" data-open-character');
     expect(application.text).toContain("所属组织");
