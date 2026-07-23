@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
 import { loadMasterSecret } from "./credential-vault.js";
-import { resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
+import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
 import { logger, sanitizeError } from "./logger.js";
 
 export type LocalServerOptions = {
@@ -34,12 +34,15 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   let runtime: Runtime;
   try {
     security = resolveRuntimeSecurity(options.env);
+    const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
     runtime = createRuntime({
       databasePath: options.databasePath,
       attachmentDirectory: join(options.dataDirectory, "attachments"),
       masterSecret: loadMasterSecret(join(options.dataDirectory, "master.key"), options.env.AI_NOVEL_MASTER_KEY),
       publicPath,
-      security
+      security,
+      disableUserAuth: devAuthBypass,
+      devAuthBypass
     });
   } catch (error) {
     logger.error("server.initialization_failed", { host: options.host, port: options.port, error: sanitizeError(error) });

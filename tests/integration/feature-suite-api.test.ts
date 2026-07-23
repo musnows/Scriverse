@@ -140,6 +140,67 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(remaining.body.data.organizations).toEqual([expect.objectContaining({ name: "深空同盟" })]);
   });
 
+  it("为设定库、种族和组织保存 Markdown 正文并保持旧设定数组兼容", async () => {
+    const { workId } = await seedWork(runtime);
+    const markdown = "## 共同规律\n\n- 只能在月光下显现\n- 不得跨越旧约边界";
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "月光规则",
+      category: "世界规则",
+      content: markdown
+    }).expect(201);
+    expect(setting.body.data.content).toBe(markdown);
+
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "月裔",
+      settingsMarkdown: markdown
+    }).expect(201);
+    expect(race.body.data).toMatchObject({ settings: [markdown], settingsMarkdown: markdown });
+
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "月下议会",
+      settingsMarkdown: markdown
+    }).expect(201);
+    expect(organization.body.data).toMatchObject({ settings: [markdown], settingsMarkdown: markdown });
+
+    const updatedRace = await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({
+      settingsMarkdown: "### 更新后的共同规律\n\n已完成登记。"
+    }).expect(200);
+    expect(updatedRace.body.data.settingsMarkdown).toContain("更新后的共同规律");
+    const updatedOrganization = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      settingsMarkdown: "### 更新后的组织章程\n\n全员需遵守。"
+    }).expect(200);
+    expect(updatedOrganization.body.data.settingsMarkdown).toContain("更新后的组织章程");
+  });
+
+  it("按标题分别保存种族和组织 Markdown 设定章节", async () => {
+    const { workId } = await seedWork(runtime);
+    const sections = [
+      { title: "生理特征", contentMarkdown: "体型会随月相变化。", sortOrder: 0 },
+      { title: "社会结构", contentMarkdown: "由长老会维护旧约。", sortOrder: 1 }
+    ];
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "月裔章节版",
+      settingsSections: sections
+    }).expect(201);
+    expect(race.body.data).toMatchObject({
+      settings: ["体型会随月相变化。", "由长老会维护旧约。"],
+      settingsSections: sections
+    });
+
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "月下议会章节版",
+      settingsSections: sections
+    }).expect(201);
+    expect(organization.body.data.settingsSections).toEqual(sections.map((section) => ({ ...section, summary: "" })));
+
+    const updated = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      settingsSections: [{ title: "新章程", contentMarkdown: "成员必须遵守月下议会的誓约。", sortOrder: 0 }]
+    }).expect(200);
+    expect(updated.body.data.settingsSections).toEqual([
+      { title: "新章程", contentMarkdown: "成员必须遵守月下议会的誓约。", summary: "", sortOrder: 0 }
+    ]);
+  });
+
   it("先维护种族主数据，再由人物引用并与组织保持独立", async () => {
     const { workId } = await seedWork(runtime);
     const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);

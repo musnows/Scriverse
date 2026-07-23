@@ -9,7 +9,7 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260723-import-permission-guard">
+    <link rel="stylesheet" href="/styles.css?v=20260723-knowledge-editor-5">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -345,27 +345,31 @@
     </dialog>
 
     <section id="entity-editor-view" class="entity-editor-view hidden" aria-label="全屏资料编辑">
-      <form id="setting-editor-form" class="entity-editor-page hidden" aria-labelledby="setting-editor-title">
-        <header class="entity-editor-header">
+      <form id="setting-editor-form" class="entity-editor-page hidden" aria-label="设定编辑器">
+        <header class="entity-editor-header setting-editor-header">
           <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
           <div class="entity-editor-heading">
             <span id="setting-editor-eyebrow" class="eyebrow">作者事实</span>
-            <h1 id="setting-editor-title">新建设定</h1>
+            <input id="setting-editor-name" class="setting-editor-title-input" name="title" maxlength="200" placeholder="新建设定" aria-label="设定标题">
+            <div class="setting-editor-header-fields">
+              <label>分类<select id="setting-editor-category" name="category">
+                <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
+              </select></label>
+              <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
+              <label id="setting-change-note-field" class="setting-editor-change-note">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
+            </div>
           </div>
           <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
         </header>
         <div class="setting-editor-workspace">
-          <aside class="setting-editor-sidebar" aria-label="设定元数据">
-            <label>标题<input id="setting-editor-name" name="title" maxlength="200" required></label>
-            <label>分类<select id="setting-editor-category" name="category">
-              <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
-            </select></label>
-            <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
-            <label id="setting-change-note-field">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
-          </aside>
           <main class="setting-editor-content">
-            <label for="setting-editor-body"><span>设定正文</span><small>适合维护长篇世界观、规则、历史、地点与创作约束。</small></label>
-            <textarea id="setting-editor-body" name="content" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容" required></textarea>
+            <div class="setting-markdown-field" data-markdown-editor>
+              <div class="setting-markdown-heading"><span>设定正文</span></div>
+              <div class="setting-markdown-compose">
+                <label><textarea id="setting-editor-body" name="content" data-markdown-textarea aria-label="Markdown 原文" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容"></textarea></label>
+                <div role="region" aria-label="安全预览"><article class="markdown-editor-preview message-body" data-markdown-preview><p class="markdown-editor-empty">预览区域暂无内容。</p></article></div>
+              </div>
+            </div>
           </main>
         </div>
       </form>
@@ -401,8 +405,30 @@
         </footer>
       </form>
 
+      <form id="knowledge-editor-form" class="entity-editor-page hidden" aria-labelledby="knowledge-editor-title">
+        <header class="character-editor-header knowledge-editor-header">
+          <button id="knowledge-editor-close" class="entity-editor-back" type="button">返回列表</button>
+          <div>
+            <span id="knowledge-editor-eyebrow" class="eyebrow">世界档案</span>
+            <div class="character-editor-title-row"><h1 id="knowledge-editor-title">新建档案</h1><span id="knowledge-editor-version" class="character-version-badge">新档案</span></div>
+          </div>
+          <div class="character-editor-header-actions"><span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span></div>
+        </header>
+        <div class="character-editor-workspace knowledge-editor-workspace">
+          <nav id="knowledge-editor-nav" class="character-editor-nav" role="tablist" aria-label="世界档案编辑分区"></nav>
+          <main id="knowledge-editor-fields" class="character-editor-fields"></main>
+        </div>
+        <footer class="character-editor-actions knowledge-editor-actions">
+          <p id="knowledge-editor-footer-note">保存后返回当前列表。</p>
+          <div><button id="knowledge-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="knowledge-editor-submit" class="primary-button" type="submit">保存档案</button></div>
+        </footer>
+      </form>
+
       <section id="character-section-editor-view" class="entity-editor-page hidden" aria-labelledby="character-section-editor-title">
       <div id="character-section-editor-host" class="character-section-editor-host"></div>
+      </section>
+      <section id="knowledge-section-editor-view" class="entity-editor-page hidden" aria-labelledby="knowledge-section-editor-title">
+      <div id="knowledge-section-editor-host" class="character-section-editor-host"></div>
       </section>
     </section>
 
@@ -627,6 +653,6 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260723-import-permission-guard"></script>
+    <script type="module" src="/app.js?v=20260723-knowledge-editor-5"></script>
   </body>
 </html>

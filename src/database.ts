@@ -1529,9 +1529,40 @@ export class Database {
     }
     if (!applied.has(36)) {
       this.transaction(() => {
+        for (const table of ["races", "organizations"] as const) {
+          const columns = new Set(this.all(`PRAGMA table_info(${table})`).map((row) => String(row.name)));
+          if (!columns.has("settings_sections_json")) {
+            this.run(`ALTER TABLE ${table} ADD COLUMN settings_sections_json TEXT NOT NULL DEFAULT '[]'`);
+          }
+          const rows = this.all<{ id: string; settings_json: string; settings_sections_json: string }>(
+            `SELECT id, settings_json, settings_sections_json FROM ${table}`
+          );
+          for (const row of rows) {
+            let existing: unknown = [];
+            let legacy: unknown = [];
+            try { existing = JSON.parse(String(row.settings_sections_json)); } catch { existing = []; }
+            try { legacy = JSON.parse(String(row.settings_json)); } catch { legacy = []; }
+            if (Array.isArray(existing) && existing.length > 0) continue;
+            const sections = Array.isArray(legacy)
+              ? legacy.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((contentMarkdown, index) => ({
+                title: contentMarkdown.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/mu)?.[1]?.trim() || `设定 ${index + 1}`,
+                contentMarkdown,
+                summary: "",
+                sortOrder: index
+              }))
+              : [];
+            this.run(`UPDATE ${table} SET settings_sections_json = ? WHERE id = ?`, JSON.stringify(sections), row.id);
+          }
+        }
         this.run("CREATE INDEX IF NOT EXISTS idx_tasks_work_created ON analysis_tasks(work_id, created_at DESC, id DESC)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (36, ?)", new Date().toISOString());
       });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
   }
 
