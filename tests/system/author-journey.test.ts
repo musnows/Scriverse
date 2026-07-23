@@ -263,7 +263,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260724-character-card-edit');
-    expect(page.text).toContain('/styles.css?v=20260724-character-card-edit');
+    expect(page.text).toContain('/styles.css?v=20260724-relationship-light-theme');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
@@ -301,6 +301,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("结果进入审核状态");
     expect(styles.text).toContain("--toast-bg:");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
+    expect(styles.text).toContain("--relationship-network-surface: #eef2f7");
+    expect(styles.text).toContain("--relationship-network-surface: #12121a");
+    expect(styles.text).toContain(".relationship-network-card .relationship-map-toolbar");
     expect(styles.text).toContain("background: var(--toast-bg)");
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
