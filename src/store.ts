@@ -141,6 +141,8 @@ type OrganizationInput = {
   name: string;
   description?: string;
   settings?: string[];
+  settingsMarkdown?: string;
+  settingsSections?: KnowledgeSectionInput[];
   memberIds?: string[];
 };
 
@@ -149,8 +151,99 @@ type RaceInput = {
   parentRaceId?: string | null;
   description?: string;
   settings?: string[];
+  settingsMarkdown?: string;
+  settingsSections?: KnowledgeSectionInput[];
   memberIds?: string[];
 };
+
+export type KnowledgeSectionInput = {
+  title: string;
+  contentMarkdown?: string;
+  summary?: string;
+  sortOrder?: number;
+};
+
+type KnowledgeSection = {
+  title: string;
+  contentMarkdown: string;
+  summary: string;
+  sortOrder: number;
+};
+
+function settingsFromInput(settingsMarkdown?: string, settings?: string[], fallback: string[] = []): string[] {
+  if (settingsMarkdown !== undefined) return settingsMarkdown.trim() ? [settingsMarkdown] : [];
+  return settings ?? fallback;
+}
+
+function settingsMarkdownFromList(settings: unknown): string {
+  return Array.isArray(settings) ? settings.map(String).filter(Boolean).join("\n\n") : "";
+}
+
+function knowledgeSectionTitle(contentMarkdown: string, index: number): string {
+  const heading = contentMarkdown.match(/^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/mu)?.[1]?.trim();
+  return heading || `设定 ${index + 1}`;
+}
+
+function normalizeKnowledgeSections(sections: KnowledgeSectionInput[]): KnowledgeSection[] {
+  return sections.map((section, index) => {
+    const contentMarkdown = section.contentMarkdown ?? "";
+    return {
+      title: section.title.trim() || knowledgeSectionTitle(contentMarkdown, index),
+      contentMarkdown,
+      summary: section.summary?.trim() ?? "",
+      sortOrder: Number.isFinite(section.sortOrder) ? Math.max(0, Math.trunc(section.sortOrder!)) : index
+    };
+  });
+}
+
+function knowledgeSectionInput(value: unknown, index: number): KnowledgeSectionInput | null {
+  if (!isRecord(value)) return null;
+  const contentMarkdown = typeof value.contentMarkdown === "string"
+    ? value.contentMarkdown
+    : typeof value.content === "string" ? value.content : "";
+  const title = typeof value.title === "string" ? value.title : "";
+  return {
+    title: title || knowledgeSectionTitle(contentMarkdown, index),
+    contentMarkdown,
+    summary: typeof value.summary === "string" ? value.summary : "",
+    sortOrder: typeof value.sortOrder === "number" ? value.sortOrder : index
+  };
+}
+
+function knowledgeSectionsFromStored(value: unknown, fallback: string[] = []): KnowledgeSection[] {
+  const parsed = typeof value === "string" ? json<unknown>(value, []) : value;
+  if (Array.isArray(parsed)) {
+    const sections = parsed.map((item, index) => knowledgeSectionInput(item, index)).filter((item): item is KnowledgeSectionInput => item !== null);
+    if (sections.length > 0 || fallback.length === 0) return normalizeKnowledgeSections(sections);
+  }
+  return normalizeKnowledgeSections(fallback.map((contentMarkdown, index) => ({
+    title: knowledgeSectionTitle(contentMarkdown, index),
+    contentMarkdown,
+    sortOrder: index
+  })));
+}
+
+function knowledgeSectionsFromInput(
+  sections: KnowledgeSectionInput[] | undefined,
+  settingsMarkdown: string | undefined,
+  settings: string[] | undefined,
+  fallbackSections: KnowledgeSection[] = []
+): KnowledgeSection[] {
+  if (sections !== undefined) return normalizeKnowledgeSections(sections);
+  if (settingsMarkdown !== undefined || settings !== undefined) {
+    const legacySettings = settingsFromInput(settingsMarkdown, settings);
+    return knowledgeSectionsFromStored(legacySettings.map((contentMarkdown, index) => ({
+      title: knowledgeSectionTitle(contentMarkdown, index),
+      contentMarkdown,
+      sortOrder: index
+    })));
+  }
+  return fallbackSections;
+}
+
+function settingsFromKnowledgeSections(sections: KnowledgeSection[]): string[] {
+  return sections.map((section) => section.contentMarkdown).filter((content) => content.trim());
+}
 
 type ChapterOutlineInput = {
   goal?: string;
@@ -435,12 +528,14 @@ export class Store {
       parentRaceId: entity.parentRaceId,
       description: entity.description,
       settings: entity.settings,
+      settingsSections: entity.settingsSections,
       memberIds: entity.memberIds
     };
     if (type === "organization") return {
       name: entity.name,
       description: entity.description,
       settings: entity.settings,
+      settingsSections: entity.settingsSections,
       memberIds: entity.memberIds
     };
     if (type === "timeline-track") return {
@@ -2389,6 +2484,7 @@ export class Store {
     changeNote = ""
   ): Record<string, unknown> {
     const timestamp = now();
+    const content = input.content;
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO settings (id, work_id, title, category, content, tags_json, status, locked, evidence_json, scope_json, author_note, created_at, updated_at)
@@ -2397,7 +2493,7 @@ export class Store {
         workId,
         input.title,
         input.category,
-        input.content,
+        content,
         JSON.stringify(input.tags ?? []),
         input.status ?? "draft",
         input.locked ? 1 : 0,
@@ -2407,6 +2503,7 @@ export class Store {
         timestamp,
         timestamp
       );
+      this.syncMarkdownAttachmentReferences(workId, "setting", settingId, content);
       this.recordEntityVersion("setting", settingId, source, sourceRef, changeNote || "建立世界观设定", timestamp);
       this.audit(workId, source === "restore" ? "setting.restored" : "setting.created", "setting", settingId, {
         locked: input.locked ?? false,
@@ -2444,6 +2541,7 @@ export class Store {
     expectedVersionNo?: number
   ): Record<string, unknown> {
     const current = this.getSetting(settingId);
+    const content = input.content ?? String(current.content);
     this.db.transaction(() => {
       this.assertExpectedVersion("setting", settingId, expectedVersionNo, "设定");
       this.db.run(
@@ -2451,7 +2549,7 @@ export class Store {
          evidence_json = ?, scope_json = ?, author_note = ?, updated_at = ? WHERE id = ?`,
         input.title ?? String(current.title),
         input.category ?? String(current.category),
-        input.content ?? String(current.content),
+        content,
         JSON.stringify(input.tags ?? current.tags),
         input.status ?? String(current.status),
         (input.locked ?? Boolean(current.locked)) ? 1 : 0,
@@ -2461,6 +2559,7 @@ export class Store {
         now(),
         settingId
       );
+      this.syncMarkdownAttachmentReferences(String(current.workId), "setting", settingId, content);
       this.recordEntityVersion("setting", settingId, source, sourceRef, changeNote || "更新世界观设定");
       this.audit(String(current.workId), "setting.updated", "setting", settingId, { fields: Object.keys(input), source, sourceRef });
     });
@@ -2472,6 +2571,7 @@ export class Store {
     this.db.transaction(() => {
       this.assertExpectedVersion("setting", settingId, expectedVersionNo, "设定");
       this.recordEntityVersion("setting", settingId, "delete", null, "删除世界观设定");
+      this.clearMarkdownAttachmentReferences("setting", settingId);
       this.db.run("DELETE FROM settings WHERE id = ?", settingId);
       this.audit(String(current.workId), "setting.deleted", "setting", settingId);
     });
@@ -2518,21 +2618,25 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, settings_sections_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         raceId,
         workId,
         parentRaceId,
         name,
         normalizedName,
         input.description ?? "",
-        JSON.stringify(input.settings ?? []),
+        JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         timestamp
       );
+      this.syncMarkdownAttachmentReferences(workId, "race", raceId, settingsMarkdownFromList(settings));
       this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `设为种族“${name}”`);
       this.recordEntityVersion("race", raceId, source, sourceRef, changeNote || "建立种族档案", timestamp);
@@ -2586,18 +2690,23 @@ export class Store {
       ? [...new Set([...(current.memberIds as string[]), ...(memberIds ?? [])])]
       : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
+    const currentSections = knowledgeSectionsFromStored(current.settingsSections, current.settings as string[]);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings, currentSections);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     this.db.transaction(() => {
       this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.db.run(
-        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
         parentRaceId,
         name,
         normalizedName,
         input.description ?? String(current.description),
-        JSON.stringify(input.settings ?? current.settings),
+        JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         now(),
         raceId
       );
+      this.syncMarkdownAttachmentReferences(workId, "race", raceId, settingsMarkdownFromList(settings));
       if (nameChanged) this.db.run("UPDATE characters SET species = ?, updated_at = ? WHERE race_id = ?", name, now(), raceId);
       if (memberIds) this.replaceRaceMembers(raceId, name, memberIds);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, nameChanged ? `种族更名为“${name}”` : `种族“${name}”成员关系变更`);
@@ -2618,6 +2727,7 @@ export class Store {
       this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.recordEntityVersion("race", raceId, "delete", null, "删除种族档案");
       this.db.run("UPDATE characters SET race_id = NULL, species = '', updated_at = ? WHERE race_id = ?", now(), raceId);
+      this.clearMarkdownAttachmentReferences("race", raceId);
       this.db.run("DELETE FROM races WHERE id = ?", raceId);
       this.recordMembershipVersions(memberSnapshots, "race", raceId, `种族“${String(current.name)}”已删除`);
       this.audit(String(current.workId), "race.deleted", "race", raceId);
@@ -2644,18 +2754,22 @@ export class Store {
       : target.parentRaceId as string | null;
     const descriptionParts = [String(target.description).trim(), String(source.description).trim()].filter(Boolean);
     const description = [...new Set(descriptionParts)].join("\n\n");
-    const settings = [...new Set([...(target.settings as string[]), ...(source.settings as string[])])];
+    const settingsSections = [...knowledgeSectionsFromStored(target.settingsSections, target.settings as string[]), ...knowledgeSectionsFromStored(source.settingsSections, source.settings as string[])]
+      .map((section, index) => ({ ...section, sortOrder: index }));
+    const settings = settingsFromKnowledgeSections(settingsSections);
 
     this.db.transaction(() => {
       this.recordEntityVersion("race", sourceRaceId, "delete", mergeId, `合并至种族“${String(target.name)}”`, timestamp);
       this.db.run(
-        "UPDATE races SET parent_race_id = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE races SET parent_race_id = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?",
         targetParentRaceId,
         description,
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         targetRaceId
       );
+      this.syncMarkdownAttachmentReferences(workId, "race", targetRaceId, settingsMarkdownFromList(settings));
       this.db.run(
         "UPDATE characters SET race_id = ?, species = ?, updated_at = ? WHERE race_id = ?",
         targetRaceId,
@@ -2667,6 +2781,7 @@ export class Store {
         this.db.run("UPDATE races SET parent_race_id = ?, updated_at = ? WHERE id = ?", targetRaceId, timestamp, childRaceId);
         this.recordEntityVersion("race", childRaceId, "merge", mergeId, `因种族“${String(source.name)}”合并而迁移父种族`, timestamp);
       }
+      this.clearMarkdownAttachmentReferences("race", sourceRaceId);
       this.db.run("DELETE FROM races WHERE id = ?", sourceRaceId);
       this.recordMembershipVersions(memberSnapshots, "race", targetRaceId, `合并种族“${String(source.name)}”`);
       this.recordEntityVersion("race", targetRaceId, "merge", mergeId, `合并种族“${String(source.name)}”`, timestamp);
@@ -2685,6 +2800,8 @@ export class Store {
   private mapRace(row: Row): Record<string, unknown> {
     const raceId = requiredString(row, "id");
     const lineage = this.raceLineage(raceId);
+    const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const members = this.db.all("SELECT id, name FROM characters WHERE race_id = ? ORDER BY name", requiredString(row, "id")).map((member) => ({
       characterId: requiredString(member, "id"),
       name: requiredString(member, "name")
@@ -2695,10 +2812,15 @@ export class Store {
       parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
-      settings: json(requiredString(row, "settings_json"), []),
+      settings,
+      settingsMarkdown: settingsMarkdownFromList(settings),
+      settingsSections,
       lineage: lineage.map((item) => ({ id: item.id, name: item.name })),
-      effectiveSettings: lineage.flatMap((item, index) => item.settings.map((value) => ({
-        value,
+      effectiveSettings: lineage.flatMap((item, index) => item.settingsSections.map((section) => ({
+        title: section.title,
+        summary: section.summary,
+        sortOrder: section.sortOrder,
+        value: section.contentMarkdown,
         sourceRaceId: item.id,
         sourceRaceName: item.name,
         inherited: index < lineage.length - 1
@@ -2743,19 +2865,21 @@ export class Store {
     }
   }
 
-  private raceLineage(raceId: string): Array<{ id: string; name: string; settings: string[] }> {
-    const lineage: Array<{ id: string; name: string; settings: string[] }> = [];
+  private raceLineage(raceId: string): Array<{ id: string; name: string; settings: string[]; settingsSections: KnowledgeSection[] }> {
+    const lineage: Array<{ id: string; name: string; settings: string[]; settingsSections: KnowledgeSection[] }> = [];
     const seen = new Set<string>();
     let currentId: string | null = raceId;
     while (currentId) {
       if (seen.has(currentId)) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级存在循环");
       seen.add(currentId);
-      const row = this.db.get("SELECT id, name, settings_json, parent_race_id FROM races WHERE id = ?", currentId);
+      const row = this.db.get("SELECT id, name, settings_json, settings_sections_json, parent_race_id FROM races WHERE id = ?", currentId);
       if (!row) throw new AppError(500, "RACE_HIERARCHY_INVALID", "种族层级引用了不存在的父种族");
+      const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
       lineage.push({
         id: requiredString(row, "id"),
         name: requiredString(row, "name"),
-        settings: json<string[]>(requiredString(row, "settings_json"), [])
+        settings: settingsFromKnowledgeSections(settingsSections),
+        settingsSections
       });
       currentId = optionalString(row, "parent_race_id");
     }
@@ -2790,20 +2914,24 @@ export class Store {
     const memberIds = [...new Set(input.memberIds ?? [])];
     this.assertCharactersInWork(workId, memberIds);
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO organizations (id, work_id, name, normalized_name, description, settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO organizations (id, work_id, name, normalized_name, description, settings_json, settings_sections_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         organizationId,
         workId,
         name,
         normalizedName,
         input.description ?? "",
-        JSON.stringify(input.settings ?? []),
+        JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         timestamp
       );
+      this.syncMarkdownAttachmentReferences(workId, "organization", organizationId, settingsMarkdownFromList(settings));
       this.replaceOrganizationMembers(organizationId, memberIds);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `加入组织“${name}”`);
       this.recordEntityVersion("organization", organizationId, source, sourceRef, changeNote || "建立组织档案", timestamp);
@@ -2850,17 +2978,22 @@ export class Store {
     if (memberIds) this.assertCharactersInWork(workId, memberIds);
     const touchedMemberIds = memberIds ? [...new Set([...(current.memberIds as string[]), ...memberIds])] : [];
     const memberSnapshots = this.captureCharacterSnapshots(touchedMemberIds);
+    const currentSections = knowledgeSectionsFromStored(current.settingsSections, current.settings as string[]);
+    const settingsSections = knowledgeSectionsFromInput(input.settingsSections, input.settingsMarkdown, input.settings, currentSections);
+    const settings = settingsFromKnowledgeSections(settingsSections);
     this.db.transaction(() => {
       this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.db.run(
-        `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
         name,
         normalizedName,
         input.description ?? String(current.description),
-        JSON.stringify(input.settings ?? current.settings),
+        JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         now(),
         organizationId
       );
+      this.syncMarkdownAttachmentReferences(workId, "organization", organizationId, settingsMarkdownFromList(settings));
       if (memberIds) {
         this.replaceOrganizationMembers(organizationId, memberIds);
         this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${name}”成员关系变更`);
@@ -2877,6 +3010,7 @@ export class Store {
     this.db.transaction(() => {
       this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.recordEntityVersion("organization", organizationId, "delete", null, "删除组织档案");
+      this.clearMarkdownAttachmentReferences("organization", organizationId);
       this.db.run("DELETE FROM organizations WHERE id = ?", organizationId);
       this.recordMembershipVersions(memberSnapshots, "organization", organizationId, `组织“${String(current.name)}”已删除`);
       this.audit(String(current.workId), "organization.deleted", "organization", organizationId);
@@ -2900,7 +3034,9 @@ export class Store {
     const memberSnapshots = this.captureCharacterSnapshots(memberIds);
     const descriptionParts = [String(target.description).trim(), String(source.description).trim()].filter(Boolean);
     const description = [...new Set(descriptionParts)].join("\n\n");
-    const settings = [...new Set([...(target.settings as string[]), ...(source.settings as string[])])];
+    const settingsSections = [...knowledgeSectionsFromStored(target.settingsSections, target.settings as string[]), ...knowledgeSectionsFromStored(source.settingsSections, source.settings as string[])]
+      .map((section, index) => ({ ...section, sortOrder: index }));
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const sourceMemberships = this.db.all(
       "SELECT character_id, role, note, created_at FROM character_organization_memberships WHERE organization_id = ?",
       sourceOrganizationId
@@ -2909,12 +3045,14 @@ export class Store {
     this.db.transaction(() => {
       this.recordEntityVersion("organization", sourceOrganizationId, "delete", mergeId, `合并至组织“${String(target.name)}”`, timestamp);
       this.db.run(
-        "UPDATE organizations SET description = ?, settings_json = ?, updated_at = ? WHERE id = ?",
+        "UPDATE organizations SET description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?",
         description,
         JSON.stringify(settings),
+        JSON.stringify(settingsSections),
         timestamp,
         targetOrganizationId
       );
+      this.syncMarkdownAttachmentReferences(workId, "organization", targetOrganizationId, settingsMarkdownFromList(settings));
       for (const membership of sourceMemberships) {
         this.db.run(
           `INSERT INTO character_organization_memberships (character_id, organization_id, role, note, created_at, updated_at)
@@ -2927,6 +3065,7 @@ export class Store {
           timestamp
         );
       }
+      this.clearMarkdownAttachmentReferences("organization", sourceOrganizationId);
       this.db.run("DELETE FROM organizations WHERE id = ?", sourceOrganizationId);
       this.recordMembershipVersions(memberSnapshots, "organization", targetOrganizationId, `合并组织“${String(source.name)}”`);
       this.recordEntityVersion("organization", targetOrganizationId, "merge", mergeId, `合并组织“${String(source.name)}”`, timestamp);
@@ -2936,6 +3075,8 @@ export class Store {
   }
 
   private mapOrganization(row: Row): Record<string, unknown> {
+    const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
+    const settings = settingsFromKnowledgeSections(settingsSections);
     const members = this.db.all(
       `SELECT c.id, c.name, m.role, m.note
        FROM character_organization_memberships m
@@ -2953,7 +3094,9 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
-      settings: json(requiredString(row, "settings_json"), []),
+      settings,
+      settingsMarkdown: settingsMarkdownFromList(settings),
+      settingsSections,
       memberIds: members.map((member) => member.characterId),
       members,
       versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),
@@ -3268,25 +3411,34 @@ export class Store {
     return [...new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]{1,300})/gu)].map((match) => String(match[1])))];
   }
 
-  private syncCharacterProfileSectionAttachments(section: Record<string, unknown>): void {
-    const sectionId = String(section.id);
-    const workId = String(section.workId);
-    const attachmentIds = this.attachmentIdsInMarkdown(String(section.contentMarkdown));
+  private syncMarkdownAttachmentReferences(workId: string, entityType: string, entityId: string, contentMarkdown: string): void {
+    const attachmentIds = this.attachmentIdsInMarkdown(contentMarkdown);
     for (const attachmentId of attachmentIds) {
       const attachment = this.getAttachment(attachmentId);
       if (attachment.workId !== workId) throw new AppError(400, "ATTACHMENT_WORK_MISMATCH", "附件不属于当前作品");
     }
-    this.db.run("DELETE FROM attachment_references WHERE entity_type = 'character-section' AND entity_id = ?", sectionId);
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = ? AND entity_id = ?", entityType, entityId);
     for (const attachmentId of attachmentIds) {
       this.db.run(
         `INSERT INTO attachment_references (attachment_id, work_id, entity_type, entity_id, created_at)
-         VALUES (?, ?, 'character-section', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?)`,
         attachmentId,
         workId,
-        sectionId,
+        entityType,
+        entityId,
         now()
       );
     }
+  }
+
+  private clearMarkdownAttachmentReferences(entityType: string, entityId: string): void {
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = ? AND entity_id = ?", entityType, entityId);
+  }
+
+  private syncCharacterProfileSectionAttachments(section: Record<string, unknown>): void {
+    const sectionId = String(section.id);
+    const workId = String(section.workId);
+    this.syncMarkdownAttachmentReferences(workId, "character-section", sectionId, String(section.contentMarkdown));
   }
 
   createCharacterProfileSection(
@@ -3585,7 +3737,7 @@ export class Store {
   deleteAttachment(attachmentId: string): { storageKey: string; removeStoredFile: boolean } {
     const attachment = this.getAttachment(attachmentId);
     const references = Number(this.db.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count ?? 0);
-    if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被人物档案章节引用，无法删除");
+    if (references > 0) throw new AppError(409, "ATTACHMENT_IN_USE", "附件仍被资料引用，无法删除");
     const storageKey = String(attachment.storageKey);
     this.db.transaction(() => {
       this.db.run("DELETE FROM attachments WHERE id = ?", attachmentId);
@@ -5112,14 +5264,39 @@ export class Store {
 
   listTasks(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC", workId).map((row) => this.mapTask(row));
+    return this.db.all("SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC", workId).map((row) => this.mapTask(row));
   }
 
   listTasksPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
-    const rows = this.db.all(`SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC${page.sql}`, workId, ...page.params);
+    const rows = this.db.all(`SELECT * FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`, workId, ...page.params);
     return paginated(rows.map((row) => this.mapTask(row)), pagination);
+  }
+
+  listTaskSummariesPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT id, work_id, task_type, scope_json, status, progress, created_at, updated_at
+       FROM analysis_tasks WHERE work_id = ? ORDER BY created_at DESC, id DESC${page.sql}`,
+      workId,
+      ...page.params
+    );
+    const chapterSummaries = new Map(this.db.all(
+      `SELECT chapter.id, chapter.title, volume.title AS volume_title
+       FROM chapters chapter JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ?`,
+      workId
+    ).map((row) => [
+      requiredString(row, "id"),
+      `${requiredString(row, "volume_title")} · ${requiredString(row, "title")}`
+    ] as const));
+    const volumeTitles = new Map(this.db.all(
+      "SELECT id, title FROM volumes WHERE work_id = ?",
+      workId
+    ).map((row) => [requiredString(row, "id"), requiredString(row, "title")] as const));
+    return paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles)), pagination);
   }
 
   getTask(taskId: string): Record<string, unknown> {
@@ -5232,6 +5409,31 @@ export class Store {
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
+  }
+
+  private mapTaskSummary(row: Row, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): Record<string, unknown> {
+    const scope = json<Record<string, unknown>>(requiredString(row, "scope_json"), {});
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      taskType: requiredString(row, "task_type"),
+      scope,
+      scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles),
+      status: requiredString(row, "status"),
+      progress: numberValue(row, "progress"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private taskScopeSummaryFromMaps(scope: Record<string, unknown>, chapterSummaries: Map<string, string>, volumeTitles: Map<string, string>): string {
+    if (typeof scope.chapterId === "string") return chapterSummaries.get(scope.chapterId) ?? "章节已删除";
+    if (scope.type === "volume" && typeof scope.volumeId === "string") {
+      const title = volumeTitles.get(scope.volumeId);
+      return title ? `分卷 · ${title}` : "分卷已删除";
+    }
+    if (scope.type === "book" || Object.keys(scope).length === 0) return "全书";
+    return "未指定范围";
   }
 
   private taskScopeSummary(workId: string, scope: Record<string, unknown>): string {

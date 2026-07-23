@@ -30,18 +30,23 @@ describe("页面刷新路由", () => {
     expect(parsePageRoute("#view=login")).toEqual({ view: "login" });
   });
 
-  it("往返保存设定和角色全屏编辑页", () => {
+  it("往返保存设定、角色、种族和组织全屏编辑页", () => {
     const settingHash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2" });
     expect(parsePageRoute(settingHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "setting", entityId: "setting-2" });
 
     const characterHash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity: "character" });
     expect(parsePageRoute(characterHash)).toEqual({ view: "entity-editor", workId: "work-1", entity: "character", entityId: null });
+
+    for (const entity of ["race", "organization"]) {
+      const hash = serializePageRoute({ view: "entity-editor", workId: "work-1", entity });
+      expect(parsePageRoute(hash)).toEqual({ view: "entity-editor", workId: "work-1", entity, entityId: null });
+    }
   });
 
   it("拒绝未知模块和不完整作品地址", () => {
     expect(parsePageRoute("#view=module&work=work-1&module=unknown")).toEqual({ view: "shelf" });
     expect(parsePageRoute("#view=editor&chapter=chapter-1")).toEqual({ view: "shelf" });
     expect(serializePageRoute({ view: "module", workId: "work-1", module: "unknown" })).toBe("#view=shelf");
-    expect(parsePageRoute("#view=entity-editor&work=work-1&entity=organization")).toEqual({ view: "shelf" });
+    expect(parsePageRoute("#view=entity-editor&work=work-1&entity=unknown")).toEqual({ view: "shelf" });
   });
 });

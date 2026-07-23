@@ -140,6 +140,100 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(remaining.body.data.organizations).toEqual([expect.objectContaining({ name: "深空同盟" })]);
   });
 
+  it("为设定库、种族和组织保存 Markdown 正文并保持旧设定数组兼容", async () => {
+    const { workId } = await seedWork(runtime);
+    const markdown = "## 共同规律\n\n- 只能在月光下显现\n- 不得跨越旧约边界";
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "月光规则",
+      category: "世界规则",
+      content: markdown
+    }).expect(201);
+    expect(setting.body.data.content).toBe(markdown);
+
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "月裔",
+      settingsMarkdown: markdown
+    }).expect(201);
+    expect(race.body.data).toMatchObject({ settings: [markdown], settingsMarkdown: markdown });
+
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "月下议会",
+      settingsMarkdown: markdown
+    }).expect(201);
+    expect(organization.body.data).toMatchObject({ settings: [markdown], settingsMarkdown: markdown });
+
+    const updatedRace = await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({
+      settingsMarkdown: "### 更新后的共同规律\n\n已完成登记。"
+    }).expect(200);
+    expect(updatedRace.body.data.settingsMarkdown).toContain("更新后的共同规律");
+    const updatedOrganization = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      settingsMarkdown: "### 更新后的组织章程\n\n全员需遵守。"
+    }).expect(200);
+    expect(updatedOrganization.body.data.settingsMarkdown).toContain("更新后的组织章程");
+  });
+
+  it("按标题分别保存种族和组织 Markdown 设定章节", async () => {
+    const { workId } = await seedWork(runtime);
+    const sections = [
+      { title: "生理特征", contentMarkdown: "体型会随月相变化。", sortOrder: 0 },
+      { title: "社会结构", contentMarkdown: "由长老会维护旧约。", sortOrder: 1 }
+    ];
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "月裔章节版",
+      settingsSections: sections
+    }).expect(201);
+    expect(race.body.data).toMatchObject({
+      settings: ["体型会随月相变化。", "由长老会维护旧约。"],
+      settingsSections: sections
+    });
+
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "月下议会章节版",
+      settingsSections: sections
+    }).expect(201);
+    expect(organization.body.data.settingsSections).toEqual(sections.map((section) => ({ ...section, summary: "" })));
+
+    const updated = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      settingsSections: [{ title: "新章程", contentMarkdown: "成员必须遵守月下议会的誓约。", sortOrder: 0 }]
+    }).expect(200);
+    expect(updated.body.data.settingsSections).toEqual([
+      { title: "新章程", contentMarkdown: "成员必须遵守月下议会的誓约。", summary: "", sortOrder: 0 }
+    ]);
+  });
+
+  it("允许旧版大体量种族和组织设定升级后继续保存", async () => {
+    const { workId } = await seedWork(runtime);
+    const legacySettings = Array.from({ length: 11 }, (_, index) => `## 旧设定 ${index + 1}\n\n${"旧".repeat(19_900)}`);
+    const legacyLength = legacySettings.reduce((total, item) => total + item.length, 0);
+    expect(legacyLength).toBeGreaterThan(200_000);
+
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({
+      name: "旧版大体量种族",
+      settings: legacySettings
+    }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({
+      name: "旧版大体量组织",
+      settings: legacySettings
+    }).expect(201);
+
+    const loadedRace = await request(runtime.app).get(`/api/races/${race.body.data.id}`).expect(200);
+    const updatedRace = await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({
+      name: "升级后的大体量种族",
+      settingsSections: loadedRace.body.data.settingsSections
+    }).expect(200);
+    expect(updatedRace.body.data.settings).toEqual(legacySettings);
+
+    const loadedOrganization = await request(runtime.app).get(`/api/organizations/${organization.body.data.id}`).expect(200);
+    const updatedOrganization = await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({
+      name: "升级后的大体量组织",
+      settingsSections: loadedOrganization.body.data.settingsSections.map((section: Record<string, unknown>, index: number) => (
+        index === 0 ? { ...section, summary: "升级后补充摘要" } : section
+      ))
+    }).expect(200);
+    expect(updatedOrganization.body.data.settings).toEqual(legacySettings);
+    expect(updatedOrganization.body.data.settingsSections[0].summary).toBe("升级后补充摘要");
+  });
+
   it("先维护种族主数据，再由人物引用并与组织保持独立", async () => {
     const { workId } = await seedWork(runtime);
     const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "帝王组织" }).expect(201);
@@ -466,6 +560,113 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const byName = new Map(characters.body.data.map((character: { name: string }) => [character.name, character]));
     expect((byName.get("林舟") as { aliases: string[] }).aliases).toEqual(["小舟"]);
     expect((byName.get("沈星") as { aliases: string[] }).aliases).toEqual(["沈博士"]);
+  });
+
+  it("角色职称变体在落库前经 AI 确认同一人后合并", async () => {
+    let verificationCalls = 0;
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      const chapters = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)"[^>]*>/gu)];
+      if (prompt.includes("第二次身份确认")) {
+        verificationCalls += 1;
+        expect(prompt).toContain("candidate:0|candidate:1");
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify([{
+          pairKey: "candidate:0|candidate:1",
+          verdict: "same",
+          confidence: 0.96,
+          reason: "正文中的马克博士是马克的职称称呼，身份和行动连续。"
+        }])}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapter = chapters[0];
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { canonicalName: "马克", aliases: [], identity: "帝王组织研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克在实验室" } },
+        { canonicalName: "马克博士", aliases: [], identity: "帝王组织研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克博士说" } }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "马克在实验室记录数据。马克博士说：实验已经完成。"
+    }).expect(200);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 1,
+      candidateCount: 1,
+      verification: { pairCount: 1, confirmedSameCount: 1, confirmedSeparateCount: 0, unresolvedCount: 0 }
+    });
+    expect(verificationCalls).toBe(1);
+    const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(characters.body.data).toHaveLength(1);
+    expect(characters.body.data[0]).toMatchObject({ name: "马克", aliases: ["马克博士"] });
+  });
+
+  it("角色职称变体未通过二次确认时不落库", async () => {
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      if (prompt.includes("第二次身份确认")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify([{
+          pairKey: "candidate:0|candidate:1",
+          verdict: "uncertain",
+          confidence: 0.55,
+          reason: "原文不足以确认两种称呼是否属于同一人。"
+        }])}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapter = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)"[^>]*>/gu)][0];
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { canonicalName: "马克", aliases: [], identity: "研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克在实验室" } },
+        { canonicalName: "马克博士", aliases: [], identity: "研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克博士说" } }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({
+      content: "马克在实验室记录数据。马克博士说：实验已经完成。"
+    }).expect(200);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 0,
+      verification: { pairCount: 1, confirmedSameCount: 0, confirmedSeparateCount: 0, unresolvedCount: 1 }
+    });
+    expect(result.body.data.result.skipped[0].reason).toContain("二次确认未通过");
+    const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(characters.body.data).toEqual([]);
+  });
+
+  it("角色职称变体命中已有角色时经确认后只更新原档案", async () => {
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
+      const prompt = body.messages[1]?.content ?? "";
+      if (prompt.includes("第二次身份确认")) {
+        const pairKey = prompt.match(/"pairKey":"([^"]+)"/u)?.[1] ?? "";
+        return new Response(JSON.stringify({ choices: [{ message: { content: `<json>${JSON.stringify([{
+          pairKey,
+          verdict: "same",
+          confidence: 0.94,
+          reason: "带职称的称呼与已有角色的身份和原文证据一致。"
+        }])}</json>` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const chapter = [...prompt.matchAll(/<CHAPTER id="([^"]+)" title="([^"]+)"[^>]*>/gu)][0];
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify([
+        { canonicalName: "马克博士", aliases: [], identity: "帝王组织研究员", firstEvidence: { chapterId: chapter?.[1], chapterTitle: chapter?.[2], quote: "马克博士说" } }
+      ]) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    const existing = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "马克" }).expect(201);
+    await request(runtime.app).patch(`/api/chapters/${chapters[0].id}`).send({ content: "马克博士说：实验已经完成。" }).expect(200);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({ savedCount: 1, verification: { pairCount: 1, confirmedSameCount: 1 } });
+    const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(characters.body.data).toHaveLength(1);
+    expect(characters.body.data[0]).toMatchObject({ id: existing.body.data.id, name: "马克", aliases: ["马克博士"] });
   });
 
   it("取消运行中的分批任务后不会被后台结果改回完成状态", async () => {

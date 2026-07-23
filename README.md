@@ -229,6 +229,8 @@ curl http://127.0.0.1:13210/api/health
 
 ## 🌟 Special Thanks
 
+感谢开源项目 [Vditor](https://github.com/Vanessa219/vditor)，为叙界提供 Markdown 编辑器、即时渲染和分屏预览能力。
+
 <p align="center">
   <a href="https://linux.do">
     <img src="showcase/public/linuxdo.png" alt="LINUX DO" width="420" />

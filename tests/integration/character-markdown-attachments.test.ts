@@ -132,6 +132,41 @@ describe("人物 Markdown 章节与附件", () => {
     expect(runtime.store.listCharacterProfileSections(String(character.id))).toEqual([]);
   });
 
+  it("维护设定库、种族和组织 Markdown 的附件引用", async () => {
+    const work = await createWork(runtime);
+    const image = await sharp({
+      create: { width: 64, height: 64, channels: 3, background: { r: 80, g: 40, b: 160 } }
+    }).png().toBuffer();
+    const upload = await request(runtime.app)
+      .post(`/api/works/${String(work.id)}/attachments`)
+      .attach("file", image, { filename: "世界观图.png", contentType: "image/png" });
+    const attachmentId = String(upload.body.data.id);
+    const markdown = `## 资料图\n\n![世界观图](attachment://${attachmentId})`;
+
+    const setting = await request(runtime.app).post(`/api/works/${String(work.id)}/settings`).send({
+      title: "带图设定",
+      category: "世界规则",
+      content: markdown
+    }).expect(201);
+    const race = await request(runtime.app).post(`/api/works/${String(work.id)}/races`).send({
+      name: "带图种族",
+      settingsMarkdown: markdown
+    }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${String(work.id)}/organizations`).send({
+      name: "带图组织",
+      settingsMarkdown: markdown
+    }).expect(201);
+
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count).toBe(3);
+    await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(409);
+
+    await request(runtime.app).patch(`/api/settings/${String(setting.body.data.id)}`).send({ content: "无附件设定" }).expect(200);
+    await request(runtime.app).patch(`/api/races/${String(race.body.data.id)}`).send({ settingsMarkdown: "无附件种族" }).expect(200);
+    await request(runtime.app).patch(`/api/organizations/${String(organization.body.data.id)}`).send({ settingsMarkdown: "无附件组织" }).expect(200);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM attachment_references WHERE attachment_id = ?", attachmentId)?.count).toBe(0);
+    await request(runtime.app).delete(`/api/attachments/${attachmentId}`).expect(204);
+  });
+
   it("按中文短词和正文片段检索人物 Markdown 章节", async () => {
     const work = await createWork(runtime);
     const character = runtime.store.createCharacter(String(work.id), { name: "哥斯拉" });

@@ -9,7 +9,8 @@
     <script src="/theme-init.js?v=20260720-route-skeleton"></script>
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
-    <link rel="stylesheet" href="/styles.css?v=20260722-prose-replacement-permission">
+    <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
+    <link rel="stylesheet" href="/styles.css?v=20260723-open-prs-6">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -99,9 +100,6 @@
             </label>
             <button id="left-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起作品侧栏" aria-expanded="true">‹</button>
           </div>
-          <button id="import-history-button" class="secondary-button import-history-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog">导入历史与恢复</button>
-          <button id="new-volume-button" class="secondary-button" type="button">新建分卷</button>
-          <button id="new-chapter-button" class="secondary-button" type="button">新建章节</button>
         </div>
         <nav id="module-nav" class="module-nav" aria-label="作品模块">
           <button type="button" data-module="editor" class="active"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>正文</button>
@@ -120,7 +118,10 @@
         </nav>
         <div class="panel-heading">
           <span>作品目录</span>
-          <span id="chapter-count">0 章</span>
+          <div class="panel-heading-actions">
+            <span id="chapter-count">0 章</span>
+            <button id="new-volume-button" class="add-button" type="button" aria-label="新建分卷" title="新建分卷">+</button>
+          </div>
         </div>
         <div id="novel-tree" class="novel-tree empty-copy">创建或选择作品后开始写作</div>
       </aside>
@@ -320,48 +321,54 @@
     <dialog id="import-mode-dialog" class="dialog import-mode-dialog" aria-labelledby="import-mode-dialog-title" aria-describedby="import-mode-dialog-description" data-testid="import-mode-dialog">
       <form method="dialog">
         <div class="dialog-header">
-          <div><span class="eyebrow">已有项目</span><h2 id="import-mode-dialog-title">选择正文导入方式</h2></div>
+          <div><span class="eyebrow">已有项目</span><h2 id="import-mode-dialog-title" tabindex="-1">选择正文导入方式</h2></div>
           <button class="dialog-close" value="cancel" aria-label="取消导入" type="submit">×</button>
         </div>
         <div class="import-mode-body">
           <p id="import-mode-dialog-description">即将把所选文件导入当前作品。请选择追加还是覆盖正文。</p>
           <p id="import-mode-file-summary" class="import-mode-file-summary"></p>
           <p id="import-mode-unsaved-warning" class="import-mode-unsaved-warning hidden" role="alert">当前章节有未保存修改，继续导入会丢失这些本地修改。</p>
-          <div class="import-mode-options" aria-label="导入方式说明">
-            <section><strong>追加正文</strong><span>保留现有卷章，把新文件解析出的卷章添加到目录末尾。</span></section>
-            <section><strong>覆盖正文</strong><span>删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span><small id="import-mode-overwrite-permission" class="import-mode-permission hidden">覆盖会影响章节关联资料，需要所有受影响模块均为可编辑。</small></section>
+          <div class="import-mode-options" role="radiogroup" aria-label="正文导入方式">
+            <label class="import-mode-option" data-testid="import-mode-append-option">
+              <input id="import-mode-append" type="radio" name="importMode" value="append" aria-describedby="import-mode-append-description">
+              <span class="import-mode-option-card"><strong>追加正文</strong><span id="import-mode-append-description">保留现有卷章，把新文件解析出的卷章添加到目录末尾。</span></span>
+            </label>
+            <label class="import-mode-option" data-testid="import-mode-overwrite-option">
+              <input id="import-mode-overwrite" type="radio" name="importMode" value="overwrite" aria-describedby="import-mode-overwrite-description import-mode-overwrite-permission">
+              <span class="import-mode-option-card"><strong>覆盖正文</strong><span id="import-mode-overwrite-description">删除现有正文目录后写入新文件；导入前会保留可恢复的版本快照。</span><small id="import-mode-overwrite-permission" class="import-mode-permission hidden">覆盖会影响章节关联资料，需要所有受影响模块均为可编辑。</small></span>
+            </label>
           </div>
         </div>
         <div class="dialog-actions">
           <button class="ghost-button" value="cancel" type="submit">取消</button>
-          <button id="import-mode-append" class="ghost-button" value="append" type="submit">追加正文</button>
-          <button id="import-mode-overwrite" class="primary-button" value="overwrite" type="submit">覆盖正文</button>
+          <button id="import-mode-confirm" class="primary-button" value="confirm" type="submit" disabled>确认</button>
         </div>
       </form>
     </dialog>
 
     <section id="entity-editor-view" class="entity-editor-view hidden" aria-label="全屏资料编辑">
-      <form id="setting-editor-form" class="entity-editor-page hidden" aria-labelledby="setting-editor-title">
-        <header class="entity-editor-header">
+      <form id="setting-editor-form" class="entity-editor-page hidden" aria-label="设定编辑器">
+        <header class="entity-editor-header setting-editor-header">
           <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
           <div class="entity-editor-heading">
             <span id="setting-editor-eyebrow" class="eyebrow">作者事实</span>
-            <h1 id="setting-editor-title">新建设定</h1>
+            <input id="setting-editor-name" class="setting-editor-title-input" name="title" maxlength="200" placeholder="新建设定" aria-label="设定标题">
+            <div class="setting-editor-header-fields">
+              <label>分类<select id="setting-editor-category" name="category">
+                <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
+              </select></label>
+              <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
+              <label id="setting-change-note-field" class="setting-editor-change-note">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
+            </div>
           </div>
           <button id="setting-editor-submit" class="primary-button" type="submit">保存设定</button>
         </header>
         <div class="setting-editor-workspace">
-          <aside class="setting-editor-sidebar" aria-label="设定元数据">
-            <label>标题<input id="setting-editor-name" name="title" maxlength="200" required></label>
-            <label>分类<select id="setting-editor-category" name="category">
-              <option value="世界规则">世界规则</option><option value="历史与年代">历史与年代</option><option value="地点与地图">地点与地图</option><option value="组织与阵营">组织与阵营</option><option value="物种与族群">物种与族群</option><option value="科技与物品">科技与物品</option><option value="术语与称谓">术语与称谓</option><option value="创作约束">创作约束</option>
-            </select></label>
-            <label class="setting-editor-lock"><input id="setting-editor-locked" name="locked" type="checkbox"><span><b>锁定为 AI 硬约束</b><small>锁定后，AI 续写与校对不能擅自覆盖这条设定。</small></span></label>
-            <label id="setting-change-note-field">版本说明<input id="setting-change-note" name="changeNote" maxlength="500" placeholder="可选，例如：补充纪元历法限制"></label>
-          </aside>
           <main class="setting-editor-content">
-            <label for="setting-editor-body"><span>设定正文</span><small>适合维护长篇世界观、规则、历史、地点与创作约束。</small></label>
-            <textarea id="setting-editor-body" name="content" maxlength="200000" spellcheck="true" placeholder="在这里完整记录设定内容" required></textarea>
+            <div class="setting-markdown-field" data-vditor-editor-field>
+              <div id="setting-editor-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
+              <textarea id="setting-editor-body" class="hidden" name="content" data-vditor-value maxlength="200000" aria-label="Markdown 原文"></textarea>
+            </div>
           </main>
         </div>
       </form>
@@ -397,8 +404,30 @@
         </footer>
       </form>
 
+      <form id="knowledge-editor-form" class="entity-editor-page hidden" aria-labelledby="knowledge-editor-title">
+        <header class="character-editor-header knowledge-editor-header">
+          <button id="knowledge-editor-close" class="entity-editor-back" type="button">返回列表</button>
+          <div>
+            <span id="knowledge-editor-eyebrow" class="eyebrow">世界档案</span>
+            <div class="character-editor-title-row"><h1 id="knowledge-editor-title">新建档案</h1><span id="knowledge-editor-version" class="character-version-badge">新档案</span></div>
+          </div>
+          <div class="character-editor-header-actions"><span id="knowledge-editor-header-note" class="knowledge-editor-header-note">独立资料页</span></div>
+        </header>
+        <div class="character-editor-workspace knowledge-editor-workspace">
+          <nav id="knowledge-editor-nav" class="character-editor-nav" role="tablist" aria-label="世界档案编辑分区"></nav>
+          <main id="knowledge-editor-fields" class="character-editor-fields"></main>
+        </div>
+        <footer class="character-editor-actions knowledge-editor-actions">
+          <p id="knowledge-editor-footer-note">保存后返回当前列表。</p>
+          <div><button id="knowledge-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="knowledge-editor-submit" class="primary-button" type="submit">保存档案</button></div>
+        </footer>
+      </form>
+
       <section id="character-section-editor-view" class="entity-editor-page hidden" aria-labelledby="character-section-editor-title">
       <div id="character-section-editor-host" class="character-section-editor-host"></div>
+      </section>
+      <section id="knowledge-section-editor-view" class="entity-editor-page hidden" aria-labelledby="knowledge-section-editor-title">
+      <div id="knowledge-section-editor-host" class="character-section-editor-host"></div>
       </section>
     </section>
 
@@ -524,7 +553,7 @@
         </section>
         <section class="account-settings-section" aria-labelledby="password-settings-title">
           <header class="account-settings-section-header"><h3 id="password-settings-title">修改密码</h3><p>新密码至少需要 10 个字符。</p></header>
-          <form id="password-form" class="account-settings-form password-settings-form"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
+          <form id="password-form" class="account-settings-form password-settings-form"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><label>确认新密码<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
         </section>
         <section class="account-settings-section" aria-labelledby="api-key-settings-title">
           <header class="account-settings-section-header"><h3 id="api-key-settings-title">CLI API Key</h3><p>用于 CLI 登录。服务端只保存摘要，重置后旧 Key 会立即失效，新 Key 仅显示一次。</p></header>
@@ -623,6 +652,8 @@
     </dialog>
 
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
-    <script type="module" src="/app.js?v=20260722-prose-replacement-permission"></script>
+    <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
+    <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
+    <script type="module" src="/app.js?v=20260723-character-save-hint"></script>
   </body>
 </html>

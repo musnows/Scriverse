@@ -1,10 +1,14 @@
 import { createServer, type Server } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 
 type SessionCredentials = {
   agent: ReturnType<typeof request.agent>;
+  cookie: string;
   csrfToken: string;
   user: { userId: string; username: string; displayName: string; role: "admin" | "user" };
 };
@@ -33,7 +37,9 @@ async function register(runtime: Runtime, username: string): Promise<SessionCred
     ...captcha
   }).expect(201);
   expect(response.body.data.user.displayName).toBe(username);
-  return { agent, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
+  const cookie = response.headers["set-cookie"]?.[0]?.split(";", 1)[0] ?? "";
+  expect(cookie).toContain("scriverse_session=");
+  return { agent, cookie, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
 }
 
 function createUserAuthTestRuntime(allowRegistration = true): Runtime {
@@ -154,6 +160,51 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(session.body.data.user.onboardingCompleted).toBe(true);
     const otherSession = await secondUser.agent.get("/api/auth/session").expect(200);
     expect(otherSession.body.data.user.onboardingCompleted).toBe(false);
+  });
+
+  it("服务器重启后使旧网页会话失效并要求重新登录", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-auth-restart-"));
+    const databasePath = join(root, "novel.db");
+    let firstRuntime: Runtime | null = null;
+    let restartedRuntime: Runtime | null = null;
+    try {
+      firstRuntime = createRuntime({
+        databasePath,
+        masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
+        serveUi: false,
+        revealCaptchaAnswer: true,
+        security: { allowRegistration: true, enforceSameOrigin: true }
+      });
+      const user = await register(firstRuntime, "restart_user");
+      await user.agent.get("/api/auth/session").expect(200);
+      firstRuntime.close();
+      firstRuntime = null;
+
+      restartedRuntime = createRuntime({
+        databasePath,
+        masterSecret: "user-auth-restart-test-master-secret-with-enough-length",
+        serveUi: false,
+        revealCaptchaAnswer: true,
+        security: { allowRegistration: true, enforceSameOrigin: true }
+      });
+      const expiredSession = await request(restartedRuntime.app)
+        .get("/api/auth/session")
+        .set("Cookie", user.cookie)
+        .expect(200);
+      expect(expiredSession.body.data).toMatchObject({ authenticated: false, user: null, csrfToken: null });
+      await request(restartedRuntime.app).get("/api/works").set("Cookie", user.cookie).expect(401);
+
+      const captcha = await solveCaptcha(restartedRuntime.app);
+      await request(restartedRuntime.app).post("/api/auth/login").send({
+        username: "restart_user",
+        password: "secure-password-123",
+        ...captcha
+      }).expect(200);
+    } finally {
+      restartedRuntime?.close();
+      firstRuntime?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("仅查看成员可读取正文和设定，但所有作品写操作都会被拒绝", async () => {
@@ -278,7 +329,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     );
     expect(storedMembership?.role).toBe("editor");
     expect(JSON.parse(String(storedMembership?.permissions_json))).toMatchObject({
-      modules: { prose: "read", settings: "write", characters: "write", ai: "read" }
+      modules: { prose: "read", settings: "write", characters: "write", "ai-chat": "read", "ai-analysis": "read" }
     });
 
     const works = await collaborator.agent.get("/api/works").expect(200);
@@ -330,7 +381,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       "SELECT permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?",
       workId,
       collaborator.user.userId
-    )?.permissions_json))).toMatchObject({ modules: { prose: "write", settings: "write", ai: "write" } });
+    )?.permissions_json))).toMatchObject({ modules: { prose: "write", settings: "write", "ai-chat": "write", "ai-analysis": "write" } });
     await collaborator.agent.patch(`/api/chapters/${chapter.body.data.id}`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ content: "完整协作权限可以修改正文。" })
@@ -382,7 +433,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       relationships: "none",
       outlines: "read",
       reviews: "none",
-      ai: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
       "ai-settings": "none"
     };
     const invited = await owner.agent.post(`/api/works/${workId}/members`)
@@ -551,7 +603,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       relationships: "none",
       outlines: "none",
       reviews: "read",
-      ai: "read",
+      "ai-chat": "none",
+      "ai-analysis": "read",
       "ai-settings": "none"
     };
     await owner.agent.post(`/api/works/${workId}/members`)
@@ -575,6 +628,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await collaborator.agent.get(`/api/works/${workId}/reviews`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/ai-calls`).expect(200);
     await collaborator.agent.get(`/api/works/${workId}/models`).expect(200);
+    const chatDenied = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
+    expect(chatDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
 
     const visibleRaces = await collaborator.agent.get(`/api/works/${workId}/races`).expect(200);
     expect(visibleRaces.body.data[0]).toMatchObject({ id: raceId, memberIds: [], members: [] });
@@ -625,6 +680,61 @@ describe("用户、作品权限与操作者追踪 API", () => {
     });
     expect(JSON.stringify(visibleCharacters.body.data)).not.toContain("不可跨模块泄露");
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("可单独授权 AI 对话或 AI 分析，互不影响", async () => {
+    const owner = await register(runtime, "ai_split_owner");
+    const chatOnly = await register(runtime, "ai_chat_only");
+    const analysisOnly = await register(runtime, "ai_analysis_only");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 权限拆分作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const basePermissions = {
+      prose: "read",
+      settings: "read",
+      characters: "read",
+      races: "read",
+      organizations: "read",
+      timeline: "read",
+      relationships: "read",
+      outlines: "read",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: chatOnly.user.userId, permissions: { ...basePermissions, "ai-chat": "write" } })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: analysisOnly.user.userId, permissions: { ...basePermissions, "ai-analysis": "write" } })
+      .expect(201);
+
+    await chatOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
+    await chatOnly.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", chatOnly.csrfToken)
+      .send({})
+      .expect(201);
+    await chatOnly.agent.get(`/api/works/${workId}/models`).expect(200);
+    const chatTasksDenied = await chatOnly.agent.get(`/api/works/${workId}/tasks`).expect(403);
+    expect(chatTasksDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await chatOnly.agent.post(`/api/works/${workId}/tasks`)
+      .set("X-CSRF-Token", chatOnly.csrfToken)
+      .send({ taskType: "book-analysis", scope: { type: "book" } })
+      .expect(403);
+
+    await analysisOnly.agent.get(`/api/works/${workId}/tasks`).expect(200);
+    await analysisOnly.agent.get(`/api/works/${workId}/models`).expect(200);
+    const analysisChatDenied = await analysisOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
+    expect(analysisChatDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await analysisOnly.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", analysisOnly.csrfToken)
+      .send({})
+      .expect(403);
   });
 
   it("成员变更保护作品创建者，并在审计失败时回滚", async () => {
@@ -735,7 +845,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(profile.body.data.displayName).toBe("新名称");
     await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
       currentPassword: "secure-password-123",
-      newPassword: "new-secure-password-456"
+      newPassword: "new-secure-password-456",
+      passwordConfirmation: "new-secure-password-456"
     }).expect(204);
     const staleLogin = await solveCaptcha(runtime.app);
     await request(runtime.app).post("/api/auth/login").send({
@@ -749,6 +860,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
       password: "new-secure-password-456",
       ...loginCaptcha
     }).expect(200);
+  });
+
+  it("修改密码必须二次确认且两次新密码相同", async () => {
+    const user = await register(runtime, "password_change_confirm_user");
+    const response = await user.agent.patch("/api/auth/password").set("X-CSRF-Token", user.csrfToken).send({
+      currentPassword: "secure-password-123",
+      newPassword: "new-secure-password-456",
+      passwordConfirmation: "different-password-456"
+    }).expect(400);
+    expect(response.body.error.details).toContainEqual(expect.objectContaining({
+      path: "passwordConfirmation",
+      message: "两次输入的密码不一致"
+    }));
   });
 
   it("用户可安全上传、读取、替换和移除自己的头像", async () => {

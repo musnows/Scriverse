@@ -222,7 +222,16 @@ function workIdFromPath(database: Database, pathname: string): string | null {
 }
 
 export class UserAuthService {
-  constructor(private readonly database: Database) {}
+  constructor(private readonly database: Database) {
+    const revokedAt = new Date().toISOString();
+    const result = this.database.run(
+      "UPDATE user_sessions SET revoked_at = ? WHERE revoked_at IS NULL",
+      revokedAt
+    );
+    if (result.changes > 0) {
+      logger.info("auth.sessions.invalidated_on_startup", { count: result.changes });
+    }
+  }
 
   resolveWorkId(pathname: string): string | null {
     return workIdFromPath(this.database, pathname);
@@ -632,7 +641,12 @@ export class UserAuthService {
   assertWorkAccess(
     user: AuthUser,
     workId: string,
-    requirements: { read?: readonly WorkPermissionModule[]; write?: readonly WorkPermissionModule[] } = {},
+    requirements: {
+      read?: readonly WorkPermissionModule[];
+      write?: readonly WorkPermissionModule[];
+      anyRead?: readonly WorkPermissionModule[];
+      anyWrite?: readonly WorkPermissionModule[];
+    } = {},
     ownerOnly = false,
     allowAdminAccess = true
   ): void {
@@ -648,6 +662,10 @@ export class UserAuthService {
         throw new AppError(403, "WORK_MODULE_READ_DENIED", `你没有读取“${workPermissionModuleLabels[module]}”模块的权限`);
       }
     }
+    if ((requirements.anyRead?.length ?? 0) > 0 && !requirements.anyRead!.some((module) => canReadWorkModule(permissions, module))) {
+      const labels = requirements.anyRead!.map((module) => workPermissionModuleLabels[module]).join("或");
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", `你没有读取“${labels}”模块的权限`);
+    }
     for (const module of requirements.write ?? []) {
       if (canWriteWorkModule(permissions, module)) continue;
       if (role === "viewer") throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
@@ -655,6 +673,14 @@ export class UserAuthService {
         throw new AppError(403, "WORK_PROSE_EDIT_DENIED", "你只能编辑已授权的设定资料，不能执行此操作");
       }
       throw new AppError(403, "WORK_MODULE_WRITE_DENIED", `你没有编辑“${workPermissionModuleLabels[module]}”模块的权限`);
+    }
+    if ((requirements.anyWrite?.length ?? 0) > 0 && !requirements.anyWrite!.some((module) => canWriteWorkModule(permissions, module))) {
+      if (role === "viewer") throw new AppError(403, "WORK_EDIT_DENIED", "你没有编辑这部作品的权限");
+      if (role === "settings-editor") {
+        throw new AppError(403, "WORK_PROSE_EDIT_DENIED", "你只能编辑已授权的设定资料，不能执行此操作");
+      }
+      const labels = requirements.anyWrite!.map((module) => workPermissionModuleLabels[module]).join("或");
+      throw new AppError(403, "WORK_MODULE_WRITE_DENIED", `你没有编辑“${labels}”模块的权限`);
     }
   }
 }
@@ -745,11 +771,14 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   };
 }
 
-const contentPermissionModules = workPermissionModules.filter((module) => !["reviews", "ai", "ai-settings"].includes(module));
+const contentPermissionModules = workPermissionModules.filter((module) => !["reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
+const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 
 type WorkAuthorizationRequirements = {
   read?: WorkPermissionModule[];
   write?: WorkPermissionModule[];
+  anyRead?: WorkPermissionModule[];
+  anyWrite?: WorkPermissionModule[];
   ownerOnly?: boolean;
 };
 
@@ -778,7 +807,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) return write ? { ownerOnly: true } : {};
   if (/^\/api\/works\/[^/]+\/members(?:\/[^/]+)?$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
-  if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { read: ["ai"] };
+  if (/^\/api\/works\/[^/]+\/models$/u.test(pathname)) return { anyRead: [...aiInteractionModules] };
   if (/^\/api\/works\/[^/]+\/file-versions\/[^/]+\/restore$/u.test(pathname)) {
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
@@ -856,12 +885,23 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return direct("reviews");
   }
   if (write && /^\/api\/suggestions\/[^/]+\/accept$/u.test(pathname)) {
-    return { write: ["ai", "prose"] };
+    return { write: ["prose"], anyWrite: [...aiInteractionModules] };
   }
-  if (/^\/api\/(?:works\/[^/]+\/(?:tasks|suggestions|ai-calls|ai-context-usage|ai-conversations|chat)|tasks\/[^/]+|ai-conversations\/[^/]+|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+  if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/(?:ai-conversations|chat)|ai-conversations\/[^/]+)(?:\/|$)/u.test(pathname)) {
     const contextRead = aiContextReadModules(request);
-    if (/^\/api\/works\/[^/]+\/ai-context-usage$/u.test(pathname)) return { read: ["ai", ...contextRead] };
-    return write ? { read: contextRead, write: ["ai"] } : { read: ["ai"] };
+    return write ? { read: contextRead, write: ["ai-chat"] } : { read: ["ai-chat"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/(?:suggestions|ai-context-usage)|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    const contextRead = aiContextReadModules(request);
+    if (/^\/api\/works\/[^/]+\/ai-context-usage$/u.test(pathname)) {
+      return { anyRead: [...aiInteractionModules], read: contextRead };
+    }
+    return write
+      ? { read: contextRead, anyWrite: [...aiInteractionModules] }
+      : { anyRead: [...aiInteractionModules] };
   }
   if (/^\/api\/works\/[^/]+\/(?:search|export)$/u.test(pathname)) return { read: [...contentPermissionModules] };
   return { ownerOnly: true };

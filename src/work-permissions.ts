@@ -8,7 +8,8 @@ export const workPermissionModules = [
   "relationships",
   "outlines",
   "reviews",
-  "ai",
+  "ai-chat",
+  "ai-analysis",
   "ai-settings"
 ] as const;
 
@@ -31,7 +32,8 @@ export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = 
   relationships: "关系",
   outlines: "大纲与伏笔",
   reviews: "审核",
-  ai: "AI 对话与分析",
+  "ai-chat": "AI 对话",
+  "ai-analysis": "AI 分析",
   "ai-settings": "AI 设置"
 };
 
@@ -64,6 +66,25 @@ function parsedPermissions(value: unknown): Record<string, unknown> {
   }
 }
 
+function isModuleAccess(value: unknown): value is WorkModuleAccess {
+  return value === "none" || value === "read" || value === "write";
+}
+
+/**
+ * 兼容旧权限键：
+ * - 仅有 ai：同时填充 ai-chat 与 ai-analysis
+ * - 已有 ai-chat + ai：将 ai 迁到 ai-analysis
+ */
+export function migrateLegacyModulePermissions(value: Record<string, unknown>): Record<string, unknown> {
+  const migrated = { ...value };
+  const legacyAi = isModuleAccess(migrated.ai) ? migrated.ai : null;
+  if (!isModuleAccess(migrated["ai-chat"]) && legacyAi) migrated["ai-chat"] = legacyAi;
+  if (!isModuleAccess(migrated["ai-analysis"])) {
+    if (isModuleAccess(migrated.ai)) migrated["ai-analysis"] = migrated.ai;
+  }
+  return migrated;
+}
+
 export function fullWorkModulePermissions(): WorkModulePermissions {
   return permissionRecord("write");
 }
@@ -84,10 +105,11 @@ export function settingsEditorModulePermissions(): WorkModulePermissions {
 
 export function normalizeWorkModulePermissions(value: unknown): WorkModulePermissions | null {
   if (!isRecord(value)) return null;
+  const migrated = migrateLegacyModulePermissions(value);
   const permissions = emptyWorkModulePermissions();
   for (const module of workPermissionModules) {
-    const access = value[module];
-    if (access !== "none" && access !== "read" && access !== "write") return null;
+    const access = migrated[module];
+    if (!isModuleAccess(access)) return null;
     permissions[module] = access;
   }
   return permissions;
@@ -101,9 +123,10 @@ export function storedWorkModulePermissions(role: string, permissionsValue: unkn
   if ("modules" in parsed) {
     const permissions = emptyWorkModulePermissions();
     if (!isRecord(parsed.modules)) return permissions;
+    const modules = migrateLegacyModulePermissions(parsed.modules);
     for (const module of workPermissionModules) {
-      const access = parsed.modules[module];
-      if (access === "none" || access === "read" || access === "write") permissions[module] = access;
+      const access = modules[module];
+      if (isModuleAccess(access)) permissions[module] = access;
     }
     return permissions;
   }
