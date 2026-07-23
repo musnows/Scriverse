@@ -4095,6 +4095,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     height: "100%",
     minHeight: 260,
     placeholder,
+    preview: { transform: transformVditorPreview },
     cache: { enable: false },
     toolbar: ["headings", "bold", "italic", "strike", "|", "line", "quote", "list", "ordered-list", "check", "|", "code", "inline-code", "link", "table", "upload", "|", "undo", "redo", "edit-mode", "fullscreen"],
     upload: {
@@ -4103,14 +4104,32 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       multiple: true,
       handler: createVditorUploadHandler(uploadAttachment, () => editor)
     },
-    input: onInput,
+    input: (markdown) => {
+      normalizeVditorAttachmentImages(editor);
+      onInput(markdown);
+    },
     after: () => {
+      normalizeVditorAttachmentImages(editor);
       if (readOnly) editor?.disabled();
     }
   });
   host.__vditor = editor;
   if (readOnly) editor.disabled();
   return editor;
+}
+
+function transformVditorPreview(html) {
+  return String(html ?? "").replace(/(<img\b[^>]*\bsrc\s*=\s*)(["'])attachment:\/\/([A-Za-z0-9_-]{1,300})\2/giu, (_match, prefix, quote, attachmentId) => `${prefix}${quote}/api/attachments/${encodeURIComponent(attachmentId)}/content${quote}`);
+}
+
+function normalizeVditorAttachmentImages(editor) {
+  const root = editor?.vditor?.element;
+  if (!root) return;
+  root.querySelectorAll('img[src^="attachment://"]').forEach((image) => {
+    const target = image.getAttribute("src")?.trim() ?? "";
+    const attachment = target.match(/^attachment:\/\/([A-Za-z0-9_-]{1,300})$/u);
+    if (attachment) image.setAttribute("src", `/api/attachments/${encodeURIComponent(attachment[1])}/content`);
+  });
 }
 
 function ensureVditorIconScript() {

@@ -245,7 +245,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260723-vditor-2');
+    expect(page.text).toContain('/app.js?v=20260723-vditor-3');
     expect(page.text).toContain('/styles.css?v=20260723-vditor-2');
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
@@ -314,6 +314,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="knowledge-section-editor-view"');
     expect(application.text).toContain('id="character-section-markdown"');
     expect(application.text).toContain("attachment://${attachment.id}");
+    expect(application.text).toContain("preview: { transform: transformVditorPreview }");
+    expect(application.text).toContain("/api/attachments/${encodeURIComponent(attachmentId)}/content");
+    expect(application.text).toContain("function normalizeVditorAttachmentImages");
     expect(application.text).toContain("read_character_sections");
     expect(styles.text).toContain(".message-body .markdown-table-scroll");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
