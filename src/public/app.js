@@ -19,7 +19,7 @@ import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelatio
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, racePathLabel } from "/race-hierarchy.js?v=20260721-race-hierarchy";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadUiModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260722-module-permissions";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260723-ai-analysis-permission";
 import { clipboardImageFiles } from "/character-markdown.js?v=20260723-clipboard-images";
 
 const state = {
@@ -83,7 +83,7 @@ function analysisTaskStatusLabel(status) {
 }
 
 function canEditWork(work = state.work) {
-  return WORK_PERMISSION_MODULES.some((item) => canWriteUiModule(work, item.uiModule));
+  return WORK_PERMISSION_MODULES.some((item) => canWritePermissionModule(work, item.id));
 }
 
 function canEditProse(work = state.work) {
@@ -93,7 +93,7 @@ function canEditProse(work = state.work) {
 function canReplaceProse(work = state.work) {
   return WORK_PERMISSION_MODULES
     .filter((item) => item.id !== "ai-settings")
-    .every((item) => canWriteUiModule(work, item.uiModule));
+    .every((item) => canWritePermissionModule(work, item.id));
 }
 
 function canManageWork(work = state.work) {
@@ -117,8 +117,8 @@ function applyWorkAccessMode() {
   const viewOnly = Boolean(state.work) && !canEditWork();
   const proseReadOnly = Boolean(state.work) && !canEditProse();
   const proseHidden = Boolean(state.work) && !canReadModule("editor");
-  const aiHidden = Boolean(state.work) && !canReadModule("tasks");
-  const aiReadOnly = Boolean(state.work) && !canEditModule("tasks");
+  const aiHidden = Boolean(state.work) && !canReadPermissionModule(state.work, "ai-chat");
+  const aiReadOnly = Boolean(state.work) && !canWritePermissionModule(state.work, "ai-chat");
   const moduleReadOnly = Boolean(state.work) && !canEditModule(state.module);
   $("#app").classList.toggle("view-only-mode", viewOnly);
   $("#app").classList.toggle("prose-read-only-mode", proseReadOnly);
@@ -126,6 +126,7 @@ function applyWorkAccessMode() {
   $("#app").classList.toggle("ai-hidden-mode", aiHidden);
   document.body.classList.toggle("work-viewer-mode", moduleReadOnly);
   for (const item of WORK_PERMISSION_MODULES) {
+    if (!item.uiModule) continue;
     const button = $(`#module-nav [data-module="${item.uiModule}"]`);
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }

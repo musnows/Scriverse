@@ -78,7 +78,8 @@ const modulePermissionsSchema = z.object({
   relationships: moduleAccessSchema,
   outlines: moduleAccessSchema,
   reviews: moduleAccessSchema,
-  ai: moduleAccessSchema,
+  "ai-chat": moduleAccessSchema,
+  "ai-analysis": moduleAccessSchema,
   "ai-settings": moduleAccessSchema
 }).strict();
 const memberSchema = z.union([
