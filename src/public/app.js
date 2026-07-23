@@ -6254,7 +6254,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
-  if (!isGlobalSearchShortcut(event)) return;
+  if (!isGlobalSearchShortcut(event) || !state.work) return;
   event.preventDefault();
   event.stopPropagation();
   if (event.repeat) return;

@@ -271,9 +271,10 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-readonly-history');
+    expect(page.text).toContain('/app.js?v=20260724-search-shortcut-scope');
     expect(page.text).toContain('/styles.css?v=20260724-setting-editor-layout');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
+    expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
     expect(application.text).not.toContain('在这里完整记录设定内容');
     expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
