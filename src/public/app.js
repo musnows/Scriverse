@@ -3902,7 +3902,6 @@ function openSettingEditor(item = null) {
   showEntityEditorPage("setting");
   settingEditorVditor = createVditorEditor($("#setting-editor-markdown"), item?.content ?? "", {
     onInput: (markdown) => { $("#setting-editor-body").value = markdown; markEntityEditorDirty(); },
-    placeholder: "在这里完整记录设定内容",
     readOnly: viewOnly
   });
   $("#setting-editor-name").focus();
@@ -4137,7 +4136,7 @@ function bindVditorEditors(container) {
         if (valueField) valueField.value = markdown;
         markEntityEditorDirty();
       },
-      placeholder: host.dataset.placeholder ?? "在这里编辑 Markdown",
+      placeholder: "",
       readOnly: Boolean(valueField?.readOnly)
     });
   });
@@ -4219,8 +4218,7 @@ async function openKnowledgeSectionEditor(index = null) {
   const titleInput = $("#knowledge-section-title");
   host.querySelectorAll("input, textarea").forEach((control) => control.addEventListener("input", () => { knowledgeSectionEditorDirty = true; }));
   knowledgeSectionVditor = createVditorEditor($("#knowledge-section-markdown"), section?.contentMarkdown ?? "", {
-    onInput: () => { knowledgeSectionEditorDirty = true; },
-    placeholder: "在这里编辑 Markdown 设定"
+    onInput: () => { knowledgeSectionEditorDirty = true; }
   });
   host.querySelector("[data-knowledge-section-edit-close]").addEventListener("click", () => void closeKnowledgeSectionEditor());
   host.querySelector("[data-knowledge-section-edit-cancel]").addEventListener("click", () => void closeKnowledgeSectionEditor());
@@ -4279,8 +4277,7 @@ async function openCharacterSectionEditor(section = null) {
   host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
   characterSectionVditor = createVditorEditor($("#character-section-markdown"), section?.contentMarkdown ?? "", {
     uploadAttachment: uploadCharacterSectionAttachment,
-    onInput: () => { characterSectionEditorDirty = true; },
-    placeholder: "支持标题、列表、引用、表格、链接和图片"
+    onInput: () => { characterSectionEditorDirty = true; }
   });
   host.querySelector("[data-character-section-edit-close]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());

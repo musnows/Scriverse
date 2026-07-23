@@ -246,7 +246,11 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260723-vditor-2');
-    expect(page.text).toContain('/styles.css?v=20260723-vditor-1');
+    expect(page.text).toContain('/styles.css?v=20260723-vditor-2');
+    expect(page.text).not.toContain('class="setting-markdown-heading"');
+    expect(application.text).not.toContain('在这里完整记录设定内容');
+    expect(application.text).not.toContain('支持标题、列表、引用、表格、链接和图片');
+    expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain('/relationship-graph.js?v=20260721-release-0.3.6');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
     expect(graph.text).toContain("assignRelationshipEdgeCurves(graph.edges)");
