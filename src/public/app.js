@@ -4368,7 +4368,7 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
   };
 }
 
-function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = uploadMarkdownAttachment, placeholder = "", readOnly = false } = {}) {
+function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment = uploadMarkdownAttachment, placeholder = "", readOnly = false, width = "auto" } = {}) {
   if (!window.Vditor) {
     toast("Markdown 编辑器资源加载失败，请刷新页面后重试", "error");
     return null;
@@ -4382,6 +4382,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
     mode: "ir",
     value: String(value ?? ""),
     height: "100%",
+    width,
     minHeight: 260,
     placeholder,
     preview: { transform: transformVditorPreview },
@@ -4536,7 +4537,9 @@ async function openKnowledgeSectionEditor(index = null) {
   const titleInput = $("#knowledge-section-title");
   host.querySelectorAll("input, textarea").forEach((control) => control.addEventListener("input", () => { knowledgeSectionEditorDirty = true; }));
   knowledgeSectionVditor = createVditorEditor($("#knowledge-section-markdown"), section?.contentMarkdown ?? "", {
-    onInput: () => { knowledgeSectionEditorDirty = true; }
+    onInput: () => { knowledgeSectionEditorDirty = true; },
+    placeholder: "从这里开始写 Markdown 设定…",
+    width: "100%"
   });
   host.querySelector("[data-knowledge-section-edit-close]").addEventListener("click", () => void closeKnowledgeSectionEditor());
   host.querySelector("[data-knowledge-section-edit-cancel]").addEventListener("click", () => void closeKnowledgeSectionEditor());
@@ -4595,7 +4598,9 @@ async function openCharacterSectionEditor(section = null) {
   host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
   characterSectionVditor = createVditorEditor($("#character-section-markdown"), section?.contentMarkdown ?? "", {
     uploadAttachment: uploadCharacterSectionAttachment,
-    onInput: () => { characterSectionEditorDirty = true; }
+    onInput: () => { characterSectionEditorDirty = true; },
+    placeholder: "从这里开始写人物章节…",
+    width: "100%"
   });
   host.querySelector("[data-character-section-edit-close]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());

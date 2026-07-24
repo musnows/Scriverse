@@ -237,6 +237,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("#setting-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr);");
     expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; }");
     expect(styles.text).toContain(".setting-editor-content { height: auto; min-height: 70dvh; padding: 16px; }");
+    expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host { width: 100%; max-width: 960px; justify-self: center; }");
+    expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host.vditor:focus-within");
+    expect(application.text).toContain('placeholder: "从这里开始写 Markdown 设定…"');
+    expect(application.text).toContain('placeholder: "从这里开始写人物章节…"');
+    expect(application.text.match(/width: "100%"/gu)).toHaveLength(2);
     expect(styles.text).toContain("#knowledge-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }");
     expect(styles.text).toContain(".vditor-editor-host .vditor");
     expect(styles.text).toContain(".setting-editor-title-input");
@@ -273,8 +278,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-whitespace-access');
-    expect(page.text).toContain('/styles.css?v=20260724-whitespace-access');
+    expect(page.text).toContain('/app.js?v=20260724-markdown-editor-boundary');
+    expect(page.text).toContain('/styles.css?v=20260724-markdown-editor-boundary');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
