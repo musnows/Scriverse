@@ -278,8 +278,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-markdown-editor-boundary');
-    expect(page.text).toContain('/styles.css?v=20260724-markdown-editor-boundary');
+    expect(page.text).toContain('/app.js?v=20260724-product-footer');
+    expect(page.text).toContain('/styles.css?v=20260724-product-footer');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');

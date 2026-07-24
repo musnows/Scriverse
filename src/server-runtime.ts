@@ -28,6 +28,10 @@ export type RunningLocalServer = {
 
 const publicPath = fileURLToPath(new URL("./public/", import.meta.url));
 
+export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
+  return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
+}
+
 export async function startLocalServer(options: LocalServerOptions): Promise<RunningLocalServer> {
   logger.info("server.starting", { host: options.host, port: options.port, dataDirectory: options.dataDirectory, databasePath: options.databasePath });
   let security: RuntimeSecurityOptions;
@@ -42,7 +46,8 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       publicPath,
       security,
       disableUserAuth: devAuthBypass,
-      devAuthBypass
+      devAuthBypass,
+      developmentServer: isDevelopmentServer(options.env)
     });
   } catch (error) {
     logger.error("server.initialization_failed", { host: options.host, port: options.port, error: sanitizeError(error) });

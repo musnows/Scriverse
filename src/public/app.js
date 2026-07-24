@@ -1624,6 +1624,23 @@ async function apiAllPages(path, limit = 100) {
   }
 }
 
+async function initializeProductFooters() {
+  const year = String(new Date().getFullYear());
+  document.querySelectorAll("[data-product-footer-year]").forEach((element) => { element.textContent = year; });
+  try {
+    const health = await api("/api/health");
+    const version = String(health.version ?? "").trim();
+    document.querySelectorAll("[data-product-footer-version]").forEach((element) => {
+      element.textContent = version ? `v${version}` : "v—";
+    });
+    document.querySelectorAll("[data-product-footer-development]").forEach((element) => {
+      element.classList.toggle("hidden", health.development !== true);
+    });
+  } catch {
+    document.querySelectorAll("[data-product-footer-version]").forEach((element) => { element.textContent = "v—"; });
+  }
+}
+
 function selectAuthMode(mode) {
   const registerTab = $("#auth-register-tab");
   const login = mode === "login" || registerTab.disabled;
@@ -1949,7 +1966,8 @@ function restoredSettingsReturnContext(route) {
 }
 
 async function initializePage() {
-  if (!(await initializeAuthentication())) {
+  const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);
+  if (!authenticated) {
     restoringPageRoute = false;
     return;
   }
