@@ -84,7 +84,7 @@
 .pending-shelf-mode .auth-pending .topbar { grid-template-columns: 280px 1fr auto; }
 .pending-shelf-mode .auth-pending .left-panel, .pending-shelf-mode .auth-pending .ai-panel { display: none; }
 .pending-shelf-mode .auth-pending .main-panel { grid-column: 1 / -1; }
-.auth-view { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; align-content: safe center; padding: 24px; overflow-y: auto; overscroll-behavior: contain; background: radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%), var(--paper); }
+.auth-view { position: fixed; inset: 0; z-index: 1000; display: grid; gap: 18px; place-items: center; align-content: safe center; padding: 24px; overflow-y: auto; overscroll-behavior: contain; background: radial-gradient(circle at 18% 16%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 34%), var(--paper); }
 .auth-view.hidden { display: none; }
 .auth-card { box-sizing: border-box; width: min(440px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow); }
 .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 34px; }
@@ -458,6 +458,12 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .settings-hub-card strong { align-self: end; font-size: 16px; }
 .settings-hub-card small { align-self: start; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .settings-work-note { max-width: 1000px; margin: 18px auto 0; color: var(--muted); font-size: 11px; }
+.product-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 18px; width: 100%; max-width: 1400px; margin: 56px auto 0; padding-top: 20px; border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent); color: var(--muted); font-size: 10px; line-height: 1.5; }
+.product-footer a { color: inherit; text-decoration: none; text-underline-offset: 3px; transition: color .14s ease; }
+.product-footer a:hover, .product-footer a:focus-visible { color: var(--accent-dark); text-decoration: underline; }
+.product-footer-development { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 9px; font-weight: 700; letter-spacing: .05em; }
+.auth-product-footer { max-width: 440px; margin: 0; padding-top: 14px; }
+.settings-product-footer { max-width: 1000px; }
 .access-dialog-body { display: grid; gap: 16px; max-height: calc(88vh - 82px); overflow-y: auto; padding: 18px 24px 22px; }
 .access-list { display: grid; gap: 8px; max-height: min(34vh, 340px); overflow: auto; padding: 0; }
 .access-row {

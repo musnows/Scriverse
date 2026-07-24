@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260724-markdown-editor-boundary">
+    <link rel="stylesheet" href="/styles.css?v=20260724-product-footer">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -56,6 +56,12 @@
         </form>
         <p id="auth-error" class="auth-error" role="alert"></p>
       </div>
+      <footer class="product-footer auth-product-footer" data-product-footer aria-label="叙界项目信息">
+        <span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span>
+        <span>叙界 <span data-product-footer-version>v—</span></span>
+        <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub · musnows/Scriverse</a>
+        <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
+      </footer>
     </section>
     <div id="app" class="app-shell">
       <header class="topbar">
@@ -134,6 +140,12 @@
             <button id="shelf-new-work" class="primary-button" type="button">新建作品</button>
           </div>
           <div id="book-shelf" class="book-shelf" data-testid="book-shelf"></div>
+          <footer class="product-footer" data-product-footer aria-label="叙界项目信息">
+            <span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span>
+            <span>叙界 <span data-product-footer-version>v—</span></span>
+            <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub · musnows/Scriverse</a>
+            <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
+          </footer>
         </section>
 
         <section id="platform-ai-view" class="shelf-view hidden" aria-labelledby="platform-ai-title">
@@ -158,6 +170,12 @@
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export"><span class="settings-card-mark">MD</span><strong>导出作品</strong><small>将当前作品安全导出为 Markdown</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
+          <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
+            <span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span>
+            <span>叙界 <span data-product-footer-version>v—</span></span>
+            <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub · musnows/Scriverse</a>
+            <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
+          </footer>
         </section>
 
         <section id="welcome-view" class="welcome-view hidden">
@@ -671,6 +689,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260724-markdown-editor-boundary"></script>
+    <script type="module" src="/app.js?v=20260724-product-footer"></script>
   </body>
 </html>

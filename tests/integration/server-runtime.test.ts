@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
-import { startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
+import { isDevelopmentServer, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
 import { APP_VERSION } from "../../src/version.js";
 
 const roots: string[] = [];
@@ -30,6 +30,13 @@ describe("本地服务运行时", () => {
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true", SCRIVERSE_RUNTIME: "container" })).toBe(false);
   });
 
+  it("识别开发服务启动方式", () => {
+    expect(isDevelopmentServer({})).toBe(false);
+    expect(isDevelopmentServer({ NODE_ENV: "production", npm_lifecycle_event: "start" })).toBe(false);
+    expect(isDevelopmentServer({ NODE_ENV: "development" })).toBe(true);
+    expect(isDevelopmentServer({ npm_lifecycle_event: "dev" })).toBe(true);
+  });
+
   it("使用隔离数据目录启动 API 和完整网页", async () => {
     const root = mkdtempSync(join(tmpdir(), "scriverse-serve-"));
     roots.push(root);
@@ -43,10 +50,10 @@ describe("本地服务运行时", () => {
     });
     runningServers.push(running);
 
-    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as { data: { status: string; version: string } };
+    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as { data: { status: string; version: string; development: boolean } };
     const page = await fetch(running.url).then((response) => response.text());
 
-    expect(health.data).toMatchObject({ status: "ok", version: APP_VERSION });
+    expect(health.data).toMatchObject({ status: "ok", version: APP_VERSION, development: false });
     expect(page).toContain("叙界");
     expect(existsSync(databasePath)).toBe(true);
     expect(existsSync(join(root, "master.key"))).toBe(true);
@@ -68,6 +75,8 @@ describe("本地服务运行时", () => {
     const session = await fetch(`${running.url}/api/auth/session`).then((response) => response.json()) as {
       data: { authenticated: boolean; user: { username: string } | null; csrfToken: string | null };
     };
+    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as { data: { development: boolean } };
     expect(session.data).toMatchObject({ authenticated: true, user: { username: "dev-bypass" }, csrfToken: null });
+    expect(health.data.development).toBe(true);
   });
 });

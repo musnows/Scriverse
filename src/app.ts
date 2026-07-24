@@ -393,6 +393,8 @@ export type RuntimeOptions = {
   devAuthBypass?: boolean;
   /** 测试用：在验证码接口中回显答案 */
   revealCaptchaAnswer?: boolean;
+  /** 当前服务是否由开发模式启动。 */
+  developmentServer?: boolean;
 };
 
 export type Runtime = {
@@ -538,7 +540,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: APP_VERSION, protocol: "openai-chat-completions" });
+    data(response, {
+      status: "ok",
+      version: APP_VERSION,
+      protocol: "openai-chat-completions",
+      development: options.developmentServer === true
+    });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
