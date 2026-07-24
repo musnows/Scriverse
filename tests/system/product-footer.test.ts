@@ -30,6 +30,11 @@ describe("产品信息页脚", () => {
     expect(page.text.match(/data-product-footer-development>开发模式<\/span>/gu)).toHaveLength(3);
     expect(application.text).toContain("async function initializeProductFooters()");
     expect(application.text).toContain('const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);');
+    expect(styles.text).toContain(".shelf-view { display: flex; flex-direction: column; height: 100%;");
+    expect(styles.text).toContain("#shelf-view, #settings-hub-view { padding-bottom: 24px; }");
+    expect(styles.text).toContain("width: 100%; min-width: 0; max-width: 1400px;");
+    expect(styles.text).toContain("margin: auto auto 0;");
+    expect(styles.text).toContain("grid-template-rows: minmax(min-content, 1fr) auto;");
     expect(styles.text).toContain(".product-footer-development {");
     expect(health.body.data).toMatchObject({ version: APP_VERSION, development: true });
   });
