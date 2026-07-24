@@ -358,8 +358,11 @@ button { cursor: pointer; }
 .user-avatar-fallback { display: grid; width: 100%; height: 100%; place-items: center; }
 .account-button > .account-avatar { width: 26px; height: 26px; font-size: 11px; }
 .account-button > span:last-child { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.account-menu { position: absolute; z-index: 80; top: 48px; right: 84px; display: grid; min-width: 180px; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow); }
+.account-menu { position: absolute; z-index: 80; top: 48px; right: 84px; display: grid; width: 180px; min-width: 0; gap: 4px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow); }
 .account-menu.hidden { display: none; }
+.account-menu-name { display: grid; min-width: 0; gap: 2px; }
+.account-menu-name > span { overflow-wrap: anywhere; }
+.account-menu-username { color: var(--muted); font-size: 10px; font-weight: 500; }
 .account-menu small { margin-bottom: 8px; color: var(--muted); }
 .account-menu button { min-height: 30px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); text-align: left; font-size: 10px; }
 .account-menu button:hover, .account-menu button:focus-visible { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); outline: none; }
