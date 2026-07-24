@@ -1616,6 +1616,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const logFields = { ...commonFields, errorCode: error.code, status: error.status };
       if (error.status >= 500) logger.error("http.request.application_error", logFields);
       else logger.warn("http.request.application_error", logFields);
+      if (error.code === "LOGIN_LOCKED" && error.details && typeof error.details === "object") {
+        const retryAfterSeconds = Number((error.details as Record<string, unknown>).retryAfterSeconds);
+        if (Number.isInteger(retryAfterSeconds) && retryAfterSeconds > 0) {
+          response.setHeader("Retry-After", String(retryAfterSeconds));
+        }
+      }
       response.status(error.status).json({ error: { code: error.code, message: error.message, ...(error.details === undefined ? {} : { details: error.details }) } });
       return;
     }
