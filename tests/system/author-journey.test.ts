@@ -278,8 +278,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-product-footer');
-    expect(page.text).toContain('/styles.css?v=20260724-product-footer');
+    expect(page.text).toContain('/app.js?v=20260724-account-menu-identity');
+    expect(page.text).toContain('/styles.css?v=20260724-account-menu-identity');
+    expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
     expect(page.text).not.toContain('class="setting-markdown-heading"');
@@ -474,6 +475,13 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".message-body h1, .message-body h2");
     expect(styles.text).toContain(".prompt-composer-actions { position: absolute; right: 8px; bottom: 8px;");
     expect(styles.text).toContain(".account-menu button { min-height: 30px; padding: 6px 9px; border: 1px solid var(--line);");
+    expect(page.text).toContain('<strong id="account-menu-name" class="account-menu-name"><span id="account-menu-display-name">账户</span><span id="account-menu-username" class="account-menu-username">@account</span></strong>');
+    expect(application.text).toContain('$("#account-menu-display-name").textContent = session.user.displayName');
+    expect(application.text).toContain('$("#account-menu-username").textContent = `@${session.user.username}`');
+    expect(styles.text).toContain(".account-menu { position: absolute; z-index: 80; top: 48px; right: 84px; display: grid; width: 180px; min-width: 0;");
+    expect(styles.text).toContain(".account-menu-name { display: grid; min-width: 0; gap: 2px; }");
+    expect(styles.text).toContain(".account-menu-name > span { overflow-wrap: anywhere; }");
+    expect(styles.text).not.toContain(".account-menu-name > span { overflow: hidden;");
     expect(styles.text).toContain("font-size: 10px; }");
     expect(styles.text).toContain(".account-menu button:hover, .account-menu button:focus-visible");
     expect(styles.text).toContain(".book-info > span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }");

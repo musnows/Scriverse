@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260724-product-footer">
+    <link rel="stylesheet" href="/styles.css?v=20260724-account-menu-identity">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -57,9 +57,7 @@
         <p id="auth-error" class="auth-error" role="alert"></p>
       </div>
       <footer class="product-footer auth-product-footer" data-product-footer aria-label="叙界项目信息">
-        <span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span>
-        <span>叙界 <span data-product-footer-version>v—</span></span>
-        <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub · musnows/Scriverse</a>
+        <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
         <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
       </footer>
     </section>
@@ -77,7 +75,7 @@
           <span id="save-state" class="save-state">就绪</span>
           <button id="account-button" class="account-button" type="button" aria-haspopup="menu" aria-expanded="false"><span id="account-avatar" class="user-avatar account-avatar" aria-hidden="true"><span class="user-avatar-fallback">作</span></span><span id="account-name">账户</span></button>
           <div id="account-menu" class="account-menu hidden" role="menu">
-            <strong id="account-menu-name">账户</strong><small id="account-menu-role">普通用户</small>
+            <strong id="account-menu-name" class="account-menu-name"><span id="account-menu-display-name">账户</span><span id="account-menu-username" class="account-menu-username">@account</span></strong><small id="account-menu-role">普通用户</small>
             <button id="onboarding-menu-button" type="button" role="menuitem">功能导览</button>
             <button id="account-settings-button" type="button" role="menuitem">账户设置</button>
             <button id="logout-button" type="button" role="menuitem">退出登录</button>
@@ -141,9 +139,7 @@
           </div>
           <div id="book-shelf" class="book-shelf" data-testid="book-shelf"></div>
           <footer class="product-footer" data-product-footer aria-label="叙界项目信息">
-            <span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span>
-            <span>叙界 <span data-product-footer-version>v—</span></span>
-            <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub · musnows/Scriverse</a>
+            <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
           </footer>
         </section>
@@ -171,9 +167,7 @@
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
-            <span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span>
-            <span>叙界 <span data-product-footer-version>v—</span></span>
-            <a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub · musnows/Scriverse</a>
+            <span class="product-footer-meta"><span>© <time data-product-footer-year></time> <a href="https://github.com/musnows" target="_blank" rel="noopener noreferrer">musnows</a></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
           </footer>
         </section>
@@ -689,6 +683,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260724-product-footer"></script>
+    <script type="module" src="/app.js?v=20260724-account-menu-identity"></script>
   </body>
 </html>

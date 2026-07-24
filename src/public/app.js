@@ -1702,7 +1702,8 @@ function applyAuthenticatedUser(session) {
   state.csrfToken = session.csrfToken;
   $("#account-name").textContent = session.user.displayName;
   renderUserAvatar($("#account-avatar"), session.user);
-  $("#account-menu-name").textContent = `${session.user.displayName} · @${session.user.username}`;
+  $("#account-menu-display-name").textContent = session.user.displayName;
+  $("#account-menu-username").textContent = `@${session.user.username}`;
   $("#account-menu-role").textContent = session.user.role === "admin" ? "系统管理员" : "普通用户";
   $("#auth-view").classList.add("hidden");
   document.documentElement.classList.remove("login-route");
