@@ -218,6 +218,7 @@
 .auth-captcha-image img[hidden], .auth-captcha-placeholder[hidden] { display: none; }
 .auth-captcha-placeholder { color: var(--muted); font-size: 13px; padding: 0 14px; white-space: nowrap; }
 .auth-captcha-hint { margin: -8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.auth-security-hint { margin: -8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .auth-error { min-height: 20px; margin: 14px 0 0 !important; color: var(--accent-dark) !important; }
 
 :root[data-theme="dark"] {

@@ -76,6 +76,9 @@ declare global {
 const sessionCookieName = "scriverse_session";
 const sessionLifetimeMs = 30 * 24 * 60 * 60_000;
 const apiKeyPrefix = "scrv_";
+const loginFailureLimit = 5;
+const loginFailureWindowMs = 5 * 60_000;
+const loginLockDurationMs = 30 * 60_000;
 function membershipAccessRole(row: Row | undefined): PublicWorkAccessRole | null {
   const role = String(row?.role ?? "");
   if (role === "owner") return "owner";
@@ -261,6 +264,71 @@ export class UserAuthService {
     return { token, session: { id: sessionId, user, csrfToken } };
   }
 
+  private loginLock(normalizedUsername: string, timestamp: Date): AppError | null {
+    const attempt = this.database.get(
+      "SELECT locked_until FROM login_attempts WHERE normalized_username = ?",
+      normalizedUsername
+    );
+    const lockedUntil = attempt?.locked_until ? String(attempt.locked_until) : null;
+    const remainingMs = lockedUntil ? Date.parse(lockedUntil) - timestamp.getTime() : 0;
+    if (remainingMs <= 0) return null;
+    const retryAfterSeconds = Math.max(1, Math.ceil(remainingMs / 1_000));
+    const retryAfterMinutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+    return new AppError(
+      429,
+      "LOGIN_LOCKED",
+      `5 分钟内密码错误达到 5 次，登录已锁定，请在 ${retryAfterMinutes} 分钟后重试`,
+      { retryAfterSeconds, lockedUntil }
+    );
+  }
+
+  private recordFailedLogin(normalizedUsername: string, timestamp: Date): AppError | null {
+    return this.database.transaction(() => {
+      this.database.run(
+        "DELETE FROM login_attempts WHERE updated_at <= ?",
+        new Date(timestamp.getTime() - loginLockDurationMs).toISOString()
+      );
+      const existing = this.database.get(
+        "SELECT failure_timestamps_json, locked_until FROM login_attempts WHERE normalized_username = ?",
+        normalizedUsername
+      );
+      const activeLock = this.loginLock(normalizedUsername, timestamp);
+      if (activeLock) return activeLock;
+
+      let parsedFailures: unknown = [];
+      try {
+        parsedFailures = JSON.parse(String(existing?.failure_timestamps_json ?? "[]"));
+      } catch {
+        parsedFailures = [];
+      }
+      const windowStart = timestamp.getTime() - loginFailureWindowMs;
+      const failureTimestamps = (Array.isArray(parsedFailures) ? parsedFailures : [])
+        .filter((value): value is string => typeof value === "string")
+        .filter((value) => {
+          const failureAt = Date.parse(value);
+          return Number.isFinite(failureAt) && failureAt > windowStart && failureAt <= timestamp.getTime();
+        });
+      failureTimestamps.push(timestamp.toISOString());
+      const recentFailures = failureTimestamps.slice(-loginFailureLimit);
+      const failureCount = recentFailures.length;
+      const lockedUntil = failureCount >= loginFailureLimit
+        ? new Date(timestamp.getTime() + loginLockDurationMs).toISOString()
+        : null;
+      this.database.run(
+        `INSERT INTO login_attempts (normalized_username, failure_timestamps_json, locked_until, updated_at)
+         VALUES (?, ?, ?, ?) ON CONFLICT(normalized_username) DO UPDATE SET
+         failure_timestamps_json = excluded.failure_timestamps_json,
+         locked_until = excluded.locked_until,
+         updated_at = excluded.updated_at`,
+        normalizedUsername,
+        JSON.stringify(recentFailures),
+        lockedUntil,
+        timestamp.toISOString()
+      );
+      return lockedUntil ? this.loginLock(normalizedUsername, timestamp) : null;
+    });
+  }
+
   register(input: { username: string; password: string }): { token: string; session: AuthSession } {
     const normalizedUsername = normalizeUsername(input.username);
     const timestamp = new Date().toISOString();
@@ -281,6 +349,7 @@ export class UserAuthService {
         timestamp,
         timestamp
       );
+      this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", normalizedUsername);
       if (role === "admin") {
         this.database.run("UPDATE works SET owner_user_id = ? WHERE owner_user_id IS NULL AND id <> ?", userId, PLATFORM_AI_WORK_ID);
         this.database.run(
@@ -298,14 +367,32 @@ export class UserAuthService {
   }
 
   login(username: string, password: string): { token: string; session: AuthSession } {
+    const normalizedUsername = normalizeUsername(username);
+    const timestamp = new Date();
+    const activeLock = this.loginLock(normalizedUsername, timestamp);
+    if (activeLock) {
+      logger.warn("auth.login.failed", {
+        reason: "account_locked",
+        retryAfterSeconds: (activeLock.details as { retryAfterSeconds: number }).retryAfterSeconds
+      });
+      throw activeLock;
+    }
     const row = this.database.get(
       "SELECT * FROM users WHERE normalized_username = ?",
-      normalizeUsername(username)
+      normalizedUsername
     );
     const fallbackSalt = "invalid-login-salt";
     const calculated = passwordDigest(password, String(row?.password_salt ?? fallbackSalt));
     const valid = row && safeEqual(calculated, String(row.password_hash));
     if (!valid) {
+      const lock = this.recordFailedLogin(normalizedUsername, timestamp);
+      if (lock) {
+        logger.warn("auth.login.failed", {
+          reason: "account_locked_after_failures",
+          retryAfterSeconds: (lock.details as { retryAfterSeconds: number }).retryAfterSeconds
+        });
+        throw lock;
+      }
       logger.warn("auth.login.failed", { reason: "invalid_credentials" });
       throw new AppError(401, "INVALID_CREDENTIALS", "用户名或密码不正确");
     }
@@ -314,8 +401,12 @@ export class UserAuthService {
       logger.warn("auth.login.failed", { reason: "account_disabled", actorRef: accountReference(user.userId) });
       throw new AppError(403, "ACCOUNT_DISABLED", "该账户已被停用");
     }
-    this.database.run("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", new Date().toISOString(), new Date().toISOString(), user.userId);
-    return this.createSession(user.userId);
+    return this.database.transaction(() => {
+      const loginAt = timestamp.toISOString();
+      this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", normalizedUsername);
+      this.database.run("UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?", loginAt, loginAt, user.userId);
+      return this.createSession(user.userId);
+    });
   }
 
   authenticate(request: Request): AuthSession | null {
@@ -532,6 +623,7 @@ export class UserAuthService {
     this.database.transaction(() => {
       this.database.run("UPDATE users SET password_hash = ?, password_salt = ?, updated_at = ? WHERE id = ?", passwordDigest(newPassword, salt), salt, timestamp, userId);
       this.database.run("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND id <> ? AND revoked_at IS NULL", timestamp, userId, sessionId);
+      this.database.run("DELETE FROM login_attempts WHERE normalized_username = ?", String(row.normalized_username));
     });
   }
 
