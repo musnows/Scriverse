@@ -42,6 +42,11 @@ async function register(runtime: Runtime, username: string): Promise<SessionCred
   return { agent, cookie, csrfToken: response.body.data.csrfToken, user: response.body.data.user };
 }
 
+async function submitLogin(runtime: Runtime, username: string, password: string) {
+  const captcha = await solveCaptcha(runtime.app);
+  return request(runtime.app).post("/api/auth/login").send({ username, password, ...captcha });
+}
+
 function createUserAuthTestRuntime(allowRegistration = true): Runtime {
   const runtime = createRuntime({
     databasePath: ":memory:",
@@ -205,6 +210,148 @@ describe("用户、作品权限与操作者追踪 API", () => {
       firstRuntime?.close();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("同一用户五分钟内连续五次密码错误后锁定登录三十分钟", async () => {
+    await register(runtime, "locked_user");
+    for (let index = 0; index < 4; index += 1) {
+      const response = await submitLogin(runtime, index % 2 === 0 ? "LOCKED_USER" : "locked_user", "wrong-password");
+      expect(response.status).toBe(401);
+      expect(response.body.error.code).toBe("INVALID_CREDENTIALS");
+    }
+
+    const locked = await submitLogin(runtime, "locked_user", "wrong-password");
+    expect(locked.status).toBe(429);
+    expect(locked.headers["retry-after"]).toBe("1800");
+    expect(locked.body.error).toMatchObject({
+      code: "LOGIN_LOCKED",
+      message: "5 分钟内密码错误达到 5 次，登录已锁定，请在 30 分钟后重试",
+      details: { retryAfterSeconds: 1_800 }
+    });
+    const attempt = runtime.database.get(
+      "SELECT json_array_length(failure_timestamps_json) AS failure_count, locked_until FROM login_attempts WHERE normalized_username = ?",
+      "locked_user"
+    );
+    expect(attempt?.failure_count).toBe(5);
+    const remainingMs = Date.parse(String(attempt?.locked_until)) - Date.now();
+    expect(remainingMs).toBeGreaterThan(29 * 60_000);
+    expect(remainingMs).toBeLessThanOrEqual(30 * 60_000);
+
+    const correctWhileLocked = await submitLogin(runtime, "locked_user", "secure-password-123");
+    expect(correctWhileLocked.status).toBe(429);
+    expect(correctWhileLocked.body.error.code).toBe("LOGIN_LOCKED");
+
+    runtime.database.run(
+      "UPDATE login_attempts SET locked_until = ? WHERE normalized_username = ?",
+      new Date(Date.now() - 1_000).toISOString(),
+      "locked_user"
+    );
+    const unlocked = await submitLogin(runtime, "locked_user", "secure-password-123");
+    expect(unlocked.status).toBe(200);
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM login_attempts WHERE normalized_username = ?",
+      "locked_user"
+    )?.count).toBe(0);
+  });
+
+  it("登录锁定在服务重启后保持生效", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-login-lock-restart-"));
+    const databasePath = join(root, "novel.db");
+    let firstRuntime: Runtime | null = null;
+    let restartedRuntime: Runtime | null = null;
+    try {
+      firstRuntime = createRuntime({
+        databasePath,
+        masterSecret: "login-lock-restart-test-master-secret-with-enough-length",
+        serveUi: false,
+        revealCaptchaAnswer: true,
+        security: { allowRegistration: true, enforceSameOrigin: true }
+      });
+      await register(firstRuntime, "persistent_lock_user");
+      for (let index = 0; index < 5; index += 1) {
+        const response = await submitLogin(firstRuntime, "persistent_lock_user", "wrong-password");
+        expect(response.status).toBe(index === 4 ? 429 : 401);
+      }
+      firstRuntime.close();
+      firstRuntime = null;
+
+      restartedRuntime = createRuntime({
+        databasePath,
+        masterSecret: "login-lock-restart-test-master-secret-with-enough-length",
+        serveUi: false,
+        revealCaptchaAnswer: true,
+        security: { allowRegistration: true, enforceSameOrigin: true }
+      });
+      const stillLocked = await submitLogin(restartedRuntime, "persistent_lock_user", "secure-password-123");
+      expect(stillLocked.status).toBe(429);
+      expect(stillLocked.body.error.code).toBe("LOGIN_LOCKED");
+    } finally {
+      restartedRuntime?.close();
+      firstRuntime?.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("密码错误超过五分钟窗口后重新计数", async () => {
+    await register(runtime, "window_user");
+    for (let index = 0; index < 4; index += 1) {
+      expect((await submitLogin(runtime, "window_user", "wrong-password")).status).toBe(401);
+    }
+    const expiredFailures = Array.from(
+      { length: 4 },
+      (_, index) => new Date(Date.now() - (6 * 60_000 + index * 1_000)).toISOString()
+    );
+    runtime.database.run(
+      "UPDATE login_attempts SET failure_timestamps_json = ? WHERE normalized_username = ?",
+      JSON.stringify(expiredFailures),
+      "window_user"
+    );
+
+    const outsideWindow = await submitLogin(runtime, "window_user", "wrong-password");
+    expect(outsideWindow.status).toBe(401);
+    expect(runtime.database.get(
+      "SELECT json_array_length(failure_timestamps_json) AS failure_count, locked_until FROM login_attempts WHERE normalized_username = ?",
+      "window_user"
+    )).toEqual({ failure_count: 1, locked_until: null });
+  });
+
+  it("仅统计任意连续五分钟内的密码错误", async () => {
+    await register(runtime, "rolling_window_user");
+    for (let index = 0; index < 4; index += 1) {
+      expect((await submitLogin(runtime, "rolling_window_user", "wrong-password")).status).toBe(401);
+    }
+    const now = Date.now();
+    runtime.database.run(
+      "UPDATE login_attempts SET failure_timestamps_json = ? WHERE normalized_username = ?",
+      JSON.stringify([
+        new Date(now - 6 * 60_000).toISOString(),
+        new Date(now - 4 * 60_000).toISOString(),
+        new Date(now - 3 * 60_000).toISOString(),
+        new Date(now - 2 * 60_000).toISOString()
+      ]),
+      "rolling_window_user"
+    );
+
+    expect((await submitLogin(runtime, "rolling_window_user", "wrong-password")).status).toBe(401);
+    const locked = await submitLogin(runtime, "rolling_window_user", "wrong-password");
+    expect(locked.status).toBe(429);
+    expect(runtime.database.get(
+      "SELECT json_array_length(failure_timestamps_json) AS failure_count FROM login_attempts WHERE normalized_username = ?",
+      "rolling_window_user"
+    )?.failure_count).toBe(5);
+  });
+
+  it("不存在的用户名也采用相同锁定响应以避免账户枚举", async () => {
+    for (let index = 0; index < 4; index += 1) {
+      expect((await submitLogin(runtime, "missing_user", "wrong-password")).status).toBe(401);
+    }
+    const locked = await submitLogin(runtime, "missing_user", "wrong-password");
+    expect(locked.status).toBe(429);
+    expect(locked.body.error.code).toBe("LOGIN_LOCKED");
+    expect(runtime.database.get(
+      "SELECT json_array_length(failure_timestamps_json) AS failure_count FROM login_attempts WHERE normalized_username = ?",
+      "missing_user"
+    )?.failure_count).toBe(5);
   });
 
   it("仅查看成员可读取正文和设定，但所有作品写操作都会被拒绝", async () => {

@@ -1580,6 +1580,24 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(38)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS login_attempts (
+          normalized_username TEXT PRIMARY KEY,
+          failure_timestamps_json TEXT NOT NULL CHECK(json_valid(failure_timestamps_json) AND json_type(failure_timestamps_json) = 'array'),
+          locked_until TEXT,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_login_attempts_updated ON login_attempts(updated_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (38, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
