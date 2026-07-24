@@ -6,7 +6,7 @@ export const WORK_PERMISSION_MODULES = Object.freeze([
   { id: "organizations", uiModule: "organizations", label: "组织" },
   { id: "timeline", uiModule: "timeline", label: "时间轴" },
   { id: "relationships", uiModule: "relationships", label: "关系" },
-  { id: "outlines", uiModule: "outlines", label: "大纲与伏笔" },
+  { id: "outlines", uiModule: "outlines", label: "大纲/伏笔" },
   { id: "reviews", uiModule: "reviews", label: "审核" },
   { id: "ai-chat", uiModule: null, label: "AI 对话" },
   { id: "ai-analysis", uiModule: "tasks", label: "AI 分析" },

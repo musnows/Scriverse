@@ -273,7 +273,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260724-login-lock');
+    expect(page.text).toContain('/app.js?v=20260724-outline-title');
     expect(page.text).toContain('/styles.css?v=20260724-login-lock');
     expect(keyboardShortcuts.text).toContain("export function isGlobalSearchShortcut(event)");
     expect(application.text).toContain("if (!isGlobalSearchShortcut(event) || !state.work) return;");
@@ -380,7 +380,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-permission-preset="read"');
     expect(application.text).toContain('data-member-permission=');
     expect(application.text).toContain('body: existing ? { permissions } : { userId, permissions }');
-    expect(application.text).toContain('/work-permissions.js?v=20260723-ai-analysis-permission');
+    expect(application.text).toContain('/work-permissions.js?v=20260724-outline-title');
     expect(workPermissions.text).toContain('label: "AI 对话"');
     expect(workPermissions.text).toContain('label: "AI 分析"');
     expect(workPermissions.text).toContain('id: "ai-chat"');
@@ -427,7 +427,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('document.title = workTitle ? `${workTitle} · 叙界` : platformDocumentTitle');
     expect(application.text).toContain("updateDocumentTitle(state.work)");
     expect(page.text).toContain('data-module="outlines"');
-    expect(page.text).toContain('<span class="nav-label">大纲与伏笔</span>');
+    expect(page.text).toContain('<span class="nav-label">大纲/伏笔</span>');
+    expect(application.text).not.toContain("navButton.textContent = unresolved.length");
+    expect(workPermissions.text).toContain('label: "大纲/伏笔"');
     expect(page.text).toContain('<button class="ai-analysis-entry" type="button" data-module="tasks">');
     expect(page.text).toContain('</svg>AI 分析</button>');
     expect(page.text).toContain('id="module-more-button"');
