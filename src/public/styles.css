@@ -451,6 +451,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .shelf-header h1 { margin: 0 0 10px; font-size: clamp(30px, 4vw, 52px); font-weight: 560; letter-spacing: -.04em; }
 .shelf-header p { margin: 0; color: var(--muted); }
 .settings-hub-header { align-items: center; }
+.settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }
 .settings-hub-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; max-width: 1000px; margin: 0 auto; }
 .settings-hub-card { display: grid; grid-template-columns: 48px minmax(0, 1fr); grid-template-rows: auto auto; gap: 4px 14px; align-items: center; min-height: 128px; padding: 22px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); text-align: left; }
 .settings-hub-card:hover, .settings-hub-card:focus-visible { border-color: var(--accent); background: var(--paper-deep); box-shadow: var(--shadow); transform: translateY(-2px); }
