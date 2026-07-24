@@ -27,6 +27,10 @@ describe("产品信息页脚", () => {
     expect(page.text.match(/<footer class="[^"]*product-footer[^"]*" data-product-footer/gu)).toHaveLength(3);
     expect(page.text.match(/© <time data-product-footer-year><\/time>/gu)).toHaveLength(3);
     expect(page.text.match(/href="https:\/\/github.com\/musnows\/Scriverse"/gu)).toHaveLength(3);
+    expect(page.text.match(/class="product-footer-meta"/gu)).toHaveLength(3);
+    expect(page.text.match(/aria-hidden="true">·<\/span>/gu)).toHaveLength(6);
+    expect(page.text.match(/aria-label="在 GitHub 查看叙界仓库">GitHub<\/a>/gu)).toHaveLength(3);
+    expect(page.text).not.toContain(">GitHub · musnows/Scriverse</a>");
     expect(page.text.match(/data-product-footer-development>开发模式<\/span>/gu)).toHaveLength(3);
     expect(application.text).toContain("async function initializeProductFooters()");
     expect(application.text).toContain('const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);');
@@ -35,6 +39,7 @@ describe("产品信息页脚", () => {
     expect(styles.text).toContain("width: 100%; min-width: 0; max-width: 1400px;");
     expect(styles.text).toContain("margin: auto auto 0;");
     expect(styles.text).toContain("grid-template-rows: minmax(min-content, 1fr) auto;");
+    expect(styles.text).toContain(".product-footer-meta { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }");
     expect(styles.text).toContain(".product-footer-development {");
     expect(health.body.data).toMatchObject({ version: APP_VERSION, development: true });
   });

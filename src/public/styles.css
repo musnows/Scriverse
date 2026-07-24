@@ -460,7 +460,8 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .settings-hub-card strong { align-self: end; font-size: 16px; }
 .settings-hub-card small { align-self: start; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .settings-work-note { max-width: 1000px; margin: 18px auto 0; color: var(--muted); font-size: 11px; }
-.product-footer { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 18px; width: 100%; max-width: 1400px; margin: auto auto 0; padding-top: 20px; border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent); color: var(--muted); font-size: 10px; line-height: 1.5; }
+.product-footer { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; width: 100%; max-width: 1400px; margin: auto auto 0; padding-top: 20px; border-top: 1px solid color-mix(in srgb, var(--line) 76%, transparent); color: var(--muted); font-size: 10px; line-height: 1.5; }
+.product-footer-meta { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
 .product-footer a { color: inherit; text-decoration: none; text-underline-offset: 3px; transition: color .14s ease; }
 .product-footer a:hover, .product-footer a:focus-visible { color: var(--accent-dark); text-decoration: underline; }
 .product-footer-development { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 9px; font-weight: 700; letter-spacing: .05em; }
