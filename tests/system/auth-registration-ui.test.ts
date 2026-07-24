@@ -36,5 +36,8 @@ describe("注册入口状态", () => {
     expect(application.text).toContain("function validatePasswordChangeConfirmation()");
     expect(application.text).toContain("passwordConfirmation");
     expect(styles.text).toContain(".password-settings-form { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }");
+    expect(page.text).toContain('aria-describedby="login-lock-hint"');
+    expect(page.text).toContain('id="login-lock-hint" class="auth-security-hint">5 分钟内连续输错 5 次密码，登录将锁定 30 分钟。</p>');
+    expect(styles.text).toContain(".auth-security-hint {");
   });
 });

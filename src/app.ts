@@ -393,6 +393,8 @@ export type RuntimeOptions = {
   devAuthBypass?: boolean;
   /** 测试用：在验证码接口中回显答案 */
   revealCaptchaAnswer?: boolean;
+  /** 当前服务是否由开发模式启动。 */
+  developmentServer?: boolean;
 };
 
 export type Runtime = {
@@ -538,7 +540,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.use(createSecurityHeadersMiddleware());
 
   app.get("/api/health", (_request, response) => {
-    data(response, { status: "ok", version: APP_VERSION, protocol: "openai-chat-completions" });
+    data(response, {
+      status: "ok",
+      version: APP_VERSION,
+      protocol: "openai-chat-completions",
+      development: options.developmentServer === true
+    });
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));
@@ -1616,6 +1623,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const logFields = { ...commonFields, errorCode: error.code, status: error.status };
       if (error.status >= 500) logger.error("http.request.application_error", logFields);
       else logger.warn("http.request.application_error", logFields);
+      if (error.code === "LOGIN_LOCKED" && error.details && typeof error.details === "object") {
+        const retryAfterSeconds = Number((error.details as Record<string, unknown>).retryAfterSeconds);
+        if (Number.isInteger(retryAfterSeconds) && retryAfterSeconds > 0) {
+          response.setHeader("Retry-After", String(retryAfterSeconds));
+        }
+      }
       response.status(error.status).json({ error: { code: error.code, message: error.message, ...(error.details === undefined ? {} : { details: error.details }) } });
       return;
     }
