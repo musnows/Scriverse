@@ -25,13 +25,6 @@ RUN npm run build
 
 FROM ${NODE_IMAGE} AS runtime
 
-ENV NODE_ENV=production \
-    SCRIVERSE_RUNTIME=container \
-    LOG_LEVEL=info \
-    HOST=0.0.0.0 \
-    PORT=13210 \
-    DATA_DIR=/app/.data
-
 WORKDIR /app
 
 RUN mkdir -p /app/.data && chown node:node /app/.data
@@ -39,10 +32,16 @@ RUN mkdir -p /app/.data && chown node:node /app/.data
 COPY --from=dependency-manifests /manifests/package.json /manifests/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm,sharing=locked npm ci --omit=dev
 
-COPY --chown=node:node src/public ./src/public
 COPY --from=build /app/dist ./dist
 
 COPY package.json package-lock.json ./
+
+ENV NODE_ENV=production \
+    SCRIVERSE_RUNTIME=container \
+    LOG_LEVEL=info \
+    HOST=0.0.0.0 \
+    PORT=13210 \
+    DATA_DIR=/app/.data
 
 USER node
 

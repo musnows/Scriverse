@@ -69,14 +69,15 @@ describe("Docker 依赖清单规范化", () => {
     const runtimeStage = dockerfile.slice(dockerfile.indexOf("AS runtime"));
     const normalizedManifestCopy = runtimeStage.indexOf("COPY --from=dependency-manifests");
     const productionInstall = runtimeStage.indexOf("npm ci --omit=dev");
-    const publicCopy = runtimeStage.indexOf("COPY --chown=node:node src/public");
     const buildCopy = runtimeStage.indexOf("COPY --from=build /app/dist");
     const versionedManifestCopy = runtimeStage.lastIndexOf("COPY package.json package-lock.json");
+    const runtimeEnv = runtimeStage.indexOf("ENV NODE_ENV=production");
 
     expect(normalizedManifestCopy).toBeGreaterThan(-1);
     expect(productionInstall).toBeGreaterThan(normalizedManifestCopy);
-    expect(publicCopy).toBeGreaterThan(productionInstall);
-    expect(buildCopy).toBeGreaterThan(publicCopy);
+    expect(runtimeStage).not.toContain("COPY --chown=node:node src/public");
+    expect(buildCopy).toBeGreaterThan(productionInstall);
     expect(versionedManifestCopy).toBeGreaterThan(buildCopy);
+    expect(runtimeEnv).toBeGreaterThan(versionedManifestCopy);
   });
 });
