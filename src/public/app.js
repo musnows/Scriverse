@@ -2149,9 +2149,7 @@ async function api(path, options = {}) {
       moduleRequestCache.clear();
       showAuth(false);
     }
-    const error = new Error(payload.error?.message ?? `请求失败：${response.status}`);
-    error.code = payload.error?.code;
-    throw error;
+    throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
   }
   if (response.status === 204) {
     invalidateModuleRequestsAfterMutation(path, method);
@@ -2160,6 +2158,32 @@ async function api(path, options = {}) {
   const payload = await response.json();
   invalidateModuleRequestsAfterMutation(path, method);
   return payload.data;
+}
+
+function createClientError(payload, fallbackMessage, fallbackStatus = null) {
+  const source = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const error = new Error(typeof source.message === "string" ? source.message : fallbackMessage);
+  error.code = typeof source.code === "string" ? source.code : undefined;
+  error.status = Number.isInteger(source.status) ? source.status : fallbackStatus;
+  error.details = source.details;
+  error.failure = typeof source.failure === "string" ? source.failure : undefined;
+  error.callId = typeof source.callId === "string" ? source.callId : undefined;
+  return error;
+}
+
+function formatAiFailureMessage(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "未知错误");
+  const lines = [`调用失败：${message}`];
+  const code = typeof error?.code === "string" ? error.code : "";
+  const status = Number.isInteger(error?.status) ? error.status : null;
+  const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
+  const failure = typeof error?.failure === "string" ? error.failure : typeof details.failure === "string" ? details.failure : "";
+  const callId = typeof error?.callId === "string" ? error.callId : typeof details.callId === "string" ? details.callId : "";
+  if (code) lines.push(`错误码：${code}`);
+  if (status) lines.push(`服务端状态：HTTP ${status}`);
+  if (failure && failure !== message) lines.push(`详细原因：${failure}`);
+  if (callId) lines.push(`调用 ID：${callId}`);
+  return lines.join("\n\n");
 }
 
 async function apiPage(path, page = 1, limit = 30) {
@@ -8993,7 +9017,7 @@ async function sendAi() {
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
   } catch (error) {
-    const failureMessage = `调用失败：${error.message}`;
+    const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
     try { persistedFailureMessage = await persistAiConversationMessage("assistant", failureMessage); } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
     appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id);
@@ -9040,7 +9064,7 @@ async function streamChat(body) {
     });
     if (!response.ok || !response.body) {
       const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-      throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
+      throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -9098,7 +9122,7 @@ async function streamChat(body) {
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "error") {
-        streamError = new Error(payload.message ?? "AI 流式调用失败");
+        streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
     while (true) {
