@@ -768,7 +768,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: error");
     expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
     expect(streamed.text).toContain('"status":502');
-    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-*****lue\\"}}"');
+    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
   });

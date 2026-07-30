@@ -415,7 +415,7 @@ function taskTraceSourceRefs(initialMessages: unknown[], rounds: unknown[]): Arr
 
 function redactProviderSecret(value: string, apiKey: string): string {
   if (!apiKey) return value;
-  const maskedKey = apiKey.length > 6 ? `${apiKey.slice(0, 3)}*****${apiKey.slice(-3)}` : "********";
+  const maskedKey = apiKey.length > 7 ? `${apiKey.slice(0, 4)}*****${apiKey.slice(-3)}` : "********";
   return value.split(apiKey).join(maskedKey);
 }
 
