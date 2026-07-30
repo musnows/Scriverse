@@ -1303,7 +1303,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .provider-card { min-width: 0; }
 .provider-card p, .provider-card .model-pill { overflow-wrap: anywhere; word-break: break-word; }
 .provider-models { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.provider-model-row { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .provider-card .model-pill { max-width: 100%; margin: 0; border: 0; text-align: left; white-space: normal; cursor: pointer; }
+.provider-model-row .model-pill { min-width: 0; }
+.provider-model-row .model-test-button { flex: 0 0 auto; min-height: 30px; padding: 6px 9px; }
 .provider-card .model-pill:hover, .provider-card .model-pill:focus-visible { background: var(--surface-hover); color: var(--ink); }
 .provider-card .card-actions { flex-wrap: wrap; }
 .pill { display: inline-block; padding: 3px 7px; margin: 0 4px 4px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--muted); font-size: 9px; }

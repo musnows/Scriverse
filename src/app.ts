@@ -1926,6 +1926,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
   });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
+  app.post("/api/models/:modelId/test", async (request, response) => data(response, await ai.testModel(request.params.modelId)));
   app.get("/api/models/:modelId", (request, response) => data(response, ai.getModel(request.params.modelId)));
   app.patch("/api/models/:modelId", (request, response) => data(response, ai.updateModel(request.params.modelId, parse(modelSchema.partial(), request.body))));
   app.delete("/api/models/:modelId", (request, response) => {

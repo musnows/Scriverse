@@ -1789,6 +1789,32 @@ export class AiManager {
     return fetchSafeAiEndpoint(this.fetchImpl, url, init, this.validateOutboundUrl);
   }
 
+  private async probeProviderModel(row: ProviderRow, apiKey: string, modelId: string, signal: AbortSignal): Promise<void> {
+    const protocol = providerProtocol(row);
+    const response = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
+      method: "POST",
+      headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+      body: JSON.stringify(buildCompletionRequestBody({
+        protocol,
+        model: modelId,
+        messages: [{ role: "user", content: "请回复“连接成功”。" }],
+        parameters: { max_tokens: 10 }
+      })),
+      signal
+    });
+    const body = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
+    let payload: CompletionPayload;
+    try {
+      payload = parseCompletionPayload(protocol, JSON.parse(body));
+    } catch {
+      throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 返回了无效 JSON`);
+    }
+    if (!payload.choices?.[0]?.message?.content?.trim()) {
+      throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用回复`);
+    }
+  }
+
   createProvider(input: ProviderInput): Record<string, unknown> {
     const providerId = id("provider");
     const encrypted = this.vault.encrypt(input.apiKey);
@@ -1930,29 +1956,7 @@ export class AiManager {
         : [];
       const probeModel = availableModels[0];
       if (!probeModel) throw new Error("AI 供应商没有返回可用模型");
-      const probeResponse = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
-        method: "POST",
-        headers: providerRequestHeaders(protocol, apiKey, "application/json"),
-        body: JSON.stringify(buildCompletionRequestBody({
-          protocol,
-          model: probeModel,
-          messages: [{ role: "user", content: "请回复“连接成功”。" }],
-          parameters: { max_tokens: 10 }
-        })),
-        signal: controller.signal
-      });
-      const probeBody = await probeResponse.text();
-      if (!probeResponse.ok) throw new Error(`HTTP ${probeResponse.status}: ${probeBody.slice(0, 300)}`);
-      let probePayload: CompletionPayload;
-      try {
-        probePayload = parseCompletionPayload(protocol, JSON.parse(probeBody));
-      } catch {
-        throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 返回了无效 JSON`);
-      }
-      const probeReply = probePayload.choices?.[0]?.message?.content?.trim();
-      if (!probeReply) {
-        throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用回复`);
-      }
+      await this.probeProviderModel(row, apiKey, probeModel, controller.signal);
       const timestamp = now();
       this.store.db.run(
         "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
@@ -1984,6 +1988,55 @@ export class AiManager {
         error: aiErrorForLog(error)
       });
       return { ok: false, error: message, provider: this.getProvider(providerId) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async testModel(modelId: string): Promise<Record<string, unknown>> {
+    const model = this.getModelRow(modelId);
+    const providerId = stringValue(model, "provider_id");
+    const provider = this.getProviderRow(providerId);
+    const apiKey = this.decryptKey(provider);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const startedAt = process.hrtime.bigint();
+    const protocol = providerProtocol(provider);
+    logger.info("ai.model_test.started", { modelId, providerId });
+    try {
+      await this.probeProviderModel(provider, apiKey, stringValue(model, "model_id"), controller.signal);
+      const timestamp = now();
+      this.store.db.run(
+        "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
+        timestamp,
+        timestamp,
+        providerId
+      );
+      logger.info("ai.model_test.completed", {
+        modelId,
+        providerId,
+        protocol,
+        ok: true,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      });
+      return { ok: true, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+    } catch (error) {
+      const message = error instanceof Error ? redactProviderSecret(error.message, apiKey) : "连接失败";
+      this.store.db.run(
+        "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
+        message,
+        now(),
+        providerId
+      );
+      logger.warn("ai.model_test.completed", {
+        modelId,
+        providerId,
+        protocol,
+        ok: false,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: aiErrorForLog(error)
+      });
+      return { ok: false, error: message, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
     }

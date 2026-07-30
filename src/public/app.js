@@ -5895,8 +5895,8 @@ function renderProviderCards(providers, models) {
   return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
     <article class="record-card provider-card"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerStatusLabel(provider.status))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><h3>${esc(provider.name)}</h3>
     <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
-    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
+    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<div class="provider-model-row"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button><button class="ghost-button model-test-button" type="button" data-test-model="${esc(model.id)}" aria-label="测试模型 ${esc(model.displayName)}">测试连接</button></div>`).join("")}</div>
+    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}" ${models.some((model) => model.providerId === provider.id) ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
 }
 
@@ -5906,6 +5906,14 @@ function bindPlatformProviderActions(host, providers, models) {
     button.textContent = "测试中";
     const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
     toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
+    await renderPlatformAiConfig();
+    await loadModels();
+  }));
+  host.querySelectorAll("[data-test-model]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "测试中";
+    const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
+    toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
     await renderPlatformAiConfig();
     await loadModels();
   }));

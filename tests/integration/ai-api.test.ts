@@ -109,6 +109,25 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(tested.body.data.error).toContain("响应缺少可用回复");
   });
 
+  it("可以单独测试指定模型并使用该模型标识符", async () => {
+    const { providerId, modelId } = await configureAi();
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { model?: string; max_tokens?: number };
+      expect(body).toMatchObject({ model: "mock-novel-model", max_tokens: 10 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "模型连接成功" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const tested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: true,
+      model: { id: modelId, modelId: "mock-novel-model" },
+      provider: { id: providerId, connectionStatus: "success" }
+    });
+  });
+
   it("模型默认开启 thinking 并可按模型关闭", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

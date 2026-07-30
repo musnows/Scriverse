@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-model-output-tokens-v1');
-    expect(page.text).toContain('/styles.css?v=20260730-drafts-stream-v1');
+    expect(page.text).toContain('/app.js?v=20260730-provider-model-test-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-provider-model-test-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -775,6 +775,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("protocol", "接口协议", "select", protocol');
     expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
+    expect(application.text).toContain("data-test-model");
+    expect(application.text).toContain("models.some((model) => model.providerId === provider.id)");
     expect(application.text).toContain('field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow)');
     expect(application.text).toContain('field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens)');
     expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
