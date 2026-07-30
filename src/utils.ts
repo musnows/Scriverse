@@ -66,7 +66,7 @@ export function normalizeUploadFileName(value: string): string {
 
 export function maskSecret(secret: string): string {
   if (secret.length <= 8) return "********";
-  return `${secret.slice(0, 3)}${"*".repeat(Math.min(12, secret.length - 7))}${secret.slice(-4)}`;
+  return `${secret.slice(0, 5)}${"*".repeat(Math.min(12, secret.length - 8))}${secret.slice(-3)}`;
 }
 
 export function clamp(value: number, min: number, max: number): number {

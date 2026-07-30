@@ -11,7 +11,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
+import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v2";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -84,6 +84,12 @@ function normalizePageSizes(value) {
     module,
     normalizePageSize(value?.[module], fallback)
   ]));
+}
+
+function isSelectableModel(model) {
+  return Boolean(model?.enabled)
+    && model?.providerStatus === "enabled"
+    && model?.providerConnectionStatus === "success";
 }
 
 const state = {
@@ -1612,6 +1618,14 @@ function renderAiConversationHistory() {
   }
 }
 
+function applyAiConversationTitle(title) {
+  if (!title || !state.aiConversationId) return;
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  if (current) current.title = title;
+  $("#ai-conversation-title").textContent = title;
+  renderAiConversationHistory();
+}
+
 async function loadAiConversations(openLatest = true) {
   const workId = state.work?.id;
   if (!workId) return;
@@ -2149,9 +2163,7 @@ async function api(path, options = {}) {
       moduleRequestCache.clear();
       showAuth(false);
     }
-    const error = new Error(payload.error?.message ?? `请求失败：${response.status}`);
-    error.code = payload.error?.code;
-    throw error;
+    throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
   }
   if (response.status === 204) {
     invalidateModuleRequestsAfterMutation(path, method);
@@ -2160,6 +2172,32 @@ async function api(path, options = {}) {
   const payload = await response.json();
   invalidateModuleRequestsAfterMutation(path, method);
   return payload.data;
+}
+
+function createClientError(payload, fallbackMessage, fallbackStatus = null) {
+  const source = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  const error = new Error(typeof source.message === "string" ? source.message : fallbackMessage);
+  error.code = typeof source.code === "string" ? source.code : undefined;
+  error.status = Number.isInteger(source.status) ? source.status : fallbackStatus;
+  error.details = source.details;
+  error.failure = typeof source.failure === "string" ? source.failure : undefined;
+  error.callId = typeof source.callId === "string" ? source.callId : undefined;
+  return error;
+}
+
+function formatAiFailureMessage(error) {
+  const message = error instanceof Error ? error.message : String(error ?? "未知错误");
+  const lines = [`调用失败：${message}`];
+  const code = typeof error?.code === "string" ? error.code : "";
+  const status = Number.isInteger(error?.status) ? error.status : null;
+  const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
+  const failure = typeof error?.failure === "string" ? error.failure : typeof details.failure === "string" ? details.failure : "";
+  const callId = typeof error?.callId === "string" ? error.callId : typeof details.callId === "string" ? details.callId : "";
+  if (code) lines.push(`错误码：${code}`);
+  if (status) lines.push(`服务端状态：HTTP ${status}`);
+  if (failure && failure !== message) lines.push(`详细原因：${failure}`);
+  if (callId) lines.push(`调用 ID：${callId}`);
+  return lines.join("\n\n");
 }
 
 async function apiPage(path, page = 1, limit = 30) {
@@ -5376,12 +5414,7 @@ async function rerunAnalysisTaskWithModel(task, button) {
   try {
     const models = await api(`/api/works/${encodeURIComponent(task.workId)}/models`);
     const currentModelId = String(task.model?.id ?? "");
-    const availableModels = models.filter((model) =>
-      model.id !== currentModelId
-      && model.enabled
-      && model.providerStatus === "enabled"
-      && model.providerConnectionStatus === "success"
-    );
+    const availableModels = models.filter((model) => model.id !== currentModelId && isSelectableModel(model));
     if (!availableModels.length) throw new Error("当前没有其他可用模型，请先配置并测试模型");
     $("#form-dialog").close();
     const currentModelLabel = task.model?.displayName || "运行时默认模型";
@@ -5892,11 +5925,28 @@ function openTaskDetailDialog(task, trace) {
 }
 
 function renderProviderCards(providers, models) {
-  return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
-    <article class="record-card provider-card"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerStatusLabel(provider.status))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><h3>${esc(provider.name)}</h3>
-    <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit} · 最大输出：${provider.maxTokens ?? 32000}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>`).join("")}</div>
-    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}">测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
+  return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => {
+    const providerModels = models.filter((model) => model.providerId === provider.id);
+    const providerStatusClass = provider.status === "disabled" ? "is-disabled" : provider.status === "error" ? "is-error" : "is-enabled";
+    const disabledNotice = provider.status === "disabled"
+      ? `<div class="provider-disabled-notice" role="status"><strong>已停用</strong><span>不会出现在新任务的模型列表中，历史任务仍可查看。</span></div>`
+      : "";
+    return `
+    <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    <div class="provider-models">${providerModels.map((model) => {
+      const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
+      const modelStatus = !model.enabled
+        ? `<span class="model-status-badge is-disabled">模型已停用</span>`
+        : provider.status !== "enabled"
+          ? `<span class="model-status-badge is-disabled">供应商已停用</span>`
+          : provider.connectionStatus !== "success"
+            ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
+            : "";
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}<button class="ghost-button model-test-button" type="button" data-test-model="${esc(model.id)}" aria-label="测试模型 ${esc(model.displayName)}">测试连接</button></div>`;
+    }).join("")}</div>
+    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
+  }).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
 }
 
@@ -5909,28 +5959,50 @@ function bindPlatformProviderActions(host, providers, models) {
     await renderPlatformAiConfig();
     await loadModels();
   }));
+  host.querySelectorAll("[data-test-model]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "测试中";
+    const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
+    toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+    await renderPlatformAiConfig();
+    await loadModels();
+  }));
   host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
   host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(undefined, models.find((model) => model.id === button.dataset.editModel))));
   host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
 }
 
-function renderTaskDefaults(models, providers, taskDefaults) {
+function renderTaskDefaults(models, providers, taskDefaults, settings) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
-  return models.length ? `<section class="config-section">
+  const availableModels = models.filter((model) => isSelectableModel(model));
+  const availableModelIds = new Set(availableModels.map((model) => model.id));
+  const currentDefaultModels = taskDefaults
+    .map((item) => item.model)
+    .filter((model) => model && !availableModelIds.has(model.id));
+  const optionModels = [...availableModels, ...currentDefaultModels];
+  return optionModels.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
-    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody>${taskTypeLabels.map(([taskType, label]) => {
+    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
+      <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
+      ${models.map((model) => {
+        const provider = providerById.get(model.providerId);
+        const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
+        return `<option value="${esc(model.id)}" ${model.id === settings.titleGenerationModelId ? "selected" : ""} ${available || model.id === settings.titleGenerationModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+      }).join("")}
+    </select></td></tr>${taskTypeLabels.map(([taskType, label]) => {
       const currentModelId = defaultModelByTask.get(taskType) ?? "";
       return `<tr><td>${esc(label)}</td><td><select class="default-model-select" data-task-default="${esc(taskType)}">
         <option value="" disabled ${currentModelId ? "" : "selected"}>请选择模型</option>
-        ${models.map((model) => {
+        ${optionModels.map((model) => {
           const provider = providerById.get(model.providerId);
-          const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
-          return `<option value="${esc(model.id)}" ${model.id === currentModelId ? "selected" : ""} ${available || model.id === currentModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+          const available = isSelectableModel({ ...model, providerStatus: model.providerStatus ?? provider?.status, providerConnectionStatus: model.providerConnectionStatus ?? provider?.connectionStatus });
+          const unavailableLabel = !model.enabled ? "模型已停用 · " : provider?.status !== "enabled" ? "供应商已停用 · " : "连接不可用 · ";
+          return `<option value="${esc(model.id)}" ${model.id === currentModelId ? "selected" : ""} ${available ? "" : "disabled"}>${esc(`${available ? "" : unavailableLabel}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
         }).join("")}
       </select></td></tr>`;
     }).join("")}</tbody></table>
-  </section>` : emptyModule("尚未配置平台模型", "请先在平台 AI 管理中添加并测试供应商模型。");
+  </section>` : emptyModule("尚未配置可用模型", "请先启用并测试供应商模型，已停用模型不会出现在新任务选择中。");
 }
 
 const relationshipIndexStatusLabels = Object.freeze({
@@ -6324,7 +6396,7 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
@@ -6461,6 +6533,18 @@ async function renderBookAiSettings() {
       button.disabled = false;
     }
   });
+  host.querySelector("[data-title-generation-default]")?.addEventListener("change", async (event) => {
+    const select = event.currentTarget;
+    select.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { titleGenerationModelId: select.value } });
+      toast("创作助手对话标题生成模型已更新");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    await renderBookAiSettings();
+    await loadModels();
+  });
   host.querySelectorAll("[data-task-default]").forEach((select) => select.addEventListener("change", async () => {
     select.disabled = true;
     try {
@@ -6480,11 +6564,11 @@ async function loadModels() {
   const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.models = models;
+  state.models = models.filter((model) => isSelectableModel(model));
   loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
   select.innerHTML = state.models.length
-    ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(modelOptionLabel(model))}</option>`).join("")
+    ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
   scheduleAiContextUsage();
 }
@@ -6532,9 +6616,50 @@ function currentAiRequestScope() {
   return { taskType, scope, selection };
 }
 
+function renderAiContextDistribution(usage) {
+  const popover = $("#ai-context-popover");
+  const host = $("#ai-context-distribution");
+  const distribution = normalizeAiContextTokenDistribution(usage);
+  const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
+  $("#ai-context-popover-description").textContent = usage
+    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok`
+    : "选择可用模型后显示当前上下文用量";
+  host.replaceChildren(...distribution.items.map((item) => {
+    const row = document.createElement("div");
+    row.className = "ai-context-distribution-row";
+    row.dataset.key = item.key;
+    row.setAttribute("role", "listitem");
+    row.setAttribute("aria-label", `${item.label}：${item.tokens.toLocaleString("zh-CN")} tok，占 ${item.percent}%`);
+
+    const label = document.createElement("div");
+    label.className = "ai-context-distribution-label";
+    const title = document.createElement("span");
+    title.textContent = item.label;
+    if (item.key === "context") {
+      const description = document.createElement("small");
+      description.textContent = "用户和 agent 的交互";
+      title.append(" ", description);
+    }
+    const value = document.createElement("strong");
+    value.textContent = `${item.tokens.toLocaleString("zh-CN")} tok · ${item.percent}%`;
+    label.append(title, value);
+
+    const track = document.createElement("div");
+    track.className = "ai-context-distribution-track";
+    track.setAttribute("aria-hidden", "true");
+    const bar = document.createElement("span");
+    bar.style.setProperty("--distribution-percent", String(item.percent));
+    track.append(bar);
+    row.append(label, track);
+    return row;
+  }));
+  popover.dataset.hasUsage = String(Boolean(usage));
+}
+
 function setAiContextMeter(usage) {
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
+  renderAiContextDistribution(usage);
   if (!usage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
@@ -6554,6 +6679,14 @@ function setAiContextMeter(usage) {
   const tooltip = formatAiContextUsageTooltip(usage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
+}
+
+function setAiContextDistributionVisible(visible) {
+  const meter = $("#ai-context-meter");
+  const popover = $("#ai-context-popover");
+  popover.classList.toggle("hidden", !visible);
+  meter.setAttribute("aria-expanded", String(visible));
+  if (!visible && document.activeElement === $("#ai-context-popover-close")) meter.focus();
 }
 
 function showAiContextWarning(usage = null) {
@@ -8567,11 +8700,7 @@ async function openTaskDialog() {
     return;
   }
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
-  const availableTaskModels = taskModels.filter((model) =>
-    model.enabled
-    && model.providerStatus === "enabled"
-    && model.providerConnectionStatus === "success"
-  );
+  const availableTaskModels = taskModels.filter((model) => isSelectableModel(model));
   const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
   const relationshipCharacterPicker = `<div class="form-field relationship-character-field">
     <span id="relationship-character-label">被分析角色（可多选）</span>
@@ -8877,8 +9006,8 @@ async function openTaskDialog() {
 function openProviderDialog(item) {
   const protocol = item?.protocol ?? "openai-chat-completions";
   const defaultBaseUrl = protocol === "anthropic-messages" ? "https://api.anthropic.com" : "https://api.openai.com/v1";
-  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("protocol", "接口协议", "select", protocol, [["openai-chat-completions", "OpenAI Chat Completions"], ["anthropic-messages", "Anthropic Messages"]]) + field("baseUrl", "API 基础地址", "url", item?.baseUrl ?? defaultBaseUrl) + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10) + field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
-    const body = { name: form.get("name"), protocol: form.get("protocol"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), maxTokens: Number(form.get("maxTokens")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
+  openDialog(item ? "编辑 AI 供应商" : "新建 AI 供应商", field("name", "显示名称", "text", item?.name) + field("protocol", "接口协议", "select", protocol, [["openai-chat-completions", "OpenAI Chat Completions"], ["anthropic-messages", "Anthropic Messages"]]) + field("baseUrl", "API 基础地址", "url", item?.baseUrl ?? defaultBaseUrl) + field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password") + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10) + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10) + field("note", "用途备注", "textarea", item?.note) + field("enabled", item ? "启用供应商" : "立即启用", "checkbox", item ? item.status === "enabled" : true), async (form) => {
+    const body = { name: form.get("name"), protocol: form.get("protocol"), baseUrl: form.get("baseUrl"), concurrencyLimit: Number(form.get("concurrencyLimit")), rpmLimit: Number(form.get("rpmLimit")), note: form.get("note"), status: form.get("enabled") === "on" ? "enabled" : "disabled" };
     if (!item || String(form.get("apiKey") ?? "").trim()) body.apiKey = form.get("apiKey");
     await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
@@ -8972,6 +9101,7 @@ async function sendAi() {
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
       persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
+      applyAiConversationTitle(streamed.conversationTitle);
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
       assistantContent = suggestion.content;
@@ -8993,7 +9123,7 @@ async function sendAi() {
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
   } catch (error) {
-    const failureMessage = `调用失败：${error.message}`;
+    const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
     try { persistedFailureMessage = await persistAiConversationMessage("assistant", failureMessage); } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
     appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id);
@@ -9029,6 +9159,7 @@ async function streamChat(body) {
   let processSteps = [];
   let persistedMessageId = null;
   let persistedMessageCreatedAt = null;
+  let conversationTitle = null;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -9040,7 +9171,7 @@ async function streamChat(body) {
     });
     if (!response.ok || !response.body) {
       const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
-      throw new Error(payload.error?.message ?? `请求失败：${response.status}`);
+      throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -9085,6 +9216,7 @@ async function streamChat(body) {
       } else if (eventName === "complete") {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
+        conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -9098,7 +9230,7 @@ async function streamChat(body) {
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "error") {
-        streamError = new Error(payload.message ?? "AI 流式调用失败");
+        streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
     while (true) {
@@ -9112,7 +9244,7 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt };
+    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle };
   } catch (error) {
     typewriter.reveal();
     message.classList.remove("is-streaming");
@@ -9127,8 +9259,12 @@ async function streamChat(body) {
 
 function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null) {
   const message = document.createElement("div");
-  message.className = role === "user" ? "user-message" : "assistant-message";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(text)}</div>`;
+  const isFailure = role === "assistant" && text.startsWith("调用失败：");
+  message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;
+  const messageBody = isFailure
+    ? `<p class="ai-error-text">${esc(text)}</p>`
+    : renderMarkdown(text);
+  message.innerHTML = `<div class="message-body">${messageBody}</div>`;
   attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
   if (citations.length) {
     const references = document.createElement("div");
@@ -10487,6 +10623,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
+  if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
     $("#account-button").setAttribute("aria-expanded", "false");
@@ -10508,6 +10645,7 @@ document.addEventListener("keydown", (event) => {
     closeLineCitationMenu();
     closeMarkdownTableMenu(true);
     hideAiMentionMenu();
+    setAiContextDistributionVisible(false);
   }
 });
 document.addEventListener("keydown", (event) => {
@@ -10517,6 +10655,10 @@ document.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   openSearchDialog().catch((error) => toast(error.message, "error"));
 }, { capture: true });
+$("#ai-context-meter").addEventListener("click", () => {
+  setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
+});
+$("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
 $("#ai-send").addEventListener("click", sendAi);
 $("#ai-new-conversation").addEventListener("click", async () => {
   const button = $("#ai-new-conversation");

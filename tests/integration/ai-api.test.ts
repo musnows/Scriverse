@@ -21,6 +21,10 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string } };
+      if (body.max_tokens === 10) {
+        expect(body.messages).toHaveLength(1);
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
       expect(body.messages[1]?.content).toContain("跃迁后必须冷却十二小时");
       expect(body.max_tokens).toBe(expectedMaxTokens);
       expect(body.thinking).toEqual({ type: expectedThinkingType });
@@ -50,9 +54,10 @@ describe("AI 供应商、模型与建议 API", () => {
       status: "enabled"
     }).expect(201);
     const providerId = provider.body.data.id;
-    expect(provider.body.data.apiKey).not.toContain("sensitive");
+    expect(provider.body.data.apiKey).toBe("sk-se************lue");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokens: 32_000 });
+    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10 });
+    expect(provider.body.data).not.toHaveProperty("maxTokens");
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
 
@@ -83,6 +88,44 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(409);
+  });
+
+  it("连接测试必须用 max_tokens=10 收到真实助手回复", async () => {
+    const { providerId } = await configureAi();
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { max_tokens?: number };
+      expect(body.max_tokens).toBe(10);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({ ok: false, provider: { connectionStatus: "failed" } });
+    expect(tested.body.data.error).toContain("响应缺少可用回复");
+  });
+
+  it("可以单独测试指定模型并使用该模型标识符", async () => {
+    const { providerId, modelId } = await configureAi();
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { model?: string; max_tokens?: number };
+      expect(body).toMatchObject({ model: "mock-novel-model", max_tokens: 10 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "模型连接成功" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const tested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({
+      ok: true,
+      model: { id: modelId, modelId: "mock-novel-model" },
+      provider: { id: providerId, connectionStatus: "success" }
+    });
   });
 
   it("模型默认开启 thinking 并可按模型关闭", async () => {
@@ -240,6 +283,27 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     await request(runtime.app).put(`/api/works/${secondWork.body.data.id}/task-defaults/chat`).send({ modelId }).expect(200);
     expect(secondChapter.body.data.title).toBe("第二章");
+  });
+
+  it("功能模型列表排除禁用模型但保留历史任务中的模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "book-analysis",
+      scope: { type: "book" },
+      modelId
+    }).expect(201);
+
+    const availableBeforeDisable = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    expect(availableBeforeDisable.body.data.map((model: { id: string }) => model.id)).toContain(modelId);
+
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ enabled: false }).expect(200);
+
+    const availableAfterDisable = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    expect(availableAfterDisable.body.data.map((model: { id: string }) => model.id)).not.toContain(modelId);
+    const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
+    expect(tasks.body.data.items.find((item: { id: string }) => item.id === task.body.data.id)?.model)
+      .toMatchObject({ id: modelId, modelId: "mock-novel-model" });
   });
 
   it("按模型上下文比例裁剪全书概要引用", async () => {
@@ -631,7 +695,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     expectedMaxTokens = 24_000;
-    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ maxTokens: expectedMaxTokens }).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ preset: { max_tokens: expectedMaxTokens } }).expect(200);
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "continue",
@@ -743,6 +807,88 @@ describe("AI 供应商、模型与建议 API", () => {
       cacheHitRate: 75,
       estimatedRequestCount: 0
     });
+  });
+
+  it("首轮对话默认使用提示词前十五字并可由独立模型生成标题", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const settingsBefore = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(settingsBefore.body.data.titleGenerationModelId).toBeNull();
+
+    const defaultConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${defaultConversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "一二三四五六七八九十一二三四五六七八九十"
+    }).expect(201);
+    const defaultReloaded = await request(runtime.app).get(`/api/ai-conversations/${defaultConversation.body.data.id}`).expect(200);
+    expect(defaultReloaded.body.data.title).toBe("一二三四五六七八九十一二三四五");
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    const completionBodies: Array<{ stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> };
+      completionBodies.push(body);
+      if (body.stream) {
+        return new Response("data: {\"choices\":[{\"delta\":{\"content\":\"助手回答\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      expect(body.tools).toBeUndefined();
+      expect(body.messages?.some((message) => message.content?.includes("请规划北港跃迁路线"))).toBe(true);
+      expect(body.messages?.some((message) => message.content?.includes("助手回答"))).toBe(true);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 });
+    });
+
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const userMessage = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "请规划北港跃迁路线"
+    }).expect(201);
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: userMessage.body.data.content,
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId: conversation.body.data.id,
+      currentMessageId: userMessage.body.data.id
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain('"conversationTitle":"北港跃迁路线"');
+    expect(completionBodies).toHaveLength(2);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.title).toBe("北港跃迁路线");
+    expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
+    const settingsAfter = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
+  });
+
+  it("侧栏问答失败时通过 SSE 返回上游错误详情", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return new Response(JSON.stringify({ error: { message: `上游参数无效：${authorization}` } }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "触发可读错误",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
+    expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
+    expect(streamed.text).not.toContain("sk-sensitive-test-value");
+    expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
   });
 
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
@@ -918,7 +1064,10 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId,
       maxAttempts: 1
     });
-    const rejection = expect(call).rejects.toThrow("AI 调用失败");
+    const rejection = expect(call).rejects.toMatchObject({
+      message: "AI 调用失败",
+      details: { failure: "AI 请求超时（60 秒）" }
+    });
     await vi.advanceTimersByTimeAsync(60_001);
     await rejection;
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);

@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-volume-lazy-module-cache-v1');
-    expect(page.text).toContain('/styles.css?v=20260730-drafts-stream-v1');
+    expect(page.text).toContain('/app.js?v=20260730-ai-error-model-availability-token-distribution-conversation-title-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-ai-error-drafts-filter-align-model-availability-token-distribution-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -774,8 +774,16 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }");
     expect(application.text).toContain('field("protocol", "接口协议", "select", protocol');
-    expect(application.text).toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
+    expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
+    expect(application.text).toContain("data-test-model");
+    expect(application.text).toContain("providerModels.length");
+    expect(application.text).toContain("function isSelectableModel(model)");
+    expect(application.text).toContain("provider-disabled-notice");
+    expect(application.text).toContain("已停用模型不会出现在新任务选择中");
+    expect(styles.text).toContain(".provider-card.is-disabled");
+    expect(styles.text).toContain(".provider-status-badge.is-disabled");
     expect(application.text).toContain('field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow)');
+    expect(application.text).toContain('field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens)');
     expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
     expect(application.text).toContain('field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled)');
     expect(application.text).toContain("所有请求都会携带最大输出令牌数，默认值为 32000。");

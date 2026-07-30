@@ -12,6 +12,8 @@ describe("AI 对话上下文 compact 界面", () => {
     ]);
 
     expect(page).toContain('id="ai-context-warning"');
+    expect(page).toContain('id="ai-context-popover"');
+    expect(page).toContain('id="ai-context-distribution"');
     expect(page).toContain('id="ai-context-compact"');
     expect(page).toContain('id="ai-context-new-conversation"');
     expect(page).toContain("整理长期记忆");
@@ -26,6 +28,9 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain("currentMessageId: persistedUserMessage.id");
     expect(application).toContain('prepared.action === "warn"');
     expect(application).toContain('prepared.action === "compacted"');
+    expect(application).toContain("normalizeAiContextTokenDistribution");
+    expect(application).toContain("setAiContextDistributionVisible");
+    expect(styles).toContain(".ai-context-popover.hidden { display: none; }");
     expect(styles).toContain(".ai-context-warning.hidden { display: none; }");
   });
 });
