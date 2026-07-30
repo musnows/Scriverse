@@ -146,7 +146,7 @@ describe("AI 分析全流程追踪", () => {
       expect.objectContaining({ role: "tool", tool_call_id: "tool-grep" })
     ]));
     expect(JSON.stringify(fullTrace)).not.toContain("sk-trace-secret");
-    expect(JSON.stringify(fullTrace)).toContain("Bearer [REDACTED]");
+    expect(JSON.stringify(fullTrace)).toContain("Bearer sk-*****ret");
     expect(fullTrace.rounds[0].attempts[0].response).not.toHaveProperty("debug");
 
     const call = runtime.database.get<Record<string, unknown>>("SELECT task_id FROM ai_calls WHERE id = ?", trace.calls[0].id);
@@ -273,13 +273,15 @@ describe("AI 分析全流程追踪", () => {
       scope: { type: "book" }
     }).expect(201);
 
-    await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId: model.body.data.id }).expect(502);
+    const failedRun = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId: model.body.data.id }).expect(502);
+    expect(JSON.stringify(failedRun.body)).not.toContain("sk-failure-trace-secret");
+    expect(JSON.stringify(failedRun.body)).toContain("Bearer sk-*****ret");
     const trace = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/trace`).expect(200);
     const serializedTrace = JSON.stringify(trace.body.data);
     expect(serializedTrace).not.toContain("sk-failure-trace-secret");
-    expect(serializedTrace).toContain("Bearer [REDACTED]");
+    expect(serializedTrace).toContain("Bearer sk-*****ret");
     const call = runtime.database.get<Record<string, unknown>>("SELECT failure FROM ai_calls WHERE task_id = ?", task.body.data.id);
     expect(String(call?.failure)).not.toContain("sk-failure-trace-secret");
-    expect(String(call?.failure)).toContain("Bearer [REDACTED]");
+    expect(String(call?.failure)).toContain("Bearer sk-*****ret");
   });
 });

@@ -748,11 +748,12 @@ describe("AI 供应商、模型与建议 API", () => {
   it("侧栏问答失败时通过 SSE 返回上游错误详情", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    fetchMock.mockImplementation(async (input) => {
+    fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       }
-      return new Response(JSON.stringify({ error: { message: "上游参数无效" } }), {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return new Response(JSON.stringify({ error: { message: `上游参数无效：${authorization}` } }), {
         status: 400,
         headers: { "Content-Type": "application/json" }
       });
@@ -767,7 +768,8 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: error");
     expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
     expect(streamed.text).toContain('"status":502');
-    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效\\"}}"');
+    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-*****lue\\"}}"');
+    expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
   });
 
