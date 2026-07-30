@@ -19,7 +19,7 @@ describe("草稿模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">草稿</button>");
-    expect(page.text).toContain('/app.js?v=20260730-conversation-title-model-v1');
+    expect(page.text).toContain('/app.js?v=20260730-ai-error-model-availability-token-distribution-conversation-title-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作草稿"');
     expect(application.text).toContain('[["prose", "正文草稿"], ["setting", "设定草稿"]]');
     expect(application.text).toContain('field("content", "内容", "markdown"');
@@ -41,6 +41,7 @@ describe("草稿模块界面", () => {
     expect(application.text).not.toContain('data-delete-draft');
     expect(application.text).toContain('editor: true');
     expect(application.text).toContain('dialog.classList.toggle("editor-dialog", Boolean(options.editor))');
+    expect(styles.text).toContain('.draft-filter-toolbar { display: flex; align-items: center;');
     expect(styles.text).toContain('.draft-filter-toolbar select { min-width: 180px; min-height: 38px;');
     expect(styles.text).toContain('font-size: 11px; }');
     expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');

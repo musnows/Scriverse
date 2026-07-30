@@ -337,8 +337,7 @@ const providerSchema = z.object({
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
-  rpmLimit: z.number().int().min(1).max(10_000).optional(),
-  maxTokens: z.number().int().min(1).max(32_768).optional()
+  rpmLimit: z.number().int().min(1).max(10_000).optional()
 });
 
 const modelSchema = z.object({
@@ -1929,6 +1928,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
   });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
+  app.post("/api/models/:modelId/test", async (request, response) => data(response, await ai.testModel(request.params.modelId)));
   app.get("/api/models/:modelId", (request, response) => data(response, ai.getModel(request.params.modelId)));
   app.patch("/api/models/:modelId", (request, response) => data(response, ai.updateModel(request.params.modelId, parse(modelSchema.partial(), request.body))));
   app.delete("/api/models/:modelId", (request, response) => {
@@ -2038,9 +2038,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     } catch (error) {
       if (!controller.signal.aborted) {
+        const details = error instanceof AppError && error.details && typeof error.details === "object" && !Array.isArray(error.details)
+          ? error.details as Record<string, unknown>
+          : null;
         sendEvent("error", {
           code: error instanceof AppError ? error.code : "AI_STREAM_FAILED",
-          message: error instanceof Error ? error.message : "AI 流式调用失败"
+          message: error instanceof Error ? error.message : "AI 流式调用失败",
+          ...(error instanceof AppError ? { status: error.status } : {}),
+          ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
+          ...(typeof details?.callId === "string" ? { callId: details.callId } : {})
         });
       }
     } finally {

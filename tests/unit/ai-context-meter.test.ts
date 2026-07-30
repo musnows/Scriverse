@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { formatAiContextUsageTooltip } from "../../src/public/ai-context-meter.js";
+import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "../../src/public/ai-context-meter.js";
 
 describe("AI 上下文用量提示", () => {
   it("分别显示作品、对话和输出预留预算", () => {
@@ -12,5 +12,27 @@ describe("AI 上下文用量提示", () => {
       conversationBudgetTokens: 30_000,
       outputReserveTokens: 32_000
     })).toBe("总输入 12,345 / 128,000 tok · 作品上下文 6,000 tok · 对话历史 2,500 / 30,000 tok · 输出预留 32,000 tok");
+  });
+
+  it("按上下文窗口归一化五类 Token 分布", () => {
+    expect(normalizeAiContextTokenDistribution({
+      contextWindow: 1_000,
+      tokenDistribution: {
+        systemPromptTokens: 120,
+        functionTokens: 80,
+        skillsTokens: 0,
+        contextTokens: 300
+      }
+    })).toEqual({
+      contextWindow: 1_000,
+      occupiedTokens: 500,
+      items: [
+        { key: "system-prompt", label: "system prompt", tokens: 120, percent: 12 },
+        { key: "function", label: "function", tokens: 80, percent: 8 },
+        { key: "skills", label: "skills", tokens: 0, percent: 0 },
+        { key: "context", label: "context", tokens: 300, percent: 30 },
+        { key: "left", label: "left", tokens: 500, percent: 50 }
+      ]
+    });
   });
 });

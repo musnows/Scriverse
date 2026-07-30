@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260730-drafts-stream-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260730-ai-error-drafts-filter-align-model-availability-token-distribution-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -309,7 +309,11 @@
             <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
             <div id="ai-mention-menu" class="ai-mention-menu hidden" role="listbox" aria-label="引用角色、设定或章节"></div>
             <div class="prompt-composer-actions">
-              <output id="ai-context-meter" class="ai-context-meter is-empty" aria-live="polite" aria-label="当前上下文用量" tabindex="0"><b>—</b></output>
+              <button id="ai-context-meter" class="ai-context-meter is-empty" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="ai-context-popover" aria-live="polite" aria-label="当前上下文用量"><b>—</b></button>
+              <section id="ai-context-popover" class="ai-context-popover hidden" role="dialog" aria-labelledby="ai-context-popover-title" aria-describedby="ai-context-popover-description">
+                <header class="ai-context-popover-header"><div><strong id="ai-context-popover-title">Token 分布</strong><small id="ai-context-popover-description">按当前模型上下文窗口计算</small></div><button id="ai-context-popover-close" class="ai-context-popover-close" type="button" aria-label="关闭 Token 分布">×</button></header>
+                <div id="ai-context-distribution" class="ai-context-distribution" role="list" aria-label="当前 Token 分布"></div>
+              </section>
               <button id="ai-send" class="ai-send-button" type="button" aria-label="发送消息">发送</button>
             </div>
           </div>
@@ -884,6 +888,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260730-conversation-title-model-v1"></script>
+    <script type="module" src="/app.js?v=20260730-ai-error-model-availability-token-distribution-conversation-title-v1"></script>
   </body>
 </html>
