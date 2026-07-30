@@ -364,7 +364,15 @@ type AiConversationMessageInput = {
   content: string;
   citations?: unknown[];
   requestId?: string;
-  metadata?: { modelDisplayName?: string; outputTokens?: number; cacheHitPercent?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
+  metadata?: {
+    modelDisplayName?: string;
+    outputTokens?: number;
+    cacheHitPercent?: number;
+    processDurationMs?: number;
+    toolCalls?: unknown[];
+    processSteps?: unknown[];
+    anthropicContent?: unknown[];
+  };
 };
 
 export type AiConversationContext = {
@@ -373,7 +381,12 @@ export type AiConversationContext = {
   compactedMessageCount: number;
   totalMessageCount: number;
   warningPending: boolean;
-  messages: Array<{ id: string; role: "user" | "assistant"; content: string }>;
+  messages: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    metadata: Record<string, unknown>;
+  }>;
 };
 
 type RestorableFileSnapshotChapter = {
@@ -5974,7 +5987,7 @@ export class Store {
     if (!conversation) throw notFound("AI 对话");
     if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     const rows = this.db.all(
-      "SELECT id, role, content FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      "SELECT id, role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
       conversationId
     );
     const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
@@ -5989,7 +6002,8 @@ export class Store {
         .map((message) => ({
           id: requiredString(message, "id"),
           role: requiredString(message, "role") === "assistant" ? "assistant" : "user",
-          content: requiredString(message, "content")
+          content: requiredString(message, "content"),
+          metadata: json<Record<string, unknown>>(requiredString(message, "metadata_json"), {})
         }))
     };
   }

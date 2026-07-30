@@ -183,7 +183,11 @@ export function buildCompletionRequestBody(input: {
   if (input.protocol === "openai-chat-completions") {
     return {
       model: input.model,
-      messages: input.messages,
+      messages: input.messages.map((message) => {
+        if (message.role !== "assistant" || !("anthropic_content" in message)) return message;
+        const { anthropic_content: _anthropicContent, ...openAiMessage } = message;
+        return openAiMessage;
+      }),
       ...input.parameters,
       ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       ...(input.stream ? { stream: true, stream_options: { include_usage: true } } : {})

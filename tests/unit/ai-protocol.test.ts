@@ -85,6 +85,29 @@ describe("AI 供应商协议适配", () => {
     ]);
   });
 
+  it("切换到 OpenAI 协议时不携带 Anthropic 回放字段", () => {
+    const body = buildCompletionRequestBody({
+      protocol: "openai-chat-completions",
+      model: "mock-model",
+      messages: [
+        { role: "user", content: "第一轮" },
+        {
+          role: "assistant",
+          content: "回答",
+          tool_calls: [],
+          anthropic_content: [{ type: "thinking", thinking: "内部思考", signature: "opaque" }]
+        },
+        { role: "user", content: "第二轮" }
+      ],
+      parameters: {}
+    });
+    expect(body.messages).toEqual([
+      { role: "user", content: "第一轮" },
+      { role: "assistant", content: "回答", tool_calls: [] },
+      { role: "user", content: "第二轮" }
+    ]);
+  });
+
   it("把 Anthropic 正文、思考和工具调用归一化并保留可回放内容块", () => {
     const parsed = parseCompletionPayload("anthropic-messages", {
       stop_reason: "tool_use",

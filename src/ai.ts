@@ -169,6 +169,7 @@ type GenerateResult = {
   content: string;
   outputTokens: number;
   cacheHitPercent?: number;
+  anthropicContent?: Record<string, unknown>[];
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
   context: string;
@@ -266,8 +267,20 @@ function isLongCatProvider(provider: Row): boolean {
   }
 }
 
+function isZhipuProvider(provider: Row): boolean {
+  try {
+    const hostname = new URL(stringValue(provider, "base_url")).hostname.toLowerCase();
+    return hostname === "open.bigmodel.cn" || hostname.endsWith(".bigmodel.cn") || hostname === "api.z.ai" || hostname.endsWith(".z.ai");
+  } catch {
+    return false;
+  }
+}
+
 function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
   if (isGeminiProviderOrModel(provider, model)) return {};
+  if (providerProtocol(provider) === "anthropic-messages" && isZhipuProvider(provider)) {
+    return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
+  }
   if (providerProtocol(provider) === "anthropic-messages" && !isLongCatProvider(provider)) return {};
   return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
 }
@@ -2431,7 +2444,8 @@ export class AiManager {
           outputTokens: generated.outputTokens,
           ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
           toolCalls: generated.toolCalls,
-          processSteps: generated.processSteps
+          processSteps: generated.processSteps,
+          ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
         }
       })
       : null;
@@ -2861,7 +2875,7 @@ export class AiManager {
     const context = contextPlan.context;
     const messages = this.buildMessages(input, context);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
+    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content ?? ""), 0);
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversation = budget.conversation as AiConversationContext | null;
@@ -2966,7 +2980,7 @@ export class AiManager {
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): AiMessage[] {
+  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): CompletionMessage[] {
     const platformPrompt = String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
     const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds);
@@ -2999,7 +3013,18 @@ export class AiManager {
         { role: "user", content: `上下文如下：\n\n${renderedContext}\n\n作者指令：\n${input.instruction}` }
       ];
     }
-    const conversationMessages: AiMessage[] = conversation?.messages.map((message) => ({ role: message.role, content: message.content })) ?? [];
+    const conversationMessages: CompletionMessage[] = conversation?.messages.map((message) => {
+      if (message.role === "user") return { role: "user", content: message.content };
+      const anthropicContent = Array.isArray(message.metadata.anthropicContent)
+        ? message.metadata.anthropicContent.filter((block): block is Record<string, unknown> => Boolean(block && typeof block === "object" && !Array.isArray(block)))
+        : [];
+      return {
+        role: "assistant",
+        content: message.content,
+        tool_calls: [],
+        ...(anthropicContent.length > 0 ? { anthropic_content: structuredClone(anthropicContent) } : {})
+      };
+    }) ?? [];
     return [
       { role: "system", content: systemPrompt },
       ...(conversation?.summary ? [{ role: "system" as const, content: `较早对话的结构化长期记忆：\n${renderConversationMemory(conversation.summary)}` }] : []),
@@ -3265,9 +3290,9 @@ export class AiManager {
     throw new Error(`Unhandled agent tool: ${name}`);
   }
 
-  private constrainParametersForContext(model: ModelRow, messages: AiMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
+  private constrainParametersForContext(model: ModelRow, messages: CompletionMessage[], parameters: Record<string, unknown>): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
+    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content ?? ""), 0);
     if (inputTokens >= contextWindow) {
       throw new AppError(400, "CONTEXT_WINDOW_EXCEEDED", `当前上下文约 ${inputTokens} Token，已超过模型 ${contextWindow} Token 的上下文容量`);
     }
@@ -3609,7 +3634,18 @@ export class AiManager {
         outputTokens,
         toolCallCount: executedToolCalls.length
       });
-      return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: executedToolCalls, processSteps };
+      return {
+        callId,
+        content,
+        outputTokens,
+        ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
+        ...(choice?.message?.anthropic_content?.length ? { anthropicContent: choice.message.anthropic_content } : {}),
+        provider: this.mapProvider(provider),
+        model: this.mapModel(model),
+        context,
+        toolCalls: executedToolCalls,
+        processSteps
+      };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 调用失败";
       this.store.db.run(
@@ -3688,6 +3724,7 @@ export class AiManager {
         reasoning: string;
         outputTokens: number;
         cacheHitPercent?: number;
+        anthropicContent?: Record<string, unknown>[];
         tokenUsage: ResolvedAiTokenUsage;
       } | null = null;
       let lastFailure: unknown = null;
@@ -3766,7 +3803,7 @@ export class AiManager {
         if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
       }
       if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, reasoning, outputTokens, cacheHitPercent, tokenUsage } = streamedResult;
+      const { content, reasoning, outputTokens, cacheHitPercent, anthropicContent, tokenUsage } = streamedResult;
       const processSteps: AiProcessStep[] = reasoning.trim()
         ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
         : [];
@@ -3795,7 +3832,18 @@ export class AiManager {
         outputChars: content.length,
         outputTokens
       });
-      return { callId, content, outputTokens, ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }), provider: this.mapProvider(provider), model: this.mapModel(model), context, toolCalls: [], processSteps };
+      return {
+        callId,
+        content,
+        outputTokens,
+        ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
+        ...(anthropicContent?.length ? { anthropicContent } : {}),
+        provider: this.mapProvider(provider),
+        model: this.mapModel(model),
+        context,
+        toolCalls: [],
+        processSteps
+      };
     } catch (error) {
       const message = error instanceof Error ? redactProviderSecret(error.message, activeApiKey) : "AI 流式调用失败";
       this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
@@ -3822,6 +3870,7 @@ export class AiManager {
     reasoning: string;
     outputTokens: number;
     cacheHitPercent?: number;
+    anthropicContent?: Record<string, unknown>[];
     tokenUsage: ResolvedAiTokenUsage;
   }> {
     const protocolLabel = protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions";
@@ -3833,6 +3882,33 @@ export class AiManager {
     let reasoning = "";
     let finishReason = "unknown";
     let usage: unknown = null;
+    const anthropicBlocks = new Map<number, Record<string, unknown>>();
+    const anthropicToolInputJson = new Map<number, string>();
+    const eventIndex = (payload: Record<string, unknown>): number | null => {
+      const index = payload.index;
+      return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : null;
+    };
+    const ensureAnthropicBlock = (index: number, type: string): Record<string, unknown> => {
+      const existing = anthropicBlocks.get(index);
+      if (existing) return existing;
+      const block: Record<string, unknown> = { type };
+      if (type === "text" || type === "thinking") block[type] = "";
+      if (type === "tool_use") block.input = {};
+      anthropicBlocks.set(index, block);
+      return block;
+    };
+    const finalizeAnthropicToolInput = (index: number): void => {
+      const block = anthropicBlocks.get(index);
+      const inputJson = anthropicToolInputJson.get(index);
+      if (!block || block.type !== "tool_use" || inputJson === undefined) return;
+      try {
+        const parsed = JSON.parse(inputJson) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) block.input = parsed;
+      } catch {
+        block.input = {};
+      }
+      anthropicToolInputJson.delete(index);
+    };
     const consumeEvent = (eventText: string): void => {
       const data = eventText.split(/\r?\n/u)
         .filter((line) => line.startsWith("data:"))
@@ -3846,6 +3922,19 @@ export class AiManager {
         : null;
       if (error) throw new Error(typeof error.message === "string" ? error.message : "上游流式响应返回错误");
       if (protocol === "anthropic-messages") {
+        const type = typeof payload.type === "string" ? payload.type : "";
+        const index = eventIndex(payload);
+        if (type === "content_block_start" && index !== null) {
+          const contentBlock = payload.content_block && typeof payload.content_block === "object" && !Array.isArray(payload.content_block)
+            ? structuredClone(payload.content_block as Record<string, unknown>)
+            : null;
+          if (contentBlock && typeof contentBlock.type === "string") {
+            if (contentBlock.type === "text" && typeof contentBlock.text !== "string") contentBlock.text = "";
+            if (contentBlock.type === "thinking" && typeof contentBlock.thinking !== "string") contentBlock.thinking = "";
+            if (contentBlock.type === "tool_use" && !contentBlock.input) contentBlock.input = {};
+            anthropicBlocks.set(index, contentBlock);
+          }
+        }
         const eventUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
           ? payload.usage as Record<string, unknown>
           : null;
@@ -3861,6 +3950,23 @@ export class AiManager {
         const eventDelta = payload.delta && typeof payload.delta === "object" && !Array.isArray(payload.delta)
           ? payload.delta as Record<string, unknown>
           : {};
+        if (type === "content_block_delta" && index !== null) {
+          const deltaType = typeof eventDelta.type === "string" ? eventDelta.type : "";
+          if (deltaType === "thinking_delta" && typeof eventDelta.thinking === "string") {
+            const block = ensureAnthropicBlock(index, "thinking");
+            block.thinking = `${typeof block.thinking === "string" ? block.thinking : ""}${eventDelta.thinking}`;
+          } else if (deltaType === "text_delta" && typeof eventDelta.text === "string") {
+            const block = ensureAnthropicBlock(index, "text");
+            block.text = `${typeof block.text === "string" ? block.text : ""}${eventDelta.text}`;
+          } else if (deltaType === "input_json_delta" && typeof eventDelta.partial_json === "string") {
+            ensureAnthropicBlock(index, "tool_use");
+            anthropicToolInputJson.set(index, `${anthropicToolInputJson.get(index) ?? ""}${eventDelta.partial_json}`);
+          } else if (deltaType === "signature_delta" && typeof eventDelta.signature === "string") {
+            const block = ensureAnthropicBlock(index, "thinking");
+            block.signature = eventDelta.signature;
+          }
+        }
+        if (type === "content_block_stop" && index !== null) finalizeAnthropicToolInput(index);
         if (typeof eventDelta.stop_reason === "string") finishReason = eventDelta.stop_reason;
         if (eventDelta.type === "thinking_delta" && typeof eventDelta.thinking === "string" && eventDelta.thinking.length > 0) {
           reasoning += eventDelta.thinking;
@@ -3907,11 +4013,20 @@ export class AiManager {
     if (!content.trim()) throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
     const cacheHitPercent = resolveCacheHitPercent(usage);
     const outputTokens = resolveOutputTokens(usage, content);
+    const anthropicContent = protocol === "anthropic-messages"
+      ? [...anthropicBlocks.entries()]
+        .sort(([left], [right]) => left - right)
+        .map(([index, block]) => {
+          finalizeAnthropicToolInput(index);
+          return block;
+        })
+      : undefined;
     return {
       content,
       reasoning,
       outputTokens,
       ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
+      ...(anthropicContent?.length ? { anthropicContent } : {}),
       tokenUsage: resolveAiTokenUsage(usage, estimatedInputTokens, outputTokens)
     };
   }
