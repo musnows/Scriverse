@@ -2038,6 +2038,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .assistant-message > .message-heading, .user-message > .message-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; opacity: .65; font-size: 9px; }
 .message-heading > span { letter-spacing: .12em; }.message-heading time { flex: 0 0 auto; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
 .message-body { min-width: 0; overflow-wrap: anywhere; }
+.assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }
+.assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }
 .message-card-actions { position: absolute; right: 0; bottom: -31px; display: flex; align-items: center; gap: 12px; height: 24px; }
 .message-card-actions button { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 2px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }
 .message-card-actions button:hover, .message-card-actions button:focus-visible { color: var(--accent-dark); }

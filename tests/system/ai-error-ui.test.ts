@@ -16,5 +16,15 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("error.callId = typeof source.callId === \"string\" ? source.callId : undefined;");
     expect(sendAiSource).toContain("const failureMessage = formatAiFailureMessage(error);");
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
+    expect(application).toContain('const isFailure = role === "assistant" && text.startsWith("调用失败：");');
+    expect(application).toContain('message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;');
+    expect(application).toContain('<p class="ai-error-text">${esc(text)}</p>');
+  });
+
+  it("让错误正文继承正常助手消息的字体和字号", async () => {
+    const styles = await readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8");
+
+    expect(styles).toContain(".assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }");
+    expect(styles).toContain(".assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }");
   });
 });

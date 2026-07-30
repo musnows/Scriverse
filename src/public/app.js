@@ -9151,8 +9151,12 @@ async function streamChat(body) {
 
 function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null) {
   const message = document.createElement("div");
-  message.className = role === "user" ? "user-message" : "assistant-message";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(text)}</div>`;
+  const isFailure = role === "assistant" && text.startsWith("调用失败：");
+  message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;
+  const messageBody = isFailure
+    ? `<p class="ai-error-text">${esc(text)}</p>`
+    : renderMarkdown(text);
+  message.innerHTML = `<div class="message-body">${messageBody}</div>`;
   attachMessageHeading(message, role === "user" ? "作者" : "助手", createdAt ?? undefined);
   if (citations.length) {
     const references = document.createElement("div");
