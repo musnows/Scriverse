@@ -5927,7 +5927,7 @@ function renderTaskDefaults(models, providers, taskDefaults, settings) {
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   return models.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
-    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>默认标题生成模型</td><td><select class="default-model-select" data-title-generation-default aria-label="默认标题生成模型">
+    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
       <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
       ${models.map((model) => {
         const provider = providerById.get(model.providerId);
@@ -6481,7 +6481,7 @@ async function renderBookAiSettings() {
     select.disabled = true;
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { titleGenerationModelId: select.value } });
-      toast("默认标题生成模型已更新");
+      toast("创作助手对话标题生成模型已更新");
     } catch (error) {
       toast(error.message, "error");
     }
