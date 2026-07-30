@@ -2035,9 +2035,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     } catch (error) {
       if (!controller.signal.aborted) {
+        const details = error instanceof AppError && error.details && typeof error.details === "object" && !Array.isArray(error.details)
+          ? error.details as Record<string, unknown>
+          : null;
         sendEvent("error", {
           code: error instanceof AppError ? error.code : "AI_STREAM_FAILED",
-          message: error instanceof Error ? error.message : "AI 流式调用失败"
+          message: error instanceof Error ? error.message : "AI 流式调用失败",
+          ...(error instanceof AppError ? { status: error.status } : {}),
+          ...(typeof details?.failure === "string" ? { failure: details.failure } : {}),
+          ...(typeof details?.callId === "string" ? { callId: details.callId } : {})
         });
       }
     } finally {

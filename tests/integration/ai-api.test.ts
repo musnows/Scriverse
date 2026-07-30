@@ -809,6 +809,34 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
+  it("侧栏问答失败时通过 SSE 返回上游错误详情", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const authorization = new Headers(init?.headers).get("Authorization");
+      return new Response(JSON.stringify({ error: { message: `上游参数无效：${authorization}` } }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "触发可读错误",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
+    expect(streamed.text).toContain('"status":502');
+    expect(streamed.text).toContain('"failure":"HTTP 400: {\\"error\\":{\\"message\\":\\"上游参数无效：Bearer sk-s*****lue\\"}}"');
+    expect(streamed.text).not.toContain("sk-sensitive-test-value");
+    expect(streamed.text).toMatch(/"callId":"call_[^"]+"/u);
+  });
+
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -982,7 +1010,10 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId,
       maxAttempts: 1
     });
-    const rejection = expect(call).rejects.toThrow("AI 调用失败");
+    const rejection = expect(call).rejects.toMatchObject({
+      message: "AI 调用失败",
+      details: { failure: "AI 请求超时（60 秒）" }
+    });
     await vi.advanceTimersByTimeAsync(60_001);
     await rejection;
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);

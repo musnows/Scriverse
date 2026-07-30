@@ -79,6 +79,8 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
 
 const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
+const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
+const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const AUTO_RUN_FATAL_CODES = new Set([
   "CREDENTIAL_DECRYPT_FAILED",
   "MODEL_REQUIRED",
@@ -412,7 +414,8 @@ function taskTraceSourceRefs(initialMessages: unknown[], rounds: unknown[]): Arr
 
 function redactProviderSecret(value: string, apiKey: string): string {
   if (!apiKey) return value;
-  return value.split(apiKey).join("[REDACTED]");
+  const maskedKey = apiKey.length > 7 ? `${apiKey.slice(0, 4)}*****${apiKey.slice(-3)}` : "********";
+  return value.split(apiKey).join(maskedKey);
 }
 
 function redactProviderSecrets(value: unknown, apiKey: string, depth = 0): unknown {
@@ -3480,7 +3483,9 @@ export class AiManager {
       const apiKey = this.decryptKey(provider);
       activeApiKey = apiKey;
       const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
-      const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
+      const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis"
+        ? AI_LONG_RUNNING_TIMEOUT_MS
+        : AI_INTERACTIVE_TIMEOUT_MS;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
       let completionRequestCount = 0;
@@ -3521,7 +3526,7 @@ export class AiManager {
               const forwardAbort = (): void => controller.abort(input.signal?.reason);
               if (input.signal?.aborted) forwardAbort();
               else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-              const timeout = setTimeout(() => controller.abort(), timeoutMs);
+              const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(timeoutMs / 1_000)} 秒）`)), timeoutMs);
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
@@ -3807,7 +3812,7 @@ export class AiManager {
             const forwardAbort = (): void => controller.abort(input.signal?.reason);
             if (input.signal?.aborted) forwardAbort();
             else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-            const timeout = setTimeout(() => controller.abort(), 60_000);
+            const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(AI_INTERACTIVE_TIMEOUT_MS / 1_000)} 秒）`)), AI_INTERACTIVE_TIMEOUT_MS);
             try {
               const response = await this.outboundFetch(endpoint, {
                 method: "POST",
