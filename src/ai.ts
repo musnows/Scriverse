@@ -7575,13 +7575,19 @@ export class AiManager {
   }
 
   private mapProvider(row: Row): Record<string, unknown> {
+    let apiKeyHint = stringValue(row, "key_hint");
+    try {
+      apiKeyHint = maskSecret(this.decryptKey(row));
+    } catch {
+      // 凭据无法解密时保留数据库中的旧掩码，避免影响供应商列表展示。
+    }
     return {
       id: stringValue(row, "id"),
       scope: "platform",
       name: stringValue(row, "name"),
       baseUrl: stringValue(row, "base_url"),
       protocol: providerProtocol(row),
-      apiKey: stringValue(row, "key_hint"),
+      apiKey: apiKeyHint,
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,

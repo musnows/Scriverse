@@ -54,7 +54,7 @@ describe("AI 供应商、模型与建议 API", () => {
       status: "enabled"
     }).expect(201);
     const providerId = provider.body.data.id;
-    expect(provider.body.data.apiKey).not.toContain("sensitive");
+    expect(provider.body.data.apiKey).toBe("sk-se************lue");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
     expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10 });
     expect(provider.body.data).not.toHaveProperty("maxTokens");
