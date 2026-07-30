@@ -1926,7 +1926,36 @@ export class AiManager {
         if (response.status !== 404 || index === endpoints.length - 1) break;
       }
       if (!payload) throw new Error(lastFailure);
-      const availableModels = Array.isArray(payload.data) ? payload.data.map((item) => item.id).filter(Boolean) : [];
+      const availableModels = Array.isArray(payload.data)
+        ? payload.data
+          .map((item) => typeof item.id === "string" ? item.id.trim() : "")
+          .filter((modelId): modelId is string => Boolean(modelId))
+        : [];
+      const probeModel = availableModels[0];
+      if (!probeModel) throw new Error("AI 供应商没有返回可用模型");
+      const probeResponse = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
+        method: "POST",
+        headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+        body: JSON.stringify(buildCompletionRequestBody({
+          protocol,
+          model: probeModel,
+          messages: [{ role: "user", content: "请回复“连接成功”。" }],
+          parameters: { max_tokens: 10 }
+        })),
+        signal: controller.signal
+      });
+      const probeBody = await probeResponse.text();
+      if (!probeResponse.ok) throw new Error(`HTTP ${probeResponse.status}: ${probeBody.slice(0, 300)}`);
+      let probePayload: CompletionPayload;
+      try {
+        probePayload = parseCompletionPayload(protocol, JSON.parse(probeBody));
+      } catch {
+        throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 返回了无效 JSON`);
+      }
+      const probeReply = probePayload.choices?.[0]?.message?.content?.trim();
+      if (!probeReply) {
+        throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用回复`);
+      }
       const timestamp = now();
       this.store.db.run(
         "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",

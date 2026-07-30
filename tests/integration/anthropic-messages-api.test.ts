@@ -34,9 +34,19 @@ describe("Anthropic Messages 供应商", () => {
       expect(url).toBe("https://api.longcat.chat/anthropic/v1/messages");
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(body.model).toBe("LongCat-2.0");
+      expect(body.messages).toBeInstanceOf(Array);
+      if (body.max_tokens === 10) {
+        expect(body.messages).toHaveLength(1);
+        return new Response(JSON.stringify({
+          id: "msg_probe",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "连接成功" }],
+          stop_reason: "end_turn"
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
       expect(body.system).toEqual(expect.stringContaining("小说作者的创作协作助手"));
       expect(body.thinking).toEqual({ type: "enabled" });
-      expect(body.messages).toBeInstanceOf(Array);
       expect((body.messages as Array<{ role: string }>).some((message) => message.role === "system")).toBe(false);
 
       if (streaming) {

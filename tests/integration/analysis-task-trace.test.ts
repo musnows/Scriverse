@@ -20,6 +20,13 @@ describe("AI 分析全流程追踪", () => {
           headers: { "Content-Type": "application/json" }
         });
       }
+      const body = JSON.parse(String(init?.body ?? "{}")) as { max_tokens?: number };
+      if (body.max_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
       completionRound += 1;
       const reflectedAuthorization = new Headers(init?.headers).get("Authorization");
       if (completionRound === 1) {
@@ -246,6 +253,13 @@ describe("AI 分析全流程追踪", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input).endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "failure-trace-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as { max_tokens?: number };
+      if (body.max_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });

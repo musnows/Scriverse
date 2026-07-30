@@ -39,6 +39,13 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
         headers: { "Content-Type": "application/json" }
       });
     }
+    const body = JSON.parse(String(init?.body ?? "{}")) as { max_tokens?: number };
+    if (body.max_tokens === 10) {
+      return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
     await new Promise<void>((resolve) => {
       releaseGates.push(resolve);
     });
