@@ -745,6 +745,60 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
+  it("首轮对话默认使用提示词前十五字并可由独立模型生成标题", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const settingsBefore = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(settingsBefore.body.data.titleGenerationModelId).toBeNull();
+
+    const defaultConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${defaultConversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "一二三四五六七八九十一二三四五六七八九十"
+    }).expect(201);
+    const defaultReloaded = await request(runtime.app).get(`/api/ai-conversations/${defaultConversation.body.data.id}`).expect(200);
+    expect(defaultReloaded.body.data.title).toBe("一二三四五六七八九十一二三四五");
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ titleGenerationModelId: modelId, agentTools: [] }).expect(200);
+    const completionBodies: Array<{ stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean; tools?: unknown; messages?: Array<{ content?: string }> };
+      completionBodies.push(body);
+      if (body.stream) {
+        return new Response("data: {\"choices\":[{\"delta\":{\"content\":\"助手回答\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" }
+        });
+      }
+      expect(body.tools).toBeUndefined();
+      expect(body.messages?.some((message) => message.content?.includes("请规划北港跃迁路线"))).toBe(true);
+      expect(body.messages?.some((message) => message.content?.includes("助手回答"))).toBe(true);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "标题：北港跃迁路线" } }] }), { status: 200 });
+    });
+
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const userMessage = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "请规划北港跃迁路线"
+    }).expect(201);
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: userMessage.body.data.content,
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId: conversation.body.data.id,
+      currentMessageId: userMessage.body.data.id
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamed.text).toContain('"conversationTitle":"北港跃迁路线"');
+    expect(completionBodies).toHaveLength(2);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.title).toBe("北港跃迁路线");
+    expect(reloaded.body.data.messages.map((message: { role: string }) => message.role)).toEqual(["user", "assistant"]);
+    const settingsAfter = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
+  });
+
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

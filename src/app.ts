@@ -425,7 +425,8 @@ const workAiSettingsSchema = z.object({
   autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"])).max(6).optional()
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"])).max(6).optional(),
+  titleGenerationModelId: z.string().trim().max(200).optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -1819,6 +1820,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
     const input = parse(workAiSettingsSchema, request.body);
+    if (input.titleGenerationModelId) ai.assertModelAvailable(input.titleGenerationModelId);
     const before = store.getWorkAiSettings(workId);
     let updated = store.updateWorkAiSettings(workId, input);
     if (updated.autoRunEnabled) {
@@ -2026,6 +2028,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
         processSteps: suggestion.processSteps,
+        conversationTitle: suggestion.conversationTitle,
         messageId: typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
           ? (suggestion.conversationMessage as Record<string, unknown>).id
           : undefined,

@@ -367,6 +367,11 @@ type AiConversationMessageInput = {
   metadata?: { modelDisplayName?: string; outputTokens?: number; cacheHitPercent?: number; processDurationMs?: number; toolCalls?: unknown[]; processSteps?: unknown[] };
 };
 
+export function defaultAiConversationTitle(prompt: string): string {
+  const normalized = prompt.replace(/\s+/gu, " ").trim();
+  return Array.from(normalized).slice(0, 15).join("") || "新对话";
+}
+
 export type AiConversationContext = {
   workId: string;
   summary: string;
@@ -374,6 +379,11 @@ export type AiConversationContext = {
   totalMessageCount: number;
   warningPending: boolean;
   messages: Array<{ id: string; role: "user" | "assistant"; content: string }>;
+};
+
+export type AiConversationTitleContext = {
+  title: string;
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
 };
 
 type RestorableFileSnapshotChapter = {
@@ -1083,6 +1093,9 @@ export class Store {
       agentTools: json<string[]>(String(row?.agent_tools_json ?? '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]'), ["story_index", "read_chapters", "search_story_entities", "grep", "read_character_sections", "search_drafts"])
         .map((tool) => tool === "query_story_knowledge" ? "search_story_entities" : tool)
         .filter((tool, index, tools) => tools.indexOf(tool) === index),
+      titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
+        ? null
+        : String(row.title_generation_model_id),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -1097,6 +1110,7 @@ export class Store {
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
     agentTools?: string[];
+    titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
     this.getWork(workId);
     const current = this.getWorkAiSettings(workId);
@@ -1110,13 +1124,16 @@ export class Store {
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentTools = input.agentTools ?? current.agentTools as string[];
+    const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
+      ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
+      : input.titleGenerationModelId?.trim() || null;
     this.db.run(
       `INSERT INTO work_ai_settings (
          work_id, system_prompt, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
-         context_compact_threshold, agent_tools_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         context_compact_threshold, agent_tools_json, title_generation_model_id, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          auto_run_enabled = excluded.auto_run_enabled,
@@ -1131,6 +1148,7 @@ export class Store {
          book_summary_context_percent = excluded.book_summary_context_percent,
          context_compact_threshold = excluded.context_compact_threshold,
          agent_tools_json = excluded.agent_tools_json,
+         title_generation_model_id = excluded.title_generation_model_id,
          updated_at = excluded.updated_at`,
       workId,
       nextPrompt,
@@ -1146,6 +1164,7 @@ export class Store {
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
       JSON.stringify(nextAgentTools),
+      nextTitleGenerationModelId,
       timestamp
     );
     this.audit(workId, "work.ai-settings.updated", "work-ai-settings", workId, {
@@ -1157,7 +1176,8 @@ export class Store {
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      agentTools: nextAgentTools
+      agentTools: nextAgentTools,
+      titleGenerationModelId: nextTitleGenerationModelId
     });
     return this.getWorkAiSettings(workId);
   }
@@ -5994,6 +6014,20 @@ export class Store {
     };
   }
 
+  getAiConversationTitleContext(conversationId: string, workId: string): AiConversationTitleContext {
+    const conversation = this.db.get("SELECT title, work_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const messages = this.db.all(
+      "SELECT role, content FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+      conversationId
+    ).map((message) => ({
+      role: requiredString(message, "role") === "assistant" ? "assistant" as const : "user" as const,
+      content: requiredString(message, "content")
+    }));
+    return { title: requiredString(conversation, "title"), messages };
+  }
+
   setAiConversationContextWarning(conversationId: string, pending: boolean): void {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -6013,6 +6047,14 @@ export class Store {
     return this.getAiConversation(conversationId);
   }
 
+  setAiConversationTitle(conversationId: string, title: string): Record<string, unknown> {
+    const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
+    this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
+    return this.getAiConversation(conversationId);
+  }
+
   addAiConversationMessage(conversationId: string, input: AiConversationMessageInput): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -6028,7 +6070,7 @@ export class Store {
     const messageId = id("message");
     const timestamp = now();
     const title = requiredString(conversation, "title") === "新对话" && input.role === "user"
-      ? input.content.replace(/\s+/gu, " ").trim().slice(0, 36) || "新对话"
+      ? defaultAiConversationTitle(input.content)
       : requiredString(conversation, "title");
     this.db.transaction(() => {
       this.db.run(

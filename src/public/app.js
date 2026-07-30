@@ -1612,6 +1612,14 @@ function renderAiConversationHistory() {
   }
 }
 
+function applyAiConversationTitle(title) {
+  if (!title || !state.aiConversationId) return;
+  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  if (current) current.title = title;
+  $("#ai-conversation-title").textContent = title;
+  renderAiConversationHistory();
+}
+
 async function loadAiConversations(openLatest = true) {
   const workId = state.work?.id;
   if (!workId) return;
@@ -5914,12 +5922,19 @@ function bindPlatformProviderActions(host, providers, models) {
   host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
 }
 
-function renderTaskDefaults(models, providers, taskDefaults) {
+function renderTaskDefaults(models, providers, taskDefaults, settings) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   return models.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
-    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody>${taskTypeLabels.map(([taskType, label]) => {
+    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>默认标题生成模型</td><td><select class="default-model-select" data-title-generation-default aria-label="默认标题生成模型">
+      <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
+      ${models.map((model) => {
+        const provider = providerById.get(model.providerId);
+        const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
+        return `<option value="${esc(model.id)}" ${model.id === settings.titleGenerationModelId ? "selected" : ""} ${available || model.id === settings.titleGenerationModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+      }).join("")}
+    </select></td></tr>${taskTypeLabels.map(([taskType, label]) => {
       const currentModelId = defaultModelByTask.get(taskType) ?? "";
       return `<tr><td>${esc(label)}</td><td><select class="default-model-select" data-task-default="${esc(taskType)}">
         <option value="" disabled ${currentModelId ? "" : "selected"}>请选择模型</option>
@@ -6324,7 +6339,7 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
     "beforebegin",
@@ -6460,6 +6475,18 @@ async function renderBookAiSettings() {
     } finally {
       button.disabled = false;
     }
+  });
+  host.querySelector("[data-title-generation-default]")?.addEventListener("change", async (event) => {
+    const select = event.currentTarget;
+    select.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { titleGenerationModelId: select.value } });
+      toast("默认标题生成模型已更新");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    await renderBookAiSettings();
+    await loadModels();
   });
   host.querySelectorAll("[data-task-default]").forEach((select) => select.addEventListener("change", async () => {
     select.disabled = true;
@@ -8972,6 +8999,7 @@ async function sendAi() {
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
       persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
+      applyAiConversationTitle(streamed.conversationTitle);
     } else {
       suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
       assistantContent = suggestion.content;
@@ -9029,6 +9057,7 @@ async function streamChat(body) {
   let processSteps = [];
   let persistedMessageId = null;
   let persistedMessageCreatedAt = null;
+  let conversationTitle = null;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -9085,6 +9114,7 @@ async function streamChat(body) {
       } else if (eventName === "complete") {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
+        conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
         await typewriter.finish();
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -9112,7 +9142,7 @@ async function streamChat(body) {
     if (buffer.trim()) await consume(buffer);
     await typewriter.finish();
     if (streamError) throw streamError;
-    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt };
+    return { content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle };
   } catch (error) {
     typewriter.reveal();
     message.classList.remove("is-streaming");
