@@ -1275,7 +1275,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-filter-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-height: 38px; }
 .character-filter-result-count { color: var(--muted); font-size: 11px; white-space: nowrap; }
 .character-filter-toolbar-actions button:disabled { cursor: default; opacity: .45; }
-.draft-filter-toolbar { display: flex; align-items: end; gap: 10px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-soft); }
+.draft-filter-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-soft); }
 .draft-filter-toolbar label { color: var(--muted); font-size: 11px; }
 .draft-filter-toolbar select { min-width: 180px; min-height: 38px; padding: 8px 10px; background: var(--surface); font-size: 11px; }
 .draft-filter-toolbar span { margin-left: auto; align-self: center; color: var(--muted); font-size: 11px; }
