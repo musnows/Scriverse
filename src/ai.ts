@@ -53,7 +53,6 @@ type ProviderInput = {
   note?: string;
   concurrencyLimit?: number;
   rpmLimit?: number;
-  maxTokens?: number;
 };
 
 type ModelInput = {
@@ -1798,8 +1797,8 @@ export class AiManager {
     const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, max_tokens, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -1812,7 +1811,6 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
-      input.maxTokens ?? DEFAULT_MAX_TOKENS,
       input.note ?? "",
       timestamp,
       timestamp
@@ -1854,7 +1852,7 @@ export class AiManager {
     if (input.protocol && input.protocol !== providerProtocol(row)) connectionStatus = "unchecked";
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url"),
       input.protocol ?? providerProtocol(row),
@@ -1866,7 +1864,6 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
-      input.maxTokens ?? numberValue(row, "max_tokens"),
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -3324,7 +3321,7 @@ export class AiManager {
     const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }, stringValue(model, "model_id")),
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     });
     const callId = id("call");
@@ -3675,7 +3672,7 @@ export class AiManager {
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }, stringValue(model, "model_id")),
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     });
     const callId = id("call");
@@ -7536,7 +7533,6 @@ export class AiManager {
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,
       rpmLimit: numberValue(row, "rpm_limit") || 10,
-      maxTokens: numberValue(row, "max_tokens") || DEFAULT_MAX_TOKENS,
       defaultModelId: row.default_model_id === null ? null : stringValue(row, "default_model_id"),
       note: stringValue(row, "note"),
       lastError: row.last_error === null ? null : stringValue(row, "last_error"),

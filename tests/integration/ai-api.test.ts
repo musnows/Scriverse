@@ -56,7 +56,8 @@ describe("AI 供应商、模型与建议 API", () => {
     const providerId = provider.body.data.id;
     expect(provider.body.data.apiKey).not.toContain("sensitive");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokens: 32_000 });
+    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10 });
+    expect(provider.body.data).not.toHaveProperty("maxTokens");
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
 
@@ -654,7 +655,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     expectedMaxTokens = 24_000;
-    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ maxTokens: expectedMaxTokens }).expect(200);
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ preset: { max_tokens: expectedMaxTokens } }).expect(200);
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "continue",
