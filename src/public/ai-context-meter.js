@@ -8,3 +8,35 @@ export function formatAiContextUsageTooltip(usage) {
   const outputReserve = Math.max(0, Math.round(Number(usage.outputReserveTokens) || 0)).toLocaleString("zh-CN");
   return `总输入 ${inputTokens} / ${contextWindow} tok · 作品上下文 ${contextTokens} tok · 对话历史 ${conversationTokens} / ${conversationBudget} tok · 输出预留 ${outputReserve} tok`;
 }
+
+function tokenCount(value) {
+  return Math.max(0, Math.round(Number(value) || 0));
+}
+
+export function normalizeAiContextTokenDistribution(usage) {
+  const contextWindow = tokenCount(usage?.contextWindow);
+  const distribution = usage?.tokenDistribution ?? {};
+  const systemPromptTokens = tokenCount(distribution.systemPromptTokens);
+  const functionTokens = tokenCount(distribution.functionTokens);
+  const skillsTokens = tokenCount(distribution.skillsTokens);
+  const contextTokens = Object.keys(distribution).length > 0
+    ? tokenCount(distribution.contextTokens)
+    : tokenCount(usage?.inputTokens);
+  const occupiedTokens = systemPromptTokens + functionTokens + skillsTokens + contextTokens;
+  const leftTokens = Math.max(0, contextWindow - occupiedTokens);
+  const items = [
+    { key: "system-prompt", label: "system prompt", tokens: systemPromptTokens },
+    { key: "function", label: "function", tokens: functionTokens },
+    { key: "skills", label: "skills", tokens: skillsTokens },
+    { key: "context", label: "context", tokens: contextTokens },
+    { key: "left", label: "left", tokens: leftTokens }
+  ];
+  return {
+    contextWindow,
+    occupiedTokens,
+    items: items.map((item) => ({
+      ...item,
+      percent: contextWindow > 0 ? Math.round(item.tokens / contextWindow * 1_000) / 10 : 0
+    }))
+  };
+}

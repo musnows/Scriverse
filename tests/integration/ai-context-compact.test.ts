@@ -70,6 +70,16 @@ describe("AI 对话上下文压缩", () => {
     const usage = await request(runtime.app).post(`/api/works/${workId}/ai-context-usage`).send({ ...requestBody, taskType: "chat", conversationId }).expect(200);
     expect(usage.body.data).toMatchObject({ compactThreshold: 50, compactRecommended: true, contextWarningPending: false });
     expect(usage.body.data.usagePercent).toBeGreaterThanOrEqual(50);
+    expect(usage.body.data.tokenDistribution).toEqual(expect.objectContaining({
+      systemPromptTokens: expect.any(Number),
+      functionTokens: expect.any(Number),
+      skillsTokens: 0,
+      contextTokens: expect.any(Number),
+      leftTokens: expect.any(Number)
+    }));
+    expect(usage.body.data.tokenDistribution.systemPromptTokens + usage.body.data.tokenDistribution.functionTokens
+      + usage.body.data.tokenDistribution.skillsTokens + usage.body.data.tokenDistribution.contextTokens
+      + usage.body.data.tokenDistribution.leftTokens).toBe(usage.body.data.contextWindow);
 
     const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
     expect(warned.body.data).toMatchObject({ action: "warn", usage: { contextWarningPending: true } });

@@ -11,7 +11,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260713-cross-day-time";
-import { formatAiContextUsageTooltip } from "/ai-context-meter.js?v=20260718-layered-context";
+import { formatAiContextUsageTooltip, normalizeAiContextTokenDistribution } from "/ai-context-meter.js?v=20260730-token-distribution-v2";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
@@ -6532,9 +6532,50 @@ function currentAiRequestScope() {
   return { taskType, scope, selection };
 }
 
+function renderAiContextDistribution(usage) {
+  const popover = $("#ai-context-popover");
+  const host = $("#ai-context-distribution");
+  const distribution = normalizeAiContextTokenDistribution(usage);
+  const contextWindow = distribution.contextWindow.toLocaleString("zh-CN");
+  $("#ai-context-popover-description").textContent = usage
+    ? `已占用 ${distribution.occupiedTokens.toLocaleString("zh-CN")} / ${contextWindow} tok`
+    : "选择可用模型后显示当前上下文用量";
+  host.replaceChildren(...distribution.items.map((item) => {
+    const row = document.createElement("div");
+    row.className = "ai-context-distribution-row";
+    row.dataset.key = item.key;
+    row.setAttribute("role", "listitem");
+    row.setAttribute("aria-label", `${item.label}：${item.tokens.toLocaleString("zh-CN")} tok，占 ${item.percent}%`);
+
+    const label = document.createElement("div");
+    label.className = "ai-context-distribution-label";
+    const title = document.createElement("span");
+    title.textContent = item.label;
+    if (item.key === "context") {
+      const description = document.createElement("small");
+      description.textContent = "用户和 agent 的交互";
+      title.append(" ", description);
+    }
+    const value = document.createElement("strong");
+    value.textContent = `${item.tokens.toLocaleString("zh-CN")} tok · ${item.percent}%`;
+    label.append(title, value);
+
+    const track = document.createElement("div");
+    track.className = "ai-context-distribution-track";
+    track.setAttribute("aria-hidden", "true");
+    const bar = document.createElement("span");
+    bar.style.setProperty("--distribution-percent", String(item.percent));
+    track.append(bar);
+    row.append(label, track);
+    return row;
+  }));
+  popover.dataset.hasUsage = String(Boolean(usage));
+}
+
 function setAiContextMeter(usage) {
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
+  renderAiContextDistribution(usage);
   if (!usage) {
     meter.classList.add("is-empty");
     meter.classList.remove("is-warning", "is-danger");
@@ -6554,6 +6595,14 @@ function setAiContextMeter(usage) {
   const tooltip = formatAiContextUsageTooltip(usage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
+}
+
+function setAiContextDistributionVisible(visible) {
+  const meter = $("#ai-context-meter");
+  const popover = $("#ai-context-popover");
+  popover.classList.toggle("hidden", !visible);
+  meter.setAttribute("aria-expanded", String(visible));
+  if (!visible && document.activeElement === $("#ai-context-popover-close")) meter.focus();
 }
 
 function showAiContextWarning(usage = null) {
@@ -10487,6 +10536,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
+  if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
     $("#account-menu").classList.add("hidden");
     $("#account-button").setAttribute("aria-expanded", "false");
@@ -10508,6 +10558,7 @@ document.addEventListener("keydown", (event) => {
     closeLineCitationMenu();
     closeMarkdownTableMenu(true);
     hideAiMentionMenu();
+    setAiContextDistributionVisible(false);
   }
 });
 document.addEventListener("keydown", (event) => {
@@ -10517,6 +10568,10 @@ document.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   openSearchDialog().catch((error) => toast(error.message, "error"));
 }, { capture: true });
+$("#ai-context-meter").addEventListener("click", () => {
+  setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
+});
+$("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
 $("#ai-send").addEventListener("click", sendAi);
 $("#ai-new-conversation").addEventListener("click", async () => {
   const button = $("#ai-new-conversation");

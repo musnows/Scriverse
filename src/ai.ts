@@ -2860,8 +2860,14 @@ export class AiManager {
     const contextPlan = this.buildContextPlan(input, model, budget);
     const context = contextPlan.context;
     const messages = this.buildMessages(input, context);
+    const tools = this.enabledAgentTools(input.workId, input.taskType);
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
-    const inputTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
+    const messageTokens = messages.reduce((total, message) => total + estimateAiTokens(message.content), 0);
+    const systemPromptTokens = estimateAiTokens(messages[0]?.content ?? "");
+    const functionTokens = tools.length > 0 ? estimateAiTokens(JSON.stringify(tools)) : 0;
+    const skillsTokens = 0;
+    const contextInteractionTokens = Math.max(0, messageTokens - systemPromptTokens);
+    const inputTokens = messageTokens + functionTokens + skillsTokens;
     const remainingTokens = Math.max(0, contextWindow - inputTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversation = budget.conversation as AiConversationContext | null;
@@ -2878,6 +2884,13 @@ export class AiManager {
       outputReserveTokens: Number(budget.outputReserveTokens),
       remainingTokens,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
+      tokenDistribution: {
+        systemPromptTokens,
+        functionTokens,
+        skillsTokens,
+        contextTokens: contextInteractionTokens,
+        leftTokens: remainingTokens
+      },
       compactThreshold: threshold,
       compactRecommended: compactableMessageCount > 0 && conversationUsagePercent >= threshold,
       contextWarningPending: conversation?.warningPending ?? false,
