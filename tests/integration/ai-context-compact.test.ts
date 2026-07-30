@@ -50,6 +50,7 @@ describe("AI 对话上下文压缩", () => {
       contextWindow: 4096
     }).expect(201);
     modelId = model.body.data.id;
+    fetchMock.mockClear();
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ contextCompactThreshold: 50 }).expect(200);
   });
 
@@ -83,10 +84,11 @@ describe("AI 对话上下文压缩", () => {
 
     const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
     expect(warned.body.data).toMatchObject({ action: "warn", usage: { contextWarningPending: true } });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
 
     const compacted = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
     expect(compacted.body.data).toMatchObject({ action: "compacted", compaction: { compactedMessageCount: 2, retainedMessageCount: 2, changed: true } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(reloaded.body.data).toMatchObject({ compactedMessageCount: 2, hasCompactedSummary: true, contextWarningPending: false });
 
@@ -94,6 +96,8 @@ describe("AI 对话上下文压缩", () => {
     let actualMessages: Array<{ role: string; content: string }> = [];
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "compact-model" }] }), { status: 200 });
+      const probeBody = JSON.parse(String(init?.body ?? "{}")) as { max_tokens?: number };
+      if (probeBody.max_tokens === 10) return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content: string }> };
       actualMessages = body.messages;
       return new Response(JSON.stringify({ choices: [{ message: { content: "已结合压缩摘要和最近对话回答。" } }] }), { status: 200 });

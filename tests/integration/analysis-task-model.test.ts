@@ -20,8 +20,8 @@ describe("AI 分析任务模型", () => {
           headers: { "Content-Type": "application/json" }
         });
       }
-      const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
-      if (body.model) requestedModels.push(body.model);
+      const body = JSON.parse(String(init?.body ?? "{}")) as { model?: string; max_tokens?: number };
+      if (body.max_tokens !== 10 && body.model) requestedModels.push(body.model);
       return new Response(JSON.stringify({
         choices: [{ message: { content: "已完成全书综合分析。" } }]
       }), { status: 200, headers: { "Content-Type": "application/json" } });

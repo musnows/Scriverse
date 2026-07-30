@@ -293,7 +293,7 @@ try {
   cleanupProviderIds.add(String(provider.id));
   assert.equal(provider.concurrencyLimit, 10);
   assert.equal(provider.rpmLimit, 10);
-  assert.equal(provider.maxTokens, 32_000);
+  assert.equal(provider.maxTokens, undefined);
   const platformProviders = await api<Entity[]>("GET", "/platform/ai/providers");
   assert.ok(platformProviders.some((item) => item.id === provider.id));
   const existingPlatformSettings = await api<Entity>("GET", "/platform/ai/settings");

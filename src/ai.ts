@@ -53,7 +53,6 @@ type ProviderInput = {
   note?: string;
   concurrencyLimit?: number;
   rpmLimit?: number;
-  maxTokens?: number;
 };
 
 type ModelInput = {
@@ -80,6 +79,8 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
 
 const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
+const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
+const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const AUTO_RUN_FATAL_CODES = new Set([
   "CREDENTIAL_DECRYPT_FAILED",
   "MODEL_REQUIRED",
@@ -413,7 +414,8 @@ function taskTraceSourceRefs(initialMessages: unknown[], rounds: unknown[]): Arr
 
 function redactProviderSecret(value: string, apiKey: string): string {
   if (!apiKey) return value;
-  return value.split(apiKey).join("[REDACTED]");
+  const maskedKey = apiKey.length > 7 ? `${apiKey.slice(0, 4)}*****${apiKey.slice(-3)}` : "********";
+  return value.split(apiKey).join(maskedKey);
 }
 
 function redactProviderSecrets(value: unknown, apiKey: string, depth = 0): unknown {
@@ -1790,6 +1792,32 @@ export class AiManager {
     return fetchSafeAiEndpoint(this.fetchImpl, url, init, this.validateOutboundUrl);
   }
 
+  private async probeProviderModel(row: ProviderRow, apiKey: string, modelId: string, signal: AbortSignal): Promise<void> {
+    const protocol = providerProtocol(row);
+    const response = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
+      method: "POST",
+      headers: providerRequestHeaders(protocol, apiKey, "application/json"),
+      body: JSON.stringify(buildCompletionRequestBody({
+        protocol,
+        model: modelId,
+        messages: [{ role: "user", content: "请回复“连接成功”。" }],
+        parameters: { max_tokens: 10 }
+      })),
+      signal
+    });
+    const body = await response.text();
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
+    let payload: CompletionPayload;
+    try {
+      payload = parseCompletionPayload(protocol, JSON.parse(body));
+    } catch {
+      throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 返回了无效 JSON`);
+    }
+    if (!payload.choices?.[0]?.message?.content?.trim()) {
+      throw new Error(`${protocol === "anthropic-messages" ? "Anthropic Messages" : "Chat Completions"} 响应缺少可用回复`);
+    }
+  }
+
   createProvider(input: ProviderInput): Record<string, unknown> {
     const providerId = id("provider");
     const encrypted = this.vault.encrypt(input.apiKey);
@@ -1798,8 +1826,8 @@ export class AiManager {
     const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, max_tokens, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -1812,7 +1840,6 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
-      input.maxTokens ?? DEFAULT_MAX_TOKENS,
       input.note ?? "",
       timestamp,
       timestamp
@@ -1854,7 +1881,7 @@ export class AiManager {
     if (input.protocol && input.protocol !== providerProtocol(row)) connectionStatus = "unchecked";
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url"),
       input.protocol ?? providerProtocol(row),
@@ -1866,7 +1893,6 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
-      input.maxTokens ?? numberValue(row, "max_tokens"),
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -1926,7 +1952,14 @@ export class AiManager {
         if (response.status !== 404 || index === endpoints.length - 1) break;
       }
       if (!payload) throw new Error(lastFailure);
-      const availableModels = Array.isArray(payload.data) ? payload.data.map((item) => item.id).filter(Boolean) : [];
+      const availableModels = Array.isArray(payload.data)
+        ? payload.data
+          .map((item) => typeof item.id === "string" ? item.id.trim() : "")
+          .filter((modelId): modelId is string => Boolean(modelId))
+        : [];
+      const probeModel = availableModels[0];
+      if (!probeModel) throw new Error("AI 供应商没有返回可用模型");
+      await this.probeProviderModel(row, apiKey, probeModel, controller.signal);
       const timestamp = now();
       this.store.db.run(
         "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
@@ -1958,6 +1991,55 @@ export class AiManager {
         error: aiErrorForLog(error)
       });
       return { ok: false, error: message, provider: this.getProvider(providerId) };
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async testModel(modelId: string): Promise<Record<string, unknown>> {
+    const model = this.getModelRow(modelId);
+    const providerId = stringValue(model, "provider_id");
+    const provider = this.getProviderRow(providerId);
+    const apiKey = this.decryptKey(provider);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const startedAt = process.hrtime.bigint();
+    const protocol = providerProtocol(provider);
+    logger.info("ai.model_test.started", { modelId, providerId });
+    try {
+      await this.probeProviderModel(provider, apiKey, stringValue(model, "model_id"), controller.signal);
+      const timestamp = now();
+      this.store.db.run(
+        "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
+        timestamp,
+        timestamp,
+        providerId
+      );
+      logger.info("ai.model_test.completed", {
+        modelId,
+        providerId,
+        protocol,
+        ok: true,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
+      });
+      return { ok: true, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+    } catch (error) {
+      const message = error instanceof Error ? redactProviderSecret(error.message, apiKey) : "连接失败";
+      this.store.db.run(
+        "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
+        message,
+        now(),
+        providerId
+      );
+      logger.warn("ai.model_test.completed", {
+        modelId,
+        providerId,
+        protocol,
+        ok: false,
+        durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
+        error: aiErrorForLog(error)
+      });
+      return { ok: false, error: message, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
     }
@@ -2033,12 +2115,37 @@ export class AiManager {
 
   listWorkModels(workId: string): Record<string, unknown>[] {
     this.store.getWork(workId);
-    return this.listPlatformModels();
+    return this.store.db.all(
+      `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+       FROM models m JOIN providers p ON p.id = m.provider_id
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       ORDER BY p.created_at, m.created_at`,
+      PLATFORM_AI_WORK_ID
+    ).map((row) => ({
+      ...this.mapModel(row),
+      providerName: stringValue(row, "provider_name"),
+      providerStatus: stringValue(row, "provider_status"),
+      providerConnectionStatus: stringValue(row, "provider_connection_status")
+    }));
   }
 
   listWorkModelsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     this.store.getWork(workId);
-    return this.listPlatformModelsPage(pagination);
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(
+      `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+       FROM models m JOIN providers p ON p.id = m.provider_id
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       ORDER BY p.created_at, m.created_at${page.sql}`,
+      PLATFORM_AI_WORK_ID,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      ...this.mapModel(row),
+      providerName: stringValue(row, "provider_name"),
+      providerStatus: stringValue(row, "provider_status"),
+      providerConnectionStatus: stringValue(row, "provider_connection_status")
+    })), pagination);
   }
 
   getModel(modelId: string): Record<string, unknown> {
@@ -3308,7 +3415,7 @@ export class AiManager {
     const tools = input.disableTools ? [] : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds);
     const completionMessages: CompletionMessage[] = [...messages];
     const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }, stringValue(model, "model_id")),
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     });
     const callId = id("call");
@@ -3389,7 +3496,9 @@ export class AiManager {
       const apiKey = this.decryptKey(provider);
       activeApiKey = apiKey;
       const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
-      const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis" ? 300_000 : 60_000;
+      const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis"
+        ? AI_LONG_RUNNING_TIMEOUT_MS
+        : AI_INTERACTIVE_TIMEOUT_MS;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
       type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
       let completionRequestCount = 0;
@@ -3430,7 +3539,7 @@ export class AiManager {
               const forwardAbort = (): void => controller.abort(input.signal?.reason);
               if (input.signal?.aborted) forwardAbort();
               else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-              const timeout = setTimeout(() => controller.abort(), timeoutMs);
+              const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(timeoutMs / 1_000)} 秒）`)), timeoutMs);
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
@@ -3659,7 +3768,7 @@ export class AiManager {
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const messages = this.buildMessages(input, context);
     const parameters = this.constrainParametersForContext(model, messages, {
-      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}), max_tokens: numberValue(provider, "max_tokens") || DEFAULT_MAX_TOKENS }, stringValue(model, "model_id")),
+      ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     });
     const callId = id("call");
@@ -3716,7 +3825,7 @@ export class AiManager {
             const forwardAbort = (): void => controller.abort(input.signal?.reason);
             if (input.signal?.aborted) forwardAbort();
             else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-            const timeout = setTimeout(() => controller.abort(), 60_000);
+            const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(AI_INTERACTIVE_TIMEOUT_MS / 1_000)} 秒）`)), AI_INTERACTIVE_TIMEOUT_MS);
             try {
               const response = await this.outboundFetch(endpoint, {
                 method: "POST",
@@ -7509,18 +7618,23 @@ export class AiManager {
   }
 
   private mapProvider(row: Row): Record<string, unknown> {
+    let apiKeyHint = stringValue(row, "key_hint");
+    try {
+      apiKeyHint = maskSecret(this.decryptKey(row));
+    } catch {
+      // 凭据无法解密时保留数据库中的旧掩码，避免影响供应商列表展示。
+    }
     return {
       id: stringValue(row, "id"),
       scope: "platform",
       name: stringValue(row, "name"),
       baseUrl: stringValue(row, "base_url"),
       protocol: providerProtocol(row),
-      apiKey: stringValue(row, "key_hint"),
+      apiKey: apiKeyHint,
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),
       concurrencyLimit: numberValue(row, "concurrency_limit") || 10,
       rpmLimit: numberValue(row, "rpm_limit") || 10,
-      maxTokens: numberValue(row, "max_tokens") || DEFAULT_MAX_TOKENS,
       defaultModelId: row.default_model_id === null ? null : stringValue(row, "default_model_id"),
       note: stringValue(row, "note"),
       lastError: row.last_error === null ? null : stringValue(row, "last_error"),

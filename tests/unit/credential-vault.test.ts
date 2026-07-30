@@ -19,7 +19,7 @@ describe("供应商凭据保护", () => {
   });
 
   it("仅显示密钥掩码并规范化兼容接口地址", () => {
-    expect(maskSecret("sk-abcdefghijklmnopqrstuvwxyz")).toMatch(/^sk-\*+wxyz$/u);
+    expect(maskSecret("sk-abcdefghijklmnopqrstuvwxyz")).toBe("sk-ab************xyz");
     expect(normalizeBaseUrl("https://example.test/v1/chat/completions/")) .toBe("https://example.test/v1");
     expect(normalizeBaseUrl("https://example.test/v1/messages/")) .toBe("https://example.test/v1");
   });
