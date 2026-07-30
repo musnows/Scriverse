@@ -1301,11 +1301,23 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .card-actions .primary-button:hover, .card-actions .primary-button:focus-visible { background: var(--accent-dark); }
 .provider-card-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
 .provider-card { min-width: 0; }
+.provider-card.is-disabled { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--surface-soft)); }
+.provider-card-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.provider-card-meta small { min-width: 0; }
+.provider-status-badge, .model-status-badge { display: inline-flex; flex: 0 0 auto; align-items: center; min-height: 22px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 9px; font-weight: 700; line-height: 1.1; white-space: nowrap; }
+.provider-status-badge.is-enabled { border-color: color-mix(in srgb, var(--green) 48%, var(--line)); background: color-mix(in srgb, var(--green) 10%, var(--surface)); color: var(--green); }
+.provider-status-badge.is-disabled, .model-status-badge.is-disabled { border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); background: color-mix(in srgb, var(--accent) 18%, var(--surface)); color: var(--accent-dark); }
+.provider-status-badge.is-error, .model-status-badge.is-unavailable { border-color: color-mix(in srgb, var(--accent) 46%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--accent-dark); }
+.provider-disabled-notice { display: flex; align-items: baseline; gap: 8px; margin: 12px 0; padding: 9px 11px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.provider-disabled-notice strong { color: var(--accent-dark); font-size: 12px; }
+.provider-disabled-notice span { color: var(--muted); font-size: 10px; line-height: 1.4; }
 .provider-card p, .provider-card .model-pill { overflow-wrap: anywhere; word-break: break-word; }
 .provider-models { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .provider-model-row { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
-.provider-card .model-pill { max-width: 100%; margin: 0; border: 0; text-align: left; white-space: normal; cursor: pointer; }
+.provider-model-row.is-unavailable { padding: 4px 6px; border: 1px dashed color-mix(in srgb, var(--accent) 42%, var(--line)); border-radius: 4px; background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.provider-card .model-pill { flex: 1 1 auto; max-width: 100%; margin: 0; border: 0; text-align: left; white-space: normal; cursor: pointer; }
 .provider-model-row .model-pill { min-width: 0; }
+.provider-model-row.is-unavailable .model-pill { color: var(--muted); opacity: .72; }
 .provider-model-row .model-test-button { flex: 0 0 auto; min-height: 30px; padding: 6px 9px; }
 .provider-card .model-pill:hover, .provider-card .model-pill:focus-visible { background: var(--surface-hover); color: var(--ink); }
 .provider-card .card-actions { flex-wrap: wrap; }

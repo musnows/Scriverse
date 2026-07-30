@@ -2112,12 +2112,37 @@ export class AiManager {
 
   listWorkModels(workId: string): Record<string, unknown>[] {
     this.store.getWork(workId);
-    return this.listPlatformModels();
+    return this.store.db.all(
+      `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+       FROM models m JOIN providers p ON p.id = m.provider_id
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       ORDER BY p.created_at, m.created_at`,
+      PLATFORM_AI_WORK_ID
+    ).map((row) => ({
+      ...this.mapModel(row),
+      providerName: stringValue(row, "provider_name"),
+      providerStatus: stringValue(row, "provider_status"),
+      providerConnectionStatus: stringValue(row, "provider_connection_status")
+    }));
   }
 
   listWorkModelsPage(workId: string, pagination: Pagination): PaginatedResult<Record<string, unknown>> {
     this.store.getWork(workId);
-    return this.listPlatformModelsPage(pagination);
+    const page = paginationSql(pagination);
+    const rows = this.store.db.all(
+      `SELECT m.*, p.name AS provider_name, p.status AS provider_status, p.connection_status AS provider_connection_status
+       FROM models m JOIN providers p ON p.id = m.provider_id
+       WHERE p.work_id = ? AND p.status = 'enabled' AND p.connection_status = 'success' AND m.enabled = 1
+       ORDER BY p.created_at, m.created_at${page.sql}`,
+      PLATFORM_AI_WORK_ID,
+      ...page.params
+    );
+    return paginated(rows.map((row) => ({
+      ...this.mapModel(row),
+      providerName: stringValue(row, "provider_name"),
+      providerStatus: stringValue(row, "provider_status"),
+      providerConnectionStatus: stringValue(row, "provider_connection_status")
+    })), pagination);
   }
 
   getModel(modelId: string): Record<string, unknown> {

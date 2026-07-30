@@ -86,6 +86,12 @@ function normalizePageSizes(value) {
   ]));
 }
 
+function isSelectableModel(model) {
+  return Boolean(model?.enabled)
+    && model?.providerStatus === "enabled"
+    && model?.providerConnectionStatus === "success";
+}
+
 const state = {
   user: null,
   csrfToken: null,
@@ -5376,12 +5382,7 @@ async function rerunAnalysisTaskWithModel(task, button) {
   try {
     const models = await api(`/api/works/${encodeURIComponent(task.workId)}/models`);
     const currentModelId = String(task.model?.id ?? "");
-    const availableModels = models.filter((model) =>
-      model.id !== currentModelId
-      && model.enabled
-      && model.providerStatus === "enabled"
-      && model.providerConnectionStatus === "success"
-    );
+    const availableModels = models.filter((model) => model.id !== currentModelId && isSelectableModel(model));
     if (!availableModels.length) throw new Error("当前没有其他可用模型，请先配置并测试模型");
     $("#form-dialog").close();
     const currentModelLabel = task.model?.displayName || "运行时默认模型";
@@ -5892,11 +5893,28 @@ function openTaskDetailDialog(task, trace) {
 }
 
 function renderProviderCards(providers, models) {
-  return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => `
-    <article class="record-card provider-card"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerStatusLabel(provider.status))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><h3>${esc(provider.name)}</h3>
-    <p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
-    <div class="provider-models">${models.filter((model) => model.providerId === provider.id).map((model) => `<div class="provider-model-row"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button><button class="ghost-button model-test-button" type="button" data-test-model="${esc(model.id)}" aria-label="测试模型 ${esc(model.displayName)}">测试连接</button></div>`).join("")}</div>
-    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}" ${models.some((model) => model.providerId === provider.id) ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`).join("")}</div>`
+  return providers.length ? `<div class="card-grid provider-card-grid">${providers.map((provider) => {
+    const providerModels = models.filter((model) => model.providerId === provider.id);
+    const providerStatusClass = provider.status === "disabled" ? "is-disabled" : provider.status === "error" ? "is-error" : "is-enabled";
+    const disabledNotice = provider.status === "disabled"
+      ? `<div class="provider-disabled-notice" role="status"><strong>已停用</strong><span>不会出现在新任务的模型列表中，历史任务仍可查看。</span></div>`
+      : "";
+    return `
+    <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    <div class="provider-models">${providerModels.map((model) => {
+      const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
+      const modelStatus = !model.enabled
+        ? `<span class="model-status-badge is-disabled">模型已停用</span>`
+        : provider.status !== "enabled"
+          ? `<span class="model-status-badge is-disabled">供应商已停用</span>`
+          : provider.connectionStatus !== "success"
+            ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
+            : "";
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}<button class="ghost-button model-test-button" type="button" data-test-model="${esc(model.id)}" aria-label="测试模型 ${esc(model.displayName)}">测试连接</button></div>`;
+    }).join("")}</div>
+    <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button><button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button><button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
+  }).join("")}</div>`
     : emptyModule("尚未配置 AI 供应商", "添加 OpenAI 或 Anthropic 兼容接口地址和密钥，测试成功后再添加模型。");
 }
 
@@ -5925,20 +5943,27 @@ function bindPlatformProviderActions(host, providers, models) {
 function renderTaskDefaults(models, providers, taskDefaults) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
-  return models.length ? `<section class="config-section">
+  const availableModels = models.filter((model) => isSelectableModel(model));
+  const availableModelIds = new Set(availableModels.map((model) => model.id));
+  const currentDefaultModels = taskDefaults
+    .map((item) => item.model)
+    .filter((model) => model && !availableModelIds.has(model.id));
+  const optionModels = [...availableModels, ...currentDefaultModels];
+  return optionModels.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
     <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody>${taskTypeLabels.map(([taskType, label]) => {
       const currentModelId = defaultModelByTask.get(taskType) ?? "";
       return `<tr><td>${esc(label)}</td><td><select class="default-model-select" data-task-default="${esc(taskType)}">
         <option value="" disabled ${currentModelId ? "" : "selected"}>请选择模型</option>
-        ${models.map((model) => {
+        ${optionModels.map((model) => {
           const provider = providerById.get(model.providerId);
-          const available = model.enabled && provider?.status === "enabled" && provider?.connectionStatus === "success";
-          return `<option value="${esc(model.id)}" ${model.id === currentModelId ? "selected" : ""} ${available || model.id === currentModelId ? "" : "disabled"}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+          const available = isSelectableModel({ ...model, providerStatus: model.providerStatus ?? provider?.status, providerConnectionStatus: model.providerConnectionStatus ?? provider?.connectionStatus });
+          const unavailableLabel = !model.enabled ? "模型已停用 · " : provider?.status !== "enabled" ? "供应商已停用 · " : "连接不可用 · ";
+          return `<option value="${esc(model.id)}" ${model.id === currentModelId ? "selected" : ""} ${available ? "" : "disabled"}>${esc(`${available ? "" : unavailableLabel}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
         }).join("")}
       </select></td></tr>`;
     }).join("")}</tbody></table>
-  </section>` : emptyModule("尚未配置平台模型", "请先在平台 AI 管理中添加并测试供应商模型。");
+  </section>` : emptyModule("尚未配置可用模型", "请先启用并测试供应商模型，已停用模型不会出现在新任务选择中。");
 }
 
 const relationshipIndexStatusLabels = Object.freeze({
@@ -6488,11 +6513,11 @@ async function loadModels() {
   const generation = workScopedUiGeneration;
   const models = await api(`/api/works/${workId}/models`);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
-  state.models = models;
+  state.models = models.filter((model) => isSelectableModel(model));
   loadedAiModelsWorkId = workId;
   const select = $("#ai-model");
   select.innerHTML = state.models.length
-    ? state.models.map((model) => `<option value="${esc(model.id)}" ${model.enabled ? "" : "disabled"}>${esc(modelOptionLabel(model))}</option>`).join("")
+    ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
   scheduleAiContextUsage();
 }
@@ -8575,11 +8600,7 @@ async function openTaskDialog() {
     return;
   }
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
-  const availableTaskModels = taskModels.filter((model) =>
-    model.enabled
-    && model.providerStatus === "enabled"
-    && model.providerConnectionStatus === "success"
-  );
+  const availableTaskModels = taskModels.filter((model) => isSelectableModel(model));
   const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
   const relationshipCharacterPicker = `<div class="form-field relationship-character-field">
     <span id="relationship-character-label">被分析角色（可多选）</span>

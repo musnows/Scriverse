@@ -285,6 +285,27 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondChapter.body.data.title).toBe("第二章");
   });
 
+  it("功能模型列表排除禁用模型但保留历史任务中的模型", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "book-analysis",
+      scope: { type: "book" },
+      modelId
+    }).expect(201);
+
+    const availableBeforeDisable = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    expect(availableBeforeDisable.body.data.map((model: { id: string }) => model.id)).toContain(modelId);
+
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ enabled: false }).expect(200);
+
+    const availableAfterDisable = await request(runtime.app).get(`/api/works/${workId}/models`).expect(200);
+    expect(availableAfterDisable.body.data.map((model: { id: string }) => model.id)).not.toContain(modelId);
+    const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
+    expect(tasks.body.data.items.find((item: { id: string }) => item.id === task.body.data.id)?.model)
+      .toMatchObject({ id: modelId, modelId: "mock-novel-model" });
+  });
+
   it("按模型上下文比例裁剪全书概要引用", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

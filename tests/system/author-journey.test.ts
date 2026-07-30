@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260730-provider-model-test-v1');
-    expect(page.text).toContain('/styles.css?v=20260730-provider-model-test-v1');
+    expect(page.text).toContain('/app.js?v=20260730-model-availability-v1');
+    expect(page.text).toContain('/styles.css?v=20260730-model-availability-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -776,7 +776,12 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('field("protocol", "接口协议", "select", protocol');
     expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain("data-test-model");
-    expect(application.text).toContain("models.some((model) => model.providerId === provider.id)");
+    expect(application.text).toContain("providerModels.length");
+    expect(application.text).toContain("function isSelectableModel(model)");
+    expect(application.text).toContain("provider-disabled-notice");
+    expect(application.text).toContain("已停用模型不会出现在新任务选择中");
+    expect(styles.text).toContain(".provider-card.is-disabled");
+    expect(styles.text).toContain(".provider-status-badge.is-disabled");
     expect(application.text).toContain('field("contextWindow", "模型上下文令牌总量", "number", values.contextWindow)');
     expect(application.text).toContain('field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens)');
     expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
