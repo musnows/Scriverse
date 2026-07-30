@@ -169,6 +169,7 @@ type GenerateResult = {
   content: string;
   outputTokens: number;
   cacheHitPercent?: number;
+  reasoningContent?: string;
   anthropicContent?: Record<string, unknown>[];
   provider: Record<string, unknown>;
   model: Record<string, unknown>;
@@ -2442,6 +2443,7 @@ export class AiManager {
         metadata: {
           ...(modelDisplayName ? { modelDisplayName } : {}),
           outputTokens: generated.outputTokens,
+          ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
           ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
           toolCalls: generated.toolCalls,
           processSteps: generated.processSteps,
@@ -3015,12 +3017,16 @@ export class AiManager {
     }
     const conversationMessages: CompletionMessage[] = conversation?.messages.map((message) => {
       if (message.role === "user") return { role: "user", content: message.content };
+      const reasoningContent = typeof message.metadata.reasoningContent === "string" && message.metadata.reasoningContent.length > 0
+        ? message.metadata.reasoningContent
+        : undefined;
       const anthropicContent = Array.isArray(message.metadata.anthropicContent)
         ? message.metadata.anthropicContent.filter((block): block is Record<string, unknown> => Boolean(block && typeof block === "object" && !Array.isArray(block)))
         : [];
       return {
         role: "assistant",
         content: message.content,
+        ...(reasoningContent === undefined ? {} : { reasoning_content: reasoningContent }),
         tool_calls: [],
         ...(anthropicContent.length > 0 ? { anthropic_content: structuredClone(anthropicContent) } : {})
       };
@@ -3638,6 +3644,9 @@ export class AiManager {
         callId,
         content,
         outputTokens,
+        ...(typeof choice?.message?.reasoning_content === "string" && choice.message.reasoning_content.length > 0
+          ? { reasoningContent: choice.message.reasoning_content }
+          : {}),
         ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
         ...(choice?.message?.anthropic_content?.length ? { anthropicContent: choice.message.anthropic_content } : {}),
         provider: this.mapProvider(provider),
@@ -3836,6 +3845,7 @@ export class AiManager {
         callId,
         content,
         outputTokens,
+        ...(reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
         ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
         ...(anthropicContent?.length ? { anthropicContent } : {}),
         provider: this.mapProvider(provider),

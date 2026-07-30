@@ -371,6 +371,7 @@ type AiConversationMessageInput = {
     processDurationMs?: number;
     toolCalls?: unknown[];
     processSteps?: unknown[];
+    reasoningContent?: string;
     anthropicContent?: unknown[];
   };
 };
