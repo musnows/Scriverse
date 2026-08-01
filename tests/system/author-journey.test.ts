@@ -289,8 +289,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".keyword-chip-editor");
     expect(styles.text).toContain(".character-version-card");
     expect(styles.text).toContain(".character-aliases { display: flex;");
+    expect(styles.text).toContain(".character-code .pill { display: inline-flex; align-items: center; justify-content: center;");
     expect(styles.text).toContain(".character-species { display: grid;");
-    expect(styles.text).toContain(".character-species .pill { justify-self: start;");
+    expect(styles.text).toContain(".character-species .pill { display: inline-flex; align-items: center; justify-content: center;");
     expect(styles.text).toContain(".card-actions .danger-button");
     expect(styles.text).toContain(".merge-dialog-note");
   });
@@ -321,7 +322,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260801-timeline-sort-actions-v1');
-    expect(page.text).toContain('/styles.css?v=20260801-timeline-sort-actions-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-character-code-pill-center-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
