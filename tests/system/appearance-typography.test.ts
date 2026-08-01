@@ -19,7 +19,8 @@ describe("显示设置字号选项", () => {
     expect(application).toContain('form.get("aiFontSize")');
     expect(styles).toContain("body { font-size: var(--ui-font-size); }");
     expect(styles).toContain(":is(.module-nav button, .ghost-button.ghost-button, .primary-button.primary-button) { font-size: calc(12px * var(--ui-font-scale)); }");
-    expect(styles).toContain(".settings-hub-card strong { font-size: calc(16px * var(--ui-font-scale)); }");
+    expect(styles).toContain(".book-card small, .book-info > span { font-size: calc(10px * var(--ui-font-scale)); }");
+    expect(styles).toContain(".settings-hub-card strong, .book-info strong { font-size: calc(16px * var(--ui-font-scale)); }");
     expect(styles).not.toContain("font-size: calc(1em * var(--ui-font-scale));");
     expect(styles).toContain(".assistant-message, .user-message { font-size: var(--ai-font-size); }");
     expect(styles).toContain(".ai-tool-call-dialog { font-size: var(--ai-font-size); }");
