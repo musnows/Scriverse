@@ -11,6 +11,8 @@ describe("显示设置字号选项", () => {
     ]);
 
     expect(page).toContain('id="appearance-ui-font-size" name="uiFontSize"');
+    expect(page).toContain('<option value="14">14 px（标准）</option>');
+    expect(page).not.toContain('<option value="16">16 px（标准）</option>');
     expect(page).toContain('id="appearance-font-size" name="fontSize"');
     expect(page).toContain('id="appearance-ai-font-size" name="aiFontSize"');
     expect(page).toContain("界面 14 px · Agent 对话 14 px");
@@ -18,8 +20,9 @@ describe("显示设置字号选项", () => {
     expect(application).toContain('root.style.setProperty("--ai-font-size", `${normalized.aiFontSize}px`);');
     expect(application).toContain('form.get("aiFontSize")');
     expect(styles).toContain("body { font-size: var(--ui-font-size); }");
-    expect(styles).toContain(".module-nav button, .ghost-button, .primary-button { font-size: calc(12px * var(--ui-font-scale)); }");
-    expect(styles).toContain(".settings-hub-card strong { font-size: calc(16px * var(--ui-font-scale)); }");
+    expect(styles).toContain(":is(.module-nav button, .ghost-button.ghost-button, .primary-button.primary-button) { font-size: calc(12px * var(--ui-font-scale)); }");
+    expect(styles).toContain(".book-card small, .book-info > span { font-size: calc(10px * var(--ui-font-scale)); }");
+    expect(styles).toContain(".settings-hub-card strong, .book-info strong { font-size: calc(16px * var(--ui-font-scale)); }");
     expect(styles).not.toContain("font-size: calc(1em * var(--ui-font-scale));");
     expect(styles).toContain(".assistant-message, .user-message { font-size: var(--ai-font-size); }");
     expect(styles).toContain(".ai-tool-call-dialog { font-size: var(--ai-font-size); }");
