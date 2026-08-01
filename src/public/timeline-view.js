@@ -8,7 +8,7 @@ function timelineEventTrackKey(event) {
   return String(event?.trackId ?? "");
 }
 
-function compareNullableTimeSort(left, right) {
+function compareNullableTimeSort(left, right, direction = "asc") {
   const leftSort = left?.timeSort;
   const rightSort = right?.timeSort;
   const leftMissing = leftSort === null || leftSort === undefined || Number.isNaN(Number(leftSort));
@@ -17,28 +17,37 @@ function compareNullableTimeSort(left, right) {
   if (leftMissing) return 1;
   if (rightMissing) return -1;
   const delta = Number(leftSort) - Number(rightSort);
-  if (delta !== 0) return delta;
-  return 0;
+  if (delta === 0) return 0;
+  return direction === "desc" ? -delta : delta;
 }
 
-function compareStableTieBreak(left, right) {
+function compareStableTieBreak(left, right, direction = "asc") {
   const leftUpdated = String(left?.updatedAt ?? "");
   const rightUpdated = String(right?.updatedAt ?? "");
-  if (leftUpdated !== rightUpdated) return leftUpdated < rightUpdated ? -1 : 1;
+  if (leftUpdated !== rightUpdated) {
+    const delta = leftUpdated < rightUpdated ? -1 : 1;
+    return direction === "desc" ? -delta : delta;
+  }
   const leftId = String(left?.id ?? "");
   const rightId = String(right?.id ?? "");
   if (leftId === rightId) return 0;
-  return leftId < rightId ? -1 : 1;
+  const delta = leftId < rightId ? -1 : 1;
+  return direction === "desc" ? -delta : delta;
+}
+
+export function normalizeTimelineSortDirection(direction) {
+  return direction === "desc" ? "desc" : "asc";
 }
 
 /**
- * 按 timeSort 升序排列；缺失或无效的排序值置底；同值按 updatedAt、id 稳定排序。
+ * 按 timeSort 排序；缺失或无效的排序值始终置底；同值按 updatedAt、id 稳定排序。
  */
-export function sortTimelineEvents(events = []) {
+export function sortTimelineEvents(events = [], { direction = "asc" } = {}) {
+  const sortDirection = normalizeTimelineSortDirection(direction);
   return [...events].sort((left, right) => {
-    const bySort = compareNullableTimeSort(left, right);
+    const bySort = compareNullableTimeSort(left, right, sortDirection);
     if (bySort !== 0) return bySort;
-    return compareStableTieBreak(left, right);
+    return compareStableTieBreak(left, right, sortDirection);
   });
 }
 
@@ -75,8 +84,8 @@ export function timelineTrackColorIndex(trackId, tracks = []) {
 /**
  * 先筛选再按时间排序，供列表渲染使用。
  */
-export function prepareTimelineEvents(events = [], filters = {}, tracks = []) {
-  return sortTimelineEvents(filterTimelineEvents(events, filters));
+export function prepareTimelineEvents(events = [], filters = {}, { direction = "asc" } = {}) {
+  return sortTimelineEvents(filterTimelineEvents(events, filters), { direction });
 }
 
 /**

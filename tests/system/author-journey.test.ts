@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-ui-font-default-14-v1');
-    expect(page.text).toContain('/styles.css?v=20260801-ui-font-default-14-v1');
+    expect(page.text).toContain('/app.js?v=20260801-timeline-sort-actions-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-timeline-sort-actions-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -694,8 +694,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("function setModuleNavExpanded(expanded)");
     expect(application.text).toContain('data-testid="timeline-axis"');
     expect(application.text).toContain('data-timeline-track-tab');
+    expect(application.text).toContain('data-timeline-sort="asc"');
+    expect(application.text).toContain('data-timeline-sort="desc"');
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
     expect(styles.text).toContain(".timeline-track-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }");
+    expect(styles.text).toContain(".timeline-track-menu[aria-pressed=\"true\"] { color: var(--ink);");
     expect(styles.text).toContain(".timeline-list { position: relative; margin-left: 15px; border-left: 1px solid var(--line); }");
     expect(styles.text).toContain(".timeline-item::before { content: \"\"; position: absolute; left: -5px; top: 5px;");
     expect(styles.text).not.toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");

@@ -51,8 +51,9 @@ import { filterRelationships } from "/relationship-filters.js?v=20260726-relatio
 import {
   prepareTimelineEvents,
   resolveTimelineActiveTrackId,
+  normalizeTimelineSortDirection,
   timelineTrackColorIndex
-} from "/timeline-view.js?v=20260801-timeline-track-tabs-v1";
+} from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
@@ -183,6 +184,7 @@ let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
 let timelineActiveTrackId = null;
+let timelineSortDirection = "asc";
 let taskProgressRefreshTimer = null;
 let taskAutoRunEditing = false;
 let taskAutoRunEditingWorkId = null;
@@ -4128,6 +4130,7 @@ function resetWorkScopedUiCaches() {
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
   timelineActiveTrackId = null;
+  timelineSortDirection = "asc";
   timelineMultiSelectEnabled = false;
   taskListPage = 1;
   state.collapsedVolumeIds.clear();
@@ -5683,8 +5686,9 @@ async function renderTimeline(page = moduleListPages.timeline) {
     { id: "", name: "未分组", description: "尚未归入独立时间轴的时间节点。" }
   ];
   timelineActiveTrackId = resolveTimelineActiveTrackId(timelineActiveTrackId, tracks);
+  timelineSortDirection = normalizeTimelineSortDirection(timelineSortDirection);
   const activeTrack = tabTracks.find((track) => String(track.id ?? "") === String(timelineActiveTrackId)) ?? tabTracks[tabTracks.length - 1];
-  const filteredEvents = prepareTimelineEvents(events, { trackIds: [timelineActiveTrackId] });
+  const filteredEvents = prepareTimelineEvents(events, { trackIds: [timelineActiveTrackId] }, { direction: timelineSortDirection });
   mountModuleCount(filteredEvents.length);
   const pageResult = paginateModuleItems(filteredEvents, page, "timeline");
   moduleListPages.timeline = pageResult.page;
@@ -5698,10 +5702,10 @@ async function renderTimeline(page = moduleListPages.timeline) {
     const colorIndex = timelineTrackColorIndex(track.id, tracks);
     return `<button type="button" class="timeline-track-tab" role="tab" id="timeline-track-tab-${esc(trackKey || "ungrouped")}" data-timeline-track-tab="${esc(trackKey)}" data-track-color-index="${colorIndex}" aria-selected="${selected}" aria-controls="timeline-track-panel" tabindex="${selected ? "0" : "-1"}"><span class="timeline-track-swatch" aria-hidden="true"></span><span>${esc(track.name)}</span></button>`;
   }).join("")}</div>`;
-  const activeActions = activeTrack.id
-    ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(activeTrack.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(activeTrack.id)}" data-entity-title="${esc(activeTrack.name)}" type="button">历史</button></div>`
+  const trackManageActions = activeTrack.id
+    ? `<button class="timeline-track-menu" data-edit-timeline-track="${esc(activeTrack.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(activeTrack.id)}" data-entity-title="${esc(activeTrack.name)}" type="button">历史</button>`
     : "";
-  const panelMarkup = `<section id="timeline-track-panel" class="timeline-track-panel" data-track-color-index="${timelineTrackColorIndex(activeTrack.id, tracks)}" role="tabpanel" aria-labelledby="timeline-track-tab-${esc(String(activeTrack.id || "ungrouped"))}"><div class="timeline-track-panel-copy"><strong>${esc(activeTrack.name)}</strong><p>${esc(activeTrack.description || "暂无说明")}</p></div><div class="timeline-track-panel-actions">${activeActions}<button class="timeline-add-event" data-add-event-track="${esc(String(activeTrack.id ?? ""))}" type="button">添加事件</button></div></section>`;
+  const panelMarkup = `<section id="timeline-track-panel" class="timeline-track-panel" data-track-color-index="${timelineTrackColorIndex(activeTrack.id, tracks)}" role="tabpanel" aria-labelledby="timeline-track-tab-${esc(String(activeTrack.id || "ungrouped"))}"><div class="timeline-track-panel-copy"><strong>${esc(activeTrack.name)}</strong><p>${esc(activeTrack.description || "暂无说明")}</p></div><div class="timeline-track-panel-actions"><div class="timeline-track-actions" role="group" aria-label="当前轨道操作">${trackManageActions}<button class="timeline-track-menu" data-add-event-track="${esc(String(activeTrack.id ?? ""))}" type="button">添加事件</button><button class="timeline-track-menu" data-timeline-sort="asc" type="button" aria-pressed="${timelineSortDirection === "asc"}">正序</button><button class="timeline-track-menu" data-timeline-sort="desc" type="button" aria-pressed="${timelineSortDirection === "desc"}">倒序</button></div></div></section>`;
   const eventItem = (item) => {
     const trackKey = item.trackId ?? "";
     const colorIndex = timelineTrackColorIndex(trackKey, tracks);
@@ -5720,6 +5724,12 @@ async function renderTimeline(page = moduleListPages.timeline) {
     const nextTrackId = button.dataset.timelineTrackTab ?? "";
     if (String(nextTrackId) === String(timelineActiveTrackId)) return;
     timelineActiveTrackId = nextTrackId;
+    await renderTimeline(1);
+  }));
+  $("#module-content").querySelectorAll("[data-timeline-sort]").forEach((button) => button.addEventListener("click", async () => {
+    const nextDirection = normalizeTimelineSortDirection(button.dataset.timelineSort);
+    if (nextDirection === timelineSortDirection) return;
+    timelineSortDirection = nextDirection;
     await renderTimeline(1);
   }));
   $("#module-content").querySelectorAll("[data-edit-timeline-track]").forEach((button) => button.addEventListener("click", () => openTimelineTrackDialog(tracks.find((track) => track.id === button.dataset.editTimelineTrack))));

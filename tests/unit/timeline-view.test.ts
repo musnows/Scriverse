@@ -27,6 +27,21 @@ describe("sortTimelineEvents", () => {
     ]);
   });
 
+  it("sorts by timeSort descending while keeping missing sorts last", () => {
+    const events = [
+      { id: "c", timeSort: 30, updatedAt: "2026-01-03" },
+      { id: "a", timeSort: 10, updatedAt: "2026-01-01" },
+      { id: "missing", timeSort: null, updatedAt: "2026-01-04" },
+      { id: "b", timeSort: 20, updatedAt: "2026-01-02" }
+    ];
+    expect(sortTimelineEvents(events, { direction: "desc" }).map((item) => item.id)).toEqual([
+      "c",
+      "b",
+      "a",
+      "missing"
+    ]);
+  });
+
   it("breaks ties by updatedAt then id", () => {
     const events = [
       { id: "b", timeSort: 1, updatedAt: "2026-01-02" },
@@ -85,6 +100,10 @@ describe("prepareTimelineEvents", () => {
     expect(prepareTimelineEvents(events, { trackIds: ["main"] }).map((item) => item.id)).toEqual([
       "main-early",
       "main-late"
+    ]);
+    expect(prepareTimelineEvents(events, { trackIds: ["main"] }, { direction: "desc" }).map((item) => item.id)).toEqual([
+      "main-late",
+      "main-early"
     ]);
   });
 });
