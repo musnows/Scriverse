@@ -35,3 +35,6 @@ jobs:
 
       - name: Run required checks
         run: npm run check
+
+      - name: Run CLI end-to-end tests
+        run: npm run test:e2e:cli
