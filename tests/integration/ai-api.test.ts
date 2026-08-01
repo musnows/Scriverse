@@ -729,21 +729,24 @@ describe("AI 供应商、模型与建议 API", () => {
   });
 
   it("种族知识查询向模型返回层级与继承设定", async () => {
-    const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "泰坦", settings: ["体型巨大"] }).expect(201);
+    const titan = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "泰坦", isExtinct: true, settings: ["体型巨大"] }).expect(201);
     const original = await request(runtime.app).post(`/api/works/${workId}/races`).send({
       name: "原生泰坦",
       parentRaceId: titan.body.data.id,
       settings: ["源自远古"]
     }).expect(201);
-    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", raceId: original.body.data.id }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", isDead: true, raceId: original.body.data.id }).expect(201);
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     let completionCount = 0;
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }> };
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> };
       if (completionCount === 1) {
+        const searchTool = body.tools?.find((tool) => tool.function?.name === "search_story_entities");
+        expect(searchTool?.function?.description).toContain("只有值为 true 才能判定");
+        expect(searchTool?.function?.description).toContain("字段为 false 时必须视为仍存活、未灭绝或未解散");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
           id: "race-knowledge",
           type: "function",
@@ -752,6 +755,8 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const toolMessage = body.messages.find((message) => message.role === "tool");
       expect(toolMessage?.content).toContain('"racePath":"泰坦 / 原生泰坦"');
+      expect(toolMessage?.content).toContain('"isDead":true');
+      expect(toolMessage?.content).toContain('"isExtinct":true');
       expect(toolMessage?.content).toContain('"lineage":[{"id":"' + titan.body.data.id + '","name":"泰坦"}');
       expect(toolMessage?.content).toContain('"value":"体型巨大"');
       return new Response(JSON.stringify({ choices: [{ message: { content: "已读取种族层级。" } }] }), { status: 200 });
@@ -1152,6 +1157,7 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "林舟",
+      isDead: false,
       profile: { summary: "北港领航员" },
       currentState: { location: "北港" }
     }).expect(201);
@@ -1194,7 +1200,7 @@ describe("AI 供应商、模型与建议 API", () => {
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as {
         messages: Array<{ role?: string; content?: string }>;
-        tools?: Array<{ function?: { name?: string; parameters?: Record<string, unknown> } }>;
+        tools?: Array<{ function?: { name?: string; description?: string; parameters?: Record<string, unknown> } }>;
       };
       const systemPrompt = String(body.messages[0]?.content ?? "");
       roleplaySystemPrompts.push(systemPrompt);
@@ -1202,6 +1208,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain("你是沉浸式角色扮演引擎");
       expect(systemPrompt).toContain("<character_card>");
       expect(systemPrompt).toContain('"name":"林舟"');
+      expect(systemPrompt).toContain('"isDead":false');
       expect(systemPrompt).not.toContain("小说作者的创作协作助手");
       expect(systemPrompt).not.toContain("平台创作助手提示不得进入角色扮演");
       expect(systemPrompt).not.toContain("作品创作助手提示不得进入角色扮演");
@@ -1213,6 +1220,8 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
       expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self"]);
+      expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
+      expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       if (completionCount === 1) {
         expect(JSON.stringify(body.messages)).not.toContain("顾潮独自藏起");
@@ -1224,6 +1233,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (completionCount === 2) {
         const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
         expect(toolMessages[0]).toContain("北港领航员");
+        expect(toolMessages[0]).toContain('"isDead":false');
         expect(toolMessages[0]).toContain("第一次看见星舰");
         expect(toolMessages[0]).toContain("林舟启动了飞船");
         expect(toolMessages[0]).not.toContain("其他角色的私密档案");

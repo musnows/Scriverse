@@ -16,7 +16,7 @@ import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-resu
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
-import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260725-unified-permissions";
+import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260731-drafts-to-ideas-v1";
 import {
   chapterVersionSourceLabel,
@@ -5371,6 +5371,10 @@ function renderSettingRows(records) {
   }).join("")}</div>`;
 }
 
+function entityLifecycleBadge(active, label) {
+  return active ? `<span class="entity-lifecycle-badge">${esc(label)}</span>` : "";
+}
+
 async function renderSettings(page = moduleListPages.settings) {
   const records = await moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`);
   state.settings = records;
@@ -5416,7 +5420,7 @@ async function renderCharacters(page = characterListPage) {
     const details = normalizeCharacterDetails(item.attributes?.details);
     return `
     <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
-    <div class="character-card-heading"><h3>${esc(item.name)}</h3>${characterLockBadge(item)}</div>
+    <div class="character-card-heading"><h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
     ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
@@ -5438,7 +5442,7 @@ async function renderCharacters(page = characterListPage) {
     const line = meta ? `${meta} · ${preview}` : preview;
     return `
     <article class="record-card module-row character-row character-card preview-record-card" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">
-      <div class="character-card-heading"><h3>${esc(item.name)}</h3>${characterLockBadge(item)}</div>
+      <div class="character-card-heading"><h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
       <p class="module-row-preview" title="${esc(line)}">${esc(line)}</p>
       <div class="card-actions">${characterActions(item)}</div>
     </article>`;
@@ -5516,7 +5520,7 @@ function renderRaceCollection(total, descendantsLoading = false) {
     ? raceActions(item)
     : `<div class="card-actions">${raceActions(item)}</div>`;
   const renderRaceNode = (item) => `<details class="race-tree-node"${state.collapsedRaceIds.has(item.id) ? "" : " open"} data-race-node="${esc(item.id)}">
-    <summary><span>${esc(item.name)}</span><small>${directChildCount(item)} 个直接子种族</small></summary>
+    <summary><span>${esc(item.name)}${entityLifecycleBadge(item.isExtinct, "已灭绝")}</span><small>${directChildCount(item)} 个直接子种族</small></summary>
     <div class="race-tree-branch">
     <article class="record-card race-card preview-record-card${canEditRaces ? " has-card-edit" : ""}" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}"><small>${item.memberIds.length} 位直接角色 · ${item.settingsCount ?? item.settings?.length ?? 0} 条自身设定</small>
         <div class="race-path" aria-label="种族路径">${esc(racePathLabel(item))}</div>
@@ -5534,7 +5538,7 @@ function renderRaceCollection(total, descendantsLoading = false) {
     return `
     <article class="record-card module-row race-card preview-record-card" data-open-race="${esc(item.id)}" role="button" tabindex="0" aria-label="查看种族 ${esc(item.name)}">
       <small>${esc(meta)}</small>
-      <h3>${esc(item.name)}<span class="module-row-path">${esc(racePathLabel(item))}</span></h3>
+      <h3>${esc(item.name)}${entityLifecycleBadge(item.isExtinct, "已灭绝")}<span class="module-row-path">${esc(racePathLabel(item))}</span></h3>
       <p class="module-row-preview" title="${esc(preview)}">${esc(preview)}${item.members.length ? ` · ${esc(item.members.map((member) => member.name).join("、"))}` : ""}</p>
       <div class="card-actions">${raceActions(item)}</div>
     </article>`;
@@ -5621,7 +5625,7 @@ async function renderOrganizations(page = moduleListPages.organizations) {
     : `<div class="card-actions">${organizationActions(item)}</div>`;
   const organizationCards = () => `<div class="card-grid organization-grid">${pageResult.items.map((item) => `
     <article class="record-card organization-card preview-record-card${canEditOrganizations ? " has-card-edit" : ""}" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"><small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
-      <h3>${esc(item.name)}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
+      <h3>${esc(item.name)}${entityLifecycleBadge(item.isDissolved, "已解散")}</h3><p>${esc(item.description || "尚未填写组织简介")}</p>
       <div class="organization-settings">${item.settingsCount ? `<span class="pill">${item.settingsCount} 条组织设定，打开查看详情</span>` : '<span class="pill">暂无组织设定</span>'}</div>
       <p class="organization-members">成员：${item.members.length ? item.members.map((member) => esc(member.name)).join("、") : "暂无绑定角色"}</p>
       ${organizationCardActions(item)}
@@ -5632,7 +5636,7 @@ async function renderOrganizations(page = moduleListPages.organizations) {
     return `
     <article class="record-card module-row organization-card" data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}">
       <small>${item.memberIds.length} 位成员 · ${(item.settingsCount ?? item.settings?.length ?? 0) ? "已填写组织设定" : "暂无组织设定"}</small>
-      <h3>${esc(item.name)}</h3>
+      <h3>${esc(item.name)}${entityLifecycleBadge(item.isDissolved, "已解散")}</h3>
       <p class="module-row-preview" title="${esc(`${preview} · 成员：${members}`)}">${esc(preview)} · ${esc(members)}</p>
       <div class="card-actions">${organizationActions(item)}</div>
     </article>`;
@@ -8991,6 +8995,7 @@ function renderCharacterEditorFields(item) {
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       field("name", "标准名", "text", item?.name) +
+      field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
       (!canReadModule("races")
         ? '<div class="character-editor-empty-field"><b>种族</b><span>当前账户没有种族模块读取权限，原有绑定不会被修改。</span></div>'
@@ -9043,6 +9048,7 @@ function collectCharacterBody(form) {
   delete profile.sections;
   const body = {
     name: String(form.get("name") ?? "").trim(),
+    isDead: form.has("isDead"),
     code: String(form.get("code") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
     attributes: {
@@ -9251,7 +9257,10 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     ? [["basic", "基础资料", "名称、层级与简介"], ["settings", "共同设定", "Markdown 设定章节"], ["members", "种族成员", "角色归属"]]
     : [["basic", "基础资料", "名称与简介"], ["settings", "组织设定", "Markdown 设定章节"], ["members", "组织成员", "角色归属"]];
   $("#knowledge-editor-nav").innerHTML = tabs.map(([key, tabTitle, description], index) => `<button type="button" role="tab" data-knowledge-editor-tab="${key}" aria-selected="${index === 0}" tabindex="${index === 0 ? "0" : "-1"}">${tabTitle}<small>${description}</small></button>`).join("");
-  const basicFields = field("name", `${label}名称`, "text", item?.name, []) + (isRace ? field("parentRaceId", "父种族", "select", item?.parentRaceId ?? "", parentOptions) : "") + field("description", `${label}简介`, "textarea", item?.description, []);
+  const basicFields = field("name", `${label}名称`, "text", item?.name, [])
+    + field(isRace ? "isExtinct" : "isDissolved", isRace ? "标记为已灭绝" : "标记为已解散", "checkbox", isRace ? item?.isExtinct ?? false : item?.isDissolved ?? false)
+    + (isRace ? field("parentRaceId", "父种族", "select", item?.parentRaceId ?? "", parentOptions) : "")
+    + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
     : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
@@ -9357,8 +9366,8 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
       if (untitled >= 0) throw new Error(`请填写第 ${untitled + 1} 条 Markdown 设定的标题`);
       const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
       const body = isRace
-        ? { name, parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
-        : { name, description: data.get("description"), settingsMarkdown, settingsSections };
+        ? { name, isExtinct: data.has("isExtinct"), parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
+        : { name, isDissolved: data.has("isDissolved"), description: data.get("description"), settingsMarkdown, settingsSections };
       if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
       const wasEditing = Boolean(knowledgeEditorItem);
       if (!(await confirmConcurrentSave())) return;
