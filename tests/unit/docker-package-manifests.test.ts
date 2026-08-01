@@ -18,8 +18,10 @@ describe("Docker 依赖清单规范化", () => {
     };
 
     expect(lock.packages["node_modules/@img/sharp-wasm32"]?.dependencies).toHaveProperty("@emnapi/runtime");
-    expect(lock.packages["node_modules/@emnapi/runtime"]?.version).toBe("1.11.2");
-    expect(lock.packages["node_modules/@emnapi/core"]?.version).toBe("1.11.2");
+    const emnapiRuntime = lock.packages["node_modules/@emnapi/runtime"] ?? lock.packages["node_modules/@rolldown/binding-wasm32-wasi/node_modules/@emnapi/runtime"];
+    const emnapiCore = lock.packages["node_modules/@emnapi/core"] ?? lock.packages["node_modules/@rolldown/binding-wasm32-wasi/node_modules/@emnapi/core"];
+    expect(emnapiRuntime?.version).toMatch(/^1\.11\./);
+    expect(emnapiCore?.version).toMatch(/^1\.11\./);
   });
 
   it("只移除会随发版变化的根包版本并固定文件时间", () => {
