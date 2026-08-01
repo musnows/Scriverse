@@ -93,6 +93,51 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(characters.body.data.find((item: Record<string, unknown>) => item.id === character.body.data.id).race).not.toHaveProperty("effectiveSettings");
   });
 
+  it("维护角色死亡、种族灭绝与组织解散标识并保留版本历史", async () => {
+    const { workId } = await seedWork(runtime);
+    const race = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "潮裔" }).expect(201);
+    const organization = await request(runtime.app).post(`/api/works/${workId}/organizations`).send({ name: "北港议会" }).expect(201);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟",
+      raceId: race.body.data.id,
+      organizationIds: [organization.body.data.id]
+    }).expect(201);
+
+    expect(character.body.data).toMatchObject({
+      isDead: false,
+      race: { isExtinct: false },
+      organizations: [{ isDissolved: false }]
+    });
+    expect(race.body.data.isExtinct).toBe(false);
+    expect(organization.body.data.isDissolved).toBe(false);
+
+    const [dead, extinct, dissolved] = await Promise.all([
+      request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({ isDead: true, changeNote: "记录角色死亡" }).expect(200),
+      request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({ isExtinct: true, changeNote: "记录种族灭绝" }).expect(200),
+      request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({ isDissolved: true, changeNote: "记录组织解散" }).expect(200)
+    ]);
+    expect(dead.body.data.isDead).toBe(true);
+    expect(extinct.body.data.isExtinct).toBe(true);
+    expect(dissolved.body.data.isDissolved).toBe(true);
+
+    const refreshed = await request(runtime.app).get(`/api/characters/${character.body.data.id}`).expect(200);
+    expect(refreshed.body.data).toMatchObject({
+      isDead: true,
+      race: { isExtinct: true },
+      organizations: [{ isDissolved: true }]
+    });
+    const characterVersions = await request(runtime.app).get(`/api/characters/${character.body.data.id}/versions`).expect(200);
+    expect(characterVersions.body.data[0]).toMatchObject({ changeNote: "记录角色死亡", snapshot: { isDead: true } });
+    const raceVersions = await request(runtime.app).get(`/api/entity-versions/race/${race.body.data.id}`).expect(200);
+    expect(raceVersions.body.data[0]).toMatchObject({ changeNote: "记录种族灭绝", snapshot: { isExtinct: true } });
+    const organizationVersions = await request(runtime.app).get(`/api/entity-versions/organization/${organization.body.data.id}`).expect(200);
+    expect(organizationVersions.body.data[0]).toMatchObject({ changeNote: "记录组织解散", snapshot: { isDissolved: true } });
+
+    await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({ isDead: "yes" }).expect(400);
+    await request(runtime.app).patch(`/api/races/${race.body.data.id}`).send({ isExtinct: 1 }).expect(400);
+    await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({ isDissolved: null }).expect(400);
+  });
+
   it("在作品内统一约束主名和全部别名，并规范化无向关系", async () => {
     const { workId } = await seedWork(runtime);
     const first = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉", aliases: ["小魔", "Mothra"] }).expect(201);
