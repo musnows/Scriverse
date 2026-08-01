@@ -175,6 +175,7 @@ export const cliResourceDefinitions = {
       required: ["name"],
       properties: {
         name: "人物主名",
+        isDead: "是否已死亡；未标记时为 false",
         aliases: "别名数组",
         raceId: "种族 ID 或 null",
         organizationIds: "组织 ID 数组",
@@ -187,7 +188,7 @@ export const cliResourceDefinitions = {
       example: { name: "林舟", aliases: ["阿舟"], attributes: { age: 24 }, profile: { motivation: "寻找失踪的姐姐" }, currentState: { location: "北港" } }
     },
     update: {
-      properties: { name: "新主名", aliases: "完整别名数组", raceId: "种族 ID 或 null", organizationIds: "完整组织数组", attributes: "完整属性对象", profile: "完整人物档案对象", currentState: "完整当前状态对象", lockedFields: "锁定字段数组", visibility: "可见范围", firstChapterId: "首次出场章节", changeNote },
+      properties: { name: "新主名", isDead: "是否已死亡", aliases: "完整别名数组", raceId: "种族 ID 或 null", organizationIds: "完整组织数组", attributes: "完整属性对象", profile: "完整人物档案对象", currentState: "完整当前状态对象", lockedFields: "锁定字段数组", visibility: "可见范围", firstChapterId: "首次出场章节", changeNote },
       example: { currentState: { location: "北港议会", condition: "受伤" }, changeNote: "同步第三章结尾状态" }
     }
   },
@@ -197,11 +198,11 @@ export const cliResourceDefinitions = {
     actions: ["list", "get", "create", "update", "history", "restore"],
     create: {
       required: ["name"],
-      properties: { name: "种族名称", parentRaceId: "父种族 ID 或 null", description: "说明", settings: "设定条目数组", memberIds: "人物 ID 数组" },
+      properties: { name: "种族名称", isExtinct: "是否已灭绝；未标记时为 false", parentRaceId: "父种族 ID 或 null", description: "说明", settings: "设定条目数组", memberIds: "人物 ID 数组" },
       example: { name: "潮裔", parentRaceId: null, description: "适应高盐雾环境的人类分支。", settings: ["夜间视力较强"], memberIds: [] }
     },
     update: {
-      properties: { name: "新名称", parentRaceId: "新父种族 ID 或 null", description: "新说明", settings: "完整设定数组", memberIds: "完整成员数组", changeNote },
+      properties: { name: "新名称", isExtinct: "是否已灭绝", parentRaceId: "新父种族 ID 或 null", description: "新说明", settings: "完整设定数组", memberIds: "完整成员数组", changeNote },
       example: { parentRaceId: null, settings: ["夜间视力较强", "需要周期性盐浴"], changeNote: "补充生理限制" }
     }
   },
@@ -211,11 +212,11 @@ export const cliResourceDefinitions = {
     actions: ["list", "get", "create", "update", "history", "restore"],
     create: {
       required: ["name"],
-      properties: { name: "组织名称", description: "说明", settings: "设定条目数组", memberIds: "人物 ID 数组" },
+      properties: { name: "组织名称", isDissolved: "是否已解散；未标记时为 false", description: "说明", settings: "设定条目数组", memberIds: "人物 ID 数组" },
       example: { name: "北港议会", description: "控制潮汐航线许可。", settings: ["七席轮值制"], memberIds: [] }
     },
     update: {
-      properties: { name: "新名称", description: "新说明", settings: "完整设定数组", memberIds: "完整成员数组", changeNote },
+      properties: { name: "新名称", isDissolved: "是否已解散", description: "新说明", settings: "完整设定数组", memberIds: "完整成员数组", changeNote },
       example: { memberIds: ["character_xxx"], changeNote: "记录林舟临时加入议会调查组" }
     }
   },

@@ -724,7 +724,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "search_story_entities",
-      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
+      description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。人物、种族、组织结果分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
       parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
     }
   },
@@ -732,7 +732,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "read_character_sections",
-      description: "读取指定人物 Markdown 档案章节的摘要或原文。先通过 search_story_entities 获取 sectionId；每次最多读取 3 个章节。",
+      description: "读取指定人物 Markdown 档案章节的摘要或原文，并返回该人物的权威 isDead 状态。只有 isDead=true 才能判定人物已死亡；isDead=false 时必须视为仍存活，禁止根据章节内容自行改判。先通过 search_story_entities 获取 sectionId；每次最多读取 3 个章节。",
       parameters: { type: "object", properties: { sectionIds: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 }, include: { type: "string", enum: ["summary", "content", "both"] }, cursor: agentToolCursorParameter }, required: ["sectionIds"], additionalProperties: false }
     }
   },
@@ -748,7 +748,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "recall_self",
-      description: "回忆与当前扮演角色自身有关的资料。只能读取自己的角色卡、人物档案章节，以及自己参与的关系、时间线和正文片段；不能指定或查询其他角色。",
+      description: "回忆与当前扮演角色自身有关的资料。角色、种族、组织状态分别以 isDead、isExtinct、isDissolved 为唯一权威标识；只有值为 true 才能判定已死亡、已灭绝或已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据回忆、正文或剧情暗示自行改判。只能读取自己的角色卡、人物档案章节，以及自己参与的关系、时间线和正文片段；不能指定或查询其他角色。",
       parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "", description: "可选的回忆关键词；留空时返回角色自身的核心资料。" }, categories: { type: "array", items: { type: "string", enum: ["profile", "sections", "relationships", "timeline", "chapters"] }, maxItems: 5 }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   }
@@ -4047,9 +4047,11 @@ export class AiManager {
     delete profile.sections;
     const roleCard = {
       name: character.name,
+      isDead: character.isDead,
       code: character.code,
       aliases: character.aliases,
       species: character.species,
+      race: character.race,
       organizations: character.organizations,
       attributes: character.attributes,
       profile,
@@ -4197,9 +4199,11 @@ export class AiManager {
         const record = {
           category: "profile",
           name: character.name,
+          isDead: character.isDead,
           code: character.code,
           aliases: character.aliases,
           species: character.species,
+          race: character.race,
           organizations: character.organizations,
           attributes: character.attributes,
           profile,
@@ -4414,6 +4418,7 @@ export class AiManager {
             sectionId,
             characterId: section.characterId,
             characterName: character.name,
+            isDead: character.isDead,
             title: section.title,
             sectionType: section.sectionType,
             versionNo: section.versionNo,
@@ -7349,7 +7354,7 @@ export class AiManager {
         const item = this.store.getCharacter(sourceId);
         if (String(item.workId) !== workId) return null;
         return source(`人物档案：${String(item.name)}`, {
-          name: item.name, aliases: item.aliases, code: item.code, species: item.species, race: item.race,
+          name: item.name, isDead: item.isDead, aliases: item.aliases, code: item.code, species: item.species, race: item.race,
           organizations: item.organizations, attributes: item.attributes, profile: item.profile,
           currentState: item.currentState, lockedFields: item.lockedFields,
           profileSections: this.store.listCharacterProfileSections(sourceId).map((section) => ({
@@ -7365,6 +7370,7 @@ export class AiManager {
         if (String(item.workId) !== workId) return null;
         return source(`种族设定：${String(item.name)}`, {
           name: item.name,
+          isExtinct: item.isExtinct,
           description: item.description,
           racePath: (item.lineage as Array<{ name: string }>).map((entry) => entry.name).join(" / "),
           lineage: item.lineage,
@@ -7376,7 +7382,7 @@ export class AiManager {
         const item = this.store.getOrganization(sourceId);
         if (String(item.workId) !== workId) return null;
         return source(`组织设定：${String(item.name)}`, {
-          name: item.name, description: item.description, settings: item.settings, members: item.members
+          name: item.name, isDissolved: item.isDissolved, description: item.description, settings: item.settings, members: item.members
         }, item.versionNo);
       }
       if (sourceType === "timeline-track") {
