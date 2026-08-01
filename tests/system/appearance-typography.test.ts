@@ -11,6 +11,8 @@ describe("显示设置字号选项", () => {
     ]);
 
     expect(page).toContain('id="appearance-ui-font-size" name="uiFontSize"');
+    expect(page).toContain('<option value="14">14 px（标准）</option>');
+    expect(page).not.toContain('<option value="16">16 px（标准）</option>');
     expect(page).toContain('id="appearance-font-size" name="fontSize"');
     expect(page).toContain('id="appearance-ai-font-size" name="aiFontSize"');
     expect(page).toContain("界面 14 px · Agent 对话 14 px");
