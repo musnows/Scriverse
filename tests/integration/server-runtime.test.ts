@@ -17,21 +17,41 @@ afterEach(async () => {
 });
 
 describe("本地服务运行时", () => {
-  it("仅在 APP_ALLOW_REGISTRATION 明确为 true 时开放注册", () => {
+  it("仅在 APP_ALLOW_REGISTRATION 明确开启时开放注册", () => {
+    const setupToken = "server-runtime-setup-token-with-at-least-32-characters";
     expect(resolveRuntimeSecurity({}).allowRegistration).toBe(false);
     expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "false" }).allowRegistration).toBe(false);
+    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "0" }).allowRegistration).toBe(false);
+    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "2" }).allowRegistration).toBe(false);
     expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "TRUE" }).allowRegistration).toBe(false);
     expect(() => resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "true" })).toThrow("APP_SETUP_TOKEN");
+    expect(() => resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "1" })).toThrow("APP_SETUP_TOKEN");
     expect(resolveRuntimeSecurity({
       APP_ALLOW_REGISTRATION: "true",
-      APP_SETUP_TOKEN: "server-runtime-setup-token-with-at-least-32-characters"
+      APP_SETUP_TOKEN: setupToken
     }).allowRegistration).toBe(true);
+    expect(resolveRuntimeSecurity({ APP_ALLOW_REGISTRATION: "1", APP_SETUP_TOKEN: setupToken }).allowRegistration).toBe(true);
+  });
+
+  it("允许布尔环境变量使用 0 和 1", () => {
+    expect(resolveRuntimeSecurity({ NODE_ENV: "production", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "true" }).allowPrivateAiEndpoints).toBe(true);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "production", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "1" }).allowPrivateAiEndpoints).toBe(true);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "production", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "false" }).allowPrivateAiEndpoints).toBe(false);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "production", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "0" }).allowPrivateAiEndpoints).toBe(false);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "production", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "2" }).allowPrivateAiEndpoints).toBe(false);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "development", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "false" }).allowPrivateAiEndpoints).toBe(false);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "development", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "0" }).allowPrivateAiEndpoints).toBe(false);
+    expect(resolveRuntimeSecurity({ NODE_ENV: "development", APP_ALLOW_PRIVATE_AI_ENDPOINTS: "2" }).allowPrivateAiEndpoints).toBe(true);
+    expect(resolveRuntimeSecurity({ APP_TRUST_PROXY: "2" }).trustProxy).toBe(2);
   });
 
   it("仅在非生产环境显式开启时允许开发免登录", () => {
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true" }, false)).toBe(true);
+    expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "1" }, false)).toBe(true);
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "production", APP_DEV_SKIP_AUTH: "true" }, false)).toBe(false);
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "false" }, false)).toBe(false);
+    expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "0" }, false)).toBe(false);
+    expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "2" }, false)).toBe(false);
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true" }, true)).toBe(false);
     expect(isDevelopmentAuthBypassEnabled({ NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true", SCRIVERSE_RUNTIME: "container" })).toBe(false);
   });

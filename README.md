@@ -116,8 +116,10 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 | `APP_AUTH_PASSWORD` | 空 | 可选的部署网关密码，至少 12 个字符；必须通过 HTTPS 传输 |
 | `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | 开发环境 `true`，生产环境 `false` | 是否允许 AI 供应商连接本机或内网地址；链路本地与云元数据地址始终禁止 |
-| `APP_ALLOW_REGISTRATION` | `false` | 仅明确设为 `true` 时开放注册；未设置或其他值均关闭，首次初始化创建管理员也必须显式开启 |
+| `APP_ALLOW_REGISTRATION` | `false` | 仅明确设为 `true` 或 `1` 时开放注册；未设置或其他值均关闭，首次初始化创建管理员也必须显式开启 |
 | `APP_SETUP_TOKEN` | 空 | 开放注册时必填且至少 32 个字符；仅首位管理员注册需要在页面输入 |
+
+布尔环境变量统一接受 `true`/`1` 表示开启、`false`/`0` 表示关闭；其他数字不会被解析为布尔值。`APP_TRUST_PROXY` 例外，其 `0`–`10` 数字表示可信代理跳数。
 
 自定义示例：
 

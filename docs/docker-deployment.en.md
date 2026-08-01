@@ -68,7 +68,7 @@ Recreate the container so the setting takes effect:
 docker compose up -d --force-recreate
 ```
 
-Registration is enabled only when `APP_ALLOW_REGISTRATION` is exactly `true`, and `APP_SETUP_TOKEN` must contain at least 32 characters. Unset, `false`, and all other values disable both the UI and backend registration endpoint, including first-administrator setup on an empty database. The setup token is checked only when creating the first administrator.
+Registration is enabled only when `APP_ALLOW_REGISTRATION` is `true` or `1`; `false` or `0` disables it, and `APP_SETUP_TOKEN` must contain at least 32 characters. Unset and all other values disable both the UI and backend registration endpoint, including first-administrator setup on an empty database. The setup token is checked only when creating the first administrator.
 
 ## Pin a release
 
