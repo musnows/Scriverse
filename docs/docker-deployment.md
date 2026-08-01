@@ -68,7 +68,7 @@ APP_SETUP_TOKEN=
 docker compose up -d --force-recreate
 ```
 
-`APP_ALLOW_REGISTRATION` 只有明确设置为 `true` 时才开放注册；同时必须配置至少 32 个字符的 `APP_SETUP_TOKEN`。未设置、`false` 或其他值都会同时关闭前端注册入口和后端注册接口，包括空数据库的首位管理员注册。初始化令牌只在创建首位管理员时校验。
+`APP_ALLOW_REGISTRATION` 只有明确设置为 `true` 或 `1` 时才开放注册；`false` 或 `0` 表示关闭，同时必须配置至少 32 个字符的 `APP_SETUP_TOKEN`。未设置或其他值都会同时关闭前端注册入口和后端注册接口，包括空数据库的首位管理员注册。初始化令牌只在创建首位管理员时校验。
 
 ## 固定正式版本
 

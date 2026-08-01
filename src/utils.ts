@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+/** 严格解析布尔环境变量；未识别的值交由调用方使用默认配置。 */
+export function parseBooleanEnvironmentValue(value: string | undefined): boolean | undefined {
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  return undefined;
+}
+
 export function id(prefix: string): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }
