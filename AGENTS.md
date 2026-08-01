@@ -149,10 +149,11 @@ tests/
 ### 版本发布
 
 - “发小版本（最后一个版本号+1）”统一解释为发布 SemVer 补丁版本：保持主版本号和次版本号不变，将最后一位加 1，例如 `0.3.2` → `0.3.3`。
+- 创建版本号提交前，必须先搜索并列出仓库内全部应用版本来源，再同步更新所有结果；本项目至少包括 `package.json`、`package-lock.json` 顶层版本、`package-lock.json` 根包版本和 `src/version.ts` 中的 `APP_VERSION`。禁止只修改包元数据而遗漏运行时版本。更新后必须运行 `tests/unit/version.test.ts`，任何版本不一致或该测试失败都属于当前发布阻塞，禁止解释为工作区或分支的既有状态问题。
 - 当用户要求“合入 `main` 并 bump 版本”或表达同等发布意图时，在创建版本号提交和 `develop` → `main` 发布 PR 之前，必须审计本次 `develop` 相对 `main` 的全部改动是否需要同步更新 CLI。审计至少覆盖新增或变更的用户操作、API 路由与请求/响应结构、认证与权限范围、导入导出格式以及现有 CLI 命令是否因此失效或缺少入口。
 - 如果审计确认需要更新 CLI，必须先从最新 `develop` 创建独立 CLI 分支，完成 CLI 契约、帮助文本、实现和对应测试，通过以 `develop` 为目标的独立 PR 合入；随后重新拉取最新 `develop`，确认 CLI 真实 E2E、全量测试与构建通过，才能创建版本号提交并将包含 CLI 更新的 `develop` 一并发布到 `main`。禁止先 bump 版本、先合入 `main`，或把应有的 CLI 同步留到发布后补做。
 - 小版本发布必须先将全部功能、修复和文档提交通过 PR 合入 `develop`，再创建版本号提交并合入 `develop`，随后通过 `develop` → `main` 发布 PR 合入 `main`。
-- `main` 合并完成后，必须在该合并提交上创建匹配版本的 Git tag 和正式 GitHub Release，并确认 npm 包与多架构 Docker 镜像发布成功。
+- `main` 合并完成后、创建 Git tag 前，必须直接读取该合并提交中的 `package.json` 与 `src/version.ts`，确认包版本、`APP_VERSION` 和计划创建的 tag 三者完全一致；任一不一致必须停止发布。确认后才能在该合并提交上创建匹配版本的 Git tag 和正式 GitHub Release，并确认 npm 包与多架构 Docker 镜像发布成功。
 
 ### Release Note 格式
 
