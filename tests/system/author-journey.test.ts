@@ -320,8 +320,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260801-global-setting-context-v1');
-    expect(page.text).toContain('/styles.css?v=20260801-ai-context-mention-v1');
+    expect(page.text).toContain('/app.js?v=20260801-timeline-axis-v1');
+    expect(page.text).toContain('/styles.css?v=20260801-timeline-axis-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -692,9 +692,11 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-testid="chapter-type-menu"');
     expect(application.text).toContain("async function renderOutlines(");
     expect(application.text).toContain("function setModuleNavExpanded(expanded)");
-    expect(application.text).toContain('data-testid="timeline-kanban"');
+    expect(application.text).toContain('data-testid="timeline-axis"');
     expect(application.text).toContain("function openTimelineTrackDialog(item)");
-    expect(styles.text).toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
+    expect(styles.text).toContain(".timeline-list { position: relative; margin-left: 15px; border-left: 1px solid var(--line); }");
+    expect(styles.text).toContain(".timeline-item::before { content: \"\"; position: absolute; left: -5px; top: 5px;");
+    expect(styles.text).not.toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
     expect(application.text).toContain("async function streamChat(body)");
     expect(application.text).toContain("createStreamTypewriter");
     expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
