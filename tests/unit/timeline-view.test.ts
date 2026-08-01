@@ -3,6 +3,7 @@ import {
   TIMELINE_UNGROUPED_COLOR_INDEX,
   filterTimelineEvents,
   prepareTimelineEvents,
+  resolveTimelineActiveTrackId,
   sortTimelineEvents,
   timelineTrackColorIndex,
   timelineTrackDisplayName
@@ -94,5 +95,23 @@ describe("timelineTrackDisplayName", () => {
     expect(timelineTrackDisplayName("main", tracks)).toBe("主线时间轴");
     expect(timelineTrackDisplayName("", tracks)).toBe("未分组");
     expect(timelineTrackDisplayName("missing", tracks)).toBe("未知轨道");
+  });
+});
+
+describe("resolveTimelineActiveTrackId", () => {
+  const tracks = [
+    { id: "b", sortOrder: 2 },
+    { id: "a", sortOrder: 1 }
+  ];
+
+  it("keeps the current track when it still exists", () => {
+    expect(resolveTimelineActiveTrackId("b", tracks)).toBe("b");
+    expect(resolveTimelineActiveTrackId("", tracks)).toBe("");
+  });
+
+  it("falls back to the first ordered track when the selection is missing", () => {
+    expect(resolveTimelineActiveTrackId("missing", tracks)).toBe("a");
+    expect(resolveTimelineActiveTrackId(null, tracks)).toBe("a");
+    expect(resolveTimelineActiveTrackId("missing", [])).toBe("");
   });
 });

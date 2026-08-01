@@ -50,9 +50,9 @@ import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import {
   prepareTimelineEvents,
-  timelineTrackColorIndex,
-  timelineTrackDisplayName
-} from "/timeline-view.js?v=20260801-timeline-axis-v1";
+  resolveTimelineActiveTrackId,
+  timelineTrackColorIndex
+} from "/timeline-view.js?v=20260801-timeline-track-tabs-v1";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
@@ -182,8 +182,7 @@ const chapterBatchSelectedIds = new Set();
 let chapterMovePending = false;
 
 let timelineMultiSelectEnabled = false;
-const timelineFilters = { trackIds: [] };
-let timelineFiltersPanelOpen = false;
+let timelineActiveTrackId = null;
 let taskProgressRefreshTimer = null;
 let taskAutoRunEditing = false;
 let taskAutoRunEditingWorkId = null;
@@ -4128,8 +4127,7 @@ function resetWorkScopedUiCaches() {
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
-  timelineFilters.trackIds = [];
-  timelineFiltersPanelOpen = false;
+  timelineActiveTrackId = null;
   timelineMultiSelectEnabled = false;
   taskListPage = 1;
   state.collapsedVolumeIds.clear();
@@ -5046,15 +5044,6 @@ function mountDraftFilterToggle() {
   });
 }
 
-function mountTimelineFilterToggle() {
-  $("#module-header-actions").querySelector('[data-module-header-action="timeline-filter-toggle"]')?.remove();
-  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="timeline-filter-toggle" aria-label="筛选时间轴" aria-controls="timeline-filter-panel" aria-expanded="${timelineFiltersPanelOpen}" title="筛选时间轴"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
-  $("#module-header-actions").querySelector('[data-module-header-action="timeline-filter-toggle"]')?.addEventListener("click", async () => {
-    timelineFiltersPanelOpen = !timelineFiltersPanelOpen;
-    await renderTimeline();
-  });
-}
-
 function bindRecordPreview(selector, open) {
   $("#module-content").querySelectorAll(selector).forEach((card) => {
     const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization ?? card.dataset.openReview;
@@ -5689,62 +5678,50 @@ async function renderTimeline(page = moduleListPages.timeline) {
     if (orderDelta !== 0) return orderDelta;
     return String(left.id).localeCompare(String(right.id));
   });
-  const legendTracks = [
+  const tabTracks = [
     ...orderedTracks,
     { id: "", name: "未分组", description: "尚未归入独立时间轴的时间节点。" }
   ];
-  const filteredEvents = prepareTimelineEvents(events, timelineFilters);
-  const hasTimelineFilters = timelineFilters.trackIds.length > 0;
+  timelineActiveTrackId = resolveTimelineActiveTrackId(timelineActiveTrackId, tracks);
+  const activeTrack = tabTracks.find((track) => String(track.id ?? "") === String(timelineActiveTrackId)) ?? tabTracks[tabTracks.length - 1];
+  const filteredEvents = prepareTimelineEvents(events, { trackIds: [timelineActiveTrackId] });
   mountModuleCount(filteredEvents.length);
   const pageResult = paginateModuleItems(filteredEvents, page, "timeline");
   moduleListPages.timeline = pageResult.page;
   timelineMultiSelectEnabled = false;
   $("#timeline-tools")?.remove();
-  mountTimelineFilterToggle();
+  $("#module-header-actions").querySelector('[data-module-header-action="timeline-filter-toggle"]')?.remove();
   $("#module-header-actions").insertAdjacentHTML("beforeend", `<div id="timeline-tools" class="timeline-tools" data-module-header-action="timeline-tools" role="group" aria-label="时间轴操作"><button id="create-timeline-track" class="ghost-button" type="button">新建独立时间轴</button><button id="timeline-multi-select-toggle" class="ghost-button" type="button" aria-pressed="false">多选</button>${events.length > 1 ? '<button id="merge-events" class="ghost-button" type="button" hidden>合并所选事件</button>' : ""}</div>`);
-  const selectedTrackIds = new Set(timelineFilters.trackIds.map(String));
-  const trackFilterOptions = legendTracks.map((track) => {
-    const value = String(track.id ?? "");
-    const checked = selectedTrackIds.has(value) ? "checked" : "";
-    return `<label><input type="checkbox" value="${esc(value)}" ${checked}><span>${esc(track.name)}</span></label>`;
-  }).join("");
-  const filterToolbar = `<section id="timeline-filter-panel" class="character-filter-toolbar${timelineFiltersPanelOpen ? "" : " hidden"}" aria-label="时间轴筛选">
-    <details class="character-filter-dropdown"><summary><span>按轨道筛选</span><strong>${hasTimelineFilters ? `已选 ${timelineFilters.trackIds.length} 项` : "全部轨道"}</strong></summary><div id="timeline-track-filter" class="character-filter-options">${trackFilterOptions}</div></details>
-    <div class="character-filter-toolbar-actions">${hasTimelineFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${filteredEvents.length} 个事件</span>` : ""}<button id="clear-timeline-filters" class="ghost-button" type="button" ${hasTimelineFilters ? "" : "disabled"}>重置筛选</button></div>
-  </section>`;
-  const legendMarkup = `<div class="timeline-track-legend" aria-label="时间轴轨道">${legendTracks.map((track) => {
+  const tabsMarkup = `<div class="timeline-track-tabs" role="tablist" aria-label="时间轴轨道">${tabTracks.map((track) => {
+    const trackKey = String(track.id ?? "");
+    const selected = trackKey === String(timelineActiveTrackId);
     const colorIndex = timelineTrackColorIndex(track.id, tracks);
-    const actions = track.id
-      ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(track.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(track.id)}" data-entity-title="${esc(track.name)}" type="button">历史</button></div>`
-      : "";
-    return `<div class="timeline-track-legend-item" data-track-color-index="${colorIndex}" data-track-id="${esc(track.id)}"><span class="timeline-track-swatch" aria-hidden="true"></span><div class="timeline-track-legend-copy"><strong>${esc(track.name)}</strong>${track.description ? `<small>${esc(track.description)}</small>` : ""}</div>${actions}</div>`;
-  }).join("")}<button class="timeline-add-event" data-add-event-track="" type="button">添加事件</button></div>`;
+    return `<button type="button" class="timeline-track-tab" role="tab" id="timeline-track-tab-${esc(trackKey || "ungrouped")}" data-timeline-track-tab="${esc(trackKey)}" data-track-color-index="${colorIndex}" aria-selected="${selected}" aria-controls="timeline-track-panel" tabindex="${selected ? "0" : "-1"}"><span class="timeline-track-swatch" aria-hidden="true"></span><span>${esc(track.name)}</span></button>`;
+  }).join("")}</div>`;
+  const activeActions = activeTrack.id
+    ? `<div class="timeline-track-actions"><button class="timeline-track-menu" data-edit-timeline-track="${esc(activeTrack.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(activeTrack.id)}" data-entity-title="${esc(activeTrack.name)}" type="button">历史</button></div>`
+    : "";
+  const panelMarkup = `<section id="timeline-track-panel" class="timeline-track-panel" data-track-color-index="${timelineTrackColorIndex(activeTrack.id, tracks)}" role="tabpanel" aria-labelledby="timeline-track-tab-${esc(String(activeTrack.id || "ungrouped"))}"><div class="timeline-track-panel-copy"><strong>${esc(activeTrack.name)}</strong><p>${esc(activeTrack.description || "暂无说明")}</p></div><div class="timeline-track-panel-actions">${activeActions}<button class="timeline-add-event" data-add-event-track="${esc(String(activeTrack.id ?? ""))}" type="button">添加事件</button></div></section>`;
   const eventItem = (item) => {
     const trackKey = item.trackId ?? "";
     const colorIndex = timelineTrackColorIndex(trackKey, tracks);
-    const trackName = timelineTrackDisplayName(trackKey, tracks);
-    return `<article class="timeline-item" data-track-color-index="${colorIndex}" data-event-id="${esc(item.id)}"><div class="timeline-card-meta"><input class="timeline-select" type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(timelineStatusLabel(item.status))}</small><span class="timeline-track-badge">${esc(trackName)}</span></div><h3>${esc(item.name)}</h3><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span class="timeline-item-location">地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}" type="button">编辑与排序</button><button data-split-event="${esc(item.id)}" type="button">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}" type="button">版本历史</button></div></article>`;
+    return `<article class="timeline-item" data-track-color-index="${colorIndex}" data-event-id="${esc(item.id)}"><div class="timeline-card-meta"><input class="timeline-select" type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(timelineStatusLabel(item.status))}</small></div><h3>${esc(item.name)}</h3><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span class="timeline-item-location">地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}" type="button">编辑与排序</button><button data-split-event="${esc(item.id)}" type="button">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}" type="button">版本历史</button></div></article>`;
   };
   const axisMarkup = pageResult.items.length
     ? `<div class="timeline-axis" data-testid="timeline-axis"><div class="timeline-list">${pageResult.items.map(eventItem).join("")}</div></div>`
-    : `<div class="timeline-axis" data-testid="timeline-axis"><div class="empty-state"><b>${hasTimelineFilters ? "没有符合筛选条件的时间节点" : "还没有时间节点"}</b>${hasTimelineFilters ? "试试调整轨道筛选，或新建事件。" : "创建独立时间轴或直接添加事件，开始梳理大事件顺序。"}</div></div>`;
-  $("#module-content").innerHTML = `${filterToolbar}${legendMarkup}${axisMarkup}${renderModulePagination(pageResult, "timeline", "时间线事件")}`;
+    : `<div class="timeline-axis" data-testid="timeline-axis"><div class="empty-state"><b>当前轨道还没有时间节点</b>可以添加事件，或切换到其他轨道查看。</div></div>`;
+  $("#module-content").innerHTML = `${tabsMarkup}${panelMarkup}${axisMarkup}${renderModulePagination(pageResult, "timeline", "时间线事件")}`;
   bindModulePagination("timeline", renderTimeline);
   $("#create-timeline-track").addEventListener("click", () => openTimelineTrackDialog());
   $("#timeline-multi-select-toggle").addEventListener("click", () => setTimelineMultiSelectMode(!timelineMultiSelectEnabled));
   $("#module-content").querySelectorAll("[data-event-select]").forEach((input) => input.addEventListener("change", updateTimelineMultiSelectControls));
   setTimelineMultiSelectMode(false);
-  const readSelectedValues = (selector) => [...$(selector).querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value);
-  $("#timeline-track-filter")?.addEventListener("change", async () => {
-    timelineFiltersPanelOpen = true;
-    timelineFilters.trackIds = readSelectedValues("#timeline-track-filter");
+  $("#module-content").querySelectorAll("[data-timeline-track-tab]").forEach((button) => button.addEventListener("click", async () => {
+    const nextTrackId = button.dataset.timelineTrackTab ?? "";
+    if (String(nextTrackId) === String(timelineActiveTrackId)) return;
+    timelineActiveTrackId = nextTrackId;
     await renderTimeline(1);
-  });
-  $("#clear-timeline-filters")?.addEventListener("click", async () => {
-    timelineFiltersPanelOpen = true;
-    timelineFilters.trackIds = [];
-    await renderTimeline(1);
-  });
+  }));
   $("#module-content").querySelectorAll("[data-edit-timeline-track]").forEach((button) => button.addEventListener("click", () => openTimelineTrackDialog(tracks.find((track) => track.id === button.dataset.editTimelineTrack))));
   $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));

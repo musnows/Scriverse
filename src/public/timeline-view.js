@@ -79,6 +79,29 @@ export function prepareTimelineEvents(events = [], filters = {}, tracks = []) {
   return sortTimelineEvents(filterTimelineEvents(events, filters));
 }
 
+/**
+ * 解析当前激活的轨道 Tab。优先保留已选轨道；失效时回退到第一条真实轨道，再回退未分组。
+ * null/undefined 表示尚未选择，回退到第一条真实轨道。
+ */
+export function resolveTimelineActiveTrackId(activeTrackId, tracks = []) {
+  const orderedIds = [...tracks]
+    .filter((track) => String(track?.id ?? ""))
+    .sort((left, right) => {
+      const orderDelta = Number(left?.sortOrder ?? 0) - Number(right?.sortOrder ?? 0);
+      if (orderDelta !== 0) return orderDelta;
+      const leftId = String(left?.id ?? "");
+      const rightId = String(right?.id ?? "");
+      if (leftId === rightId) return 0;
+      return leftId < rightId ? -1 : 1;
+    })
+    .map((track) => String(track.id));
+  const fallback = orderedIds[0] ?? "";
+  if (activeTrackId === null || activeTrackId === undefined) return fallback;
+  const key = String(activeTrackId);
+  if (orderedIds.includes(key) || key === "") return key;
+  return fallback;
+}
+
 export function timelineTrackDisplayName(trackId, tracks = []) {
   const key = String(trackId ?? "");
   if (!key) return "未分组";
