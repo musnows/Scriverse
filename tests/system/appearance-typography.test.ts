@@ -13,8 +13,8 @@ describe("显示设置字号选项", () => {
     expect(page).toContain('id="appearance-ui-font-size" name="uiFontSize"');
     expect(page).toContain('id="appearance-font-size" name="fontSize"');
     expect(page).toContain('id="appearance-ai-font-size" name="aiFontSize"');
-    expect(page).toContain("界面 16 px · Agent 对话 14 px");
-    expect(application).toContain("uiFontSize: 16, aiFontSize: 14");
+    expect(page).toContain("界面 14 px · Agent 对话 14 px");
+    expect(application).toContain("uiFontSize: 14, aiFontSize: 14");
     expect(application).toContain('root.style.setProperty("--ai-font-size", `${normalized.aiFontSize}px`);');
     expect(application).toContain('form.get("aiFontSize")');
     expect(styles).toContain("body { font-size: var(--ui-font-size); }");
