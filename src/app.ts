@@ -12,10 +12,11 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { BackupManager, nextRunFromCron, validateCronExpression } from "./backup-manager.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
-import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type S3BackupRunView, type S3BackupSettingsView, type S3PublicTargetView, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
@@ -82,6 +83,44 @@ const loginSchema = z.object({
   ...captchaFields
 }).strict();
 const userUpdateSchema = z.object({ role: z.enum(["admin", "user"]).optional(), status: z.enum(["active", "disabled"]).optional() }).strict();
+
+const s3TargetCreateSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  endpoint: z.string().trim().url("endpoint 必须是完整 URL").max(500),
+  region: z.string().trim().min(1).max(100).default("us-east-1"),
+  bucket: z.string().trim().min(1).max(200),
+  subDirectory: z.string().trim().max(500).default(""),
+  accessKeyId: z.string().trim().min(1).max(500),
+  secretAccessKey: z.string().trim().min(1).max(2000),
+  enabled: z.boolean().default(false),
+  forcePathStyle: z.boolean().default(false)
+}).strict();
+
+const s3TargetUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  endpoint: z.string().trim().url("endpoint 必须是完整 URL").max(500).optional(),
+  region: z.string().trim().min(1).max(100).optional(),
+  bucket: z.string().trim().min(1).max(200).optional(),
+  subDirectory: z.string().trim().max(500).optional(),
+  accessKeyId: z.string().trim().min(1).max(500).optional(),
+  secretAccessKey: z.string().trim().min(1).max(2000).optional(),
+  enabled: z.boolean().optional(),
+  forcePathStyle: z.boolean().optional()
+}).strict();
+
+const s3BackupSettingsSchema = z.object({
+  backupImages: z.boolean().default(false),
+  scheduleEnabled: z.boolean().default(false),
+  scheduleCron: z.string().trim().min(1).max(100).default("0 3 * * *"),
+  retentionCount: z.coerce.number().int().min(1).max(1000).default(30)
+}).strict().refine((input) => validateCronExpression(input.scheduleCron), {
+  path: ["scheduleCron"],
+  message: "Cron 表达式格式不正确，支持 5 段或 6 段标准 Cron"
+});
+
+const cronPreviewSchema = z.object({
+  cron: z.string().trim().min(1).max(100)
+}).strict();
 const memberRoleValueSchema = z.enum(["editor", "settings-editor", "viewer"]);
 const moduleAccessSchema = z.enum(["none", "read", "write"]);
 const modulePermissionsSchema = z.object({
@@ -599,6 +638,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backupManager: BackupManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -970,9 +1010,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const credentialVault = new CredentialVault(options.masterSecret);
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    credentialVault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +1032,70 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+
+  type BackupAlert = {
+    id: string;
+    level: "info" | "error";
+    targetName: string;
+    stage: string;
+    message: string;
+    serverResponse?: string;
+    status?: number;
+    createdAt: string;
+  };
+  const recentBackupAlerts: BackupAlert[] = [];
+  const pushBackupAlert = (alert: Omit<BackupAlert, "id" | "createdAt">): void => {
+    recentBackupAlerts.unshift({
+      ...alert,
+      id: Math.random().toString(36).slice(2, 12),
+      createdAt: new Date().toISOString()
+    });
+    while (recentBackupAlerts.length > 50) recentBackupAlerts.pop();
+  };
+  const backupManager = new BackupManager(
+    store,
+    database,
+    credentialVault,
+    attachmentStorage,
+    options.databasePath,
+    {
+      onTargetError: (target, error, stage) => {
+        const serverResp = (error as { responseBody?: unknown }).responseBody;
+        pushBackupAlert({
+          level: "error",
+          targetName: target.name,
+          stage,
+          message: error.message,
+          serverResponse: typeof serverResp === "string" ? serverResp.slice(0, 2000) : undefined,
+          status: (error as { status?: unknown }).status as number | undefined
+        });
+        logger.error("backup.target.error", {
+          target,
+          stage,
+          error: sanitizeError(error)
+        });
+      },
+      onRunCompleted: () => {
+        pushBackupAlert({
+          level: "info",
+          targetName: "(系统)",
+          stage: "backup",
+          message: "备份任务完成"
+        });
+      },
+      onRunFailed: (_run, _errors) => {
+        pushBackupAlert({
+          level: "error",
+          targetName: "(系统)",
+          stage: "backup",
+          message: "备份任务存在失败项，请查看运行记录"
+        });
+      }
+    },
+    options.fetchImpl ?? fetch
+  );
+  // 启动备份调度器
+  backupManager.startScheduler();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2165,93 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  function assertBackupAdmin(request: Request): void {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+  }
+
+  app.get("/api/platform/backup/targets", (request, response) => {
+    assertBackupAdmin(request);
+    data(response, store.listS3Targets());
+  });
+  app.post("/api/platform/backup/targets", (request, response) => {
+    assertBackupAdmin(request);
+    const input = parse(s3TargetCreateSchema, request.body);
+    const created = store.createS3Target({ ...input, vault: credentialVault });
+    backupManager.notifyConfigChanged();
+    data(response, created, 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", (request, response) => {
+    assertBackupAdmin(request);
+    const input = parse(s3TargetUpdateSchema, request.body);
+    const updated = store.updateS3Target(request.params.targetId, { ...input, vault: credentialVault });
+    backupManager.notifyConfigChanged();
+    data(response, updated);
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    assertBackupAdmin(request);
+    store.deleteS3Target(request.params.targetId);
+    backupManager.notifyConfigChanged();
+    noContent(response);
+  });
+  app.get("/api/platform/backup/settings", (request, response) => {
+    assertBackupAdmin(request);
+    data(response, store.getS3BackupSettings());
+  });
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    assertBackupAdmin(request);
+    const input = parse(s3BackupSettingsSchema, request.body);
+    const updated = store.updateS3BackupSettings(input);
+    backupManager.notifyConfigChanged();
+    data(response, updated);
+  });
+  app.post("/api/platform/backup/cron-preview", (request, response) => {
+    assertBackupAdmin(request);
+    const input = parse(cronPreviewSchema, request.body ?? {});
+    if (!validateCronExpression(input.cron)) {
+      throw new AppError(400, "INVALID_CRON", "Cron 表达式格式不正确");
+    }
+    const next = nextRunFromCron(input.cron);
+    data(response, { nextRunAt: next.toISOString() });
+  });
+  app.get("/api/platform/backup/runs", (request, response) => {
+    assertBackupAdmin(request);
+    const pagination = parsePagination({
+      page: request.query.page ?? "1",
+      limit: request.query.limit ?? "20"
+    }) ?? { page: 1, limit: 20, offset: 0 };
+    data(response, store.listS3BackupRunsPage(pagination));
+  });
+  app.get("/api/platform/backup/runs/:runId", (request, response) => {
+    assertBackupAdmin(request);
+    const run = store.getS3BackupRun(request.params.runId);
+    if (!run) throw new AppError(404, "NOT_FOUND", "备份运行记录不存在");
+    data(response, run);
+  });
+  app.get("/api/platform/backup/alerts", (request, response) => {
+    assertBackupAdmin(request);
+    data(response, recentBackupAlerts.slice(0, 50));
+  });
+  app.post("/api/platform/backup/run", async (request, response, next) => {
+    assertBackupAdmin(request);
+    try {
+      const runView: S3BackupRunView = await backupManager.runBackup({ source: "manual" });
+      data(response, runView, 202);
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.get("/api/platform/backup/status", (request, response) => {
+    assertBackupAdmin(request);
+    const settings = store.getS3BackupSettings();
+    const current = backupManager.getCurrentRun();
+    data(response, {
+      settings,
+      currentRun: current,
+      nextRunAt: settings.scheduleEnabled ? backupManager.getNextRunAt() : null
+    });
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,9 +2766,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, backupManager, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
+    backupManager.close();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
     logger.info("runtime.closed");

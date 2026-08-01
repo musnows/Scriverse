@@ -209,6 +209,7 @@
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="backup-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">备</span><strong>S3 备份</strong><small>将数据库和图片同步到多个 S3 兼容对象存储</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
@@ -795,6 +796,86 @@
           </fieldset>
         </div>
         <div class="dialog-actions"><button class="ghost-button" id="platform-ui-settings-cancel" type="button">取消</button><button class="primary-button" id="platform-ui-settings-save" type="submit">保存设置</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="backup-settings-dialog" class="dialog wide-dialog" aria-labelledby="backup-settings-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">系统管理员</span><h2 id="backup-settings-title">S3 备份设置</h2><p id="backup-settings-meta" class="dialog-header-meta">配置 S3 兼容对象存储，定时备份数据库和图片。</p></div>
+        <div class="settings-dialog-header-actions"><button id="backup-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="backup-settings-close" class="dialog-close" aria-label="关闭备份设置" type="button">×</button></div>
+      </div>
+      <div id="backup-settings-body" class="access-dialog-body backup-body">
+        <form id="backup-global-form" class="backup-global-form">
+          <fieldset class="backup-settings-fieldset">
+            <legend>全局备份设置</legend>
+            <div class="backup-global-grid">
+              <label class="backup-toggle-row"><input id="backup-images" name="backupImages" type="checkbox"><span><strong>同时备份图片</strong><small>关闭时只备份数据库；开启后会将附件图片同步到 /scriverse/img，已存在的文件跳过上传。</small></span></label>
+              <label class="backup-toggle-row"><input id="backup-schedule-enabled" name="scheduleEnabled" type="checkbox"><span><strong>启用定时备份</strong><small>根据 Cron 表达式触发自动备份；关闭后只支持手动触发。</small></span></label>
+              <label>Cron 触发时间<input id="backup-cron" name="scheduleCron" type="text" spellcheck="false" maxlength="100" aria-describedby="backup-cron-hint"><small id="backup-cron-hint">标准 5 或 6 段 Cron 表达式，例如 0 3 * * *（每天凌晨 3 点）。<span id="backup-cron-preview" class="backup-cron-preview"></span></small></label>
+              <label>数据库备份留存个数<input id="backup-retention" name="retentionCount" type="number" min="1" max="1000" step="1" required><small>超过该数量后自动删除最老的数据库备份文件，图片不受此限制。</small></label>
+            </div>
+            <div class="backup-global-actions">
+              <button type="button" id="backup-refresh-status" class="ghost-button">刷新状态</button>
+              <button type="button" id="backup-run-now" class="primary-button">立即备份</button>
+              <button type="submit" id="backup-save-settings" class="primary-button">保存全局设置</button>
+            </div>
+            <div id="backup-status-card" class="backup-status-card" aria-live="polite">
+              <h3>备份状态</h3>
+              <p id="backup-status-current">当前没有运行中的备份。</p>
+              <p id="backup-status-next">下次执行：—</p>
+            </div>
+          </fieldset>
+        </form>
+        <section class="backup-targets-section" aria-labelledby="backup-targets-title">
+          <header class="backup-targets-header">
+            <h3 id="backup-targets-title">S3 存储目标</h3>
+            <button type="button" id="backup-new-target" class="primary-button">新增 S3 目标</button>
+          </header>
+          <div id="backup-targets-list" class="backup-targets-list"></div>
+        </section>
+        <section class="backup-runs-section" aria-labelledby="backup-runs-title">
+          <header class="backup-targets-header">
+            <h3 id="backup-runs-title">备份历史</h3>
+            <button type="button" id="backup-refresh-runs" class="ghost-button">刷新历史</button>
+          </header>
+          <div id="backup-runs-list" class="backup-runs-list"></div>
+        </section>
+        <section class="backup-alerts-section" aria-labelledby="backup-alerts-title">
+          <header class="backup-targets-header">
+            <h3 id="backup-alerts-title">最近备份告警</h3>
+          </header>
+          <div id="backup-alerts-list" class="backup-alerts-list"></div>
+        </section>
+      </div>
+    </dialog>
+
+    <dialog id="backup-target-dialog" class="dialog" aria-labelledby="backup-target-dialog-title">
+      <form id="backup-target-form" method="dialog">
+        <div class="dialog-header">
+          <div><span class="eyebrow">S3 目标</span><h2 id="backup-target-dialog-title">新增 S3 目标</h2></div>
+          <button class="dialog-close" value="cancel" aria-label="关闭" type="submit">×</button>
+        </div>
+        <div class="dialog-fields">
+          <label>目标名称<input id="backup-target-name" name="name" type="text" maxlength="100" required placeholder="例如：Cloudflare R2 主备"></label>
+          <label>Endpoint URL<input id="backup-target-endpoint" name="endpoint" type="url" maxlength="500" required placeholder="https://xxx.r2.cloudflarestorage.com"></label>
+          <div class="backup-target-grid">
+            <label>Region<input id="backup-target-region" name="region" type="text" maxlength="100" value="us-east-1" required></label>
+            <label>Bucket 名称<input id="backup-target-bucket" name="bucket" type="text" maxlength="200" required></label>
+          </div>
+          <label>子目录（可选）<input id="backup-target-subdir" name="subDirectory" type="text" maxlength="500" placeholder="例如 projects/novel，留空则直接在桶根目录创建 /scriverse"><small>实际同步路径为：<code>{bucket}/{subDirectory}/scriverse/{img,db}</code></small></label>
+          <label>Access Key ID<input id="backup-target-ak" name="accessKeyId" type="text" maxlength="500" required autocomplete="off" spellcheck="false"></label>
+          <label>Secret Access Key<input id="backup-target-sk" name="secretAccessKey" type="password" maxlength="2000" required autocomplete="off" spellcheck="false"></label>
+          <label class="backup-toggle-row"><input id="backup-target-enabled" name="enabled" type="checkbox" checked><span><strong>启用该目标</strong><small>关闭后不会同步到此目标。</small></span></label>
+          <label class="backup-toggle-row"><input id="backup-target-pathstyle" name="forcePathStyle" type="checkbox"><span><strong>使用 Path-Style 访问</strong><small>部分 S3 兼容服务（如 MinIO 旧部署）需要开启；AWS S3 通常关闭。</small></span></label>
+        </div>
+        <div id="backup-target-submit-status" class="dialog-submit-status hidden" role="status" aria-live="polite">
+          <span>正在提交，请稍候</span>
+        </div>
+        <div class="dialog-actions">
+          <button id="backup-target-delete" class="danger-button hidden" type="button" value="delete">删除目标</button>
+          <button class="ghost-button" value="cancel" type="submit">取消</button>
+          <button id="backup-target-save" class="primary-button" value="default" type="submit">保存</button>
+        </div>
       </form>
     </dialog>
 

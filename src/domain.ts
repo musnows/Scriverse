@@ -92,3 +92,50 @@ export type AiInjectedEntities = {
   races: string[];
   organizations: string[];
 };
+
+export type S3PublicTargetView = {
+  id: string;
+  name: string;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  subDirectory: string;
+  enabled: boolean;
+  forcePathStyle: boolean;
+  accessKeyHint: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type S3BackupSettingsView = {
+  backupImages: boolean;
+  scheduleEnabled: boolean;
+  scheduleCron: string;
+  retentionCount: number;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  updatedAt: string;
+};
+
+export type S3BackupRunView = {
+  id: string;
+  status: "running" | "success" | "partial" | "failed";
+  includeImages: boolean;
+  startedAt: string;
+  completedAt: string | null;
+  totalImages: number;
+  uploadedImages: number;
+  skippedImages: number;
+  databaseSynced: number;
+  purgedOldBackups: number;
+  targets: Array<{ id: string; name: string }>;
+  failures: Array<{
+    targetId: string;
+    targetName: string;
+    stage: string;
+    message: string;
+    serverResponse?: string;
+    status?: number;
+  }>;
+  detail: Record<string, unknown>;
+};

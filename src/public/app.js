@@ -3373,6 +3373,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#backup-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3747,6 +3748,267 @@ async function openPlatformUiSettingsDialog() {
     $("#platform-ui-settings-dialog").showModal();
   } catch (error) {
     toast(error.message, "error");
+  }
+}
+
+let backupTargetEditingId = null;
+
+function formatBackupTime(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString();
+  } catch {
+    return String(iso);
+  }
+}
+
+async function refreshBackupCronPreview() {
+  const cron = String($("#backup-cron").value || "").trim();
+  const previewEl = $("#backup-cron-preview");
+  if (!cron) {
+    previewEl.textContent = "";
+    return;
+  }
+  try {
+    const result = await api("/api/platform/backup/cron-preview", { method: "POST", body: { cron } });
+    previewEl.textContent = `下次执行：${formatBackupTime(result.nextRunAt)}`;
+  } catch (_error) {
+    previewEl.textContent = "Cron 表达式无效";
+  }
+}
+
+function renderBackupStatus(statusData) {
+  const current = $("#backup-status-current");
+  const next = $("#backup-status-next");
+  if (statusData?.currentRun) {
+    const run = statusData.currentRun;
+    let text = `运行中：${run.status}，开始于 ${formatBackupTime(run.startedAt)}`;
+    if (run.summary) {
+      text += ` · 已同步数据库 ${run.summary.dbBackedUpCount ?? 0}/${run.summary.targetCount ?? 0} 个目标`;
+    }
+    current.textContent = text;
+  } else {
+    current.textContent = "当前没有运行中的备份。";
+  }
+  const nextAt = statusData?.nextRunAt;
+  next.textContent = `下次执行：${nextAt ? formatBackupTime(nextAt) : "（未启用定时）"}`;
+}
+
+function renderBackupTargets(targets) {
+  const list = $("#backup-targets-list");
+  if (!targets || !targets.length) {
+    list.innerHTML = '<p class="empty-state-text">尚未配置 S3 存储目标，点击右上角新增。</p>';
+    return;
+  }
+  list.innerHTML = targets.map((t) => {
+    const path = `${esc(t.bucket)}${t.subDirectory ? "/" + esc(t.subDirectory) : ""}/scriverse/`;
+    return `<article class="access-row backup-target-row" data-target-id="${esc(t.id)}">
+      <div class="access-person backup-target-copy">
+        <div class="backup-target-name">
+          <strong>${esc(t.name)}</strong>
+          <span class="pill ${t.enabled ? "pill-enabled" : "pill-disabled"}">${t.enabled ? "启用" : "停用"}</span>
+        </div>
+        <small><b>Endpoint</b>: ${esc(t.endpoint)}</small>
+        <small><b>Region</b>: ${esc(t.region)} · <b>Bucket</b>: ${esc(t.bucket)}</small>
+        <small><b>路径</b>: ${path}</small>
+        ${t.forcePathStyle ? '<small>Path-Style 访问已开启</small>' : ""}
+      </div>
+      <div class="access-row-actions">
+        <button type="button" class="ghost-button" data-edit-target="${esc(t.id)}">编辑</button>
+      </div>
+    </article>`;
+  }).join("");
+  list.querySelectorAll("[data-edit-target]").forEach((button) => button.addEventListener("click", () => {
+    const target = targets.find((t) => t.id === button.dataset.editTarget);
+    if (target) openBackupTargetDialog(target);
+  }));
+}
+
+function renderBackupRuns(runsPage) {
+  const list = $("#backup-runs-list");
+  const items = runsPage?.items ?? runsPage ?? [];
+  if (!items.length) {
+    list.innerHTML = '<p class="empty-state-text">尚无备份记录，等待首次备份完成。</p>';
+    return;
+  }
+  list.innerHTML = items.map((run) => {
+    const counts = run.summary
+      ? `DB:${run.summary.dbBackedUpCount ?? 0}/${run.summary.targetCount ?? 0} · ` +
+        (run.summary.includeImages ? `IMG:${run.summary.imageUploadedCount ?? 0}张 · ` : "") +
+        `清理:${run.summary.oldBackupsDeletedCount ?? 0}`
+      : "—";
+    return `<article class="access-row backup-run-row">
+      <div class="access-person">
+        <div class="backup-target-name">
+          <strong>备份 #${esc(String(run.id).slice(0, 8))}</strong>
+          <span class="pill pill-${esc(run.status)}">${esc(run.status)}</span>
+          ${run.source === "schedule" ? '<span class="pill">定时</span>' : '<span class="pill pill-enabled">手动</span>'}
+        </div>
+        <small>开始：${formatBackupTime(run.startedAt)} ${run.finishedAt ? ` · 结束：${formatBackupTime(run.finishedAt)}` : ""}</small>
+        <small>${counts}</small>
+        ${run.failureSummary ? `<small class="backup-failure-text">${esc(run.failureSummary)}</small>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+}
+
+function renderBackupAlerts(alerts) {
+  const list = $("#backup-alerts-list");
+  if (!alerts || !alerts.length) {
+    list.innerHTML = '<p class="empty-state-text">最近没有备份告警。</p>';
+    return;
+  }
+  list.innerHTML = alerts.slice(0, 20).map((alert) => `<article class="backup-alert-row alert-${esc(alert.level)}">
+    <div class="backup-alert-head">
+      <strong>${esc(alert.targetName)}</strong>
+      <span>${esc(alert.stage)}</span>
+      <span>${formatBackupTime(alert.createdAt)}</span>
+    </div>
+    <p>${esc(alert.message)}</p>
+    ${alert.status ? `<small>HTTP ${esc(String(alert.status))}</small>` : ""}
+    ${alert.serverResponse ? `<details><summary>服务端返回详情</summary><pre>${esc(alert.serverResponse)}</pre></details>` : ""}
+  </article>`).join("");
+}
+
+async function loadBackupDialogData() {
+  try {
+    const [targets, runsPage, alerts, statusData] = await Promise.all([
+      api("/api/platform/backup/targets"),
+      api("/api/platform/backup/runs"),
+      api("/api/platform/backup/alerts"),
+      api("/api/platform/backup/status")
+    ]);
+    $("#backup-images").checked = Boolean(statusData.settings.backupImages);
+    $("#backup-schedule-enabled").checked = Boolean(statusData.settings.scheduleEnabled);
+    $("#backup-cron").value = statusData.settings.scheduleCron || "0 3 * * *";
+    $("#backup-retention").value = String(statusData.settings.retentionCount ?? 30);
+    renderBackupStatus(statusData);
+    renderBackupTargets(targets);
+    renderBackupRuns(runsPage);
+    renderBackupAlerts(alerts);
+    void refreshBackupCronPreview();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function openBackupSettingsDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  $("#backup-settings-dialog").showModal();
+  await loadBackupDialogData();
+}
+
+function openBackupTargetDialog(target = null) {
+  backupTargetEditingId = target?.id ?? null;
+  const title = $("#backup-target-dialog-title");
+  const deleteBtn = $("#backup-target-delete");
+  title.textContent = target ? "编辑 S3 目标" : "新增 S3 目标";
+  deleteBtn.classList.toggle("hidden", !target);
+  $("#backup-target-name").value = target?.name ?? "";
+  $("#backup-target-endpoint").value = target?.endpoint ?? "";
+  $("#backup-target-region").value = target?.region ?? "us-east-1";
+  $("#backup-target-bucket").value = target?.bucket ?? "";
+  $("#backup-target-subdir").value = target?.subDirectory ?? "";
+  $("#backup-target-ak").value = "";
+  $("#backup-target-sk").value = "";
+  $("#backup-target-enabled").checked = target ? Boolean(target.enabled) : true;
+  $("#backup-target-pathstyle").checked = target ? Boolean(target.forcePathStyle) : false;
+  $("#backup-target-form").setAttribute("data-editing", target ? "1" : "0");
+  $("#backup-target-dialog").showModal();
+  $("#backup-target-name").focus();
+}
+
+async function submitBackupTargetForm() {
+  const form = $("#backup-target-form");
+  const statusEl = $("#backup-target-submit-status");
+  const saveBtn = $("#backup-target-save");
+  saveBtn.disabled = true;
+  statusEl.classList.remove("hidden");
+  try {
+    const payload = {
+      name: $("#backup-target-name").value.trim(),
+      endpoint: $("#backup-target-endpoint").value.trim(),
+      region: $("#backup-target-region").value.trim(),
+      bucket: $("#backup-target-bucket").value.trim(),
+      subDirectory: $("#backup-target-subdir").value.trim(),
+      enabled: $("#backup-target-enabled").checked,
+      forcePathStyle: $("#backup-target-pathstyle").checked
+    };
+    if ($("#backup-target-ak").value.trim()) payload.accessKeyId = $("#backup-target-ak").value.trim();
+    if ($("#backup-target-sk").value.trim()) payload.secretAccessKey = $("#backup-target-sk").value.trim();
+    if (backupTargetEditingId) {
+      await api(`/api/platform/backup/targets/${encodeURIComponent(backupTargetEditingId)}`, {
+        method: "PATCH",
+        body: payload
+      });
+      toast("S3 目标已更新");
+    } else {
+      await api("/api/platform/backup/targets", {
+        method: "POST",
+        body: payload
+      });
+      toast("S3 目标已创建");
+    }
+    $("#backup-target-dialog").close();
+    await loadBackupDialogData();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    saveBtn.disabled = false;
+    statusEl.classList.add("hidden");
+  }
+}
+
+async function deleteBackupTarget() {
+  if (!backupTargetEditingId) return;
+  if (!confirm("确定删除该 S3 目标？这不会删除对象存储中已上传的备份。")) return;
+  try {
+    await api(`/api/platform/backup/targets/${encodeURIComponent(backupTargetEditingId)}`, { method: "DELETE" });
+    $("#backup-target-dialog").close();
+    toast("S3 目标已删除");
+    await loadBackupDialogData();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function submitBackupGlobalSettings(event) {
+  event.preventDefault();
+  const button = $("#backup-save-settings");
+  button.disabled = true;
+  try {
+    const payload = {
+      backupImages: $("#backup-images").checked,
+      scheduleEnabled: $("#backup-schedule-enabled").checked,
+      scheduleCron: String($("#backup-cron").value || "").trim() || "0 3 * * *",
+      retentionCount: Number($("#backup-retention").value)
+    };
+    const updated = await api("/api/platform/backup/settings", { method: "PATCH", body: payload });
+    const statusData = await api("/api/platform/backup/status");
+    renderBackupStatus({ ...statusData, settings: updated });
+    toast("备份全局设置已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function runBackupNow() {
+  const button = $("#backup-run-now");
+  button.disabled = true;
+  try {
+    const run = await api("/api/platform/backup/run", { method: "POST" });
+    toast(`备份任务 #${String(run.id).slice(0, 8)} 已开始`);
+    await loadBackupDialogData();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -11390,6 +11652,39 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+$("#backup-settings-button").addEventListener("click", openBackupSettingsDialog);
+$("#backup-settings-close").addEventListener("click", () => $("#backup-settings-dialog").close());
+$("#backup-settings-return").addEventListener("click", () => returnToSettingsHub("#backup-settings-button", "#backup-settings-dialog").catch((error) => toast(error.message, "error")));
+$("#backup-global-form").addEventListener("submit", submitBackupGlobalSettings);
+$("#backup-run-now").addEventListener("click", runBackupNow);
+$("#backup-refresh-status").addEventListener("click", loadBackupDialogData);
+$("#backup-refresh-runs").addEventListener("click", async () => {
+  try {
+    const [runsPage, alerts, statusData] = await Promise.all([
+      api("/api/platform/backup/runs"),
+      api("/api/platform/backup/alerts"),
+      api("/api/platform/backup/status")
+    ]);
+    renderBackupRuns(runsPage);
+    renderBackupAlerts(alerts);
+    renderBackupStatus(statusData);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
+$("#backup-cron").addEventListener("input", () => { void refreshBackupCronPreview(); });
+$("#backup-new-target").addEventListener("click", () => openBackupTargetDialog());
+$("#backup-target-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitter = event.submitter;
+  if (submitter && submitter.value === "delete") {
+    await deleteBackupTarget();
+    return;
+  }
+  if (submitter && submitter.value === "cancel") return;
+  await submitBackupTargetForm();
+});
+$("#backup-target-delete").addEventListener("click", deleteBackupTarget);
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
 $("#members-settings-return").addEventListener("click", () => returnToSettingsHub("#collaboration-button", "#members-dialog").catch((error) => toast(error.message, "error")));
 $("#members-dialog").addEventListener("close", () => {

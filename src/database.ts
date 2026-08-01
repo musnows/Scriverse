@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -659,6 +659,54 @@ export class Database {
         failure TEXT,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_targets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        region TEXT NOT NULL DEFAULT 'us-east-1',
+        bucket TEXT NOT NULL,
+        sub_directory TEXT NOT NULL DEFAULT '',
+        encrypted_access_key_id TEXT NOT NULL,
+        access_key_id_iv TEXT NOT NULL,
+        access_key_id_tag TEXT NOT NULL,
+        encrypted_secret_access_key TEXT NOT NULL,
+        secret_access_key_iv TEXT NOT NULL,
+        secret_access_key_tag TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+        force_path_style INTEGER NOT NULL DEFAULT 0 CHECK(force_path_style IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        backup_images INTEGER NOT NULL DEFAULT 0 CHECK(backup_images IN (0, 1)),
+        schedule_enabled INTEGER NOT NULL DEFAULT 0 CHECK(schedule_enabled IN (0, 1)),
+        schedule_cron TEXT NOT NULL DEFAULT '0 3 * * *',
+        retention_count INTEGER NOT NULL DEFAULT 30 CHECK(retention_count BETWEEN 1 AND 3650),
+        last_run_at TEXT,
+        next_run_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_runs (
+        id TEXT PRIMARY KEY,
+        status TEXT NOT NULL CHECK(status IN ('running', 'success', 'partial', 'failed')),
+        include_images INTEGER NOT NULL DEFAULT 0 CHECK(include_images IN (0, 1)),
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        total_images INTEGER NOT NULL DEFAULT 0,
+        uploaded_images INTEGER NOT NULL DEFAULT 0,
+        skipped_images INTEGER NOT NULL DEFAULT 0,
+        database_synced INTEGER NOT NULL DEFAULT 0,
+        purged_old_backups INTEGER NOT NULL DEFAULT 0,
+        targets_json TEXT NOT NULL DEFAULT '[]',
+        failures_json TEXT NOT NULL DEFAULT '[]',
+        detail_json TEXT NOT NULL DEFAULT '{}'
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_started ON s3_backup_runs(started_at DESC);
 
       CREATE INDEX IF NOT EXISTS idx_volumes_work ON volumes(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_chapters_work ON chapters(work_id, volume_id, sort_order);
@@ -2766,6 +2814,61 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_targets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          endpoint TEXT NOT NULL,
+          region TEXT NOT NULL DEFAULT 'us-east-1',
+          bucket TEXT NOT NULL,
+          sub_directory TEXT NOT NULL DEFAULT '',
+          encrypted_access_key_id TEXT NOT NULL,
+          access_key_id_iv TEXT NOT NULL,
+          access_key_id_tag TEXT NOT NULL,
+          encrypted_secret_access_key TEXT NOT NULL,
+          secret_access_key_iv TEXT NOT NULL,
+          secret_access_key_tag TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          force_path_style INTEGER NOT NULL DEFAULT 0 CHECK(force_path_style IN (0, 1)),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          backup_images INTEGER NOT NULL DEFAULT 0 CHECK(backup_images IN (0, 1)),
+          schedule_enabled INTEGER NOT NULL DEFAULT 0 CHECK(schedule_enabled IN (0, 1)),
+          schedule_cron TEXT NOT NULL DEFAULT '0 3 * * *',
+          retention_count INTEGER NOT NULL DEFAULT 30 CHECK(retention_count BETWEEN 1 AND 3650),
+          last_run_at TEXT,
+          next_run_at TEXT,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_runs (
+          id TEXT PRIMARY KEY,
+          status TEXT NOT NULL CHECK(status IN ('running', 'success', 'partial', 'failed')),
+          include_images INTEGER NOT NULL DEFAULT 0 CHECK(include_images IN (0, 1)),
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          total_images INTEGER NOT NULL DEFAULT 0,
+          uploaded_images INTEGER NOT NULL DEFAULT 0,
+          skipped_images INTEGER NOT NULL DEFAULT 0,
+          database_synced INTEGER NOT NULL DEFAULT 0,
+          purged_old_backups INTEGER NOT NULL DEFAULT 0,
+          targets_json TEXT NOT NULL DEFAULT '[]',
+          failures_json TEXT NOT NULL DEFAULT '[]',
+          detail_json TEXT NOT NULL DEFAULT '{}'
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_started ON s3_backup_runs(started_at DESC)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

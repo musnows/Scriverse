@@ -3346,3 +3346,47 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+/* S3 备份设置样式 */
+.backup-body { padding: 18px 22px; display: grid; gap: 22px; max-height: calc(88vh - 140px); overflow-y: auto; }
+.backup-settings-fieldset { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: grid; gap: 12px; }
+.backup-settings-fieldset legend { padding: 0 6px; color: var(--text); font-weight: 600; }
+.backup-global-grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+.backup-toggle-row { display: grid; grid-template-columns: 32px 1fr; align-items: start; gap: 6px; padding: 2px 0; }
+.backup-toggle-row strong { display: block; margin-bottom: 2px; }
+.backup-toggle-row small { color: var(--muted); }
+.backup-cron-preview { display: block; margin-top: 3px; color: var(--accent); font-weight: 600; }
+.backup-global-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.backup-status-card { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; background: var(--surface-soft); }
+.backup-status-card h3 { margin: 0 0 4px; font-size: 13px; }
+.backup-status-card p { margin: 0; font-size: 12px; color: var(--muted); }
+.backup-targets-section, .backup-runs-section, .backup-alerts-section { display: grid; gap: 10px; }
+.backup-targets-header, .backup-targets-section > header, .backup-runs-section > header, .backup-alerts-section > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.backup-targets-header h3, .backup-targets-section h3, .backup-runs-section h3, .backup-alerts-section h3 { margin: 0; font-size: 15px; }
+.backup-targets-list, .backup-runs-list, .backup-alerts-list { display: grid; gap: 8px; }
+.backup-target-name { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; margin-bottom: 3px; }
+.backup-target-copy small { display: block; color: var(--muted); margin: 1px 0; }
+.pill-enabled { background: rgba(46, 160, 67, .12); color: #2aa043; border-color: rgba(46, 160, 67, .3); }
+.pill-disabled { background: rgba(120, 120, 120, .1); color: var(--muted); }
+.pill-success { background: rgba(46, 160, 67, .12); color: #2aa043; border-color: rgba(46, 160, 67, .3); }
+.pill-running { background: rgba(68, 127, 255, .12); color: #447fff; border-color: rgba(68, 127, 255, .3); }
+.pill-failed, .pill-partial { background: rgba(200, 70, 70, .12); color: #cc4242; border-color: rgba(200, 70, 70, .3); }
+.backup-target-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.backup-failure-text { color: #cc4242; }
+.backup-alert-row { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--surface); display: grid; gap: 4px; }
+.backup-alert-row.alert-error { border-color: rgba(200, 70, 70, .4); background: rgba(200, 70, 70, .06); }
+.backup-alert-row.alert-info { border-color: var(--line); }
+.backup-alert-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.backup-alert-head strong { font-size: 12px; }
+.backup-alert-head span { font-size: 11px; color: var(--muted); }
+.backup-alert-row p { margin: 2px 0; font-size: 12px; }
+.backup-alert-row details { margin-top: 3px; }
+.backup-alert-row summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+.backup-alert-row pre { margin: 4px 0 0; padding: 6px 8px; border-radius: 4px; background: var(--surface-soft); border: 1px solid var(--line); max-height: 200px; overflow: auto; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+.backup-body code { font-family: var(--font-mono), monospace; padding: 1px 4px; border-radius: 3px; background: var(--surface-soft); border: 1px solid var(--line); font-size: 11px; }
+.access-row-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.empty-state-text { padding: 14px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 8px; font-size: 12px; }
+@media (max-width: 680px) {
+  .backup-target-grid { grid-template-columns: 1fr; }
+  .backup-body { padding: 14px 16px; }
+}
