@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 71;
+export const DATABASE_SCHEMA_VERSION = 72;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -243,6 +243,7 @@ export class Database {
         name TEXT NOT NULL,
         normalized_name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
+        is_extinct INTEGER NOT NULL DEFAULT 0 CHECK(is_extinct IN (0, 1)),
         settings_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -260,6 +261,7 @@ export class Database {
         attributes_json TEXT NOT NULL DEFAULT '{}',
         profile_json TEXT NOT NULL DEFAULT '{}',
         current_state_json TEXT NOT NULL DEFAULT '{}',
+        is_dead INTEGER NOT NULL DEFAULT 0 CHECK(is_dead IN (0, 1)),
         locked_fields_json TEXT NOT NULL DEFAULT '[]',
         first_chapter_id TEXT REFERENCES chapters(id) ON DELETE SET NULL,
         merged_into_character_id TEXT,
@@ -592,6 +594,7 @@ export class Database {
         name TEXT NOT NULL,
         normalized_name TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT '',
+        is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1)),
         settings_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -2740,6 +2743,29 @@ export class Database {
           this.run("ALTER TABLE work_ai_settings ADD COLUMN always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (71, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(72)) {
+      this.transaction(() => {
+        const characterColumns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!characterColumns.has("is_dead")) {
+          this.run("ALTER TABLE characters ADD COLUMN is_dead INTEGER NOT NULL DEFAULT 0 CHECK(is_dead IN (0, 1))");
+        }
+        const raceColumns = new Set(this.all("PRAGMA table_info(races)").map((row) => String(row.name)));
+        if (!raceColumns.has("is_extinct")) {
+          this.run("ALTER TABLE races ADD COLUMN is_extinct INTEGER NOT NULL DEFAULT 0 CHECK(is_extinct IN (0, 1))");
+        }
+        const organizationColumns = new Set(this.all("PRAGMA table_info(organizations)").map((row) => String(row.name)));
+        if (!organizationColumns.has("is_dissolved")) {
+          this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

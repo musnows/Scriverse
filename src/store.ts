@@ -144,6 +144,7 @@ type DraftInput = {
 
 type CharacterInput = {
   name: string;
+  isDead?: boolean;
   code?: string;
   aliases?: string[];
   raceId?: string | null;
@@ -183,6 +184,7 @@ export type AttachmentInput = {
 
 type CharacterSnapshot = {
   name: string;
+  isDead: boolean;
   code?: string;
   aliases: string[];
   raceId: string | null;
@@ -234,6 +236,7 @@ type RelationshipInput = {
 
 type OrganizationInput = {
   name: string;
+  isDissolved?: boolean;
   description?: string;
   settings?: string[];
   settingsMarkdown?: string;
@@ -243,6 +246,7 @@ type OrganizationInput = {
 
 type RaceInput = {
   name: string;
+  isExtinct?: boolean;
   parentRaceId?: string | null;
   description?: string;
   settings?: string[];
@@ -686,6 +690,7 @@ export class Store {
     };
     if (type === "race") return {
       name: entity.name,
+      isExtinct: entity.isExtinct,
       parentRaceId: entity.parentRaceId,
       description: entity.description,
       settings: entity.settings,
@@ -694,6 +699,7 @@ export class Store {
     };
     if (type === "organization") return {
       name: entity.name,
+      isDissolved: entity.isDissolved,
       description: entity.description,
       settings: entity.settings,
       settingsSections: entity.settingsSections,
@@ -893,8 +899,8 @@ export class Store {
     else if (type === "volume") restored = this.updateVolume(entityId, snapshot as Partial<{ title: string; kind?: string; description?: string; keywords?: string[]; sortOrder?: number }>, expectedVersionNo, "restore", sourceRef, changeNote);
     else if (type === "draft") restored = this.updateDraft(entityId, snapshot as Partial<DraftInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "setting") restored = this.updateSetting(entityId, snapshot as Partial<SettingInput>, "restore", sourceRef, changeNote, expectedVersionNo);
-    else if (type === "race") restored = this.updateRace(entityId, snapshot as Partial<RaceInput>, "restore", sourceRef, changeNote, expectedVersionNo);
-    else if (type === "organization") restored = this.updateOrganization(entityId, snapshot as Partial<OrganizationInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "race") restored = this.updateRace(entityId, { isExtinct: false, ...snapshot } as Partial<RaceInput>, "restore", sourceRef, changeNote, expectedVersionNo);
+    else if (type === "organization") restored = this.updateOrganization(entityId, { isDissolved: false, ...snapshot } as Partial<OrganizationInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "timeline-track") restored = this.updateTimelineTrack(entityId, snapshot as Partial<TimelineTrackInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "timeline-event") restored = this.updateTimelineEvent(entityId, snapshot as Partial<TimelineInput>, "restore", sourceRef, changeNote, expectedVersionNo);
     else if (type === "relationship") restored = this.updateRelationship(entityId, snapshot as Partial<RelationshipInput>, "restore", sourceRef, changeNote, expectedVersionNo);
@@ -960,10 +966,10 @@ export class Store {
       return this.insertSettingWithId(workId, entityId, snapshot as SettingInput, "restore", sourceRef, changeNote);
     }
     if (type === "race") {
-      return this.insertRaceWithId(workId, entityId, snapshot as RaceInput, "restore", sourceRef, changeNote);
+      return this.insertRaceWithId(workId, entityId, { isExtinct: false, ...snapshot } as RaceInput, "restore", sourceRef, changeNote);
     }
     if (type === "organization") {
-      return this.insertOrganizationWithId(workId, entityId, snapshot as OrganizationInput, "restore", sourceRef, changeNote);
+      return this.insertOrganizationWithId(workId, entityId, { isDissolved: false, ...snapshot } as OrganizationInput, "restore", sourceRef, changeNote);
     }
     if (type === "timeline-track") {
       return this.insertTimelineTrackWithId(workId, entityId, snapshot as TimelineTrackInput, "restore", sourceRef, changeNote);
@@ -3757,14 +3763,15 @@ export class Store {
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, settings_json, settings_sections_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO races (id, work_id, parent_race_id, name, normalized_name, description, is_extinct, settings_json, settings_sections_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         raceId,
         workId,
         parentRaceId,
         name,
         normalizedName,
         input.description ?? "",
+        input.isExtinct ? 1 : 0,
         JSON.stringify(settings),
         JSON.stringify(settingsSections),
         timestamp,
@@ -3848,11 +3855,12 @@ export class Store {
     this.db.transaction(() => {
       this.assertExpectedVersion("race", raceId, expectedVersionNo, "种族");
       this.db.run(
-        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE races SET parent_race_id = ?, name = ?, normalized_name = ?, description = ?, is_extinct = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
         parentRaceId,
         name,
         normalizedName,
         input.description ?? String(current.description),
+        input.isExtinct === undefined ? (current.isExtinct ? 1 : 0) : (input.isExtinct ? 1 : 0),
         JSON.stringify(settings),
         JSON.stringify(settingsSections),
         now(),
@@ -3964,6 +3972,7 @@ export class Store {
       parentRaceId: optionalString(row, "parent_race_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
+      isExtinct: booleanValue(row, "is_extinct"),
       ...(row.child_count === undefined ? {} : { childCount: numberValue(row, "child_count") }),
       ...(includeMarkdown
         ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
@@ -4089,13 +4098,14 @@ export class Store {
     const timestamp = now();
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO organizations (id, work_id, name, normalized_name, description, settings_json, settings_sections_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO organizations (id, work_id, name, normalized_name, description, is_dissolved, settings_json, settings_sections_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         organizationId,
         workId,
         name,
         normalizedName,
         input.description ?? "",
+        input.isDissolved ? 1 : 0,
         JSON.stringify(settings),
         JSON.stringify(settingsSections),
         timestamp,
@@ -4154,10 +4164,11 @@ export class Store {
     this.db.transaction(() => {
       this.assertExpectedVersion("organization", organizationId, expectedVersionNo, "组织");
       this.db.run(
-        `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE organizations SET name = ?, normalized_name = ?, description = ?, is_dissolved = ?, settings_json = ?, settings_sections_json = ?, updated_at = ? WHERE id = ?`,
         name,
         normalizedName,
         input.description ?? String(current.description),
+        input.isDissolved === undefined ? (current.isDissolved ? 1 : 0) : (input.isDissolved ? 1 : 0),
         JSON.stringify(settings),
         JSON.stringify(settingsSections),
         now(),
@@ -4264,6 +4275,7 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
+      isDissolved: booleanValue(row, "is_dissolved"),
       ...(includeMarkdown
         ? { settings, settingsMarkdown: settingsMarkdownFromList(settings), settingsSections }
         : { settings: [], settingsCount: settingsSections.length }),
@@ -4333,6 +4345,7 @@ export class Store {
     delete profile.sections;
     return {
       name: String(character.name),
+      isDead: Boolean(character.isDead),
       code: String(character.code),
       aliases: [...(character.aliases as string[])],
       raceId: character.raceId as string | null,
@@ -4415,8 +4428,8 @@ export class Store {
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
-         locked_fields_json, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         is_dead, locked_fields_json, first_chapter_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
@@ -4427,6 +4440,7 @@ export class Store {
         JSON.stringify(input.attributes ?? {}),
         JSON.stringify(input.profile ?? {}),
         JSON.stringify(input.currentState ?? {}),
+        input.isDead ? 1 : 0,
         JSON.stringify(input.lockedFields ?? []),
         input.firstChapterId ?? null,
         timestamp,
@@ -5081,7 +5095,7 @@ export class Store {
       this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       this.db.run(
         `UPDATE characters SET name = ?, code = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
-         locked_fields_json = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
+         is_dead = ?, locked_fields_json = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         input.code === undefined ? String(current.code) : input.code.trim(),
         JSON.stringify(names.aliases),
@@ -5090,6 +5104,7 @@ export class Store {
         JSON.stringify(attributes),
         JSON.stringify(input.profile ?? current.profile),
         JSON.stringify(input.currentState ?? current.currentState),
+        input.isDead === undefined ? (current.isDead ? 1 : 0) : (input.isDead ? 1 : 0),
         JSON.stringify(input.lockedFields ?? current.lockedFields),
         input.firstChapterId === undefined ? (current.firstChapterId as string | null) : input.firstChapterId,
         now(),
@@ -5171,7 +5186,7 @@ export class Store {
     }
     return this.updateCharacter(
       characterId,
-      { ...snapshot, code: snapshot.code ?? "" },
+      { ...snapshot, isDead: snapshot.isDead ?? false, code: snapshot.code ?? "" },
       "restore",
       requiredString(version, "id"),
       `恢复至 v${versionNo}`,
@@ -5203,8 +5218,8 @@ export class Store {
     this.db.transaction(() => {
       this.db.run(
         `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
-         locked_fields_json, first_chapter_id, version_no, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         is_dead, locked_fields_json, first_chapter_id, version_no, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
@@ -5215,6 +5230,7 @@ export class Store {
         JSON.stringify(snapshot.attributes ?? {}),
         JSON.stringify(snapshot.profile ?? {}),
         JSON.stringify(snapshot.currentState ?? {}),
+        snapshot.isDead ? 1 : 0,
         JSON.stringify(snapshot.lockedFields ?? []),
         snapshot.firstChapterId ?? null,
         nextVersionNo,
@@ -5268,7 +5284,7 @@ export class Store {
       requiredString(row, "id")
     ).map((item) => requiredString(item, "display_name"));
     const organizations = this.db.all(
-      `SELECT o.id, o.name, m.role, m.note
+      `SELECT o.id, o.name, o.is_dissolved, m.role, m.note
        FROM character_organization_memberships m
        JOIN organizations o ON o.id = m.organization_id
        WHERE m.character_id = ? ORDER BY o.name`,
@@ -5276,6 +5292,7 @@ export class Store {
     ).map((item) => ({
       organizationId: requiredString(item, "id"),
       name: requiredString(item, "name"),
+      isDissolved: booleanValue(item, "is_dissolved"),
       role: requiredString(item, "role"),
       note: requiredString(item, "note")
     }));
@@ -5317,6 +5334,7 @@ export class Store {
       race: race ? {
         id: String(race.id),
         name: species,
+        isExtinct: race.isExtinct,
         lineage: race.lineage,
         effectiveSettings: race.effectiveSettings
       } : null,
@@ -5327,6 +5345,7 @@ export class Store {
       profile,
       profileSectionCount,
       currentState: json(requiredString(row, "current_state_json"), {}),
+      isDead: booleanValue(row, "is_dead"),
       lockedFields: json(requiredString(row, "locked_fields_json"), []),
       firstChapterId: optionalString(row, "first_chapter_id"),
       mergedIntoCharacterId: optionalString(row, "merged_into_character_id"),
@@ -8192,7 +8211,7 @@ export class Store {
        ), character_race_paths AS (
          SELECT character_id, path FROM character_race_lineage WHERE parent_race_id IS NULL
        )
-       SELECT character.id, character.name, character.aliases_json, character.species,
+       SELECT character.id, character.name, character.aliases_json, character.species, character.is_dead,
               COALESCE(path.path, character.species) AS race_path
        FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
        WHERE character.work_id = ? AND (
@@ -8207,7 +8226,7 @@ export class Store {
       pattern
     );
     const organizations = this.db.all(
-      "SELECT id, name, description, settings_json FROM organizations WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
+      "SELECT id, name, description, is_dissolved, settings_json FROM organizations WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
       pattern,
       pattern,
@@ -8225,7 +8244,8 @@ export class Store {
         id: requiredString(row, "id"),
         title: requiredString(row, "name"),
         snippet: [requiredString(row, "race_path"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、"),
-        racePath: requiredString(row, "race_path")
+        racePath: requiredString(row, "race_path"),
+        isDead: booleanValue(row, "is_dead")
       })),
       ...characterSections.map((section) => ({
         type: "character",
@@ -8233,7 +8253,8 @@ export class Store {
         sectionId: String(section.id),
         title: `${String(section.characterName)} / ${String(section.title)}`,
         snippet: snippet(String(section.contentMarkdown)),
-        sectionType: String(section.sectionType)
+        sectionType: String(section.sectionType),
+        isDead: Boolean(this.getCharacter(String(section.characterId)).isDead)
       })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
       ...races.map((race) => {
@@ -8244,11 +8265,12 @@ export class Store {
           id: String(race.id),
           title: String(race.name),
           snippet: snippet(`${lineage.map((item) => item.name).join(" / ")}\n${String(race.description)}\n${effectiveSettings.map((item) => `${item.sourceRaceName}：${item.value}`).join("\n")}`),
+          isExtinct: Boolean(race.isExtinct),
           lineage,
           effectiveSettings
         };
       }),
-      ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`) })),
+      ...organizations.map((row) => ({ type: "organization", id: requiredString(row, "id"), title: requiredString(row, "name"), snippet: snippet(`${requiredString(row, "description")}\n${json<string[]>(requiredString(row, "settings_json"), []).join("\n")}`), isDissolved: booleanValue(row, "is_dissolved") })),
       ...chapters.map((row) => ({ type: "chapter", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), volumeId: requiredString(row, "volume_id") }))
     ];
   }

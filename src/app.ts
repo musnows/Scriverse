@@ -178,6 +178,7 @@ const draftSchema = z.object({
 
 const characterSchema = z.object({
   name: nonEmpty.max(200),
+  isDead: z.boolean().optional(),
   code: z.string().trim().max(200).optional(),
   aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
   raceId: identifier.nullable().optional(),
@@ -280,6 +281,7 @@ const knowledgeSectionsSchema = knowledgeSectionSchema.array().max(200).superRef
 
 const organizationSchema = z.object({
   name: nonEmpty.max(200),
+  isDissolved: z.boolean().optional(),
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
   settingsMarkdown: z.string().max(200_000).optional(),
@@ -289,6 +291,7 @@ const organizationSchema = z.object({
 
 const raceSchema = z.object({
   name: nonEmpty.max(200),
+  isExtinct: z.boolean().optional(),
   parentRaceId: identifier.nullable().optional(),
   description: z.string().max(100_000).optional(),
   settings: z.array(z.string().trim().min(1).max(20_000)).max(200).optional(),
