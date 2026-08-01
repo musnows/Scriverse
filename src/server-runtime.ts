@@ -104,6 +104,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       developmentServer: isDevelopmentServer(options.env)
     });
     await runtime.cleanupAttachments();
+    runtime.backupService.start();
   } catch (error) {
     logger.error("server.initialization_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
     throw error;

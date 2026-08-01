@@ -2,6 +2,7 @@ import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type
 import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
+import type { BackupConfigStored } from "./backup-types.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -1140,6 +1141,32 @@ export class Store {
       });
     });
     return this.getPlatformUiSettings();
+  }
+
+  getBackupSettingsRaw(): BackupConfigStored {
+    const row = this.db.get("SELECT config_json, updated_at FROM backup_settings WHERE id = 1");
+    const fallback: BackupConfigStored = { targets: [], backupImages: true, scheduleTime: "03:00", retentionCount: 10 };
+    if (!row) return fallback;
+    try {
+      const parsed = JSON.parse(String(row.config_json)) as Partial<BackupConfigStored>;
+      return {
+        targets: Array.isArray(parsed.targets) ? parsed.targets : [],
+        backupImages: typeof parsed.backupImages === "boolean" ? parsed.backupImages : true,
+        scheduleTime: typeof parsed.scheduleTime === "string" ? parsed.scheduleTime : "03:00",
+        retentionCount: Number.isInteger(parsed.retentionCount) ? (parsed.retentionCount as number) : 10
+      };
+    } catch {
+      return fallback;
+    }
+  }
+
+  updateBackupSettingsRaw(config: BackupConfigStored): void {
+    this.db.run(
+      `INSERT INTO backup_settings (id, config_json, updated_at) VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET config_json = excluded.config_json, updated_at = excluded.updated_at`,
+      JSON.stringify(config),
+      new Date().toISOString()
+    );
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;

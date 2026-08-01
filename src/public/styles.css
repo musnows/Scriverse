@@ -3346,3 +3346,26 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+/* S3 数据备份设置 */
+.backup-settings-fields { display: flex; flex-direction: column; gap: 20px; }
+.backup-targets-section { display: flex; flex-direction: column; gap: 12px; }
+.backup-targets-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.backup-targets-header h3 { margin: 0; font-size: 15px; }
+.backup-targets-list { display: flex; flex-direction: column; gap: 12px; }
+.backup-targets-empty { margin: 0; color: var(--text-muted, #8a8175); font-size: 13px; }
+.backup-target-card { border: 1px solid var(--line); border-radius: 10px; padding: 14px; background: var(--surface-soft, rgba(255, 255, 255, 0.4)); }
+.backup-target-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.backup-target-card-header strong { flex: 1; }
+.backup-target-enabled { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted, #8a8175); }
+.backup-target-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.backup-target-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted, #8a8175); }
+.backup-target-fields input { width: 100%; }
+.backup-global-fieldset { display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+.backup-global-fieldset legend { padding: 0 6px; font-size: 13px; color: var(--accent-dark); }
+.backup-global-fieldset label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.backup-global-fieldset input[type="number"], .backup-global-fieldset input[type="time"] { max-width: 220px; }
+.backup-toggle { flex-direction: row !important; align-items: center; gap: 8px; }
+.backup-status-area { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 8px; background: var(--surface-soft, rgba(255, 255, 255, 0.4)); border: 1px solid var(--line); font-size: 13px; }
+.backup-status-area.is-error { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); color: var(--accent-dark); }
+.backup-status-error { color: var(--accent-dark); }

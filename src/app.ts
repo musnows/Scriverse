@@ -13,6 +13,8 @@ import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
+import { BackupService } from "./backup-service.js";
+import type { BackupConfigClient } from "./backup-types.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
@@ -435,6 +437,27 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupTargetSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(120),
+  endpoint: z.string().min(1).max(2048),
+  region: z.string().min(1).max(64),
+  bucket: z.string().min(1).max(128),
+  subdir: z.string().max(256).regex(/^[\w\-./]*$/u, "子目录只能包含字母、数字、短横线、下划线、点与圆点分隔符"),
+  enabled: z.boolean(),
+  accessKeyId: z.string().max(2048),
+  secretAccessKey: z.string().max(2048),
+  hasAccessKeyId: z.boolean().optional(),
+  hasSecretAccessKey: z.boolean().optional()
+}).strict().refine((input) => !input.subdir.includes(".."), { message: "子目录不能包含 .. 路径片段" });
+
+const backupConfigSchema = z.object({
+  targets: z.array(backupTargetSchema).max(50),
+  backupImages: z.boolean(),
+  scheduleTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/u, "定时时间格式应为 HH:MM"),
+  retentionCount: z.number().int().min(1).max(1000)
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -600,6 +623,7 @@ export type Runtime = {
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
+  backupService: BackupService;
   close: () => void;
 };
 
@@ -991,6 +1015,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backupService = new BackupService({
+    database,
+    store,
+    vault: new CredentialVault(options.masterSecret),
+    fetchImpl: options.fetchImpl ?? fetch,
+    attachmentDirectory: options.attachmentDirectory ?? join(dirname(options.databasePath), "attachments"),
+    assertSafeEndpoint: (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints).then(() => undefined).catch((error) => {
+      if (error instanceof AppError) throw new AppError(error.status, "UNSAFE_BACKUP_ENDPOINT", `备份目标地址不安全：${error.message}`);
+      throw error;
+    })
+  });
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2095,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  const requireAdmin = (request: Request): void => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+  };
+  app.get("/api/backup/config", (request, response) => {
+    requireAdmin(request);
+    data(response, backupService.getClientConfig());
+  });
+  app.put("/api/backup/config", async (request, response) => {
+    requireAdmin(request);
+    data(response, await backupService.saveClientConfig(parse(backupConfigSchema, request.body) as BackupConfigClient));
+  });
+  app.post("/api/backup/trigger", async (request, response) => {
+    requireAdmin(request);
+    data(response, await backupService.triggerNow());
+  });
+  app.get("/api/backup/status", (request, response) => {
+    requireAdmin(request);
+    data(response, backupService.getStatus());
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,9 +2630,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, backupService, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
+    backupService.stop();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
     logger.info("runtime.closed");

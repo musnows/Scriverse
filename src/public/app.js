@@ -57,6 +57,7 @@ import {
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
+import { createEmptyTarget, defaultBackupConfig, describeBackupStatus } from "/backup-config.js?v=20260801-s3-backup-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -3373,6 +3374,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#backup-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3747,6 +3749,101 @@ async function openPlatformUiSettingsDialog() {
     $("#platform-ui-settings-dialog").showModal();
   } catch (error) {
     toast(error.message, "error");
+  }
+}
+
+let backupConfigDraft = defaultBackupConfig();
+
+async function openBackupSettingsDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  try {
+    const config = await api("/api/backup/config");
+    backupConfigDraft = config && Array.isArray(config.targets) ? config : defaultBackupConfig();
+    $("#backup-images-enabled").checked = backupConfigDraft.backupImages !== false;
+    $("#backup-schedule-time").value = backupConfigDraft.scheduleTime || "03:00";
+    $("#backup-retention-count").value = String(backupConfigDraft.retentionCount ?? 10);
+    renderBackupTargets();
+    await refreshBackupStatus();
+    $("#backup-settings-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderBackupTargets() {
+  const list = $("#backup-targets-list");
+  list.innerHTML = "";
+  if (!backupConfigDraft.targets.length) {
+    list.innerHTML = `<p class="backup-targets-empty">尚未添加备份目标。点击「添加目标」增加一个 S3 兼容存储。</p>`;
+    return;
+  }
+  for (const target of backupConfigDraft.targets) {
+    const card = document.createElement("article");
+    card.className = "backup-target-card";
+    card.dataset.targetId = target.id;
+    card.innerHTML = `
+      <div class="backup-target-card-header">
+        <strong>${esc(target.name || "(未命名目标)")}</strong>
+        <label class="backup-target-enabled"><input type="checkbox" data-field="enabled" ${target.enabled ? "checked" : ""}> 启用</label>
+        <button class="ghost-button backup-target-remove" type="button">删除</button>
+      </div>
+      <div class="backup-target-fields">
+        <label>名称<input data-field="name" maxlength="120" value="${esc(target.name)}"></label>
+        <label>Endpoint<input data-field="endpoint" placeholder="https://s3.amazonaws.com" value="${esc(target.endpoint)}"></label>
+        <label>Region<input data-field="region" value="${esc(target.region)}"></label>
+        <label>Bucket<input data-field="bucket" value="${esc(target.bucket)}"></label>
+        <label>子目录（可选，留空则备份到桶根目录下的 /scriverse）<input data-field="subdir" value="${esc(target.subdir)}"></label>
+        <label>Access Key ID<input data-field="accessKeyId" type="password" autocomplete="new-password" placeholder="${target.hasAccessKeyId ? "已配置（留空保持不变）" : "输入 accessKeyId"}"></label>
+        <label>Secret Access Key<input data-field="secretAccessKey" type="password" autocomplete="new-password" placeholder="${target.hasSecretAccessKey ? "已配置（留空保持不变）" : "输入 secretAccessKey"}"></label>
+      </div>`;
+    list.append(card);
+  }
+}
+
+function updateDraftField(targetId, field, value) {
+  const target = backupConfigDraft.targets.find((candidate) => candidate.id === targetId);
+  if (target) target[field] = value;
+}
+
+function collectBackupConfig() {
+  const targets = backupConfigDraft.targets.map((target) => ({
+    id: target.id,
+    name: target.name,
+    endpoint: target.endpoint,
+    region: target.region,
+    bucket: target.bucket,
+    subdir: target.subdir,
+    enabled: target.enabled,
+    accessKeyId: target.accessKeyId,
+    secretAccessKey: target.secretAccessKey,
+    hasAccessKeyId: false,
+    hasSecretAccessKey: false
+  }));
+  return {
+    targets,
+    backupImages: $("#backup-images-enabled").checked,
+    scheduleTime: $("#backup-schedule-time").value || "03:00",
+    retentionCount: Number($("#backup-retention-count").value) || 10
+  };
+}
+
+async function refreshBackupStatus() {
+  const area = $("#backup-status-area");
+  try {
+    const status = await api("/api/backup/status");
+    const summary = describeBackupStatus(status);
+    const stateLabel = { running: "备份进行中", failed: "上次备份失败", success: "上次备份成功", idle: "尚未执行备份" }[summary.state];
+    const parts = [`<strong>${esc(stateLabel)}</strong>`];
+    if (status.lastFinishedAt) parts.push(`<span>完成于 ${esc(formatDateTime(status.lastFinishedAt))}</span>`);
+    if (summary.detail) parts.push(`<span class="backup-status-error">${esc(summary.detail)}</span>`);
+    if (status.nextRunAt) parts.push(`<span>下次计划：${esc(formatDateTime(status.nextRunAt))}</span>`);
+    area.innerHTML = parts.join(" ");
+    area.classList.toggle("is-error", summary.state === "failed");
+  } catch {
+    area.textContent = "";
   }
 }
 
@@ -11384,6 +11481,61 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
     Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
     $("#platform-ui-settings-dialog").close();
     toast("界面与分页设置已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#backup-settings-button").addEventListener("click", openBackupSettingsDialog);
+$("#backup-settings-close").addEventListener("click", () => $("#backup-settings-dialog").close());
+$("#backup-settings-return").addEventListener("click", () => returnToSettingsHub("#backup-settings-button", "#backup-settings-dialog").catch((error) => toast(error.message, "error")));
+$("#backup-settings-cancel").addEventListener("click", () => $("#backup-settings-dialog").close());
+$("#backup-target-add").addEventListener("click", () => {
+  backupConfigDraft.targets.push(createEmptyTarget());
+  renderBackupTargets();
+});
+$("#backup-targets-list").addEventListener("input", (event) => {
+  const card = event.target.closest(".backup-target-card");
+  if (!card) return;
+  const field = event.target.dataset.field;
+  if (!field) return;
+  updateDraftField(card.dataset.targetId, field, event.target.type === "checkbox" ? event.target.checked : event.target.value);
+  if (field === "name") {
+    const strong = card.querySelector("strong");
+    if (strong) strong.textContent = event.target.value.trim() || "(未命名目标)";
+  }
+});
+$("#backup-targets-list").addEventListener("click", (event) => {
+  if (!event.target.classList.contains("backup-target-remove")) return;
+  const card = event.target.closest(".backup-target-card");
+  if (!card) return;
+  backupConfigDraft.targets = backupConfigDraft.targets.filter((candidate) => candidate.id !== card.dataset.targetId);
+  renderBackupTargets();
+});
+$("#backup-settings-save").addEventListener("click", async () => {
+  const button = $("#backup-settings-save");
+  button.disabled = true;
+  try {
+    const saved = await api("/api/backup/config", { method: "PUT", body: collectBackupConfig() });
+    backupConfigDraft = saved;
+    renderBackupTargets();
+    $("#backup-settings-dialog").close();
+    toast("S3 备份设置已保存");
+    await refreshBackupStatus();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#backup-trigger-now").addEventListener("click", async () => {
+  const button = $("#backup-trigger-now");
+  button.disabled = true;
+  try {
+    await api("/api/backup/trigger", { method: "POST" });
+    toast("备份任务已完成");
+    await refreshBackupStatus();
   } catch (error) {
     toast(error.message, "error");
   } finally {

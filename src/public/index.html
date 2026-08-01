@@ -209,6 +209,7 @@
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="backup-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">备</span><strong>S3 数据备份</strong><small>将数据库与图片定时备份到 S3 兼容存储</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
@@ -798,6 +799,25 @@
       </form>
     </dialog>
 
+    <dialog id="backup-settings-dialog" class="dialog wide-dialog backup-settings-dialog" aria-labelledby="backup-settings-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="backup-settings-title">S3 数据备份</h2><p class="dialog-header-meta">将数据库与图片定时备份到多个 S3 兼容目标，支持子目录与留存清理。</p></div><div class="settings-dialog-header-actions"><button id="backup-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="backup-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
+      <div class="dialog-fields backup-settings-fields">
+        <section class="backup-targets-section">
+          <div class="backup-targets-header"><h3>备份目标</h3><button id="backup-target-add" class="ghost-button" type="button">添加目标</button></div>
+          <div id="backup-targets-list" class="backup-targets-list" aria-live="polite"></div>
+          <small>可添加多个 S3 兼容目标，保存后按列表顺序依次同步。每个目标可在给定子目录下备份到 /scriverse。</small>
+        </section>
+        <fieldset class="backup-global-fieldset">
+          <legend>备份选项</legend>
+          <label class="backup-toggle"><input type="checkbox" id="backup-images-enabled"> 备份图片（取消勾选则仅备份数据库）</label>
+          <label>定时备份时间<input type="time" id="backup-schedule-time" required></label>
+          <label>备份留存个数（保留的数据库快照数量，超出后删除最旧的数据库备份）<input type="number" id="backup-retention-count" min="1" max="1000" required></label>
+        </fieldset>
+        <div id="backup-status-area" class="backup-status-area" aria-live="polite"></div>
+      </div>
+      <div class="dialog-actions"><button class="ghost-button" id="backup-settings-cancel" type="button">取消</button><button class="ghost-button" id="backup-trigger-now" type="button">立即备份</button><button class="primary-button" id="backup-settings-save" type="button">保存设置</button></div>
+    </dialog>
+
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="account-settings-body">
@@ -951,6 +971,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-timeline-lifecycle-v1"></script>
+    <script type="module" src="/app.js?v=20260801-s3-backup-v1"></script>
   </body>
 </html>

@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2766,6 +2766,27 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS backup_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          config_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(
+          "INSERT INTO backup_settings (id, config_json, updated_at) VALUES (1, ?, ?) ON CONFLICT(id) DO NOTHING",
+          JSON.stringify({ targets: [], backupImages: true, scheduleTime: "03:00", retentionCount: 10 }),
+          new Date().toISOString()
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
