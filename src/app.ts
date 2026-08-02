@@ -402,12 +402,15 @@ const modelSchema = z.object({
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   thinkingEnabled: z.boolean().optional(),
+  multimodalEnabled: z.boolean().optional(),
+  imageToolDefault: z.boolean().optional(),
   enabled: z.boolean().optional(),
   note: z.string().max(10_000).optional()
 });
 
 const aiPromptSchema = z.object({
-  systemPrompt: z.string().max(100_000).optional()
+  systemPrompt: z.string().max(100_000).optional(),
+  imageToolModelId: identifier.nullable().optional()
 });
 
 const aiUsageQuerySchema = z.object({
@@ -490,9 +493,10 @@ const workAiSettingsSchema = z.object({
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"])).max(6).optional(),
+  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
-  titleGenerationModelId: z.string().trim().max(200).optional()
+  titleGenerationModelId: z.string().trim().max(200).optional(),
+  imageToolModelId: identifier.nullable().optional()
 }).strict();
 
 const contextSchema = z.object({
@@ -1007,7 +1011,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         read: requiredModules,
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
-    }
+    },
+    attachmentStorage
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
@@ -2070,7 +2075,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? ai.listPlatformModelsPage(pagination) : ai.listPlatformModels());
   });
   app.get("/api/platform/ai/settings", (_request, response) => data(response, store.getPlatformAiSettings()));
-  app.patch("/api/platform/ai/settings", (request, response) => data(response, store.updatePlatformAiSettings(parse(aiPromptSchema, request.body))));
+  app.patch("/api/platform/ai/settings", (request, response) => {
+    const input = parse(aiPromptSchema, request.body);
+    if (input.imageToolModelId) ai.assertImageToolModelAvailable(input.imageToolModelId);
+    data(response, store.updatePlatformAiSettings(input));
+  });
   app.get("/api/platform/ai/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getPlatformTokenUsage(query.timezoneOffset));
@@ -2109,6 +2118,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const workId = request.params.workId;
     const input = parse(workAiSettingsSchema, request.body);
     if (input.titleGenerationModelId) ai.assertModelAvailable(input.titleGenerationModelId);
+    if (input.imageToolModelId) ai.assertImageToolModelAvailable(input.imageToolModelId);
     const before = store.getWorkAiSettings(workId);
     let updated = store.updateWorkAiSettings(workId, input);
     if (updated.autoRunEnabled) {

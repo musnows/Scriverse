@@ -117,7 +117,7 @@ describe("分析任务自动运行", () => {
       agentToolCallLimit: 12,
       agentToolCallGlobalMultiplier: 3,
       alwaysIncludeSettingInfo: false,
-      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]
+      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]
     });
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({

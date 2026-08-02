@@ -45,7 +45,8 @@ export const WORK_AGENT_TOOL_IDS = [
   "grep",
   "search_story_entities",
   "read_character_sections",
-  "search_drafts"
+  "search_drafts",
+  "image"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
 const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
@@ -1092,16 +1093,24 @@ export class Store {
     const row = this.db.get("SELECT * FROM platform_ai_settings WHERE id = 1");
     return {
       systemPrompt: String(row?.system_prompt ?? ""),
+      imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
+        ? null
+        : String(row.image_tool_model_id),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
 
-  updatePlatformAiSettings(input: { systemPrompt?: string }): Record<string, unknown> {
+  updatePlatformAiSettings(input: { systemPrompt?: string; imageToolModelId?: string | null }): Record<string, unknown> {
     const timestamp = now();
+    const current = this.getPlatformAiSettings();
     this.db.run(
-      `INSERT INTO platform_ai_settings (id, system_prompt, updated_at) VALUES (1, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt, updated_at = excluded.updated_at`,
-      input.systemPrompt ?? String(this.getPlatformAiSettings().systemPrompt),
+      `INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, updated_at) VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt,
+         image_tool_model_id = excluded.image_tool_model_id, updated_at = excluded.updated_at`,
+      input.systemPrompt ?? String(current.systemPrompt),
+      input.imageToolModelId === undefined
+        ? (current.imageToolModelId === null ? null : String(current.imageToolModelId))
+        : input.imageToolModelId,
       timestamp
     );
     return this.getPlatformAiSettings();
@@ -1184,6 +1193,9 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
+      imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
+        ? null
+        : String(row.image_tool_model_id),
       alwaysIncludeSettingInfo: Number(row?.always_include_setting_info ?? 0) === 1,
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
@@ -1205,6 +1217,7 @@ export class Store {
     agentToolCallLimit?: number;
     agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
+    imageToolModelId?: string | null;
     alwaysIncludeSettingInfo?: boolean;
     titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
@@ -1225,6 +1238,9 @@ export class Store {
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
+    const nextImageToolModelId = input.imageToolModelId === undefined
+      ? (current.imageToolModelId ? String(current.imageToolModelId) : null)
+      : input.imageToolModelId?.trim() || null;
     const nextAlwaysIncludeSettingInfo = input.alwaysIncludeSettingInfo ?? Boolean(current.alwaysIncludeSettingInfo);
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
@@ -1235,8 +1251,8 @@ export class Store {
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
-         agent_tools_json, title_generation_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1255,6 +1271,7 @@ export class Store {
          agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
+         image_tool_model_id = excluded.image_tool_model_id,
          always_include_setting_info = excluded.always_include_setting_info,
          updated_at = excluded.updated_at`,
       workId,
@@ -1275,6 +1292,7 @@ export class Store {
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
+      nextImageToolModelId,
       nextAlwaysIncludeSettingInfo ? 1 : 0,
       timestamp
     );
@@ -1291,6 +1309,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
+      imageToolModelId: nextImageToolModelId,
       alwaysIncludeSettingInfo: nextAlwaysIncludeSettingInfo,
       titleGenerationModelId: nextTitleGenerationModelId
     });
@@ -4937,6 +4956,21 @@ export class Store {
   getAttachment(attachmentId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM attachments WHERE id = ?", attachmentId);
     if (!row) throw notFound("附件");
+    return this.mapAttachment(row);
+  }
+
+  getSettingAttachment(workId: string, attachmentId: string): Record<string, unknown> {
+    const row = this.db.get(
+      `SELECT attachment.*
+       FROM attachments attachment
+       JOIN attachment_references reference ON reference.attachment_id = attachment.id
+       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ? AND reference.entity_type = 'setting'
+       LIMIT 1`,
+      attachmentId,
+      workId,
+      workId
+    );
+    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被设定正文引用");
     return this.mapAttachment(row);
   }
 

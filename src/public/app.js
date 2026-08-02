@@ -5,7 +5,7 @@ import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260731-model-context-guidance-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
@@ -1487,6 +1487,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
   search_drafts: "搜索想法",
+  image: "读取设定图片",
   recall_self: "回忆自身"
 };
 
@@ -1497,6 +1498,7 @@ const AI_TOOL_DESCRIPTIONS = {
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
+  image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。"
 };
 
@@ -6840,7 +6842,9 @@ function renderProviderCards(providers, models) {
           : provider.connectionStatus !== "success"
             ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
             : "";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
+      const capability = model.multimodalEnabled ? " · 多模态" : "";
+      const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
@@ -6856,8 +6860,11 @@ function bindPlatformProviderActions(host, providers, models) {
     await renderPlatformAiConfig();
     await loadModels();
   }));
-  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
-  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(undefined, models.find((model) => model.id === button.dataset.editModel))));
+  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel))));
+  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => {
+    const model = models.find((item) => item.id === button.dataset.editModel);
+    openModelDialog(undefined, model, providers.find((provider) => provider.id === model?.providerId));
+  }));
   host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
 }
 
@@ -6865,14 +6872,21 @@ function renderTaskDefaults(models, providers, taskDefaults, settings) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const availableModels = models.filter((model) => isSelectableModel(model));
+  const imageModels = availableModels.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
   const availableModelIds = new Set(availableModels.map((model) => model.id));
   const currentDefaultModels = taskDefaults
     .map((item) => item.model)
     .filter((model) => model && !availableModelIds.has(model.id));
   const optionModels = [...availableModels, ...currentDefaultModels];
-  return optionModels.length ? `<section class="config-section">
+  return optionModels.length || imageModels.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
-    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
+    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>多模态读图工具</td><td><select class="default-model-select" data-image-tool-default aria-label="多模态读图工具默认模型">
+      <option value="" ${settings.imageToolModelId ? "" : "selected"}>跟随平台默认</option>
+      ${imageModels.map((model) => {
+        const provider = providerById.get(model.providerId);
+        return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+      }).join("")}
+    </select></td></tr><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
       <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
       ${models.map((model) => {
         const provider = providerById.get(model.providerId);
@@ -7187,13 +7201,33 @@ async function renderPlatformAiConfig() {
     api("/api/platform/ai/settings")
   ]);
   const host = $("#platform-ai-content");
-  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section>${renderProviderCards(providers, models)}`;
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const imageModels = models.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
+  const imageModelOptions = imageModels.map((model) => {
+    const provider = providerById.get(model.providerId);
+    const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
+    return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""} ${available || model.id === settings.imageToolModelId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
+  }).join("");
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models)}</section>`;
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
     try {
       await api("/api/platform/ai/settings", { method: "PATCH", body: { systemPrompt: $("#platform-system-prompt").value } });
       toast("平台全局系统提示词已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-platform-image-tool-model").addEventListener("click", async () => {
+    const button = $("#save-platform-image-tool-model");
+    button.disabled = true;
+    try {
+      await api("/api/platform/ai/settings", { method: "PATCH", body: { imageToolModelId: $("#platform-image-tool-model").value || null } });
+      toast("平台多模态读图默认模型已更新");
+      await renderPlatformAiConfig();
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -7359,7 +7393,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
@@ -7386,7 +7420,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -7585,6 +7619,18 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { titleGenerationModelId: select.value } });
       toast("创作助手对话标题生成模型已更新");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    await renderBookAiSettings();
+    await loadModels();
+  });
+  host.querySelector("[data-image-tool-default]")?.addEventListener("change", async (event) => {
+    const select = event.currentTarget;
+    select.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { imageToolModelId: select.value || null } });
+      toast("本书多模态读图模型已更新");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -10122,18 +10168,23 @@ function openProviderDialog(item) {
   protocolSelect.addEventListener("change", syncProviderCredentialField);
 }
 
-function openModelDialog(providerId, item = null) {
+function openModelDialog(providerId, item = null, provider = null) {
   const values = modelFormValues(item);
+  const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol);
+  const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
+  const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
+    ? "使用当前已保存的模型标识符和供应商凭据，并发送一张测试图片验证图片请求。"
+    : "使用当前已保存的模型标识符和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
     ? `<section class="model-connection-test">
-        <div><strong>模型连接测试</strong><p>使用当前已保存的模型标识符和供应商凭据发起最小请求。</p></div>
+        <div><strong>模型连接测试</strong><p>${connectionTestDescription}</p></div>
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -10143,6 +10194,16 @@ function openModelDialog(providerId, item = null) {
   const contextWindowHint = $("#model-context-window-hint");
   const temperatureInput = $("#dialog-fields input[name='temperature']");
   const temperatureHint = $("#model-temperature-hint");
+  const multimodalInput = $("#model-multimodal-enabled");
+  const imageDefaultField = $("#model-image-tool-default-field");
+  const imageDefaultInput = $("#model-image-tool-default");
+  const syncMultimodalFields = () => {
+    if (!multimodalInput || !imageDefaultField || !imageDefaultInput) return;
+    const hideImageDefault = !multimodalInput.checked || !imageDefaultSupported;
+    imageDefaultField.hidden = hideImageDefault;
+    imageDefaultField.classList.toggle("hidden", hideImageDefault);
+    if (!multimodalInput.checked) imageDefaultInput.checked = false;
+  };
   const syncModelContextWindowGuidance = () => {
     const guidance = modelContextWindowGuidance(contextWindowInput.value);
     contextWindowInput.setCustomValidity(guidance.belowMinimum ? "模型上下文不能低于 32K（32768 Token）。" : "");
@@ -10157,13 +10218,14 @@ function openModelDialog(providerId, item = null) {
     syncKimiTemperature();
   });
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
+  multimodalInput?.addEventListener("change", syncMultimodalFields);
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     button.textContent = "测试中";
     try {
       const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-      toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      toast(result.ok ? (result.multimodalTested ? "模型连接测试成功，图片请求已验证" : "模型连接测试成功") : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
       await renderPlatformAiConfig();
       await loadModels();
     } catch (error) {
@@ -10175,6 +10237,7 @@ function openModelDialog(providerId, item = null) {
   });
   syncModelContextWindowGuidance();
   syncKimiTemperature();
+  syncMultimodalFields();
 }
 
 async function sendAi() {
