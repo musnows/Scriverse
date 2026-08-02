@@ -148,6 +148,39 @@ describe("SigV4 签名", () => {
     expect(captured!.auth).toContain(`Signature=${signature}`);
   });
 
+  it("含空格与中文的对象 key 签名与独立计算一致（不双重编码）", async () => {
+    let captured: { url: string; auth: string } | null = null;
+    const fetchImpl = captureFetch((init, url) => {
+      captured = { url, auth: String(new Headers(init.headers).get("authorization") ?? "") };
+      return new Response(null, { status: 200 });
+    });
+    const client = new S3CompatClient({
+      endpoint: "https://s3.amazonaws.com",
+      region: "us-east-1",
+      bucket: "examplebucket",
+      accessKeyId: testAccessKey,
+      secretAccessKey: testSecretKey,
+      fetchImpl,
+      now: testClock
+    });
+    const key = "小说 备份/scriverse/db/novel-2026-08-02.db";
+    await client.putObject(key, Buffer.from("data"));
+    const url = new URL(captured!.url);
+    // 实际请求路径为单次编码（路径分隔符保留）
+    expect(url.pathname).toBe(`/${encodeURIComponent(key)}`.replace(/%2F/giu, "/"));
+    // 期望签名基于解码后的原始路径做单次规范化编码，与客户端一致（不双重编码）
+    const signature = expectedSignature({
+      method: "PUT",
+      path: uriEncode(decodeURIComponent(url.pathname)),
+      query: "",
+      host: url.host,
+      payload: Buffer.from("data"),
+      accessKeyId: testAccessKey,
+      secretAccessKey: testSecretKey
+    });
+    expect(captured!.auth).toContain(`Signature=${signature}`);
+  });
+
   it("DELETE 请求签名与独立计算一致", async () => {
     let captured: { url: string; auth: string } | null = null;
     const fetchImpl = captureFetch((init, url) => {

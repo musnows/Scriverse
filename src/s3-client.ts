@@ -157,7 +157,9 @@ export class S3CompatClient {
   private sign(method: string, url: URL, query: Map<string, string>, payloadHash: string): string {
     const { amzDate, shortDate } = formatAmzDate(this.now());
     const host = url.host;
-    const canonicalUri = uriEncode(url.pathname);
+    // url.pathname 已是百分号编码形式，必须解码后按 SigV4 规则重新单次规范化编码，
+    // 否则含空格或非 ASCII 字符的对象 key（如用户配置的子目录）会被双重编码导致签名失败。
+    const canonicalUri = uriEncode(decodeURIComponent(url.pathname));
     const canonicalQuery = canonicalQueryString(query);
     const canonicalHeaders = `host:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
     const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
