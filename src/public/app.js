@@ -2507,10 +2507,7 @@ async function api(path, options = {}) {
     if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       const restarted = await checkSystemBoot(true);
       if (!restarted) {
-        state.user = null;
-        state.csrfToken = null;
-        moduleRequestCache.clear();
-        showAuth(false);
+        invalidateAuthentication();
       }
     }
     throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
@@ -2768,8 +2765,28 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
+function clearAuthenticationOverlays() {
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
+  document.querySelectorAll("[popover]").forEach((popover) => {
+    if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
+  });
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+}
+
+function invalidateAuthentication() {
+  state.user = null;
+  state.csrfToken = null;
+  moduleRequestCache.clear();
+  showAuth(false);
+}
+
 function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = false) {
   if (state.user) return;
+  document.documentElement.classList.remove("dev-auth-bypass");
+  document.documentElement.classList.add("login-route");
+  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
+  clearAuthenticationOverlays();
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -2897,6 +2914,7 @@ function dismissChapterInsightToast() {
 }
 
 function toast(message, type = "info") {
+  if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
@@ -10773,17 +10791,7 @@ function hasUnsavedEditorChanges() {
 }
 
 function redirectToLoginAfterSystemRestart() {
-  state.user = null;
-  state.csrfToken = null;
-  moduleRequestCache.clear();
-  document.documentElement.classList.remove("dev-auth-bypass");
-  document.documentElement.classList.add("login-route");
-  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-  const toastRegion = $("#toast-region");
-  toastRegion.replaceChildren();
-  if (typeof toastRegion.hidePopover === "function" && toastRegion.matches(":popover-open")) toastRegion.hidePopover();
-  $("#system-restart-dialog").close();
-  showAuth(false);
+  invalidateAuthentication();
 }
 
 $("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
