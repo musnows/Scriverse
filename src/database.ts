@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2766,6 +2766,47 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        const timestamp = new Date().toISOString();
+        this.run(`CREATE TABLE IF NOT EXISTS platform_backup_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          scheduler_enabled INTEGER NOT NULL DEFAULT 0,
+          schedule_cron TEXT NOT NULL DEFAULT '0 3 * * *',
+          backup_images INTEGER NOT NULL DEFAULT 1,
+          retention_count INTEGER NOT NULL DEFAULT 10 CHECK(retention_count BETWEEN 1 AND 365),
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(
+          `INSERT INTO platform_backup_settings (id, scheduler_enabled, schedule_cron, backup_images, retention_count, updated_at)
+           VALUES (1, 0, '0 3 * * *', 1, 10, ?) ON CONFLICT(id) DO NOTHING`,
+          timestamp
+        );
+        this.run(`CREATE TABLE IF NOT EXISTS platform_backup_targets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          endpoint TEXT NOT NULL,
+          region TEXT NOT NULL,
+          bucket TEXT NOT NULL,
+          access_key_id TEXT NOT NULL,
+          secret_access_key_json TEXT NOT NULL,
+          prefix TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          last_backup_at TEXT,
+          last_status TEXT CHECK(last_status IS NULL OR last_status IN ('success', 'failed')),
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", timestamp);
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

@@ -1,5 +1,6 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
+import type { SQLInputValue } from "node:sqlite";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
@@ -25,6 +26,63 @@ import {
   splitDocumentParagraphs
 } from "./utils.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
+
+export type BackupSettingsRow = {
+  scheduler_enabled: number;
+  schedule_cron: string;
+  backup_images: number;
+  retention_count: number;
+  updated_at: string;
+};
+
+export type BackupTargetRow = {
+  id: number;
+  name: string;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  access_key_id: string;
+  secret_access_key_json: string;
+  prefix: string;
+  enabled: number;
+  last_backup_at: string | null;
+  last_status: "success" | "failed" | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BackupSettingsInput = {
+  schedulerEnabled: boolean;
+  scheduleCron: string;
+  backupImages: boolean;
+  retentionCount: number;
+};
+
+export type BackupTargetInsert = {
+  name: string;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKeyJson: string;
+  prefix: string;
+  enabled: boolean;
+};
+
+export type BackupTargetUpdate = Partial<BackupTargetInsert>;
+
+/** 备份目标可更新字段到数据库列的受控映射，列名不允许来自客户端输入。 */
+const backupTargetUpdatableColumns: Record<string, string> = {
+  name: "name",
+  endpoint: "endpoint",
+  region: "region",
+  bucket: "bucket",
+  accessKeyId: "access_key_id",
+  secretAccessKeyJson: "secret_access_key_json",
+  prefix: "prefix",
+  enabled: "enabled"
+};
 
 type WorkInput = {
   title: string;
@@ -8436,5 +8494,133 @@ export class Store {
       this.audit(workId, "work.writing_goal.updated", "work", workId, input);
     });
     return this.getWritingProgress(workId);
+  }
+
+  // ===== 平台数据备份 =====
+
+  getPlatformBackupSettings(): BackupSettingsRow {
+    const row = this.db.get("SELECT * FROM platform_backup_settings WHERE id = 1");
+    return {
+      scheduler_enabled: Number(row?.scheduler_enabled ?? 0),
+      schedule_cron: String(row?.schedule_cron ?? "0 3 * * *"),
+      backup_images: Number(row?.backup_images ?? 1),
+      retention_count: Number(row?.retention_count ?? 10),
+      updated_at: String(row?.updated_at ?? "")
+    };
+  }
+
+  updatePlatformBackupSettings(input: BackupSettingsInput): BackupSettingsRow {
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_backup_settings (id, scheduler_enabled, schedule_cron, backup_images, retention_count, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET scheduler_enabled = excluded.scheduler_enabled, schedule_cron = excluded.schedule_cron,
+         backup_images = excluded.backup_images, retention_count = excluded.retention_count, updated_at = excluded.updated_at`,
+        input.schedulerEnabled ? 1 : 0,
+        input.scheduleCron,
+        input.backupImages ? 1 : 0,
+        input.retentionCount,
+        timestamp
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-settings.updated", "platform-backup-settings", "platform-backup-settings", {
+        schedulerEnabled: input.schedulerEnabled,
+        scheduleCron: input.scheduleCron,
+        backupImages: input.backupImages,
+        retentionCount: input.retentionCount
+      });
+    });
+    return this.getPlatformBackupSettings();
+  }
+
+  listPlatformBackupTargets(): BackupTargetRow[] {
+    return this.db.all("SELECT * FROM platform_backup_targets ORDER BY id ASC") as BackupTargetRow[];
+  }
+
+  getPlatformBackupTarget(targetId: number): BackupTargetRow {
+    const row = this.db.get("SELECT * FROM platform_backup_targets WHERE id = ?", targetId);
+    if (!row) throw notFound("备份目标");
+    return row as BackupTargetRow;
+  }
+
+  createPlatformBackupTarget(input: BackupTargetInsert): BackupTargetRow {
+    const timestamp = now();
+    let targetId = 0;
+    this.db.transaction(() => {
+      const result = this.db.run(
+        `INSERT INTO platform_backup_targets
+           (name, endpoint, region, bucket, access_key_id, secret_access_key_json, prefix, enabled, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        input.name,
+        input.endpoint,
+        input.region,
+        input.bucket,
+        input.accessKeyId,
+        input.secretAccessKeyJson,
+        input.prefix,
+        input.enabled ? 1 : 0,
+        timestamp,
+        timestamp
+      );
+      targetId = Number(result.lastInsertRowid);
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.created", "platform-backup-target", String(targetId), {
+        name: input.name,
+        endpoint: input.endpoint,
+        region: input.region,
+        bucket: input.bucket,
+        prefix: input.prefix,
+        enabled: input.enabled
+      });
+    });
+    return this.getPlatformBackupTarget(targetId);
+  }
+
+  updatePlatformBackupTarget(targetId: number, input: BackupTargetUpdate): BackupTargetRow {
+    this.getPlatformBackupTarget(targetId);
+    const timestamp = now();
+    this.db.transaction(() => {
+      const assignments: string[] = [];
+      const values: SQLInputValue[] = [];
+      for (const [key, column] of Object.entries(backupTargetUpdatableColumns)) {
+        if (!(key in input)) continue;
+        const value = (input as Record<string, unknown>)[key];
+        assignments.push(`${column} = ?`);
+        values.push(typeof value === "boolean" ? (value ? 1 : 0) : String(value ?? ""));
+      }
+      assignments.push("updated_at = ?");
+      values.push(timestamp, targetId);
+      this.db.run(`UPDATE platform_backup_targets SET ${assignments.join(", ")} WHERE id = ?`, ...values);
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.updated", "platform-backup-target", String(targetId), {
+        name: input.name,
+        endpoint: input.endpoint,
+        region: input.region,
+        bucket: input.bucket,
+        prefix: input.prefix,
+        enabled: input.enabled
+      });
+    });
+    return this.getPlatformBackupTarget(targetId);
+  }
+
+  deletePlatformBackupTarget(targetId: number): void {
+    const row = this.getPlatformBackupTarget(targetId);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM platform_backup_targets WHERE id = ?", targetId);
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.deleted", "platform-backup-target", String(targetId), {
+        name: row.name,
+        endpoint: row.endpoint
+      });
+    });
+  }
+
+  markPlatformBackupTargetResult(targetId: number, status: "success" | "failed", error: string, at: string): void {
+    this.db.run(
+      "UPDATE platform_backup_targets SET last_backup_at = ?, last_status = ?, last_error = ?, updated_at = ? WHERE id = ?",
+      at,
+      status,
+      error,
+      at,
+      targetId
+    );
   }
 }

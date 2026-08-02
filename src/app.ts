@@ -12,8 +12,10 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { BackupManager, normalizeBackupPrefix } from "./backup.js";
+import { isValidCronExpression } from "./cron.js";
 import { CredentialVault } from "./credential-vault.js";
-import { Database } from "./database.js";
+import { Database, PLATFORM_AI_WORK_ID } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
@@ -435,6 +437,71 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+function assertBackupEndpoint(value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AppError(400, "BACKUP_ENDPOINT_INVALID", "备份端点必须是有效的 HTTP 或 HTTPS 地址");
+  }
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    throw new AppError(400, "BACKUP_ENDPOINT_INVALID", "备份端点必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
+  }
+  if (url.search || url.hash) {
+    throw new AppError(400, "BACKUP_ENDPOINT_INVALID", "备份端点不允许携带查询参数或锚点");
+  }
+}
+
+const backupSettingsInputSchema = z.object({
+  schedulerEnabled: z.boolean(),
+  scheduleCron: z.string().trim().min(5).max(64).refine(isValidCronExpression, "定时表达式无效，需为 5 段 cron 格式（分 时 日 月 周）"),
+  backupImages: z.boolean(),
+  retentionCount: z.number().int().min(1).max(365)
+}).strict();
+
+const backupTargetFields = {
+  name: z.string().trim().min(1).max(80),
+  endpoint: z.string().trim().min(1).max(500),
+  region: z.string().trim().min(1).max(64),
+  bucket: z.string().trim().min(1).max(255).regex(/^[a-z0-9][a-z0-9.-]{1,253}$/u, "桶名仅允许小写字母、数字、点和短横线"),
+  accessKeyId: z.string().trim().min(1).max(256),
+  secretAccessKey: z.string().trim().min(1).max(1024),
+  prefix: z.string().trim().max(500),
+  enabled: z.boolean()
+};
+const backupTargetCreateSchema = z.object({
+  ...backupTargetFields,
+  prefix: z.string().trim().max(500).default("")
+}).strict().superRefine((input, context) => {
+  try {
+    assertBackupEndpoint(input.endpoint);
+  } catch (error) {
+    context.addIssue({ code: "custom", message: error instanceof Error ? error.message : "备份端点无效", path: ["endpoint"] });
+  }
+  try {
+    normalizeBackupPrefix(input.prefix);
+  } catch (error) {
+    context.addIssue({ code: "custom", message: error instanceof Error ? error.message : "备份子目录无效", path: ["prefix"] });
+  }
+});
+const backupTargetUpdateSchema = z.object(backupTargetFields).strict().partial().superRefine((input, context) => {
+  if (input.endpoint !== undefined) {
+    try {
+      assertBackupEndpoint(input.endpoint);
+    } catch (error) {
+      context.addIssue({ code: "custom", message: error instanceof Error ? error.message : "备份端点无效", path: ["endpoint"] });
+    }
+  }
+  if (input.prefix !== undefined) {
+    try {
+      normalizeBackupPrefix(input.prefix);
+    } catch (error) {
+      context.addIssue({ code: "custom", message: error instanceof Error ? error.message : "备份子目录无效", path: ["prefix"] });
+    }
+  }
+});
+const targetIdSchema = z.coerce.number().int().min(1).max(2_147_483_647);
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -599,6 +666,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backup: BackupManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -970,9 +1038,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const vault = new CredentialVault(options.masterSecret);
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +1060,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backup = new BackupManager({
+    store,
+    vault,
+    database,
+    databasePath: options.databasePath,
+    masterKeyPath: join(dirname(options.databasePath), "master.key"),
+    attachmentDirectory: attachmentStorage.rootDirectory,
+    fetchImpl: options.fetchImpl ?? fetch
+  });
+  backup.start();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2139,37 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  const requirePlatformAdmin = (request: Request, _response: Response, next: NextFunction): void => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    next();
+  };
+  app.get("/api/platform/backup/settings", requirePlatformAdmin, (_request, response) => data(response, backup.getSnapshot()));
+  app.patch("/api/platform/backup/settings", requirePlatformAdmin, (request, response) => {
+    data(response, backup.updateSettings(parse(backupSettingsInputSchema, request.body)));
+  });
+  app.post("/api/platform/backup/targets", requirePlatformAdmin, (request, response) => {
+    data(response, backup.createTarget(parse(backupTargetCreateSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", requirePlatformAdmin, (request, response) => {
+    const targetId = parse(targetIdSchema, request.params.targetId);
+    data(response, backup.updateTarget(targetId, parse(backupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/targets/:targetId", requirePlatformAdmin, (request, response) => {
+    const targetId = parse(targetIdSchema, request.params.targetId);
+    backup.deleteTarget(targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/run", requirePlatformAdmin, async (request, response) => {
+    const outcome = await backup.runNow("manual");
+    if ("busy" in outcome) throw new AppError(409, "BACKUP_BUSY", "备份任务正在执行中，请稍后重试");
+    store.audit(PLATFORM_AI_WORK_ID, "platform.backup.run-completed", "platform-backup", null, {
+      targetCount: outcome.results.length,
+      succeededCount: outcome.results.filter((result) => result.ok).length
+    });
+    data(response, outcome);
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,9 +2684,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, backup, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
+    backup.stop();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
     logger.info("runtime.closed");
