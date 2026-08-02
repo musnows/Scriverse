@@ -2766,6 +2766,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }
 .setting-markdown-field { display: grid; grid-template-rows: minmax(0, 1fr); height: 100%; min-height: 0; }
 .entity-editor-page.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"], .entity-editor-page.is-read-only .vditor-wysiwyg pre.vditor-reset[contenteditable="false"], .entity-editor-page.is-read-only .vditor-sv[contenteditable="false"] { opacity: 1; cursor: default; }
+.markdown-editor-field.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"], .markdown-editor-field.is-read-only .vditor-wysiwyg pre.vditor-reset[contenteditable="false"], .markdown-editor-field.is-read-only .vditor-sv[contenteditable="false"] { opacity: 1; cursor: default; }
 .setting-markdown-heading, .markdown-editor-field-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 24px; color: var(--ink); font-size: 14px; }
 .setting-markdown-heading small, .markdown-editor-field-heading small { color: var(--muted); font-size: 10px; }
 .markdown-editor-field { display: grid; gap: 10px; min-width: 0; }
@@ -2792,6 +2793,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .vditor-editor-host.vditor--dark .vditor-reset table tr { background: var(--surface); border-top-color: var(--line); }
 .vditor-editor-host.vditor--dark .vditor-reset table td, .vditor-editor-host.vditor--dark .vditor-reset table th { border-color: var(--line); color: var(--ink); }
 .vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }
+.editor-dialog .dialog-fields input[readonly], .editor-dialog .dialog-fields textarea[readonly], .editor-dialog .dialog-fields select:disabled { color: var(--ink); -webkit-text-fill-color: var(--ink); opacity: 1; cursor: default; }
 .record-markdown-preview { display: -webkit-box; margin: 12px 0 8px; overflow: hidden; overflow-wrap: anywhere; color: var(--ink); font-size: 12px; line-height: 1.7; -webkit-box-orient: vertical; -webkit-line-clamp: 12; }
 .record-markdown-preview > :first-child, .knowledge-markdown-block .message-body > :first-child { margin-top: 0; }
 .record-markdown-preview > :last-child, .knowledge-markdown-block .message-body > :last-child { margin-bottom: 0; }
