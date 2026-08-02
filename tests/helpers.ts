@@ -1,4 +1,7 @@
 import { createRuntime, type Runtime } from "../src/app.js";
+import { CredentialVault } from "../src/credential-vault.js";
+
+export const testVault = new CredentialVault("test-master-secret-with-at-least-32-characters");
 
 export function createTestRuntime(fetchImpl?: typeof fetch): Runtime {
   const runtime = createRuntime({

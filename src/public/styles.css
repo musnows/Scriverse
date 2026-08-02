@@ -3346,3 +3346,126 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+/* S3 备份管理视图与卡片。复用现有 shelf、dialog 和卡片视觉，仅定义其独立控件。 */
+.s3-backup-status {
+  margin: 0 var(--shelf-padding, 24px) 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.s3-backup-status.is-error { color: var(--color-danger, #c0392b); }
+.s3-backup-section {
+  margin: 0 var(--shelf-padding, 24px) 24px;
+  padding: 16px;
+  background: var(--surface-card);
+  border-radius: 8px;
+}
+.s3-backup-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.s3-backup-section-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.s3-backup-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.s3-backup-config-list { margin-top: 8px; }
+.s3-backup-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.s3-backup-config-card {
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: var(--surface-card);
+}
+.s3-backup-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.s3-backup-config-header strong { font-size: 15px; }
+.s3-backup-status-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--surface-muted, #eee);
+  color: var(--text-secondary);
+}
+.s3-backup-status-badge.is-success { background: #e6f4ea; color: #137333; }
+.s3-backup-status-badge.is-failed { background: #fce8e6; color: #c5221f; }
+.s3-backup-config-meta {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px 16px;
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+.s3-backup-config-meta dt { color: var(--text-secondary); margin: 0; font-size: 11px; }
+.s3-backup-config-meta dd { margin: 0; }
+.s3-backup-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 4px 0;
+  padding: 4px 8px;
+  background: var(--surface-muted);
+  border-radius: 4px;
+  max-height: 80px;
+  overflow: hidden;
+}
+.s3-backup-config-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.s3-backup-settings-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.s3-backup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.s3-backup-field input[type="number"] {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+.s3-backup-field-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin-top: 22px;
+}
+.s3-backup-settings-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.s3-config-dialog { min-width: 480px; max-width: 90vw; }
+.s3-config-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 13px; }
+.s3-config-field input { padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; }
+.s3-config-field-checkbox { flex-direction: row; align-items: center; gap: 6px; margin-top: 12px; }
+.s3-config-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.s3-config-row .s3-config-field { flex: 1; margin-bottom: 0; }
+.s3-config-row + .s3-config-field { margin-top: 12px; }

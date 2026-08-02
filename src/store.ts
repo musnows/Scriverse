@@ -1,6 +1,7 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import { CredentialVault } from "./credential-vault.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
@@ -567,8 +568,10 @@ function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInje
   };
 }
 
+type DbValue = string | number | null;
+
 export class Store {
-  constructor(readonly db: Database) {
+  constructor(readonly db: Database, readonly vault: CredentialVault) {
     this.backfillEntityVersionBaselines();
   }
 
@@ -8436,5 +8439,216 @@ export class Store {
       this.audit(workId, "work.writing_goal.updated", "work", workId, input);
     });
     return this.getWritingProgress(workId);
+  }
+
+  listS3BackupConfigs(): Array<{
+    id: string;
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    forcePathStyle: boolean;
+    enabled: boolean;
+    accessKeyIdMasked: string;
+    lastBackupAt: string | null;
+    lastBackupStatus: string | null;
+    lastBackupMessage: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }> {
+    return this.db.all(
+      `SELECT id, name, endpoint, region, bucket, prefix, force_path_style, enabled,
+              encrypted_ak, ak_iv, ak_tag, encrypted_sk, sk_iv, sk_tag,
+              last_backup_at, last_backup_status, last_backup_message, created_at, updated_at
+       FROM s3_backup_configs ORDER BY created_at, id`
+    ).map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      endpoint: String(row.endpoint),
+      region: String(row.region),
+      bucket: String(row.bucket),
+      prefix: String(row.prefix ?? ""),
+      forcePathStyle: Number(row.force_path_style ?? 0) === 1,
+      enabled: Number(row.enabled ?? 1) === 1,
+      accessKeyIdMasked: `${this.vault.decrypt({ encrypted: String(row.encrypted_ak), iv: String(row.ak_iv), tag: String(row.ak_tag) }).slice(0, 4)}****`,
+      lastBackupAt: row.last_backup_at ? String(row.last_backup_at) : null,
+      lastBackupStatus: row.last_backup_status ? String(row.last_backup_status) : null,
+      lastBackupMessage: row.last_backup_message ? String(row.last_backup_message) : null,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at)
+    }));
+  }
+
+  getS3BackupConfigWithCredentials(configId: string): {
+    id: string;
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    forcePathStyle: boolean;
+    accessKeyId: string;
+    secretAccessKey: string;
+    enabled: boolean;
+  } | null {
+    const row = this.db.get("SELECT * FROM s3_backup_configs WHERE id = ?", configId);
+    if (!row) return null;
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      endpoint: String(row.endpoint),
+      region: String(row.region),
+      bucket: String(row.bucket),
+      prefix: String(row.prefix ?? ""),
+      forcePathStyle: Number(row.force_path_style ?? 0) === 1,
+      accessKeyId: this.vault.decrypt({ encrypted: String(row.encrypted_ak), iv: String(row.ak_iv), tag: String(row.ak_tag) }),
+      secretAccessKey: this.vault.decrypt({ encrypted: String(row.encrypted_sk), iv: String(row.sk_iv), tag: String(row.sk_tag) }),
+      enabled: Number(row.enabled ?? 1) === 1
+    };
+  }
+
+  createS3BackupConfig(input: {
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    prefix: string;
+    forcePathStyle: boolean;
+    accessKeyId: string;
+    secretAccessKey: string;
+  }): { id: string; name: string; endpoint: string; region: string; bucket: string; prefix: string; forcePathStyle: boolean; accessKeyIdMasked: string; enabled: boolean; lastBackupAt: string | null; lastBackupStatus: string | null; lastBackupMessage: string | null } {
+    const id = randomUUID();
+    const timestamp = now();
+    const normalizedPrefix = this.normalizePrefix(input.prefix);
+    const ak = this.vault.encrypt(input.accessKeyId);
+    const sk = this.vault.encrypt(input.secretAccessKey);
+    const decryptedAk = input.accessKeyId;
+    this.db.run(
+      `INSERT INTO s3_backup_configs
+       (id, name, endpoint, region, bucket, prefix, force_path_style,
+        encrypted_ak, ak_iv, ak_tag, encrypted_sk, sk_iv, sk_tag, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      id, input.name, input.endpoint, input.region, input.bucket, normalizedPrefix,
+      input.forcePathStyle ? 1 : 0,
+      ak.encrypted, ak.iv, ak.tag, sk.encrypted, sk.iv, sk.tag,
+      timestamp, timestamp
+    );
+    return {
+      id,
+      name: input.name,
+      endpoint: input.endpoint,
+      region: input.region,
+      bucket: input.bucket,
+      prefix: normalizedPrefix,
+      forcePathStyle: input.forcePathStyle,
+      accessKeyIdMasked: `${decryptedAk.slice(0, 4)}****`,
+      enabled: true,
+      lastBackupAt: null,
+      lastBackupStatus: null,
+      lastBackupMessage: null
+    };
+  }
+
+  private normalizePrefix(prefix: string): string {
+    if (!prefix || !prefix.trim()) return "";
+    const cleaned = prefix.replace(/\\/gu, "/").replace(/\/+/gu, "/").replace(/^\/|\/$/gu, "");
+    return cleaned;
+  }
+
+  updateS3BackupConfig(configId: string, input: {
+    name?: string;
+    endpoint?: string;
+    region?: string;
+    bucket?: string;
+    prefix?: string;
+    forcePathStyle?: boolean;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    enabled?: boolean;
+  }): { id: string; name: string; endpoint: string; region: string; bucket: string; prefix: string; forcePathStyle: boolean; accessKeyIdMasked: string; enabled: boolean; lastBackupAt: string | null; lastBackupStatus: string | null; lastBackupMessage: string | null } {
+    const existing = this.db.get("SELECT * FROM s3_backup_configs WHERE id = ?", configId);
+    if (!existing) throw notFound("S3 备份配置");
+    const fields: string[] = [];
+    const values: DbValue[] = [];
+    if (input.name !== undefined) { fields.push("name = ?"); values.push(input.name); }
+    if (input.endpoint !== undefined) { fields.push("endpoint = ?"); values.push(input.endpoint); }
+    if (input.region !== undefined) { fields.push("region = ?"); values.push(input.region); }
+    if (input.bucket !== undefined) { fields.push("bucket = ?"); values.push(input.bucket); }
+    if (input.prefix !== undefined) { fields.push("prefix = ?"); values.push(this.normalizePrefix(input.prefix)); }
+    if (input.forcePathStyle !== undefined) { fields.push("force_path_style = ?"); values.push(input.forcePathStyle ? 1 : 0); }
+    if (input.enabled !== undefined) { fields.push("enabled = ?"); values.push(input.enabled ? 1 : 0); }
+    if (input.accessKeyId !== undefined) {
+      const ak = this.vault.encrypt(input.accessKeyId);
+      fields.push("encrypted_ak = ?", "ak_iv = ?", "ak_tag = ?");
+      values.push(ak.encrypted, ak.iv, ak.tag);
+    }
+    if (input.secretAccessKey !== undefined) {
+      const sk = this.vault.encrypt(input.secretAccessKey);
+      fields.push("encrypted_sk = ?", "sk_iv = ?", "sk_tag = ?");
+      values.push(sk.encrypted, sk.iv, sk.tag);
+    }
+    if (fields.length === 0) return this.getS3BackupConfigById(configId);
+    fields.push("updated_at = ?");
+    values.push(now());
+    values.push(configId);
+    this.db.run(`UPDATE s3_backup_configs SET ${fields.join(", ")} WHERE id = ?`, ...(values as never[]));
+    return this.getS3BackupConfigById(configId);
+  }
+
+  private getS3BackupConfigById(configId: string): { id: string; name: string; endpoint: string; region: string; bucket: string; prefix: string; forcePathStyle: boolean; accessKeyIdMasked: string; enabled: boolean; lastBackupAt: string | null; lastBackupStatus: string | null; lastBackupMessage: string | null } {
+    const row = this.db.get("SELECT * FROM s3_backup_configs WHERE id = ?", configId);
+    if (!row) throw notFound("S3 备份配置");
+    const decryptedAk = this.vault.decrypt({ encrypted: String(row.encrypted_ak), iv: String(row.ak_iv), tag: String(row.ak_tag) });
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      endpoint: String(row.endpoint),
+      region: String(row.region),
+      bucket: String(row.bucket),
+      prefix: String(row.prefix ?? ""),
+      forcePathStyle: Number(row.force_path_style ?? 0) === 1,
+      accessKeyIdMasked: `${decryptedAk.slice(0, 4)}****`,
+      enabled: Number(row.enabled ?? 1) === 1,
+      lastBackupAt: row.last_backup_at ? String(row.last_backup_at) : null,
+      lastBackupStatus: row.last_backup_status ? String(row.last_backup_status) : null,
+      lastBackupMessage: row.last_backup_message ? String(row.last_backup_message) : null
+    };
+  }
+
+  deleteS3BackupConfig(configId: string): void {
+    const existing = this.db.get("SELECT id FROM s3_backup_configs WHERE id = ?", configId);
+    if (!existing) throw notFound("S3 备份配置");
+    this.db.run("DELETE FROM s3_backup_configs WHERE id = ?", configId);
+  }
+
+  updateS3BackupStatus(configId: string, status: string, message: string | null): void {
+    this.db.run(
+      "UPDATE s3_backup_configs SET last_backup_at = ?, last_backup_status = ?, last_backup_message = ?, updated_at = ? WHERE id = ?",
+      now(), status, message ? message.slice(0, 2000) : null, now(), configId
+    );
+  }
+
+  getS3BackupSettings(): { scheduleHour: number; includeImages: boolean; retentionCount: number } {
+    const row = this.db.get("SELECT * FROM s3_backup_settings WHERE id = 1");
+    return {
+      scheduleHour: Number(row?.schedule_hour ?? 3),
+      includeImages: Number(row?.include_images ?? 1) === 1,
+      retentionCount: Number(row?.retention_count ?? 10)
+    };
+  }
+
+  updateS3BackupSettings(input: { scheduleHour?: number; includeImages?: boolean; retentionCount?: number }): { scheduleHour: number; includeImages: boolean; retentionCount: number } {
+    const current = this.getS3BackupSettings();
+    const fields: string[] = [];
+    const values: DbValue[] = [];
+    if (input.scheduleHour !== undefined) { fields.push("schedule_hour = ?"); values.push(input.scheduleHour); }
+    if (input.includeImages !== undefined) { fields.push("include_images = ?"); values.push(input.includeImages ? 1 : 0); }
+    if (input.retentionCount !== undefined) { fields.push("retention_count = ?"); values.push(input.retentionCount); }
+    if (fields.length === 0) return current;
+    fields.push("updated_at = ?");
+    values.push(now());
+    this.db.run(`UPDATE s3_backup_settings SET ${fields.join(", ")} WHERE id = 1`, ...(values as never[]));
+    return this.getS3BackupSettings();
   }
 }

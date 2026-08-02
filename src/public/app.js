@@ -67,6 +67,14 @@ import {
   moveCropRect,
   resizeCropRect
 } from "/avatar-crop.js?v=20260725-avatar-crop";
+import {
+  s3ConfigFormValues,
+  s3ConfigPayload,
+  s3SettingsFormValues,
+  s3SettingsPayload,
+  s3StatusLabel,
+  s3StatusClass
+} from "/s3-backup.js?v=20260801-s3-backup-v1";
 
 const defaultPageSizes = Object.freeze({
   drafts: 30,
@@ -3373,6 +3381,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3986,7 +3995,8 @@ async function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
-    || !$("#work-audit-view").classList.contains("hidden");
+    || !$("#work-audit-view").classList.contains("hidden")
+    || !$("#s3-backup-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
     settingsReturnContext = captureSettingsReturnContext();
@@ -3999,6 +4009,7 @@ async function showSettingsHub() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#s3-backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -4026,6 +4037,7 @@ async function returnFromSettings() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#s3-backup-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -4046,6 +4058,7 @@ async function showPlatformAi() {
   $("#platform-ai-view").classList.remove("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#s3-backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -4067,6 +4080,7 @@ async function showPlatformUsage() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.remove("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#s3-backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -4077,6 +4091,224 @@ async function showPlatformUsage() {
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
+}
+
+let s3BackupConfigs = [];
+let s3BackupSettings = { scheduleHour: 3, includeImages: true, retentionCount: 10 };
+let s3BackupLoading = false;
+
+async function showS3Backup() {
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 S3 备份管理将放弃本地修改。是否继续？"))) return false;
+  state.dirty = false;
+  dismissChapterInsightToast();
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#s3-backup-view").classList.remove("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "S3 备份管理";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setTopbarViewState("S3 备份");
+  await renderS3Backup();
+  replacePageRoute({ view: "s3-backup", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  return true;
+}
+
+async function renderS3Backup() {
+  s3BackupLoading = true;
+  s3BackupStatusEl().textContent = "加载中…";
+  s3BackupStatusEl().className = "s3-backup-status";
+  try {
+    const [configs, settings] = await Promise.all([
+      api("/api/platform/s3-backup/configs"),
+      api("/api/platform/s3-backup/settings")
+    ]);
+    s3BackupConfigs = Array.isArray(configs) ? configs : [];
+    s3BackupSettings = settings ?? s3BackupSettings;
+    s3BackupLoading = false;
+    renderS3ConfigList();
+    renderS3SettingsForm();
+  } catch (error) {
+    s3BackupLoading = false;
+    s3BackupStatusEl().textContent = `加载失败：${error.message}`;
+    s3BackupStatusEl().className = "s3-backup-status is-error";
+  }
+}
+
+function s3BackupStatusEl() {
+  return $("#s3-backup-status");
+}
+
+function renderS3ConfigList() {
+  const container = $("#s3-backup-config-list");
+  if (!container) return;
+  if (s3BackupConfigs.length === 0) {
+    container.innerHTML = '<p class="s3-backup-empty">尚未添加 S3 备份配置，点击「添加配置」开始。</p>';
+    return;
+  }
+  container.innerHTML = `<div class="s3-backup-config-grid">${s3BackupConfigs.map((config) => renderS3ConfigCard(config)).join("")}</div>`;
+  container.querySelectorAll("[data-s3-test]").forEach((btn) => {
+    btn.addEventListener("click", () => testS3Config(btn.dataset.s3Test));
+  });
+  container.querySelectorAll("[data-s3-delete]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteS3Config(btn.dataset.s3Delete));
+  });
+  container.querySelectorAll("[data-s3-edit]").forEach((btn) => {
+    btn.addEventListener("click", () => openS3ConfigDialog(btn.dataset.s3Edit));
+  });
+}
+
+function renderS3ConfigCard(config) {
+  const statusClass = s3StatusClass(config.lastBackupStatus);
+  const statusLabel = s3StatusLabel(config.lastBackupStatus);
+  return `
+    <article class="s3-backup-config-card" data-config-id="${esc(config.id)}">
+      <header class="s3-backup-config-header">
+        <strong>${esc(config.name)}</strong>
+        <span class="s3-backup-status-badge ${statusClass}">${esc(statusLabel)}</span>
+      </header>
+      <dl class="s3-backup-config-meta">
+        <div><dt>端点</dt><dd>${esc(config.endpoint)}</dd></div>
+        <div><dt>Bucket</dt><dd>${esc(config.bucket)}</dd></div>
+        <div><dt>区域</dt><dd>${esc(config.region)}</dd></div>
+        <div><dt>AK</dt><dd>${esc(config.accessKeyIdMasked ?? "****")}</dd></div>
+        <div><dt>前缀</dt><dd>${esc(config.prefix || "/")}</dd></div>
+        <div><dt>最后备份</dt><dd>${esc(config.lastBackupAt ?? "从未")}</dd></div>
+      </dl>
+      ${config.lastBackupMessage ? `<p class="s3-backup-message">${esc(config.lastBackupMessage)}</p>` : ""}
+      <footer class="s3-backup-config-actions">
+        <button type="button" data-s3-edit="${esc(config.id)}">编辑</button>
+        <button type="button" data-s3-test="${esc(config.id)}">测试</button>
+        <button type="button" data-s3-delete="${esc(config.id)}" class="danger">删除</button>
+      </footer>
+    </article>`;
+}
+
+function renderS3SettingsForm() {
+  const form = $("#s3-backup-settings-form");
+  if (!form) return;
+  form.querySelector("#s3-schedule-hour").value = String(s3BackupSettings.scheduleHour);
+  form.querySelector("#s3-include-images").checked = Boolean(s3BackupSettings.includeImages);
+  form.querySelector("#s3-retention-count").value = String(s3BackupSettings.retentionCount);
+}
+
+async function saveS3BackupSettings(event) {
+  event?.preventDefault();
+  const form = $("#s3-backup-settings-form");
+  if (!form.reportValidity()) return;
+  const payload = s3SettingsPayload(s3SettingsFormValues(form));
+  try {
+    s3BackupSettings = await api("/api/platform/s3-backup/settings", { method: "PATCH", body: JSON.stringify(payload) });
+    renderS3SettingsForm();
+    toast("备份设置已保存");
+  } catch (error) {
+    toast(`保存失败：${error.message}`, "error");
+  }
+}
+
+async function runS3BackupNow() {
+  const button = $("#s3-backup-run-now");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  button.textContent = "备份中…";
+  try {
+    const result = await api("/api/platform/s3-backup/run", { method: "POST" });
+    const summary = result?.summary ?? result;
+    toast(`备份完成：成功 ${summary.succeeded ?? 0} / 失败 ${summary.failed ?? 0}`);
+    await renderS3Backup();
+  } catch (error) {
+    toast(`备份失败：${error.message}`, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "立即备份";
+  }
+}
+
+function openS3ConfigDialog(configId = null) {
+  const dialog = $("#s3-config-dialog");
+  const form = $("#s3-config-form");
+  if (!dialog || !form) return;
+  form.reset();
+  form.querySelector("#s3-config-id").value = configId ?? "";
+  if (configId) {
+    const config = s3BackupConfigs.find((item) => item.id === configId);
+    if (config) {
+      form.querySelector("#s3-config-name").value = config.name;
+      form.querySelector("#s3-config-endpoint").value = config.endpoint;
+      form.querySelector("#s3-config-region").value = config.region;
+      form.querySelector("#s3-config-bucket").value = config.bucket;
+      form.querySelector("#s3-config-prefix").value = config.prefix ?? "";
+      form.querySelector("#s3-config-force-path").checked = Boolean(config.forcePathStyle);
+    }
+    $("#s3-config-ak-row").classList.add("hidden");
+    $("#s3-config-sk-row").classList.add("hidden");
+  } else {
+    $("#s3-config-ak-row").classList.remove("hidden");
+    $("#s3-config-sk-row").classList.remove("hidden");
+    form.querySelector("#s3-config-region").value = "us-east-1";
+  }
+  $("#s3-config-title").textContent = configId ? "编辑 S3 配置" : "添加 S3 配置";
+  dialog.showModal();
+}
+
+async function testS3Config(configId) {
+  const button = document.querySelector(`[data-s3-test="${CSS.escape(configId)}"]`);
+  if (button) {
+    button.disabled = true;
+    button.textContent = "测试中…";
+  }
+  try {
+    const result = await api(`/api/platform/s3-backup/configs/${configId}/test`, { method: "POST" });
+    toast(result?.success ? "连接测试成功" : `连接失败：${result?.message ?? "未知错误"}`, result?.success ? "success" : "error");
+  } catch (error) {
+    toast(`连接测试失败：${error.message}`, "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "测试";
+    }
+  }
+}
+
+async function deleteS3Config(configId) {
+  const config = s3BackupConfigs.find((item) => item.id === configId);
+  if (!config) return;
+  if (!confirm(`确定要删除 S3 备份配置「${config.name}」吗？此操作不可撤销。`)) return;
+  try {
+    await api(`/api/platform/s3-backup/configs/${configId}`, { method: "DELETE" });
+    toast("配置已删除");
+    await renderS3Backup();
+  } catch (error) {
+    toast(`删除失败：${error.message}`, "error");
+  }
+}
+
+async function saveS3Config(event) {
+  event?.preventDefault();
+  const form = $("#s3-config-form");
+  if (!form.reportValidity()) return;
+  const configId = form.querySelector("#s3-config-id").value || null;
+  const values = s3ConfigFormValues(form);
+  const payload = s3ConfigPayload(values, !configId);
+  try {
+    if (configId) {
+      await api(`/api/platform/s3-backup/configs/${configId}`, { method: "PATCH", body: JSON.stringify(payload) });
+      toast("配置已更新");
+    } else {
+      await api("/api/platform/s3-backup/configs", { method: "POST", body: JSON.stringify(payload) });
+      toast("配置已添加");
+    }
+    $("#s3-config-dialog").close();
+    await renderS3Backup();
+  } catch (error) {
+    toast(`保存失败：${error.message}`, "error");
+  }
 }
 
 function renderShelf() {
@@ -4175,6 +4407,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#s3-backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
   settingsReturnContext = null;
@@ -12022,6 +12255,17 @@ window.addEventListener("online", () => {
   void refreshSystemHealth();
 });
 window.addEventListener("offline", () => updateSystemHealth({ status: "offline" }));
+
+$("#s3-backup-button").addEventListener("click", () => showS3Backup().catch((error) => toast(error.message, "error")));
+$("#s3-backup-refresh").addEventListener("click", () => renderS3Backup().catch((error) => toast(error.message, "error")));
+$("#s3-backup-return").addEventListener("click", () => returnFromSettings());
+$("#s3-backup-settings-form").addEventListener("submit", (event) => { void saveS3BackupSettings(event); });
+$("#s3-backup-run-now").addEventListener("click", () => { void runS3BackupNow(); });
+$("#s3-config-add").addEventListener("click", () => openS3ConfigDialog(null));
+$("#s3-config-dialog").addEventListener("close", () => $("#s3-config-form")?.reset());
+$("#s3-config-close").addEventListener("click", () => $("#s3-config-dialog").close());
+$("#s3-config-cancel").addEventListener("click", () => $("#s3-config-dialog").close());
+$("#s3-config-form").addEventListener("submit", (event) => { void saveS3Config(event); });
 
 initializePage().catch((error) => {
   restoringPageRoute = false;

@@ -16,7 +16,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
-import { AppError } from "./errors.js";
+import { AppError, notFound } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
@@ -24,6 +24,7 @@ import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedE
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { BackupService, formatBackupResults } from "./backup-service.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -435,6 +436,41 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const s3BackupConfigCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  endpoint: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "S3 端点必须使用 HTTP 或 HTTPS"),
+  region: z.string().trim().min(1).max(64).default("us-east-1"),
+  bucket: z.string().trim().min(1).max(255),
+  prefix: z.string().trim().max(255)
+    .refine((value) => !value.includes(".."), "前缀不能包含 ..")
+    .refine((value) => !value.includes("\\"), "前缀不能包含反斜杠")
+    .default(""),
+  forcePathStyle: z.boolean().default(false),
+  accessKeyId: z.string().trim().min(1).max(500),
+  secretAccessKey: z.string().trim().min(1).max(500)
+}).strict();
+
+const s3BackupConfigUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  endpoint: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "S3 端点必须使用 HTTP 或 HTTPS").optional(),
+  region: z.string().trim().min(1).max(64).optional(),
+  bucket: z.string().trim().min(1).max(255).optional(),
+  prefix: z.string().trim().max(255)
+    .refine((value) => !value.includes(".."), "前缀不能包含 ..")
+    .refine((value) => !value.includes("\\"), "前缀不能包含反斜杠")
+    .optional(),
+  forcePathStyle: z.boolean().optional(),
+  accessKeyId: z.string().trim().min(1).max(500).optional(),
+  secretAccessKey: z.string().trim().min(1).max(500).optional(),
+  enabled: z.boolean().optional()
+}).strict().refine((input) => Object.keys(input).length > 0, "至少需要提供一项配置");
+
+const s3BackupSettingsSchema = z.object({
+  scheduleHour: z.number().int().min(0).max(23).optional(),
+  includeImages: z.boolean().optional(),
+  retentionCount: z.number().int().min(1).max(999).optional()
+}).strict().refine((input) => Object.keys(input).length > 0, "至少需要提供一项设置");
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -599,6 +635,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backup: BackupService;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -937,7 +974,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const getDevelopmentUser = (): AuthUser | null => options.devAuthBypass
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
-  const store = new Store(database);
+  const vault = new CredentialVault(options.masterSecret);
+  const store = new Store(database, vault);
+  const backup = new BackupService(attachmentStorage, options.databasePath, store);
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -972,7 +1011,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -2517,6 +2556,102 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     });
   }
 
+  const requireAdminS3 = (request: Request, response: Response, next: NextFunction): void => {
+    if (options.disableUserAuth === true) return next();
+    if (!request.authUser || request.authUser.role !== "admin") {
+      next(new AppError(403, "ADMIN_REQUIRED", "仅管理员可以管理 S3 备份设置"));
+      return;
+    }
+    next();
+  };
+
+  app.get("/api/platform/s3-backup/configs", requireAdminS3, (_request, response) => {
+    data(response, store.listS3BackupConfigs());
+  });
+
+  app.post("/api/platform/s3-backup/configs", requireAdminS3, async (request, response, next) => {
+    try {
+      const input = parse(s3BackupConfigCreateSchema, request.body);
+      const config = await store.createS3BackupConfig(input);
+      data(response, config, 201);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/platform/s3-backup/configs/:configId", requireAdminS3, async (request, response, next) => {
+    try {
+      const configId = String(request.params.configId);
+      if (!store.getS3BackupConfigWithCredentials(configId)) throw notFound("S3 备份配置不存在");
+      const input = parse(s3BackupConfigUpdateSchema, request.body);
+      const config = await store.updateS3BackupConfig(configId, input);
+      data(response, config);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/platform/s3-backup/configs/:configId", requireAdminS3, async (request, response, next) => {
+    try {
+      const configId = String(request.params.configId);
+      if (!store.getS3BackupConfigWithCredentials(configId)) throw notFound("S3 备份配置不存在");
+      store.deleteS3BackupConfig(configId);
+      noContent(response);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/platform/s3-backup/configs/:configId/test", requireAdminS3, async (request, response, next) => {
+    try {
+      const configId = String(request.params.configId);
+      const result = await backup.testConnection(configId);
+      data(response, result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/platform/s3-backup/settings", requireAdminS3, (_request, response) => {
+    data(response, store.getS3BackupSettings());
+  });
+
+  app.patch("/api/platform/s3-backup/settings", requireAdminS3, (request, response, next) => {
+    try {
+      const input = parse(s3BackupSettingsSchema, request.body);
+      const settings = store.updateS3BackupSettings(input);
+      data(response, settings);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/platform/s3-backup/run", requireAdminS3, async (_request, response, next) => {
+    try {
+      const summary = await backup.runBackup();
+      data(response, formatBackupResults(summary));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  let lastScheduledDay: string | null = null;
+  const backupInterval = setInterval(() => {
+    const now = new Date();
+    const settings = store.getS3BackupSettings();
+    if (now.getHours() !== settings.scheduleHour) {
+      lastScheduledDay = null;
+      return;
+    }
+    const today = now.toISOString().slice(0, 10);
+    if (lastScheduledDay === today) return;
+    lastScheduledDay = today;
+    backup.runBackup().catch((error) => {
+      logger.error("backup.scheduled.failed", { error: sanitizeError(error) });
+    });
+  }, 60_000);
+  backupInterval.unref?.();
+
   app.use((_request, _response, next) => next(new AppError(404, "ROUTE_NOT_FOUND", "请求的接口不存在")));
   app.use((error: unknown, request: Request, response: Response, _next: NextFunction) => {
     const commonFields = { method: request.method, path: sanitizeRequestPath(request.path), error: sanitizeError(error) };
@@ -2574,8 +2709,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, backup, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    clearInterval(backupInterval);
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
