@@ -321,7 +321,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-expect(page.text).toContain('/app.js?v=20260802-draft-readonly-v1');
+expect(page.text).toContain('/app.js?v=20260803-model-list-v1');
 expect(page.text).toContain('/styles.css?v=20260802-draft-readonly-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -822,6 +822,7 @@ expect(page.text).toContain('/styles.css?v=20260802-draft-readonly-v1');
     expect(application.text).toContain("function isSelectableModel(model)");
     expect(application.text).toContain("provider-disabled-notice");
     expect(application.text).toContain("已停用模型不会出现在新任务选择中");
+    expect(application.text).not.toContain('<span class="model-status-badge is-disabled">供应商已停用</span>');
     expect(styles.text).toContain(".provider-card.is-disabled");
     expect(styles.text).toContain(".provider-status-badge.is-disabled");
     expect(styles.text).toContain(".model-connection-test");
