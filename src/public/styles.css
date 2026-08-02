@@ -2533,6 +2533,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .background-task-actions #background-task-open-analysis { margin-right: auto; }
 .merge-dialog-note { margin: 0; padding: 10px 12px; border-left: 2px solid var(--accent); background: var(--surface-soft); color: var(--muted); font-size: 11px; line-height: 1.6; }
 .form-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.model-multimodal-fields { gap: 9px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.model-multimodal-heading { color: var(--ink); font-size: 12px; font-weight: 600; }
+.model-multimodal-fields .model-capability-option { display: grid !important; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 9px; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink) !important; transition: border-color .15s ease, background-color .15s ease; }
+.model-multimodal-fields .model-capability-option[hidden], .model-multimodal-fields .model-capability-option.hidden { display: none !important; }
+.model-capability-option > input { width: 16px !important; min-width: 16px; margin-top: 2px; }
+.model-capability-option > span { display: grid; gap: 4px; min-width: 0; }
+.model-capability-option strong { color: var(--ink); font-size: 11px; font-weight: 600; }
+.model-capability-option small, .model-multimodal-note { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.model-capability-option:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.model-multimodal-note { margin: 0 2px; }
 .analysis-type-description { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .task-chapter-field { transition: opacity .15s ease; }
 .task-chapter-field.is-disabled { opacity: .48; }
