@@ -1424,6 +1424,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .platform-system-prompt-section { margin-bottom: 36px; }
+.platform-image-tool-panel { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.platform-image-tool-field { display: grid; flex: 1 1 360px; gap: 7px; min-width: 0; color: var(--muted); font-size: 10px; }
+.platform-image-tool-field select { width: 100%; height: 36px; min-height: 36px; padding: 8px 10px; font-size: 12px; }
+.platform-image-tool-panel .config-save-button { flex: 0 0 auto; min-height: 36px; padding: 8px 14px; }
 .task-auto-run-panel {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 148px;
@@ -2160,6 +2164,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section .config-save-button { min-height: 32px; padding: 5px 11px; font-size: 11px; }
 .config-section .card-actions { margin-top: 12px; }
 .config-section .card-actions .config-save-button { border: 1px solid var(--line); background: transparent; color: var(--ink); }
+.platform-image-tool-panel .config-save-button:hover, .platform-image-tool-panel .config-save-button:focus-visible { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); }
+@media (max-width: 850px) {
+  .platform-image-tool-panel { align-items: stretch; flex-direction: column; }
+  .platform-image-tool-field { flex: 0 0 auto; }
+  .platform-image-tool-field select, .platform-image-tool-panel .config-save-button { height: 40px; min-height: 40px; }
+  .platform-image-tool-panel .config-save-button { width: 100%; }
+}
 .field-label textarea {
   width: 100%;
   min-height: 140px;
