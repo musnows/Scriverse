@@ -322,7 +322,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
 expect(page.text).toContain('/app.js?v=20260803-model-list-v1');
-expect(page.text).toContain('/styles.css?v=20260802-draft-readonly-v1');
+expect(page.text).toContain('/styles.css?v=20260803-mobile-scroll-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -736,6 +736,7 @@ expect(page.text).toContain('/styles.css?v=20260802-draft-readonly-v1');
     expect(styles.text).toContain(".app-shell.shelf-mode .mobile-module-tab { display: none; }");
     expect(styles.text).toContain(".mobile-module-tab { position: fixed;");
     expect(styles.text).toContain(".mobile-panel-backdrop { position: fixed; z-index: 36;");
+    expect(styles.text).toContain(".shelf-view { height: 100%; min-height: 0; padding: 28px var(--mobile-gutter) 42px; }");
     expect(styles.text).toMatch(/\.left-panel \{[\s\S]*?z-index: 37;/);
     expect(styles.text).toContain(".ai-panel {\n    position: fixed;\n    z-index: 35;");
     expect(application.text).toContain("function isMobileViewport()");
