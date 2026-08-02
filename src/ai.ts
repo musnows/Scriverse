@@ -2534,7 +2534,7 @@ export class AiManager {
     const row = this.getProviderRow(providerId);
     const protocol = providerProtocol(row);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     const startedAt = process.hrtime.bigint();
     let credentialSecret = "";
     let accessToken = "";
@@ -2623,7 +2623,7 @@ export class AiManager {
     const providerId = stringValue(model, "provider_id");
     const provider = this.getProviderRow(providerId);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     const startedAt = process.hrtime.bigint();
     const protocol = providerProtocol(provider);
     const multimodalTested = boolValue(model, "multimodal_enabled") && protocol === "openai-chat-completions";
