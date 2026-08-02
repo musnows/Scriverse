@@ -5147,15 +5147,14 @@ function bindModuleContentInteractions() {
   moduleContentInteractionsBound = true;
   const host = $("#module-content");
   const open = async (card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization;
+    const id = card.dataset.openSetting ?? card.dataset.openRace ?? card.dataset.openOrganization;
     if (!id) return;
     if (card.dataset.openSetting) return openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly: true });
-    if (card.dataset.openCharacter) return openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openRace) return openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openOrganization) return openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly: true });
   };
   const findCard = (target) => target instanceof Element
-    ? target.closest("[data-open-setting], [data-open-character], [data-open-race], [data-open-organization]")
+    ? target.closest("[data-open-setting], [data-open-race], [data-open-organization]")
     : null;
   host.addEventListener("click", (event) => {
     if (event.target instanceof Element && event.target.closest("button, a, summary")) return;

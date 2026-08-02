@@ -137,4 +137,16 @@ describe("作品工作台按需加载", () => {
     expect(renderCharactersSource).toContain('openCharacterEditor(pageCharacters.find((item) => item.id === id)');
     expect(openCharacterEditorSource).toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
   });
+
+  it("角色卡预览只由角色列表处理，避免模块事件代理重复打开", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const moduleInteractionSource = application.slice(
+      application.indexOf("function bindModuleContentInteractions()"),
+      application.indexOf("function openReviewDetailDialog(")
+    );
+
+    expect(moduleInteractionSource).not.toContain("openCharacter");
+    expect(moduleInteractionSource).not.toContain("openCharacterEditor(await api");
+    expect(application).toContain('bindRecordPreview("[data-open-character]"');
+  });
 });
