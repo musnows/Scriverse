@@ -5,7 +5,7 @@ import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260802-multimodal-model-config-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
@@ -10170,7 +10170,7 @@ function openProviderDialog(item) {
 
 function openModelDialog(providerId, item = null, provider = null) {
   const values = modelFormValues(item);
-  const imageDefaultSupported = (provider?.protocol ?? "openai-chat-completions") === "openai-chat-completions";
+  const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol);
   const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;

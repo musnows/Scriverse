@@ -111,7 +111,9 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
-const MULTIMODAL_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=";
+// A small but non-transparent PNG. The model test must exercise an actual image_url
+// payload, while keeping the request cheap and avoiding any user data in the probe.
+const MULTIMODAL_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAPoAAAD6AG1e1JrAAAARUlEQVRYhe3XsREAMAhC0UzIFqzqWmaLpHmFvXcifM40+3OOBcYJSoTxhsuIhhVXGEUcLyAZSFZQGli+ismoZlVO81wHF5KP4IhRmUscAAAAAElFTkSuQmCC";
 /** 出站 AI 响应体上限，防止恶意或故障供应商推送超大响应拖垮进程。 */
 export const AI_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 

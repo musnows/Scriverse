@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload } from "../../src/public/model-config.js";
+import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
 
 describe("AI 模型配置", () => {
+  it("仅允许 OpenAI Chat Completions 供应商使用多模态能力", () => {
+    expect(supportsMultimodalModelProtocol("openai-chat-completions")).toBe(true);
+    expect(supportsMultimodalModelProtocol("anthropic-messages")).toBe(false);
+    expect(supportsMultimodalModelProtocol("google-vertex")).toBe(false);
+    expect(supportsMultimodalModelProtocol(undefined)).toBe(false);
+  });
+
   it("新模型默认开启 thinking 并写入配置载荷", () => {
     const values = modelFormValues();
     expect(values.thinkingEnabled).toBe(true);

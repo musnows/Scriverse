@@ -1,6 +1,7 @@
 export const MODEL_PURPOSE_OPTIONS: ReadonlyArray<readonly [string, string]>;
 export const MIN_MODEL_CONTEXT_WINDOW: number;
 export const RECOMMENDED_MODEL_CONTEXT_WINDOW: number;
+export function supportsMultimodalModelProtocol(protocol: string | null | undefined): boolean;
 
 export type ModelFormValues = {
   displayName: string;
