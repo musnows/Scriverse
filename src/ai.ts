@@ -688,8 +688,7 @@ const recallSelfArguments = z.object({
   cursor: agentToolCursor
 }).strict();
 const recallRelationshipArguments = z.object({
-  otherCharacter: z.string().trim().max(200).default(""),
-  query: z.string().trim().max(200).default(""),
+  characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   cursor: agentToolCursor
 }).strict();
 const agentToolCursorParameter = {
@@ -761,8 +760,8 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     type: "function",
     function: {
       name: "recall_relationship",
-      description: "查询当前扮演角色与其他角色之间已记录的人物关系。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。可按对方角色名、别名或关系类型、关键词筛选；留空时返回当前角色参与的全部关系。已拒绝的关系候选不会作为记忆返回。",
-      parameters: { type: "object", properties: { otherCharacter: { type: "string", maxLength: 200, default: "", description: "可选的对方角色姓名、别名或角色 ID。" }, query: { type: "string", maxLength: 200, default: "", description: "可选的关系类型、关键词、状态或证据短语。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+      description: "查询当前扮演角色的人物关系。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
+      parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   }
 };
@@ -3828,7 +3827,7 @@ export class AiManager {
       ? [
           `当前可用的内部记忆能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
-          ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
+          ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
@@ -4199,18 +4198,21 @@ export class AiManager {
     const args = parsed.data;
     if (name === "recall_relationship") {
       if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_relationship");
-      const { otherCharacter: otherCharacterQuery, query, cursor } = args as z.infer<typeof recallRelationshipArguments>;
+      const { characters: requestedCharacters, cursor } = args as z.infer<typeof recallRelationshipArguments>;
       const character = this.store.getCharacter(roleplayCharacterId);
       if (String(character.workId) !== workId) throw new Error("Roleplay character belongs to a different work");
-      const characters = new Map(this.store.listCharacters(workId, false, true).map((item) => [String(item.id), item]));
-      const normalizedOtherCharacterQuery = otherCharacterQuery.toLocaleLowerCase("zh-CN");
-      const normalizedQuery = query.toLocaleLowerCase("zh-CN");
+      const characterList = this.store.listCharacters(workId, false, true);
+      const characters = new Map(characterList.map((item) => [String(item.id), item]));
       const characterSearchText = (item: Record<string, unknown> | null): string => {
         if (!item) return "";
         const aliases = Array.isArray(item.aliases) ? item.aliases.filter((alias): alias is string => typeof alias === "string") : [];
         return [item.id, item.name, item.code, ...aliases].map((value) => String(value ?? "")).join("\n").toLocaleLowerCase("zh-CN");
       };
-      const memoryRecords: Record<string, unknown>[] = [];
+      const normalizedRequestedCharacters = requestedCharacters.map((item) => item.toLocaleLowerCase("zh-CN"));
+      const unresolvedCharacters = requestedCharacters.filter((item, index) => !characterList.some((candidate) => characterSearchText(candidate).includes(normalizedRequestedCharacters[index] ?? "")));
+      const hasRequestedCharacters = requestedCharacters.length > 0;
+      const relatedCharacters = new Map<string, Record<string, unknown>>();
+      const relationshipRecords: Record<string, unknown>[] = [];
       for (const relationship of this.store.listRelationships(workId)) {
         if (relationship.confirmationStatus === "rejected") continue;
         const fromCharacterId = String(relationship.fromCharacterId);
@@ -4218,9 +4220,20 @@ export class AiManager {
         if (fromCharacterId !== roleplayCharacterId && toCharacterId !== roleplayCharacterId) continue;
         const otherCharacterId = fromCharacterId === roleplayCharacterId ? toCharacterId : fromCharacterId;
         const other = characters.get(otherCharacterId);
-        if (!other || (normalizedOtherCharacterQuery && !characterSearchText(other).includes(normalizedOtherCharacterQuery))) continue;
+        if (!other) continue;
+        if (!hasRequestedCharacters) {
+          const existing = relatedCharacters.get(otherCharacterId);
+          relatedCharacters.set(otherCharacterId, {
+            id: otherCharacterId,
+            name: other.name,
+            aliases: Array.isArray(other.aliases) ? other.aliases : [],
+            relationshipCount: Number(existing?.relationshipCount ?? 0) + 1
+          });
+          continue;
+        }
+        if (!normalizedRequestedCharacters.some((query) => characterSearchText(other).includes(query))) continue;
         const selfIsFrom = fromCharacterId === roleplayCharacterId;
-        const record = {
+        relationshipRecords.push({
           category: "relationship",
           relationshipId: String(relationship.id),
           self: String(character.name),
@@ -4237,18 +4250,23 @@ export class AiManager {
           confirmationStatus: relationship.confirmationStatus,
           locked: relationship.locked,
           versionNo: relationship.versionNo
-        };
-        if (!normalizedQuery || JSON.stringify(record).toLocaleLowerCase("zh-CN").includes(normalizedQuery)) memoryRecords.push(record);
+        });
       }
-      const records = structuralToolResultRecords(memoryRecords, maximumRecordChars);
+      const sourceRecords = hasRequestedCharacters ? relationshipRecords : [...relatedCharacters.values()];
+      const records = structuralToolResultRecords(sourceRecords, maximumRecordChars);
       const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
         ok: true,
         data: {
           identity: { name: character.name, code: character.code },
-          otherCharacter: otherCharacterQuery,
-          query,
-          relationships: page,
-          ...(memoryRecords.length === 0 ? { hint: "No matching relationship memory was found." } : {})
+          mode: hasRequestedCharacters ? "details" : "related_characters",
+          ...(hasRequestedCharacters
+            ? {
+                requestedCharacters,
+                relationships: page,
+                ...(unresolvedCharacters.length > 0 ? { unresolvedCharacters } : {})
+              }
+            : { relatedCharacters: page }),
+          ...(sourceRecords.length === 0 ? { hint: "No matching relationship memory was found." } : {})
         },
         pagination
       }), maximumResultChars);
@@ -4256,7 +4274,7 @@ export class AiManager {
         id: toolCall.id,
         name,
         calledAt,
-        arguments: { otherCharacter: otherCharacterQuery, query, ...(cursor > 0 ? { cursor } : {}) },
+        arguments: { characters: requestedCharacters, ...(cursor > 0 ? { cursor } : {}) },
         status: "completed",
         result
       };

@@ -1499,7 +1499,7 @@ const AI_TOOL_DESCRIPTIONS = {
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
-  recall_relationship: "读取当前扮演角色与其他角色之间已记录的关系详情；不能查询两个其他角色之间的关系。"
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
 };
 
 let aiFeedScrollFrame = null;
