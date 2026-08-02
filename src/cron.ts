@@ -115,7 +115,11 @@ export function describeCronExpression(expression: string): string {
     const weekdayOnly = dayOfWeek.length <= 7 && dayOfWeek.length > 0 && dayOfMonth.length === 31 && month.length === 12;
     if (weekdayOnly && hour.length === 1 && minute.length === 1) {
       const labels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-      const days = [...dayOfWeek].sort((a, b) => a - b).map((value) => labels[value]).join("、");
+      // 0 与 7 均表示周日，统一映射到 0 并去重，避免越界与重复
+      const days = [...new Set([...dayOfWeek].map((value) => value % 7))]
+        .sort((a, b) => a - b)
+        .map((value) => labels[value])
+        .join("、");
       return `每${days}的 ${String(hour[0]).padStart(2, "0")}:${String(minute[0]).padStart(2, "0")} 触发`;
     }
     return `每分钟 ${[...minute].sort((a, b) => a - b).slice(0, 8).join("、")} 触发（完整表达式 ${expression}）`;

@@ -37,6 +37,16 @@ describe("页面刷新路由", () => {
       workId: "work-1",
       returnView: "shelf"
     });
+    const backupHash = serializePageRoute({
+      view: "platform-backup",
+      workId: null,
+      returnView: "shelf"
+    });
+    expect(parsePageRoute(backupHash)).toEqual({
+      view: "platform-backup",
+      workId: null,
+      returnView: "shelf"
+    });
     const auditHash = serializePageRoute({
       view: "work-audit",
       workId: "work-1",

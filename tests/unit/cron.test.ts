@@ -83,6 +83,7 @@ describe("cron 描述", () => {
     expect(describeCronExpression("* * * * *")).toBe("每分钟触发");
     expect(describeCronExpression("0 3 * * *")).toContain("每天 03:00 触发");
     expect(describeCronExpression("0 9 * * 1-5")).toContain("周一、周二、周三、周四、周五");
+    expect(describeCronExpression("0 0 * * 7")).toContain("每周日的 00:00 触发");
     expect(describeCronExpression("bad")).toBe("无法解析的表达式");
   });
 });
