@@ -7,6 +7,7 @@ import { DATABASE_SCHEMA_VERSION, readDatabaseSchemaVersion } from "./database.j
 import { loadMasterSecret } from "./credential-vault.js";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
 import { logger, sanitizeError } from "./logger.js";
+import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -101,7 +102,10 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       security,
       disableUserAuth: devAuthBypass,
       devAuthBypass,
-      developmentServer: isDevelopmentServer(options.env)
+      developmentServer: isDevelopmentServer(options.env),
+      releaseCheckIntervalMs: resolveReleaseCheckIntervalMs(options.env.APP_UPDATE_CHECK_INTERVAL_MINUTES),
+      releaseCheckTimeoutMs: resolveReleaseCheckTimeoutMs(options.env.APP_UPDATE_CHECK_TIMEOUT_SECONDS),
+      releaseCheckRetries: resolveReleaseCheckRetries(options.env.APP_UPDATE_CHECK_RETRIES)
     });
     await runtime.cleanupAttachments();
   } catch (error) {

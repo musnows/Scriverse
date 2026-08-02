@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -413,6 +413,7 @@ export class Database {
         output_note TEXT NOT NULL DEFAULT '',
         preset_json TEXT NOT NULL DEFAULT '{}',
         thinking_enabled INTEGER NOT NULL DEFAULT 1,
+        multimodal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(multimodal_enabled IN (0, 1)),
         enabled INTEGER NOT NULL DEFAULT 1,
         note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
@@ -430,6 +431,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS platform_ai_settings (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         system_prompt TEXT NOT NULL DEFAULT '',
+        image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         updated_at TEXT NOT NULL
       );
 
@@ -457,8 +459,9 @@ export class Database {
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
         agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 48),
         agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts","image"]',
         title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+        image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
         updated_at TEXT NOT NULL
       );
@@ -2766,6 +2769,41 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        const modelColumns = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+        if (!modelColumns.has("multimodal_enabled")) {
+          this.run("ALTER TABLE models ADD COLUMN multimodal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(multimodal_enabled IN (0, 1))");
+        }
+        const platformColumns = new Set(this.all("PRAGMA table_info(platform_ai_settings)").map((row) => String(row.name)));
+        if (!platformColumns.has("image_tool_model_id")) {
+          this.run("ALTER TABLE platform_ai_settings ADD COLUMN image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL");
+        }
+        const workColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!workColumns.has("image_tool_model_id")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL");
+        }
+        for (const row of this.all("SELECT work_id, agent_tools_json FROM work_ai_settings")) {
+          let tools: unknown[] = [];
+          try {
+            const parsed = JSON.parse(String(row.agent_tools_json ?? "[]")) as unknown;
+            tools = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            tools = [];
+          }
+          if (tools.includes("image")) continue;
+          tools.push("image");
+          this.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(tools), String(row.work_id));
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

@@ -111,6 +111,28 @@ describe("AI 供应商协议适配", () => {
     expect((body.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty("tool_calls");
   });
 
+  it("保留 OpenAI 多模态消息内容块", () => {
+    const body = buildCompletionRequestBody({
+      protocol: "openai-chat-completions",
+      model: "vision-model",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "理解这张图片" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,AAAA", detail: "auto" } }
+        ]
+      }],
+      parameters: { max_tokens: 128 }
+    });
+    expect(body.messages).toEqual([{
+      role: "user",
+      content: [
+        { type: "text", text: "理解这张图片" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA", detail: "auto" } }
+      ]
+    }]);
+  });
+
   it("为 Google Vertex 使用 OpenAI 兼容端点与 Bearer 头", () => {
     expect(providerCompletionEndpoint(
       "https://aiplatform.googleapis.com/v1/projects/demo/locations/global/endpoints/openapi",

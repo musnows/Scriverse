@@ -5,7 +5,7 @@ import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260731-model-context-guidance-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
@@ -195,6 +195,10 @@ let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+let productUpdateStatus = null;
+let productUpdateChecking = false;
+let productUpdateTimer = null;
+const fallbackProductUpdatePollInterval = 60 * 60 * 1000;
 const systemHealthPollInterval = 30_000;
 let systemHealthTimer = null;
 let systemHealthSnapshot = { status: "checking", version: "" };
@@ -965,6 +969,7 @@ let knowledgeSectionEditorDirty = false;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
+let characterEditorRelationshipsLoaded = false;
 let characterEditorSections = [];
 let characterSectionPendingAttachments = [];
 let markdownEditorPendingAttachments = [];
@@ -1483,7 +1488,9 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
   search_drafts: "搜索想法",
-  recall_self: "回忆自身"
+  recall_self: "回忆自身",
+  image: "读取设定图片",
+  recall_relationship: "回忆人物关系"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1493,7 +1500,9 @@ const AI_TOOL_DESCRIPTIONS = {
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
-  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。"
+  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
+  image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
 };
 
 let aiFeedScrollFrame = null;
@@ -2507,10 +2516,7 @@ async function api(path, options = {}) {
     if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       const restarted = await checkSystemBoot(true);
       if (!restarted) {
-        state.user = null;
-        state.csrfToken = null;
-        moduleRequestCache.clear();
-        showAuth(false);
+        invalidateAuthentication();
       }
     }
     throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
@@ -2650,6 +2656,35 @@ function applyProductHealthMetadata(health) {
   });
 }
 
+function applyProductUpdateMetadata(update) {
+  if (update && typeof update === "object") productUpdateStatus = update;
+  if (update?.checked !== true) {
+    renderBackgroundTaskCenter();
+    return;
+  }
+  const latestVersion = String(update.latestVersion ?? "").trim();
+  const releaseUrl = String(update.releaseUrl ?? "").trim();
+  const updateAvailable = update.updateAvailable === true && Boolean(latestVersion) && Boolean(releaseUrl);
+  const updateDot = document.querySelector("[data-settings-update-dot]");
+  updateDot?.classList.toggle("hidden", !updateAvailable);
+  const settingsButton = $("#settings-button");
+  settingsButton.setAttribute("aria-label", updateAvailable ? `设置，有新版本 v${latestVersion}` : "设置");
+  settingsButton.title = updateAvailable ? `设置，有新版本 v${latestVersion}` : "设置";
+  document.querySelectorAll("[data-product-footer-update]").forEach((element) => {
+    element.classList.toggle("hidden", !updateAvailable);
+    if (updateAvailable) {
+      element.textContent = `发现新版本 v${latestVersion}，查看更新说明`;
+      element.href = releaseUrl;
+      element.setAttribute("aria-label", `查看叙界 v${latestVersion} 更新说明`);
+    } else {
+      element.textContent = "";
+      element.removeAttribute("href");
+      element.removeAttribute("aria-label");
+    }
+  });
+  renderBackgroundTaskCenter();
+}
+
 function scheduleSystemHealthCheck() {
   if (systemHealthTimer !== null) window.clearTimeout(systemHealthTimer);
   systemHealthTimer = window.setTimeout(() => {
@@ -2669,11 +2704,44 @@ async function refreshSystemHealth() {
   }
 }
 
+function scheduleProductUpdateCheck() {
+  if (productUpdateTimer !== null) window.clearTimeout(productUpdateTimer);
+  if (productUpdateStatus?.enabled === false) {
+    productUpdateTimer = null;
+    return;
+  }
+  const nextCheckAt = Date.parse(String(productUpdateStatus?.nextCheckAt ?? ""));
+  const delay = Number.isFinite(nextCheckAt)
+    ? Math.max(1000, nextCheckAt - Date.now())
+    : fallbackProductUpdatePollInterval;
+  productUpdateTimer = window.setTimeout(() => {
+    productUpdateTimer = null;
+    void refreshProductUpdate();
+  }, Math.min(delay, 2_147_483_647));
+}
+
+async function refreshProductUpdate() {
+  if (productUpdateChecking || productUpdateStatus?.enabled === false) return;
+  productUpdateChecking = true;
+  renderBackgroundTaskCenter();
+  try {
+    applyProductUpdateMetadata(await api("/api/update-check"));
+  } catch {
+    // 更新探测失败时静默保留当前展示状态
+  } finally {
+    productUpdateChecking = false;
+    renderBackgroundTaskCenter();
+    scheduleProductUpdateCheck();
+  }
+}
+
 async function initializeProductFooters() {
   const year = String(new Date().getFullYear());
   document.querySelectorAll("[data-product-footer-year]").forEach((element) => { element.textContent = year; });
   applyProductHealthMetadata(null);
+  applyProductUpdateMetadata(null);
   await refreshSystemHealth();
+  void refreshProductUpdate();
 }
 
 function observeSystemBootId(value) {
@@ -2768,8 +2836,28 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
+function clearAuthenticationOverlays() {
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
+  document.querySelectorAll("[popover]").forEach((popover) => {
+    if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
+  });
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+}
+
+function invalidateAuthentication() {
+  state.user = null;
+  state.csrfToken = null;
+  moduleRequestCache.clear();
+  showAuth(false);
+}
+
 function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = false) {
   if (state.user) return;
+  document.documentElement.classList.remove("dev-auth-bypass");
+  document.documentElement.classList.add("login-route");
+  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
+  clearAuthenticationOverlays();
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -2897,6 +2985,7 @@ function dismissChapterInsightToast() {
 }
 
 function toast(message, type = "info") {
+  if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
@@ -5067,15 +5156,14 @@ function bindModuleContentInteractions() {
   moduleContentInteractionsBound = true;
   const host = $("#module-content");
   const open = async (card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization;
+    const id = card.dataset.openSetting ?? card.dataset.openRace ?? card.dataset.openOrganization;
     if (!id) return;
     if (card.dataset.openSetting) return openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly: true });
-    if (card.dataset.openCharacter) return openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openRace) return openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openOrganization) return openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly: true });
   };
   const findCard = (target) => target instanceof Element
-    ? target.closest("[data-open-setting], [data-open-character], [data-open-race], [data-open-organization]")
+    ? target.closest("[data-open-setting], [data-open-race], [data-open-organization]")
     : null;
   host.addEventListener("click", (event) => {
     if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
@@ -5608,10 +5696,7 @@ async function renderRaces() {
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
-  [state.organizations, state.characters] = await Promise.all([
-    moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? moduleApiAllPages("organizations", `/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.organizations = await moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`);
   mountModuleCount(state.organizations.length);
   const pageResult = paginateModuleItems(state.organizations, page, "organizations");
   moduleListPages.organizations = pageResult.page;
@@ -5916,10 +6001,11 @@ async function renderReviews(page = moduleListPages.reviews) {
   const canResolveReview = canEditModule("reviews");
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
-  const [reviews, characters] = await Promise.all([
-    moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`),
-    canReadCharacters ? moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
-  ]);
+  const reviews = await moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`);
+  const hasCharacterDuplicateReviews = reviews.some((item) => item.itemType === "character-duplicate");
+  const characters = canReadCharacters && hasCharacterDuplicateReviews
+    ? await moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`)
+    : [];
   mountModuleCount(reviews.length);
   const pageResult = paginateModuleItems(reviews, page, "reviews");
   moduleListPages.reviews = pageResult.page;
@@ -6760,7 +6846,9 @@ function renderProviderCards(providers, models) {
           : provider.connectionStatus !== "success"
             ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
             : "";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
+      const capability = model.multimodalEnabled ? " · 多模态" : "";
+      const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
@@ -6776,8 +6864,11 @@ function bindPlatformProviderActions(host, providers, models) {
     await renderPlatformAiConfig();
     await loadModels();
   }));
-  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
-  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(undefined, models.find((model) => model.id === button.dataset.editModel))));
+  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel))));
+  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => {
+    const model = models.find((item) => item.id === button.dataset.editModel);
+    openModelDialog(undefined, model, providers.find((provider) => provider.id === model?.providerId));
+  }));
   host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
 }
 
@@ -6785,14 +6876,21 @@ function renderTaskDefaults(models, providers, taskDefaults, settings) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const availableModels = models.filter((model) => isSelectableModel(model));
+  const imageModels = availableModels.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
   const availableModelIds = new Set(availableModels.map((model) => model.id));
   const currentDefaultModels = taskDefaults
     .map((item) => item.model)
     .filter((model) => model && !availableModelIds.has(model.id));
   const optionModels = [...availableModels, ...currentDefaultModels];
-  return optionModels.length ? `<section class="config-section">
+  return optionModels.length || imageModels.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
-    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
+    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>多模态读图工具</td><td><select class="default-model-select" data-image-tool-default aria-label="多模态读图工具默认模型">
+      <option value="" ${settings.imageToolModelId ? "" : "selected"}>跟随平台默认</option>
+      ${imageModels.map((model) => {
+        const provider = providerById.get(model.providerId);
+        return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+      }).join("")}
+    </select></td></tr><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
       <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
       ${models.map((model) => {
         const provider = providerById.get(model.providerId);
@@ -6857,8 +6955,7 @@ function relationshipIndexStatusMarkup(status) {
 function updateBackgroundTaskCenterVisibility() {
   const button = $("#background-task-button");
   if (!button) return;
-  const visible = Boolean(state.work)
-    && (canReadModule("tasks") || canReadModule("ai-settings"));
+  const visible = Boolean(state.user);
   button.classList.toggle("hidden", !visible);
   if (!visible) {
     $("#background-task-count")?.classList.add("hidden");
@@ -6867,13 +6964,44 @@ function updateBackgroundTaskCenterVisibility() {
   const activityCount = backgroundTaskActivityCount(
     backgroundTaskCenterSnapshot.taskPage,
     backgroundTaskCenterSnapshot.relationshipIndex
-  );
+  ) + (productUpdateChecking ? 1 : 0);
   const badge = $("#background-task-count");
   badge.textContent = activityCount > 99 ? "99+" : String(activityCount);
   badge.classList.toggle("hidden", activityCount === 0);
   button.classList.toggle("is-active", activityCount > 0);
   button.setAttribute("aria-label", activityCount > 0 ? `后台任务中心，${activityCount} 项进行中` : "后台任务中心");
   button.setAttribute("title", activityCount > 0 ? `后台任务中心 · ${activityCount} 项进行中` : "后台任务中心");
+}
+
+function backgroundProductUpdateMarkup() {
+  const status = productUpdateStatus;
+  const updateCheckDisabled = status?.enabled === false;
+  const currentVersion = String(status?.currentVersion ?? "").trim();
+  const latestVersion = String(status?.latestVersion ?? "").trim();
+  const nextCheckAt = formatDateTime(status?.nextCheckAt) || "等待首次探测";
+  const updateAvailable = status?.updateAvailable === true && Boolean(status?.releaseUrl);
+  const badgeClass = productUpdateChecking ? "running" : updateCheckDisabled ? "unknown" : updateAvailable ? "partial" : status?.checked === true ? "completed" : status ? "unknown" : "pending";
+  const badgeLabel = productUpdateChecking ? "探测中" : updateCheckDisabled ? "已关闭" : updateAvailable ? "有新版本" : status?.checked === true ? "已是最新" : status ? "本次未探测" : "等待探测";
+  const detail = productUpdateChecking
+    ? "正在请求 GitHub 最新 Release"
+    : updateCheckDisabled
+      ? "已通过服务端配置关闭版本更新探测"
+      : updateAvailable
+        ? `当前 v${currentVersion || "—"} · 最新 v${latestVersion} · 下次探测 ${nextCheckAt}`
+        : status?.checked === true
+          ? `当前 v${currentVersion || "—"} · 下次探测 ${nextCheckAt}`
+          : status
+            ? `GitHub 暂不可用 · 下次探测 ${nextCheckAt}`
+            : "应用启动后将在后台探测 GitHub Release";
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading"><div><strong>版本更新探测</strong><small>按服务端配置定期检查 GitHub Release</small></div></div>
+    <div class="background-task-list"><article class="background-task-row">
+      <span class="task-status-badge is-${badgeClass}"><span class="task-status-indicator" aria-hidden="true"></span><span>${badgeLabel}</span></span>
+      <div><strong>叙界版本更新</strong><small>${esc(detail)}</small></div>
+      <span class="background-task-progress">${updateAvailable ? `v${esc(latestVersion)}` : "系统"}</span>
+      ${updateAvailable ? `<a class="ghost-button background-update-link" href="${esc(status.releaseUrl)}" target="_blank" rel="noopener noreferrer" aria-label="查看叙界 v${esc(latestVersion)} 更新说明">说明</a>` : '<span class="background-task-action-placeholder" aria-hidden="true"></span>'}
+    </article></div>
+  </section>`;
 }
 
 function backgroundTaskTransitionMessage(transition) {
@@ -6934,17 +7062,17 @@ function renderBackgroundTaskCenter() {
   updateBackgroundTaskCenterVisibility();
   const content = $("#background-task-content");
   if (!content) return;
-  content.innerHTML = `${backgroundTaskListMarkup(
+  content.innerHTML = `${backgroundProductUpdateMarkup()}${state.work ? `${backgroundTaskListMarkup(
     backgroundTaskCenterSnapshot.taskPage,
     backgroundTaskCenterSnapshot.errors.tasks
   )}${backgroundIndexMarkup(
     backgroundTaskCenterSnapshot.relationshipIndex,
     backgroundTaskCenterSnapshot.errors.index
-  )}`;
+  )}` : ""}`;
   $("#background-task-dialog-meta").textContent = state.work
-    ? `《${state.work.title}》的分析任务与索引队列`
-    : "当前作品的分析任务与索引队列";
-  $("#background-task-open-analysis").classList.toggle("hidden", !canReadModule("tasks"));
+    ? `系统更新与《${state.work.title}》的分析任务、索引队列`
+    : "系统更新探测状态";
+  $("#background-task-open-analysis").classList.toggle("hidden", !state.work || !canReadModule("tasks"));
   content.querySelectorAll("[data-background-task-detail]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -7063,8 +7191,7 @@ function stopBackgroundTaskCenter() {
   backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
   const dialog = $("#background-task-dialog");
   if (dialog?.open) dialog.close();
-  $("#background-task-button")?.classList.add("hidden");
-  $("#background-task-count")?.classList.add("hidden");
+  updateBackgroundTaskCenterVisibility();
 }
 
 function startBackgroundTaskCenter(workId) {
@@ -7081,13 +7208,33 @@ async function renderPlatformAiConfig() {
     api("/api/platform/ai/settings")
   ]);
   const host = $("#platform-ai-content");
-  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section>${renderProviderCards(providers, models)}`;
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const imageModels = models.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
+  const imageModelOptions = imageModels.map((model) => {
+    const provider = providerById.get(model.providerId);
+    const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
+    return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""} ${available || model.id === settings.imageToolModelId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
+  }).join("");
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models)}</section>`;
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
     try {
       await api("/api/platform/ai/settings", { method: "PATCH", body: { systemPrompt: $("#platform-system-prompt").value } });
       toast("平台全局系统提示词已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-platform-image-tool-model").addEventListener("click", async () => {
+    const button = $("#save-platform-image-tool-model");
+    button.disabled = true;
+    try {
+      await api("/api/platform/ai/settings", { method: "PATCH", body: { imageToolModelId: $("#platform-image-tool-model").value || null } });
+      toast("平台多模态读图默认模型已更新");
+      await renderPlatformAiConfig();
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -7253,7 +7400,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
@@ -7280,7 +7427,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -7479,6 +7626,18 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { titleGenerationModelId: select.value } });
       toast("创作助手对话标题生成模型已更新");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    await renderBookAiSettings();
+    await loadModels();
+  });
+  host.querySelector("[data-image-tool-default]")?.addEventListener("change", async (event) => {
+    const select = event.currentTarget;
+    select.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { imageToolModelId: select.value || null } });
+      toast("本书多模态读图模型已更新");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -7692,7 +7851,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-attachment-module="${esc(options.attachmentModule ?? "settings")}" data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field${options.readOnly ? " is-read-only" : ""}" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-attachment-module="${esc(options.attachmentModule ?? "settings")}" data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"${options.readOnly ? ' aria-readonly="true"' : ""}></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -8295,6 +8454,15 @@ function activateCharacterEditorTab(key) {
     button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-character-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.characterEditorPanel !== key));
+  if (
+    key === "relationships"
+    && characterEditorItem?.id
+    && canReadModule("relationships")
+    && !characterEditorRelationshipsLoaded
+    && !characterEditorRelationshipsLoading
+  ) {
+    void loadCharacterEditorRelationships(characterEditorItem.id);
+  }
 }
 
 function setCharacterHistoryVisible(visible) {
@@ -8314,6 +8482,10 @@ function renderCharacterEditorRelationships() {
   }
   if (characterEditorRelationshipsLoading) {
     host.innerHTML = '<p class="character-relationship-status">正在读取人物关系……</p>';
+    return;
+  }
+  if (!characterEditorRelationshipsLoaded) {
+    host.innerHTML = '<p class="character-relationship-status">打开人物关系分区后载入关系。</p>';
     return;
   }
   const characterId = String(characterEditorItem.id);
@@ -8338,20 +8510,23 @@ function renderCharacterEditorRelationships() {
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
 
-async function loadCharacterEditorRelationships(characterId) {
+async function loadCharacterEditorRelationships(characterId, { refresh = false } = {}) {
   const workId = state.work?.id;
   if (!workId || characterEditorItem?.id !== characterId) return;
+  if (!refresh && (characterEditorRelationshipsLoaded || characterEditorRelationshipsLoading)) return;
   characterEditorRelationshipsLoading = true;
+  characterEditorRelationshipsLoaded = false;
   renderCharacterEditorRelationships();
   let loaded = false;
   try {
     const [characters, relationships] = await Promise.all([
-      apiAllPages(`/api/works/${workId}/characters`),
-      apiAllPages(`/api/works/${workId}/relationships`)
+      moduleApiAllPages("characters", `/api/works/${workId}/characters`),
+      moduleApiAllPages("relationships", `/api/works/${workId}/relationships`)
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
     characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
     if (state.work?.id === workId && characterEditorItem?.id === characterId) {
@@ -8369,7 +8544,7 @@ async function refreshRelationshipSurfaces(characterId = null) {
   const tasks = [];
   if (state.module === "relationships") tasks.push(renderRelationships());
   if (characterId && entityEditorType === "character" && !$("#entity-editor-view").classList.contains("hidden") && characterEditorItem?.id === characterId) {
-    tasks.push(loadCharacterEditorRelationships(characterId));
+    tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
 }
@@ -9140,15 +9315,15 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
-  [state.races, state.organizations, state.characters] = await Promise.all([
+  [state.races, state.organizations] = await Promise.all([
     canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
   characterEditorRelationships = [];
-  characterEditorRelationshipsLoading = Boolean(item);
+  characterEditorRelationshipsLoading = false;
+  characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
@@ -9160,20 +9335,30 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const characterMergeButton = $("#character-merge-button");
   const characterDeleteButton = $("#character-delete-button");
   const canManageCharacter = Boolean(item && !readOnly && canEditModule("characters"));
-  characterMergeButton.classList.toggle("hidden", !canManageCharacter || state.characters.length < 2);
+  characterMergeButton.classList.toggle("hidden", !canManageCharacter);
   characterDeleteButton.classList.toggle("hidden", !canManageCharacter);
   characterMergeButton.onclick = async () => {
     if (!item) return;
-    await closeEntityEditor({ force: true });
-    openEntityMergeDialog({
-      typeLabel: "角色",
-      source: item,
-      candidates: state.characters,
-      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
-      body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
-      refresh: renderCharacters,
-      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
-    });
+    const workId = state.work?.id;
+    if (!workId) return;
+    try {
+      const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`);
+      if (state.work?.id !== workId || characterEditorItem?.id !== item.id) return;
+      state.characters = candidates;
+      if (candidates.length < 2) return toast("至少需要两个角色才能合并", "error");
+      await closeEntityEditor({ force: true });
+      openEntityMergeDialog({
+        typeLabel: "角色",
+        source: item,
+        candidates,
+        endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
+        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
+        refresh: renderCharacters,
+        impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+      });
+    } catch (error) {
+      toast(error.message, "error");
+    }
   };
   characterDeleteButton.onclick = () => {
     if (!item) return;
@@ -9231,7 +9416,6 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
-    if (canReadModule("relationships")) void loadCharacterEditorRelationships(item.id);
     void loadCharacterMarkdownSections(item.id);
   }
 }
@@ -9263,7 +9447,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
-    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
+    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${readOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
     + knowledgeEditorSection("settings", title, "", '<div id="knowledge-markdown-sections" class="knowledge-markdown-sections"></div>')
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
@@ -9278,8 +9462,13 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
   if (kind === "race" && !(await ensureCompleteRaceList())) return;
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
+  const memberCharacters = readOnly
+    ? (Array.isArray(item?.members) ? item.members : []).map((member) => ({ id: member.characterId, name: member.name, aliases: [] }))
+    : canReadModule("characters")
+      ? await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
+      : [];
+  if (!readOnly) state.characters = memberCharacters;
+  const memberOptions = memberCharacters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
   const module = isRace ? "races" : "organizations";
   const label = isRace ? "种族" : "组织";
@@ -9588,7 +9777,7 @@ function openTimelineSplitDialog(item) {
 
 async function openRelationshipDialog(item, options = {}) {
   if (!canReadModule("characters")) return toast("配置人物关系前需要角色模块读取权限", "error");
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
@@ -10016,18 +10205,23 @@ function openProviderDialog(item) {
   protocolSelect.addEventListener("change", syncProviderCredentialField);
 }
 
-function openModelDialog(providerId, item = null) {
+function openModelDialog(providerId, item = null, provider = null) {
   const values = modelFormValues(item);
+  const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol);
+  const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
+  const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
+    ? "使用当前已保存的模型标识符和供应商凭据，并发送一张测试图片验证图片请求。"
+    : "使用当前已保存的模型标识符和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
     ? `<section class="model-connection-test">
-        <div><strong>模型连接测试</strong><p>使用当前已保存的模型标识符和供应商凭据发起最小请求。</p></div>
+        <div><strong>模型连接测试</strong><p>${connectionTestDescription}</p></div>
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -10037,6 +10231,16 @@ function openModelDialog(providerId, item = null) {
   const contextWindowHint = $("#model-context-window-hint");
   const temperatureInput = $("#dialog-fields input[name='temperature']");
   const temperatureHint = $("#model-temperature-hint");
+  const multimodalInput = $("#model-multimodal-enabled");
+  const imageDefaultField = $("#model-image-tool-default-field");
+  const imageDefaultInput = $("#model-image-tool-default");
+  const syncMultimodalFields = () => {
+    if (!multimodalInput || !imageDefaultField || !imageDefaultInput) return;
+    const hideImageDefault = !multimodalInput.checked || !imageDefaultSupported;
+    imageDefaultField.hidden = hideImageDefault;
+    imageDefaultField.classList.toggle("hidden", hideImageDefault);
+    if (!multimodalInput.checked) imageDefaultInput.checked = false;
+  };
   const syncModelContextWindowGuidance = () => {
     const guidance = modelContextWindowGuidance(contextWindowInput.value);
     contextWindowInput.setCustomValidity(guidance.belowMinimum ? "模型上下文不能低于 32K（32768 Token）。" : "");
@@ -10051,13 +10255,14 @@ function openModelDialog(providerId, item = null) {
     syncKimiTemperature();
   });
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
+  multimodalInput?.addEventListener("change", syncMultimodalFields);
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     button.textContent = "测试中";
     try {
       const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-      toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      toast(result.ok ? (result.multimodalTested ? "模型连接测试成功，图片请求已验证" : "模型连接测试成功") : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
       await renderPlatformAiConfig();
       await loadModels();
     } catch (error) {
@@ -10069,6 +10274,7 @@ function openModelDialog(providerId, item = null) {
   });
   syncModelContextWindowGuidance();
   syncKimiTemperature();
+  syncMultimodalFields();
 }
 
 async function sendAi() {
@@ -10773,17 +10979,7 @@ function hasUnsavedEditorChanges() {
 }
 
 function redirectToLoginAfterSystemRestart() {
-  state.user = null;
-  state.csrfToken = null;
-  moduleRequestCache.clear();
-  document.documentElement.classList.remove("dev-auth-bypass");
-  document.documentElement.classList.add("login-route");
-  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-  const toastRegion = $("#toast-region");
-  toastRegion.replaceChildren();
-  if (typeof toastRegion.hidePopover === "function" && toastRegion.matches(":popover-open")) toastRegion.hidePopover();
-  $("#system-restart-dialog").close();
-  showAuth(false);
+  invalidateAuthentication();
 }
 
 $("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
@@ -11967,13 +12163,14 @@ $("#background-task-button").addEventListener("click", () => {
   const dialog = $("#background-task-dialog");
   if (!dialog.open) dialog.showModal();
   void refreshBackgroundTaskCenter();
+  void refreshProductUpdate();
 });
 $("#background-task-dialog").addEventListener("close", scheduleBackgroundTaskCenterRefresh);
 $("#background-task-refresh").addEventListener("click", async () => {
   const button = $("#background-task-refresh");
   button.disabled = true;
   try {
-    await refreshBackgroundTaskCenter();
+    await Promise.all([refreshBackgroundTaskCenter(), refreshProductUpdate()]);
   } finally {
     button.disabled = false;
   }
