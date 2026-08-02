@@ -4,6 +4,7 @@ import {
   defaultReleaseCheckRetries,
   defaultReleaseCheckTimeoutMs,
   isNewerRelease,
+  maximumReleaseCheckIntervalMs,
   maximumReleaseCheckRetries,
   maximumReleaseCheckTimeoutMs,
   minimumReleaseCheckIntervalMs,
@@ -27,11 +28,15 @@ describe("GitHub Release 更新探测", () => {
     expect(resolveReleaseCheckIntervalMs(undefined)).toBe(defaultReleaseCheckIntervalMs);
     expect(resolveReleaseCheckIntervalMs("")).toBe(defaultReleaseCheckIntervalMs);
     expect(resolveReleaseCheckIntervalMs("invalid")).toBe(defaultReleaseCheckIntervalMs);
+    expect(resolveReleaseCheckIntervalMs("0")).toBe(0);
     expect(resolveReleaseCheckIntervalMs("-5")).toBe(minimumReleaseCheckIntervalMs);
-    expect(resolveReleaseCheckIntervalMs("0")).toBe(minimumReleaseCheckIntervalMs);
     expect(resolveReleaseCheckIntervalMs("5")).toBe(minimumReleaseCheckIntervalMs);
     expect(resolveReleaseCheckIntervalMs("10")).toBe(minimumReleaseCheckIntervalMs);
     expect(resolveReleaseCheckIntervalMs("25")).toBe(25 * 60 * 1000);
+    expect(maximumReleaseCheckIntervalMs).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(resolveReleaseCheckIntervalMs("10080")).toBe(maximumReleaseCheckIntervalMs);
+    expect(resolveReleaseCheckIntervalMs("20000")).toBe(maximumReleaseCheckIntervalMs);
+    expect(resolveReleaseCheckIntervalMs("1e20")).toBe(maximumReleaseCheckIntervalMs);
   });
 
   it("解析超时与重试配置并限制安全边界", () => {
@@ -61,6 +66,7 @@ describe("GitHub Release 更新探测", () => {
     });
 
     await expect(checker.check()).resolves.toEqual({
+      enabled: true,
       checked: true,
       updateAvailable: true,
       currentVersion: "0.6.7",
@@ -85,6 +91,17 @@ describe("GitHub Release 更新探测", () => {
     now = minimumReleaseCheckIntervalMs;
     await checker.check();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("配置为 0 时关闭探测且不访问 GitHub", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    await expect(new ReleaseUpdateChecker("0.6.7", fetchMock, { intervalMs: 0 }).check()).resolves.toEqual({
+      enabled: false,
+      checked: false,
+      updateAvailable: false,
+      currentVersion: "0.6.7"
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("失败后按配置进行一次内部重试", async () => {

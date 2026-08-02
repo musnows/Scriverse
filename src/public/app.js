@@ -2706,6 +2706,10 @@ async function refreshSystemHealth() {
 
 function scheduleProductUpdateCheck() {
   if (productUpdateTimer !== null) window.clearTimeout(productUpdateTimer);
+  if (productUpdateStatus?.enabled === false) {
+    productUpdateTimer = null;
+    return;
+  }
   const nextCheckAt = Date.parse(String(productUpdateStatus?.nextCheckAt ?? ""));
   const delay = Number.isFinite(nextCheckAt)
     ? Math.max(1000, nextCheckAt - Date.now())
@@ -2717,7 +2721,7 @@ function scheduleProductUpdateCheck() {
 }
 
 async function refreshProductUpdate() {
-  if (productUpdateChecking) return;
+  if (productUpdateChecking || productUpdateStatus?.enabled === false) return;
   productUpdateChecking = true;
   renderBackgroundTaskCenter();
   try {
@@ -6971,21 +6975,24 @@ function updateBackgroundTaskCenterVisibility() {
 
 function backgroundProductUpdateMarkup() {
   const status = productUpdateStatus;
+  const updateCheckDisabled = status?.enabled === false;
   const currentVersion = String(status?.currentVersion ?? "").trim();
   const latestVersion = String(status?.latestVersion ?? "").trim();
   const nextCheckAt = formatDateTime(status?.nextCheckAt) || "等待首次探测";
   const updateAvailable = status?.updateAvailable === true && Boolean(status?.releaseUrl);
-  const badgeClass = productUpdateChecking ? "running" : updateAvailable ? "partial" : status?.checked === true ? "completed" : status ? "unknown" : "pending";
-  const badgeLabel = productUpdateChecking ? "探测中" : updateAvailable ? "有新版本" : status?.checked === true ? "已是最新" : status ? "本次未探测" : "等待探测";
+  const badgeClass = productUpdateChecking ? "running" : updateCheckDisabled ? "unknown" : updateAvailable ? "partial" : status?.checked === true ? "completed" : status ? "unknown" : "pending";
+  const badgeLabel = productUpdateChecking ? "探测中" : updateCheckDisabled ? "已关闭" : updateAvailable ? "有新版本" : status?.checked === true ? "已是最新" : status ? "本次未探测" : "等待探测";
   const detail = productUpdateChecking
     ? "正在请求 GitHub 最新 Release"
-    : updateAvailable
-      ? `当前 v${currentVersion || "—"} · 最新 v${latestVersion} · 下次探测 ${nextCheckAt}`
-      : status?.checked === true
-        ? `当前 v${currentVersion || "—"} · 下次探测 ${nextCheckAt}`
-        : status
-          ? `GitHub 暂不可用 · 下次探测 ${nextCheckAt}`
-          : "应用启动后将在后台探测 GitHub Release";
+    : updateCheckDisabled
+      ? "已通过服务端配置关闭版本更新探测"
+      : updateAvailable
+        ? `当前 v${currentVersion || "—"} · 最新 v${latestVersion} · 下次探测 ${nextCheckAt}`
+        : status?.checked === true
+          ? `当前 v${currentVersion || "—"} · 下次探测 ${nextCheckAt}`
+          : status
+            ? `GitHub 暂不可用 · 下次探测 ${nextCheckAt}`
+            : "应用启动后将在后台探测 GitHub Release";
   return `<section class="background-task-section">
     <div class="background-task-section-heading"><div><strong>版本更新探测</strong><small>按服务端配置定期检查 GitHub Release</small></div></div>
     <div class="background-task-list"><article class="background-task-row">

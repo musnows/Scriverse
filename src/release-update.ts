@@ -4,12 +4,14 @@ const minutesToMilliseconds = 60 * 1000;
 const secondsToMilliseconds = 1000;
 export const defaultReleaseCheckIntervalMs = 60 * minutesToMilliseconds;
 export const minimumReleaseCheckIntervalMs = 10 * minutesToMilliseconds;
+export const maximumReleaseCheckIntervalMs = 7 * 24 * 60 * minutesToMilliseconds;
 export const defaultReleaseCheckTimeoutMs = 90 * secondsToMilliseconds;
 export const maximumReleaseCheckTimeoutMs = 300 * secondsToMilliseconds;
 export const defaultReleaseCheckRetries = 1;
 export const maximumReleaseCheckRetries = 5;
 
 export type ReleaseUpdateResult = {
+  enabled: boolean;
   checked: boolean;
   updateAvailable: boolean;
   currentVersion: string;
@@ -23,7 +25,8 @@ export function resolveReleaseCheckIntervalMs(value: string | undefined): number
   if (value === undefined || value.trim() === "") return defaultReleaseCheckIntervalMs;
   const minutes = Number(value);
   if (!Number.isFinite(minutes)) return defaultReleaseCheckIntervalMs;
-  return Math.max(minimumReleaseCheckIntervalMs, Math.round(minutes * minutesToMilliseconds));
+  if (minutes === 0) return 0;
+  return Math.min(maximumReleaseCheckIntervalMs, Math.max(minimumReleaseCheckIntervalMs, Math.round(minutes * minutesToMilliseconds)));
 }
 
 export function resolveReleaseCheckTimeoutMs(value: string | undefined): number {
@@ -97,13 +100,27 @@ export class ReleaseUpdateChecker {
   ) {
     this.currentVersion = currentVersion;
     this.fetchImpl = fetchImpl;
-    this.intervalMs = Math.max(minimumReleaseCheckIntervalMs, options.intervalMs ?? defaultReleaseCheckIntervalMs);
+    const configuredIntervalMs = options.intervalMs ?? defaultReleaseCheckIntervalMs;
+    this.intervalMs = configuredIntervalMs === 0
+      ? 0
+      : Math.min(
+        maximumReleaseCheckIntervalMs,
+        Math.max(minimumReleaseCheckIntervalMs, Number.isFinite(configuredIntervalMs) ? Math.round(configuredIntervalMs) : defaultReleaseCheckIntervalMs)
+      );
     this.timeoutMs = Math.max(secondsToMilliseconds, Math.min(maximumReleaseCheckTimeoutMs, options.timeoutMs ?? defaultReleaseCheckTimeoutMs));
     this.retries = Math.min(maximumReleaseCheckRetries, Math.max(0, Math.floor(options.retries ?? defaultReleaseCheckRetries)));
     this.now = options.now ?? Date.now;
   }
 
   check(): Promise<ReleaseUpdateResult> {
+    if (this.intervalMs === 0) {
+      return Promise.resolve({
+        enabled: false,
+        checked: false,
+        updateAvailable: false,
+        currentVersion: this.currentVersion
+      });
+    }
     if (this.cached && this.cached.expiresAt > this.now()) return Promise.resolve(this.cached.result);
     if (this.inFlight) return this.inFlight;
     this.inFlight = this.fetchLatestRelease().then((result) => {
@@ -126,6 +143,7 @@ export class ReleaseUpdateChecker {
 
   private async fetchLatestRelease(): Promise<ReleaseUpdateResult> {
     const unavailable: ReleaseUpdateResult = {
+      enabled: true,
       checked: false,
       updateAvailable: false,
       currentVersion: this.currentVersion
@@ -151,6 +169,7 @@ export class ReleaseUpdateChecker {
         if (!parseVersion(latestVersion)) continue;
         const updateAvailable = isNewerRelease(this.currentVersion, latestVersion);
         return {
+          enabled: true,
           checked: true,
           updateAvailable,
           currentVersion: this.currentVersion,
