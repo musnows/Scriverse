@@ -2481,6 +2481,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .dialog-fields input, .dialog-fields textarea, .dialog-fields select { width: 100%; padding: 9px 10px; font-size: 13px; }
 .dialog-fields textarea { resize: vertical; min-height: 90px; line-height: 1.6; }
+.system-restart-dialog { width: min(500px, 92vw); }
+.system-restart-message { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.7; }
 .background-task-dialog { width: min(860px, 94vw); }
 .background-task-content { display: grid; gap: 16px; max-height: 64vh; overflow-y: auto; padding: 20px 24px; }
 .background-task-section { display: grid; gap: 12px; min-width: 0; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }

@@ -2684,7 +2684,10 @@ function observeSystemBootId(value) {
   systemRestartDetected = true;
   if (systemBootCheckTimer !== null) clearTimeout(systemBootCheckTimer);
   systemBootCheckTimer = null;
-  invalidateAuthentication();
+  clearAuthenticationOverlays();
+  const dialog = $("#system-restart-dialog");
+  if (!dialog.open) dialog.showModal();
+  window.requestAnimationFrame(() => $("#system-restart-dialog-title").focus());
   return true;
 }
 
@@ -2912,7 +2915,7 @@ function dismissChapterInsightToast() {
 }
 
 function toast(message, type = "info") {
-  if (!state.user && document.documentElement.classList.contains("login-route")) return;
+  if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
@@ -10781,9 +10784,18 @@ $("#onboarding-dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
   completeOnboarding();
 });
+$("#system-restart-dialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+});
 function hasUnsavedEditorChanges() {
   return state.dirty || entityEditorDirty || characterSectionEditorDirty || knowledgeSectionEditorDirty;
 }
+
+function redirectToLoginAfterSystemRestart() {
+  invalidateAuthentication();
+}
+
+$("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
 $("#onboarding-dialog").addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     event.preventDefault();
