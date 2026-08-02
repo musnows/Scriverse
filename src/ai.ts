@@ -362,7 +362,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"] as const;
-const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self"] as const;
+const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
 const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
@@ -687,6 +687,11 @@ const recallSelfArguments = z.object({
   categories: z.array(z.enum(["profile", "sections", "relationships", "timeline", "chapters"])).max(5).default([]),
   cursor: agentToolCursor
 }).strict();
+const recallRelationshipArguments = z.object({
+  otherCharacter: z.string().trim().max(200).default(""),
+  query: z.string().trim().max(200).default(""),
+  cursor: agentToolCursor
+}).strict();
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
@@ -750,6 +755,14 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "recall_self",
       description: "回忆与当前扮演角色自身有关的资料。角色、种族、组织状态分别以 isDead、isExtinct、isDissolved 为唯一权威标识；只有值为 true 才能判定已死亡、已灭绝或已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据回忆、正文或剧情暗示自行改判。只能读取自己的角色卡、人物档案章节，以及自己参与的关系、时间线和正文片段；不能指定或查询其他角色。",
       parameters: { type: "object", properties: { query: { type: "string", maxLength: 200, default: "", description: "可选的回忆关键词；留空时返回角色自身的核心资料。" }, categories: { type: "array", items: { type: "string", enum: ["profile", "sections", "relationships", "timeline", "chapters"] }, maxItems: 5 }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  recall_relationship: {
+    type: "function",
+    function: {
+      name: "recall_relationship",
+      description: "查询当前扮演角色与其他角色之间已记录的人物关系。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。可按对方角色名、别名或关系类型、关键词筛选；留空时返回当前角色参与的全部关系。已拒绝的关系候选不会作为记忆返回。",
+      parameters: { type: "object", properties: { otherCharacter: { type: "string", maxLength: 200, default: "", description: "可选的对方角色姓名、别名或角色 ID。" }, query: { type: "string", maxLength: 200, default: "", description: "可选的关系类型、关键词、状态或证据短语。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
     }
   }
 };
@@ -3811,10 +3824,11 @@ export class AiManager {
     const platformPrompt = roleplayCharacterId ? "" : String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = roleplayCharacterId ? "" : String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
     const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId);
-    const toolGuidance = enabledToolIds.includes("recall_self")
+    const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship")
       ? [
-          "唯一可用的内部记忆能力是 recall_self。不要向用户提及工具、调用过程、资料库或检索结果。",
-          "当回应涉及角色的身份、经历、关系、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆。该能力不能指定其他角色，也不能查询与当前角色无关的信息。",
+          `当前可用的内部记忆能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
+          "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
+          ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
@@ -4076,7 +4090,13 @@ export class AiManager {
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     if (roleplayCharacterId) {
       const requested = requestedToolIds ? new Set(requestedToolIds) : null;
-      return canReadWorkModule(permissions, "characters") && (!requested || requested.has("recall_self")) ? ["recall_self"] : [];
+      if (!canReadWorkModule(permissions, "characters")) return [];
+      const roleplayTools: AgentToolId[] = [];
+      if (!requested || requested.has("recall_self")) roleplayTools.push("recall_self");
+      if (canReadWorkModule(permissions, "relationships") && (!requested || requested.has("recall_relationship"))) {
+        roleplayTools.push("recall_relationship");
+      }
+      return roleplayTools;
     }
     const sourceTools = conversationId && taskType === "chat"
       ? this.store.ensureAiConversationAgentTools(conversationId, workId)
@@ -4141,6 +4161,7 @@ export class AiManager {
       : name === "read_character_sections" ? readCharacterSectionsArguments
       : name === "search_drafts" ? searchDraftsArguments
       : name === "recall_self" ? recallSelfArguments
+      : name === "recall_relationship" ? recallRelationshipArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
     const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
@@ -4150,7 +4171,8 @@ export class AiManager {
       ? toolId as ConfiguredAgentToolId
       : null;
     const toolAvailable = roleplayCharacterId
-      ? toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters")
+      ? (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
+        || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
     if (!schema || !toolId || !toolAvailable) {
       return {
@@ -4175,6 +4197,70 @@ export class AiManager {
       };
     }
     const args = parsed.data;
+    if (name === "recall_relationship") {
+      if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_relationship");
+      const { otherCharacter: otherCharacterQuery, query, cursor } = args as z.infer<typeof recallRelationshipArguments>;
+      const character = this.store.getCharacter(roleplayCharacterId);
+      if (String(character.workId) !== workId) throw new Error("Roleplay character belongs to a different work");
+      const characters = new Map(this.store.listCharacters(workId, false, true).map((item) => [String(item.id), item]));
+      const normalizedOtherCharacterQuery = otherCharacterQuery.toLocaleLowerCase("zh-CN");
+      const normalizedQuery = query.toLocaleLowerCase("zh-CN");
+      const characterSearchText = (item: Record<string, unknown> | null): string => {
+        if (!item) return "";
+        const aliases = Array.isArray(item.aliases) ? item.aliases.filter((alias): alias is string => typeof alias === "string") : [];
+        return [item.id, item.name, item.code, ...aliases].map((value) => String(value ?? "")).join("\n").toLocaleLowerCase("zh-CN");
+      };
+      const memoryRecords: Record<string, unknown>[] = [];
+      for (const relationship of this.store.listRelationships(workId)) {
+        if (relationship.confirmationStatus === "rejected") continue;
+        const fromCharacterId = String(relationship.fromCharacterId);
+        const toCharacterId = String(relationship.toCharacterId);
+        if (fromCharacterId !== roleplayCharacterId && toCharacterId !== roleplayCharacterId) continue;
+        const otherCharacterId = fromCharacterId === roleplayCharacterId ? toCharacterId : fromCharacterId;
+        const other = characters.get(otherCharacterId);
+        if (!other || (normalizedOtherCharacterQuery && !characterSearchText(other).includes(normalizedOtherCharacterQuery))) continue;
+        const selfIsFrom = fromCharacterId === roleplayCharacterId;
+        const record = {
+          category: "relationship",
+          relationshipId: String(relationship.id),
+          self: String(character.name),
+          other: String(other.name),
+          direction: relationship.directed ? (selfIsFrom ? "self_to_other" : "other_to_self") : "mutual",
+          directed: Boolean(relationship.directed),
+          relationshipType: relationship.category,
+          subtype: relationship.subtype,
+          keywords: relationship.keywords,
+          currentStatus: relationship.currentStatus,
+          timeRange: relationship.timeRange,
+          confidence: relationship.confidence,
+          evidence: relationship.evidence,
+          confirmationStatus: relationship.confirmationStatus,
+          locked: relationship.locked,
+          versionNo: relationship.versionNo
+        };
+        if (!normalizedQuery || JSON.stringify(record).toLocaleLowerCase("zh-CN").includes(normalizedQuery)) memoryRecords.push(record);
+      }
+      const records = structuralToolResultRecords(memoryRecords, maximumRecordChars);
+      const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
+        ok: true,
+        data: {
+          identity: { name: character.name, code: character.code },
+          otherCharacter: otherCharacterQuery,
+          query,
+          relationships: page,
+          ...(memoryRecords.length === 0 ? { hint: "No matching relationship memory was found." } : {})
+        },
+        pagination
+      }), maximumResultChars);
+      return {
+        id: toolCall.id,
+        name,
+        calledAt,
+        arguments: { otherCharacter: otherCharacterQuery, query, ...(cursor > 0 ? { cursor } : {}) },
+        status: "completed",
+        result
+      };
+    }
     if (name === "recall_self") {
       if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_self");
       const { query, categories: categoryList, cursor } = args as z.infer<typeof recallSelfArguments>;
