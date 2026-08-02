@@ -969,6 +969,7 @@ let knowledgeSectionEditorDirty = false;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
+let characterEditorRelationshipsLoaded = false;
 let characterEditorSections = [];
 let characterSectionPendingAttachments = [];
 let markdownEditorPendingAttachments = [];
@@ -5151,15 +5152,14 @@ function bindModuleContentInteractions() {
   moduleContentInteractionsBound = true;
   const host = $("#module-content");
   const open = async (card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization;
+    const id = card.dataset.openSetting ?? card.dataset.openRace ?? card.dataset.openOrganization;
     if (!id) return;
     if (card.dataset.openSetting) return openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly: true });
-    if (card.dataset.openCharacter) return openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openRace) return openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openOrganization) return openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly: true });
   };
   const findCard = (target) => target instanceof Element
-    ? target.closest("[data-open-setting], [data-open-character], [data-open-race], [data-open-organization]")
+    ? target.closest("[data-open-setting], [data-open-race], [data-open-organization]")
     : null;
   host.addEventListener("click", (event) => {
     if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
@@ -5692,10 +5692,7 @@ async function renderRaces() {
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
-  [state.organizations, state.characters] = await Promise.all([
-    moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? moduleApiAllPages("organizations", `/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.organizations = await moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`);
   mountModuleCount(state.organizations.length);
   const pageResult = paginateModuleItems(state.organizations, page, "organizations");
   moduleListPages.organizations = pageResult.page;
@@ -6000,10 +5997,11 @@ async function renderReviews(page = moduleListPages.reviews) {
   const canResolveReview = canEditModule("reviews");
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
-  const [reviews, characters] = await Promise.all([
-    moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`),
-    canReadCharacters ? moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
-  ]);
+  const reviews = await moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`);
+  const hasCharacterDuplicateReviews = reviews.some((item) => item.itemType === "character-duplicate");
+  const characters = canReadCharacters && hasCharacterDuplicateReviews
+    ? await moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`)
+    : [];
   mountModuleCount(reviews.length);
   const pageResult = paginateModuleItems(reviews, page, "reviews");
   moduleListPages.reviews = pageResult.page;
@@ -8449,6 +8447,15 @@ function activateCharacterEditorTab(key) {
     button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-character-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.characterEditorPanel !== key));
+  if (
+    key === "relationships"
+    && characterEditorItem?.id
+    && canReadModule("relationships")
+    && !characterEditorRelationshipsLoaded
+    && !characterEditorRelationshipsLoading
+  ) {
+    void loadCharacterEditorRelationships(characterEditorItem.id);
+  }
 }
 
 function setCharacterHistoryVisible(visible) {
@@ -8468,6 +8475,10 @@ function renderCharacterEditorRelationships() {
   }
   if (characterEditorRelationshipsLoading) {
     host.innerHTML = '<p class="character-relationship-status">正在读取人物关系……</p>';
+    return;
+  }
+  if (!characterEditorRelationshipsLoaded) {
+    host.innerHTML = '<p class="character-relationship-status">打开人物关系分区后载入关系。</p>';
     return;
   }
   const characterId = String(characterEditorItem.id);
@@ -8492,20 +8503,23 @@ function renderCharacterEditorRelationships() {
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
 
-async function loadCharacterEditorRelationships(characterId) {
+async function loadCharacterEditorRelationships(characterId, { refresh = false } = {}) {
   const workId = state.work?.id;
   if (!workId || characterEditorItem?.id !== characterId) return;
+  if (!refresh && (characterEditorRelationshipsLoaded || characterEditorRelationshipsLoading)) return;
   characterEditorRelationshipsLoading = true;
+  characterEditorRelationshipsLoaded = false;
   renderCharacterEditorRelationships();
   let loaded = false;
   try {
     const [characters, relationships] = await Promise.all([
-      apiAllPages(`/api/works/${workId}/characters`),
-      apiAllPages(`/api/works/${workId}/relationships`)
+      moduleApiAllPages("characters", `/api/works/${workId}/characters`),
+      moduleApiAllPages("relationships", `/api/works/${workId}/relationships`)
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
     characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
     if (state.work?.id === workId && characterEditorItem?.id === characterId) {
@@ -8523,7 +8537,7 @@ async function refreshRelationshipSurfaces(characterId = null) {
   const tasks = [];
   if (state.module === "relationships") tasks.push(renderRelationships());
   if (characterId && entityEditorType === "character" && !$("#entity-editor-view").classList.contains("hidden") && characterEditorItem?.id === characterId) {
-    tasks.push(loadCharacterEditorRelationships(characterId));
+    tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
 }
@@ -9294,15 +9308,15 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
-  [state.races, state.organizations, state.characters] = await Promise.all([
+  [state.races, state.organizations] = await Promise.all([
     canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
   characterEditorRelationships = [];
-  characterEditorRelationshipsLoading = Boolean(item);
+  characterEditorRelationshipsLoading = false;
+  characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
@@ -9314,20 +9328,30 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const characterMergeButton = $("#character-merge-button");
   const characterDeleteButton = $("#character-delete-button");
   const canManageCharacter = Boolean(item && !readOnly && canEditModule("characters"));
-  characterMergeButton.classList.toggle("hidden", !canManageCharacter || state.characters.length < 2);
+  characterMergeButton.classList.toggle("hidden", !canManageCharacter);
   characterDeleteButton.classList.toggle("hidden", !canManageCharacter);
   characterMergeButton.onclick = async () => {
     if (!item) return;
-    await closeEntityEditor({ force: true });
-    openEntityMergeDialog({
-      typeLabel: "角色",
-      source: item,
-      candidates: state.characters,
-      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
-      body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
-      refresh: renderCharacters,
-      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
-    });
+    const workId = state.work?.id;
+    if (!workId) return;
+    try {
+      const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`);
+      if (state.work?.id !== workId || characterEditorItem?.id !== item.id) return;
+      state.characters = candidates;
+      if (candidates.length < 2) return toast("至少需要两个角色才能合并", "error");
+      await closeEntityEditor({ force: true });
+      openEntityMergeDialog({
+        typeLabel: "角色",
+        source: item,
+        candidates,
+        endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
+        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
+        refresh: renderCharacters,
+        impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+      });
+    } catch (error) {
+      toast(error.message, "error");
+    }
   };
   characterDeleteButton.onclick = () => {
     if (!item) return;
@@ -9385,7 +9409,6 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
-    if (canReadModule("relationships")) void loadCharacterEditorRelationships(item.id);
     void loadCharacterMarkdownSections(item.id);
   }
 }
@@ -9417,7 +9440,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
-    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
+    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${readOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
     + knowledgeEditorSection("settings", title, "", '<div id="knowledge-markdown-sections" class="knowledge-markdown-sections"></div>')
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
@@ -9432,8 +9455,13 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
   if (kind === "race" && !(await ensureCompleteRaceList())) return;
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
+  const memberCharacters = readOnly
+    ? (Array.isArray(item?.members) ? item.members : []).map((member) => ({ id: member.characterId, name: member.name, aliases: [] }))
+    : canReadModule("characters")
+      ? await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
+      : [];
+  if (!readOnly) state.characters = memberCharacters;
+  const memberOptions = memberCharacters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
   const module = isRace ? "races" : "organizations";
   const label = isRace ? "种族" : "组织";
@@ -9742,7 +9770,7 @@ function openTimelineSplitDialog(item) {
 
 async function openRelationshipDialog(item, options = {}) {
   if (!canReadModule("characters")) return toast("配置人物关系前需要角色模块读取权限", "error");
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];

@@ -118,7 +118,35 @@ describe("作品工作台按需加载", () => {
     expect(renderRacesSource).toContain("dismissLoadingToast();");
     expect(renderRacesSource).not.toContain("apiAllPages");
     expect(renderRacesSource).not.toContain('/characters');
-    expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
+    expect(openKnowledgeEditorSource).toContain('const memberCharacters = readOnly');
+    expect(openKnowledgeEditorSource).toContain('await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)');
+    expect(openKnowledgeEditorSource).toContain('if (!readOnly) state.characters = memberCharacters;');
+    expect(openKnowledgeEditorSource).not.toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
+  });
+
+  it("组织列表不预加载未用于列表渲染的角色目录", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderOrganizationsSource = application.slice(
+      application.indexOf("async function renderOrganizations("),
+      application.indexOf("function updateTimelineMultiSelectControls(")
+    );
+
+    expect(renderOrganizationsSource).toContain('state.organizations = await moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`)');
+    expect(renderOrganizationsSource).not.toContain("/characters");
+    expect(renderOrganizationsSource).toContain("item.members");
+  });
+
+  it("审核面板仅为角色查重审核项加载角色目录", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderReviewsSource = application.slice(
+      application.indexOf("async function renderReviews("),
+      application.indexOf("async function renderTasks(")
+    );
+
+    expect(renderReviewsSource).toContain('const reviews = await moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`)');
+    expect(renderReviewsSource).toContain('const hasCharacterDuplicateReviews = reviews.some((item) => item.itemType === "character-duplicate");');
+    expect(renderReviewsSource).toContain('canReadCharacters && hasCharacterDuplicateReviews');
+    expect(renderReviewsSource).toContain('`/api/works/${state.work.id}/characters?includeMerged=1`');
   });
 
   it("角色分页不覆盖跨模块全量引用缓存", async () => {
@@ -135,6 +163,22 @@ describe("作品工作台按需加载", () => {
     expect(renderCharactersSource).toContain("const pageCharacters = characterPage.items;");
     expect(renderCharactersSource).not.toContain("state.characters = characterPage.items");
     expect(renderCharactersSource).toContain('openCharacterEditor(pageCharacters.find((item) => item.id === id)');
-    expect(openCharacterEditorSource).toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(openCharacterEditorSource).not.toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(openCharacterEditorSource).toContain('const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`)');
+    expect(openCharacterEditorSource).not.toContain("loadCharacterEditorRelationships(item.id)");
+    expect(application).toContain('moduleApiAllPages("characters", `/api/works/${workId}/characters`)');
+    expect(application).toContain('key === "relationships"');
+  });
+
+  it("角色卡预览只由角色列表处理，避免模块事件代理重复打开", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const moduleInteractionSource = application.slice(
+      application.indexOf("function bindModuleContentInteractions()"),
+      application.indexOf("function openReviewDetailDialog(")
+    );
+
+    expect(moduleInteractionSource).not.toContain("openCharacter");
+    expect(moduleInteractionSource).not.toContain("openCharacterEditor(await api");
+    expect(application).toContain('bindRecordPreview("[data-open-character]"');
   });
 });

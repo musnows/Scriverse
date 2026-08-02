@@ -594,7 +594,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("body.work-viewer-mode [data-edit-setting]");
     expect(styles.text).toContain("body.work-viewer-mode [data-merge-review]");
     expect(application.text).toContain('item.status === "pending" && canResolveReview');
-    expect(application.text).toContain('canReadCharacters ? moduleApiAllPages("reviews"');
+    expect(application.text).toContain('canReadCharacters && hasCharacterDuplicateReviews');
     expect(application.text).toContain('const canReadAggregate = hasWork && canReadAggregateContent()');
     expect(styles.text).not.toContain(".app-shell.prose-read-only-mode:not(.shelf-mode) #new-chapter-button");
     expect(styles.text).toContain(".add-button { width: 24px; height: 24px;");
