@@ -36,7 +36,7 @@ describe("系统重启认证清理", () => {
     }
   });
 
-  it("系统重启提示出现前清理业务弹层并在确认后返回登录页", async () => {
+  it("确认系统重启提示并返回登录页时清理业务弹层", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
@@ -53,9 +53,17 @@ describe("系统重启认证清理", () => {
     expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "login" }));');
     expect(application.text).toContain("toastRegion.replaceChildren();");
     expect(application.text).toContain("showAuth(false);");
-    expect(application.text).toMatch(/systemRestartDetected = true;[\s\S]*?clearAuthenticationOverlays\(\);[\s\S]*?dialog\.showModal\(\);[\s\S]*?return true;/u);
+    const observeSystemBootBlock = application.text.slice(
+      application.text.indexOf("function observeSystemBootId(value)"),
+      application.text.indexOf("async function checkSystemBoot(forceFresh = false)")
+    );
+    expect(observeSystemBootBlock).toContain("dialog.showModal();");
+    expect(observeSystemBootBlock).not.toContain("clearAuthenticationOverlays();");
     expect(application.text).toContain('if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;');
     expect(application.text).toContain("function redirectToLoginAfterSystemRestart()");
+    expect(application.text).toMatch(/function redirectToLoginAfterSystemRestart\(\) \{\s+invalidateAuthentication\(\);\s+\}/u);
+    expect(application.text).toMatch(/function invalidateAuthentication\(\) \{[\s\S]*?showAuth\(false\);[\s\S]*?\}/u);
+    expect(application.text).toMatch(/function showAuth\([\s\S]*?classList\.add\("login-route"\);[\s\S]*?clearAuthenticationOverlays\(\);[\s\S]*?classList\.remove\("hidden"\);/u);
     expect(application.text).toContain('$("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);');
     expect(application.text).toContain("if (hasUnsavedEditorChanges()) event.preventDefault();");
     expect(application.text).toContain('document.addEventListener("visibilitychange", () => {');

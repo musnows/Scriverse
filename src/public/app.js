@@ -2684,7 +2684,6 @@ function observeSystemBootId(value) {
   systemRestartDetected = true;
   if (systemBootCheckTimer !== null) clearTimeout(systemBootCheckTimer);
   systemBootCheckTimer = null;
-  clearAuthenticationOverlays();
   const dialog = $("#system-restart-dialog");
   if (!dialog.open) dialog.showModal();
   window.requestAnimationFrame(() => $("#system-restart-dialog-title").focus());
