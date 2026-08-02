@@ -321,7 +321,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260802-platform-ai-layout-v1');
+    expect(page.text).toContain('/app.js?v=20260802-multimodal-model-test-v2');
     expect(page.text).toContain('/styles.css?v=20260802-platform-ai-layout-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -329,6 +329,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="form-field model-multimodal-fields"');
     expect(application.text).toContain('class="checkbox-field model-capability-option"');
     expect(application.text).toContain('模型供应商配置');
+    expect(application.text).toContain('const multimodalFields = imageDefaultSupported ?');
+    expect(application.text).toContain('图片请求已验证');
+    expect(application.text).toContain('发送一张测试图片验证图片请求');
     expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
     expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');

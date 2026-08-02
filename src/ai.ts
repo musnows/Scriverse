@@ -111,6 +111,7 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
+const MULTIMODAL_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=";
 /** 出站 AI 响应体上限，防止恶意或故障供应商推送超大响应拖垮进程。 */
 export const AI_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -2379,15 +2380,21 @@ export class AiManager {
     return { accessToken, credentialSecret };
   }
 
-  private async probeProviderModel(row: ProviderRow, accessToken: string, modelId: string, signal: AbortSignal): Promise<void> {
+  private async probeProviderModel(row: ProviderRow, accessToken: string, modelId: string, signal: AbortSignal, options: { multimodal?: boolean } = {}): Promise<void> {
     const protocol = providerProtocol(row);
+    const content: CompletionMessageContent = options.multimodal
+      ? [
+        { type: "text", text: "请识别这张测试图片，并回复“图片连接成功”。" },
+        { type: "image_url", image_url: { url: MULTIMODAL_TEST_IMAGE_DATA_URL, detail: "low" } }
+      ]
+      : "请回复“连接成功”。";
     const response = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
       method: "POST",
       headers: providerRequestHeaders(protocol, accessToken, "application/json"),
       body: JSON.stringify(buildCompletionRequestBody({
         protocol,
         model: modelId,
-        messages: [{ role: "user", content: "请回复“连接成功”。" }],
+        messages: [{ role: "user", content }],
         parameters: { max_tokens: 10 }
       })),
       signal
@@ -2617,12 +2624,13 @@ export class AiManager {
     const timeout = setTimeout(() => controller.abort(), 10_000);
     const startedAt = process.hrtime.bigint();
     const protocol = providerProtocol(provider);
+    const multimodalTested = boolValue(model, "multimodal_enabled") && protocol === "openai-chat-completions";
     let credentialSecret = "";
     let accessToken = "";
     logger.info("ai.model_test.started", { modelId, providerId });
     try {
       ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider));
-      await this.probeProviderModel(provider, accessToken, stringValue(model, "model_id"), controller.signal);
+      await this.probeProviderModel(provider, accessToken, stringValue(model, "model_id"), controller.signal, { multimodal: multimodalTested });
       const timestamp = now();
       this.store.db.run(
         "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
@@ -2637,7 +2645,7 @@ export class AiManager {
         ok: true,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return { ok: true, multimodalTested, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
@@ -2668,6 +2676,9 @@ export class AiManager {
     const timestamp = now();
     const multimodalEnabled = input.multimodalEnabled ?? false;
     const enabled = input.enabled ?? true;
+    if (multimodalEnabled && providerProtocol(provider) !== "openai-chat-completions") {
+      throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "多模态模型当前仅支持 Chat Completions 协议");
+    }
     if (input.imageToolDefault && !multimodalEnabled) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "只有多模态模型才能设为默认读图模型");
     }
@@ -2792,6 +2803,9 @@ export class AiManager {
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")), nextModelId);
     const multimodalEnabled = input.multimodalEnabled ?? boolValue(row, "multimodal_enabled");
     const enabled = input.enabled ?? boolValue(row, "enabled");
+    if (multimodalEnabled && providerProtocol(provider) !== "openai-chat-completions") {
+      throw new AppError(400, "MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED", "多模态模型当前仅支持 Chat Completions 协议");
+    }
     if (input.imageToolDefault && !multimodalEnabled) {
       throw new AppError(400, "MODEL_NOT_MULTIMODAL", "只有多模态模型才能设为默认读图模型");
     }

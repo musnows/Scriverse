@@ -10171,12 +10171,15 @@ function openProviderDialog(item) {
 function openModelDialog(providerId, item = null, provider = null) {
   const values = modelFormValues(item);
   const imageDefaultSupported = (provider?.protocol ?? "openai-chat-completions") === "openai-chat-completions";
-  const multimodalFields = `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled && imageDefaultSupported ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">${imageDefaultSupported ? "当前供应商支持作为多模态读图工具默认模型。" : "当前供应商协议暂不支持作为多模态读图工具默认模型。"}</small></div>`;
+  const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
+  const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
+    ? "使用当前已保存的模型标识符和供应商凭据，并发送一张测试图片验证图片请求。"
+    : "使用当前已保存的模型标识符和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
     ? `<section class="model-connection-test">
-        <div><strong>模型连接测试</strong><p>使用当前已保存的模型标识符和供应商凭据发起最小请求。</p></div>
+        <div><strong>模型连接测试</strong><p>${connectionTestDescription}</p></div>
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
@@ -10195,6 +10198,7 @@ function openModelDialog(providerId, item = null, provider = null) {
   const imageDefaultField = $("#model-image-tool-default-field");
   const imageDefaultInput = $("#model-image-tool-default");
   const syncMultimodalFields = () => {
+    if (!multimodalInput || !imageDefaultField || !imageDefaultInput) return;
     const hideImageDefault = !multimodalInput.checked || !imageDefaultSupported;
     imageDefaultField.hidden = hideImageDefault;
     imageDefaultField.classList.toggle("hidden", hideImageDefault);
@@ -10214,14 +10218,14 @@ function openModelDialog(providerId, item = null, provider = null) {
     syncKimiTemperature();
   });
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
-  multimodalInput.addEventListener("change", syncMultimodalFields);
+  multimodalInput?.addEventListener("change", syncMultimodalFields);
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     button.textContent = "测试中";
     try {
       const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-      toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      toast(result.ok ? (result.multimodalTested ? "模型连接测试成功，图片请求已验证" : "模型连接测试成功") : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
       await renderPlatformAiConfig();
       await loadModels();
     } catch (error) {

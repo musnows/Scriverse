@@ -252,6 +252,46 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
+  it("多模态模型单独测试会发送图片内容块", async () => {
+    const { modelId } = await configureAi();
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ multimodalEnabled: true }).expect(200);
+    fetchMock.mockImplementation(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: unknown }>; max_tokens?: number };
+      expect(body.max_tokens).toBe(10);
+      const content = body.messages?.[0]?.content;
+      expect(Array.isArray(content)).toBe(true);
+      expect(content).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "text" }),
+        expect.objectContaining({ type: "image_url", image_url: expect.objectContaining({ detail: "low" }) })
+      ]));
+      const imageBlock = (content as Array<Record<string, unknown>>).find((block) => block.type === "image_url");
+      expect(String((imageBlock?.image_url as Record<string, unknown>)?.url)).toMatch(/^data:image\/png;base64,/u);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "图片连接成功" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+
+    const tested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({ ok: true, multimodalTested: true });
+  });
+
+  it("非 Chat Completions 供应商不能启用多模态模型", async () => {
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "Anthropic 测试供应商",
+      protocol: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      apiKey: "sk-anthropic-test",
+      status: "enabled"
+    }).expect(201);
+    const rejected = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "不支持的多模态模型",
+      modelId: "claude-test",
+      multimodalEnabled: true
+    }).expect(400);
+    expect(rejected.body.error.code).toBe("MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED");
+  });
+
   it("模型默认开启 thinking 并可按模型关闭", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
