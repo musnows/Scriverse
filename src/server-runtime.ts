@@ -127,6 +127,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
         return;
       }
       const port = address.port;
+      runtime.s3Backup.startScheduler();
       const displayHost = options.host.includes(":") ? `[${options.host}]` : options.host;
       let closed = false;
       const close = async (): Promise<void> => {

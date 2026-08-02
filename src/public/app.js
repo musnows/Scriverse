@@ -3373,6 +3373,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -11343,6 +11344,7 @@ $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
+$("#s3-backup-button").addEventListener("click", openS3BackupDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
   const panel = $("#presence-panel");
@@ -12032,3 +12034,178 @@ initializePage().catch((error) => {
   showShelf();
   toast(`系统初始化失败：${error.message}`, "error");
 });
+
+// ===== S3 备份配置管理 =====
+
+async function openS3BackupDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  await renderS3BackupList();
+  $("#s3-backup-dialog").showModal();
+}
+
+async function renderS3BackupList() {
+  try {
+    const configs = await api("/api/platform/s3-backup/configs");
+    const list = $("#s3-backup-list");
+    if (!configs.length) {
+      list.innerHTML = '<p class="empty-state">暂无备份配置，点击下方按钮新增。</p>';
+      return;
+    }
+    list.innerHTML = configs.map((config) => {
+      const statusLabel = config.lastBackupStatus === "success" ? "上次备份成功"
+        : config.lastBackupStatus === "failed" ? "上次备份失败"
+        : config.lastBackupStatus === "running" ? "备份中"
+        : "尚未备份";
+      const statusClass = config.lastBackupStatus === "success" ? "status-success"
+        : config.lastBackupStatus === "failed" ? "status-error"
+        : "status-pending";
+      const lastTime = config.lastBackupAt
+        ? new Date(config.lastBackupAt).toLocaleString("zh-CN")
+        : "--";
+      const scheduleText = config.scheduleEnabled
+        ? `定时: ${String(config.scheduleHour).padStart(2, "0")}:${String(config.scheduleMinute).padStart(2, "0")}，保留 ${config.retentionCount} 份`
+        : "未启用定时";
+      const errorHtml = config.lastBackupError
+        ? `<p class="s3-error-text">错误: ${esc(config.lastBackupError)}</p>`
+        : "";
+      return `<article class="record-card s3-backup-card">
+        <div class="s3-backup-info">
+          <strong>${esc(config.name)}</strong>
+          <small>${esc(config.endpoint)} / ${esc(config.bucket)}${config.subdirectory ? " / " + esc(config.subdirectory) : ""}</small>
+          <small>${config.includeImages ? "含图片" : "仅数据库"} | ${scheduleText} | ${config.enabled ? "已启用" : "已禁用"}</small>
+          <small><span class="${statusClass}">${statusLabel}</span> | ${lastTime}</small>
+          ${errorHtml}
+        </div>
+        <div class="s3-backup-actions">
+          ${config.lastBackupStatus === "running" ? '<span class="backup-running">备份进行中...</span>' : `<button class="ghost-button s3-backup-run" data-config-id="${esc(config.id)}">立即备份</button>`}
+          <button class="ghost-button s3-backup-edit-btn" data-config-id="${esc(config.id)}">编辑</button>
+          <button class="danger-button s3-backup-delete-btn" data-config-id="${esc(config.id)}">删除</button>
+        </div>
+      </article>`;
+    }).join("");
+
+    list.querySelectorAll(".s3-backup-run").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "备份中...";
+        try {
+          await api(`/api/platform/s3-backup/configs/${btn.dataset.configId}/backup`, { method: "POST" });
+          toast("备份完成");
+          await renderS3BackupList();
+        } catch (error) {
+          toast(error.message, "error");
+          btn.disabled = false;
+          btn.textContent = "立即备份";
+        }
+      });
+    });
+    list.querySelectorAll(".s3-backup-edit-btn").forEach((btn) => {
+      btn.addEventListener("click", () => openS3BackupEditDialog(btn.dataset.configId));
+    });
+    list.querySelectorAll(".s3-backup-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!await confirmToast(`确定要删除备份配置吗？此操作不可撤销。`)) return;
+        try {
+          await api(`/api/platform/s3-backup/configs/${btn.dataset.configId}`, { method: "DELETE" });
+          toast("备份配置已删除");
+          await renderS3BackupList();
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      });
+    });
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function openS3BackupEditDialog(configId) {
+  const form = $("#s3-backup-edit-form");
+  form.reset();
+  $("#s3-config-id").value = configId || "";
+
+  if (configId) {
+    $("#s3-backup-edit-title").textContent = "编辑备份配置";
+    api(`/api/platform/s3-backup/configs/${configId}`).then((config) => {
+      $("#s3-config-name").value = config.name || "";
+      $("#s3-config-endpoint").value = config.endpoint || "";
+      $("#s3-config-region").value = config.region || "us-east-1";
+      $("#s3-config-bucket").value = config.bucket || "";
+      $("#s3-config-subdirectory").value = config.subdirectory || "";
+      $("#s3-config-ak").value = config.accessKeyId || "";
+      $("#s3-config-sk").value = "";
+      $("#s3-config-sk").placeholder = "留空则保留现有密钥，不修改";
+      $("#s3-config-include-images").checked = config.includeImages;
+      $("#s3-config-enabled").checked = config.enabled;
+      $("#s3-config-schedule-enabled").checked = config.scheduleEnabled;
+      $("#s3-config-schedule-hour").value = config.scheduleHour;
+      $("#s3-config-schedule-minute").value = config.scheduleMinute;
+      $("#s3-config-retention").value = config.retentionCount;
+    }).catch((error) => toast(error.message, "error"));
+  } else {
+    $("#s3-backup-edit-title").textContent = "新增备份配置";
+    $("#s3-config-region").value = "us-east-1";
+    $("#s3-config-sk").placeholder = "输入 Secret Access Key";
+    $("#s3-config-include-images").checked = true;
+    $("#s3-config-enabled").checked = true;
+    $("#s3-config-schedule-enabled").checked = false;
+    $("#s3-config-schedule-hour").value = 3;
+    $("#s3-config-schedule-minute").value = 0;
+    $("#s3-config-retention").value = 7;
+  }
+  $("#s3-backup-edit-dialog").showModal();
+}
+
+async function saveS3BackupConfig(event) {
+  event.preventDefault();
+  const button = $("#s3-backup-edit-save");
+  button.disabled = true;
+  try {
+    const configId = $("#s3-config-id").value;
+    const body = {
+      name: $("#s3-config-name").value.trim(),
+      endpoint: $("#s3-config-endpoint").value.trim(),
+      region: $("#s3-config-region").value.trim() || "us-east-1",
+      bucket: $("#s3-config-bucket").value.trim(),
+      subdirectory: $("#s3-config-subdirectory").value.trim(),
+      accessKeyId: $("#s3-config-ak").value.trim(),
+      includeImages: $("#s3-config-include-images").checked,
+      scheduleEnabled: $("#s3-config-schedule-enabled").checked,
+      scheduleHour: Number($("#s3-config-schedule-hour").value),
+      scheduleMinute: Number($("#s3-config-schedule-minute").value),
+      retentionCount: Number($("#s3-config-retention").value),
+      enabled: $("#s3-config-enabled").checked
+    };
+    const sk = $("#s3-config-sk").value.trim();
+    if (!configId && !sk) {
+      toast("请输入 Secret Access Key", "error");
+      button.disabled = false;
+      return;
+    }
+    if (sk) body.secretAccessKey = sk;
+
+    if (configId) {
+      await api(`/api/platform/s3-backup/configs/${configId}`, { method: "PATCH", body });
+    } else {
+      await api("/api/platform/s3-backup/configs", { method: "POST", body });
+    }
+    toast(configId ? "备份配置已更新" : "备份配置已创建");
+    $("#s3-backup-edit-dialog").close();
+    await renderS3BackupList();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// 事件注册
+$("#s3-backup-close").addEventListener("click", () => $("#s3-backup-dialog").close());
+$("#s3-backup-cancel").addEventListener("click", () => $("#s3-backup-dialog").close());
+$("#s3-backup-add").addEventListener("click", () => openS3BackupEditDialog(null));
+$("#s3-backup-edit-close").addEventListener("click", () => $("#s3-backup-edit-dialog").close());
+$("#s3-backup-edit-cancel").addEventListener("click", () => $("#s3-backup-edit-dialog").close());
+$("#s3-backup-edit-form").addEventListener("submit", saveS3BackupConfig);

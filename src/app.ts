@@ -31,6 +31,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
+import { S3BackupManager } from "./s3-backup.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -599,6 +600,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  s3Backup: S3BackupManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -990,6 +992,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
     }
+  );
+  const s3Backup = new S3BackupManager(
+    database,
+    new CredentialVault(options.masterSecret),
+    options.databasePath,
+    attachmentStorage.rootDirectory
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
@@ -2060,6 +2068,69 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  // S3 备份配置管理（管理员专用）
+  app.get("/api/platform/s3-backup/configs", (request, response) => {
+    if (!request.authUser || request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    data(response, s3Backup.listConfigs());
+  });
+  app.get("/api/platform/s3-backup/configs/:id", (request, response) => {
+    if (!request.authUser || request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    const config = s3Backup.getConfig(request.params.id);
+    if (!config) throw new AppError(404, "S3_BACKUP_CONFIG_NOT_FOUND", "备份配置不存在");
+    data(response, config);
+  });
+  app.post("/api/platform/s3-backup/configs", (request, response) => {
+    if (!request.authUser || request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    const input = parse(z.object({
+      name: nonEmpty.max(200),
+      endpoint: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "S3 端点地址必须使用 HTTP 或 HTTPS"),
+      region: z.string().trim().max(100).default("us-east-1"),
+      bucket: nonEmpty.max(200),
+      subdirectory: z.string().trim().max(500).default(""),
+      accessKeyId: nonEmpty.max(200),
+      secretAccessKey: nonEmpty.max(500),
+      includeImages: z.boolean().default(true),
+      scheduleEnabled: z.boolean().default(false),
+      scheduleHour: z.number().int().min(0).max(23).default(3),
+      scheduleMinute: z.number().int().min(0).max(59).default(0),
+      retentionCount: z.number().int().min(0).max(365).default(7),
+      enabled: z.boolean().default(true)
+    }).strict(), request.body);
+    data(response, s3Backup.createConfig(input), 201);
+  });
+  app.patch("/api/platform/s3-backup/configs/:id", (request, response) => {
+    if (!request.authUser || request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    const input = parse(z.object({
+      name: nonEmpty.max(200).optional(),
+      endpoint: z.string().url().optional(),
+      region: z.string().trim().max(100).optional(),
+      bucket: nonEmpty.max(200).optional(),
+      subdirectory: z.string().trim().max(500).optional(),
+      accessKeyId: nonEmpty.max(200).optional(),
+      secretAccessKey: nonEmpty.max(500).optional(),
+      includeImages: z.boolean().optional(),
+      scheduleEnabled: z.boolean().optional(),
+      scheduleHour: z.number().int().min(0).max(23).optional(),
+      scheduleMinute: z.number().int().min(0).max(59).optional(),
+      retentionCount: z.number().int().min(0).max(365).optional(),
+      enabled: z.boolean().optional()
+    }).strict().refine((input) => Object.keys(input).length > 0, { message: "至少需要提供一项修改" }), request.body);
+    data(response, s3Backup.updateConfig(request.params.id, input));
+  });
+  app.delete("/api/platform/s3-backup/configs/:id", (request, response) => {
+    if (!request.authUser || request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    s3Backup.deleteConfig(request.params.id);
+    noContent(response);
+  });
+  app.post("/api/platform/s3-backup/configs/:id/backup", async (request, response) => {
+    if (!request.authUser || request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    const result = await s3Backup.executeBackup(request.params.id);
+    if (!result.success) {
+      throw new AppError(502, "S3_BACKUP_FAILED", result.error ?? "备份失败");
+    }
+    data(response, { success: true });
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,8 +2645,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, s3Backup, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    s3Backup.stopScheduler();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });

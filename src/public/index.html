@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260801-ui-font-scale-shelf-v3">
+<link rel="stylesheet" href="/styles.css?v=20260802-s3-backup-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -214,6 +214,7 @@
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small></button>
+            <button id="s3-backup-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">备</span><strong>S3 备份</strong><small>配置数据库与图片的自动备份到 S3 兼容存储</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
@@ -798,6 +799,39 @@
       </form>
     </dialog>
 
+    <dialog id="s3-backup-dialog" class="dialog wide-dialog" aria-labelledby="s3-backup-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="s3-backup-title">S3 备份配置</h2></div><button id="s3-backup-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <div id="s3-backup-list" class="s3-backup-list"></div>
+      <div class="dialog-actions"><button class="primary-button" id="s3-backup-add" type="button">新增备份配置</button><button class="ghost-button" id="s3-backup-cancel" type="button">关闭</button></div>
+    </dialog>
+
+    <dialog id="s3-backup-edit-dialog" class="dialog" aria-labelledby="s3-backup-edit-title">
+      <div class="dialog-header"><div><h2 id="s3-backup-edit-title">编辑备份配置</h2></div><button id="s3-backup-edit-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
+      <form id="s3-backup-edit-form">
+        <input type="hidden" id="s3-config-id" value="">
+        <label>配置名称<input id="s3-config-name" class="full-width-input" maxlength="200" required placeholder="例如：生产环境备份"></label>
+        <label>S3 端点地址<input id="s3-config-endpoint" class="full-width-input" maxlength="500" required placeholder="https://s3.amazonaws.com 或 https://play.min.io"></label>
+        <label>区域 (Region)<input id="s3-config-region" class="full-width-input" maxlength="100" placeholder="us-east-1"></label>
+        <label>存储桶 (Bucket)<input id="s3-config-bucket" class="full-width-input" maxlength="200" required placeholder="my-backup-bucket"></label>
+        <label>子目录<span class="field-hint">（可选，文件将上传到 [子目录/]scriverse/ 下）</span><input id="s3-config-subdirectory" class="full-width-input" maxlength="500" placeholder="不填则上传到桶根目录"></label>
+        <label>Access Key ID<input id="s3-config-ak" class="full-width-input" maxlength="200" required placeholder="AKIAIOSFODNN7EXAMPLE"></label>
+        <label>Secret Access Key<input id="s3-config-sk" class="full-width-input" maxlength="500" placeholder="留空则保留现有密钥，不修改"></label>
+        <div class="form-checkbox-group">
+          <label class="form-checkbox"><input type="checkbox" id="s3-config-include-images" checked><span>备份图片（附件目录中的 .webp/.png/.jpg/.gif 文件）</span></label>
+          <label class="form-checkbox"><input type="checkbox" id="s3-config-enabled"><span>启用此配置</span></label>
+        </div>
+        <fieldset class="form-fieldset">
+          <legend>定时备份</legend>
+          <label class="form-checkbox"><input type="checkbox" id="s3-config-schedule-enabled"><span>启用定时备份</span></label>
+          <div class="form-row">
+            <label>时间（24 小时制）<div class="form-inline"><input id="s3-config-schedule-hour" type="number" min="0" max="23" value="3" class="inline-input" aria-label="小时"> : <input id="s3-config-schedule-minute" type="number" min="0" max="59" value="0" class="inline-input" aria-label="分钟"></div></label>
+          </div>
+          <label>备份留存个数<input id="s3-config-retention" type="number" min="0" max="365" value="7" class="inline-input" aria-label="保留个数"><span class="field-hint">超过的旧数据库备份会被自动删除（图片不会清理）</span></label>
+        </fieldset>
+        <div class="dialog-actions"><button class="ghost-button" id="s3-backup-edit-cancel" type="button">取消</button><button class="primary-button" id="s3-backup-edit-save" type="submit">保存配置</button></div>
+      </form>
+    </dialog>
+
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="account-settings-body">
@@ -951,6 +985,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-timeline-lifecycle-v1"></script>
+    <script type="module" src="/app.js?v=20260802-s3-backup-v1"></script>
   </body>
 </html>

@@ -3346,3 +3346,29 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+/* S3 备份 */
+.s3-backup-list { display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow-y: auto; padding: 0 4px; }
+.s3-backup-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; }
+.s3-backup-info { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.s3-backup-info strong { font-size: 15px; }
+.s3-backup-info small { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.s3-backup-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.s3-backup-actions .backup-running { font-size: 12px; color: var(--text-secondary); font-style: italic; }
+.s3-error-text { color: var(--error-text, #c0392b); font-size: 11px; margin: 2px 0 0; }
+.status-success { color: var(--success-text, #27ae60); font-weight: 600; }
+.status-error { color: var(--error-text, #c0392b); font-weight: 600; }
+.status-pending { color: var(--text-secondary); }
+
+/* S3 备份编辑表单 */
+#s3-backup-edit-form { display: flex; flex-direction: column; gap: 12px; }
+#s3-backup-edit-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-secondary); }
+#s3-backup-edit-form .full-width-input { width: 100%; box-sizing: border-box; }
+#s3-backup-edit-form .form-checkbox-group { display: flex; flex-direction: column; gap: 8px; }
+#s3-backup-edit-form .form-checkbox { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; flex-direction: row; }
+#s3-backup-edit-form .form-fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+#s3-backup-edit-form .form-fieldset legend { font-size: 13px; font-weight: 600; padding: 0 6px; }
+#s3-backup-edit-form .form-row { display: flex; flex-direction: column; gap: 4px; }
+#s3-backup-edit-form .form-inline { display: flex; align-items: center; gap: 4px; }
+#s3-backup-edit-form .inline-input { width: 70px; text-align: center; }
+#s3-backup-edit-form .field-hint { font-size: 11px; color: var(--text-secondary); margin-left: 0; }
