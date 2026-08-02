@@ -124,6 +124,18 @@ describe("作品工作台按需加载", () => {
     expect(openKnowledgeEditorSource).not.toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
   });
 
+  it("组织列表不预加载未用于列表渲染的角色目录", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderOrganizationsSource = application.slice(
+      application.indexOf("async function renderOrganizations("),
+      application.indexOf("function updateTimelineMultiSelectControls(")
+    );
+
+    expect(renderOrganizationsSource).toContain('state.organizations = await moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`)');
+    expect(renderOrganizationsSource).not.toContain("/characters");
+    expect(renderOrganizationsSource).toContain("item.members");
+  });
+
   it("角色分页不覆盖跨模块全量引用缓存", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const renderCharactersSource = application.slice(

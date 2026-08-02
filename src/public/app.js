@@ -5688,10 +5688,7 @@ async function renderRaces() {
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
-  [state.organizations, state.characters] = await Promise.all([
-    moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? moduleApiAllPages("organizations", `/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.organizations = await moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`);
   mountModuleCount(state.organizations.length);
   const pageResult = paginateModuleItems(state.organizations, page, "organizations");
   moduleListPages.organizations = pageResult.page;
