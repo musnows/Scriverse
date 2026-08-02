@@ -135,7 +135,11 @@ describe("作品工作台按需加载", () => {
     expect(renderCharactersSource).toContain("const pageCharacters = characterPage.items;");
     expect(renderCharactersSource).not.toContain("state.characters = characterPage.items");
     expect(renderCharactersSource).toContain('openCharacterEditor(pageCharacters.find((item) => item.id === id)');
-    expect(openCharacterEditorSource).toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(openCharacterEditorSource).not.toContain('canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`)');
+    expect(openCharacterEditorSource).toContain('const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`)');
+    expect(openCharacterEditorSource).not.toContain("loadCharacterEditorRelationships(item.id)");
+    expect(application).toContain('moduleApiAllPages("characters", `/api/works/${workId}/characters`)');
+    expect(application).toContain('key === "relationships"');
   });
 
   it("角色卡预览只由角色列表处理，避免模块事件代理重复打开", async () => {

@@ -969,6 +969,7 @@ let knowledgeSectionEditorDirty = false;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
+let characterEditorRelationshipsLoaded = false;
 let characterEditorSections = [];
 let characterSectionPendingAttachments = [];
 let markdownEditorPendingAttachments = [];
@@ -8400,6 +8401,15 @@ function activateCharacterEditorTab(key) {
     button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-character-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.characterEditorPanel !== key));
+  if (
+    key === "relationships"
+    && characterEditorItem?.id
+    && canReadModule("relationships")
+    && !characterEditorRelationshipsLoaded
+    && !characterEditorRelationshipsLoading
+  ) {
+    void loadCharacterEditorRelationships(characterEditorItem.id);
+  }
 }
 
 function setCharacterHistoryVisible(visible) {
@@ -8419,6 +8429,10 @@ function renderCharacterEditorRelationships() {
   }
   if (characterEditorRelationshipsLoading) {
     host.innerHTML = '<p class="character-relationship-status">正在读取人物关系……</p>';
+    return;
+  }
+  if (!characterEditorRelationshipsLoaded) {
+    host.innerHTML = '<p class="character-relationship-status">打开人物关系分区后载入关系。</p>';
     return;
   }
   const characterId = String(characterEditorItem.id);
@@ -8443,20 +8457,23 @@ function renderCharacterEditorRelationships() {
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
 
-async function loadCharacterEditorRelationships(characterId) {
+async function loadCharacterEditorRelationships(characterId, { refresh = false } = {}) {
   const workId = state.work?.id;
   if (!workId || characterEditorItem?.id !== characterId) return;
+  if (!refresh && (characterEditorRelationshipsLoaded || characterEditorRelationshipsLoading)) return;
   characterEditorRelationshipsLoading = true;
+  characterEditorRelationshipsLoaded = false;
   renderCharacterEditorRelationships();
   let loaded = false;
   try {
     const [characters, relationships] = await Promise.all([
-      apiAllPages(`/api/works/${workId}/characters`),
-      apiAllPages(`/api/works/${workId}/relationships`)
+      moduleApiAllPages("characters", `/api/works/${workId}/characters`),
+      moduleApiAllPages("relationships", `/api/works/${workId}/relationships`)
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
     characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
     if (state.work?.id === workId && characterEditorItem?.id === characterId) {
@@ -8474,7 +8491,7 @@ async function refreshRelationshipSurfaces(characterId = null) {
   const tasks = [];
   if (state.module === "relationships") tasks.push(renderRelationships());
   if (characterId && entityEditorType === "character" && !$("#entity-editor-view").classList.contains("hidden") && characterEditorItem?.id === characterId) {
-    tasks.push(loadCharacterEditorRelationships(characterId));
+    tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
 }
@@ -9245,15 +9262,15 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
-  [state.races, state.organizations, state.characters] = await Promise.all([
+  [state.races, state.organizations] = await Promise.all([
     canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
   characterEditorRelationships = [];
-  characterEditorRelationshipsLoading = Boolean(item);
+  characterEditorRelationshipsLoading = false;
+  characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
@@ -9265,20 +9282,30 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const characterMergeButton = $("#character-merge-button");
   const characterDeleteButton = $("#character-delete-button");
   const canManageCharacter = Boolean(item && !readOnly && canEditModule("characters"));
-  characterMergeButton.classList.toggle("hidden", !canManageCharacter || state.characters.length < 2);
+  characterMergeButton.classList.toggle("hidden", !canManageCharacter);
   characterDeleteButton.classList.toggle("hidden", !canManageCharacter);
   characterMergeButton.onclick = async () => {
     if (!item) return;
-    await closeEntityEditor({ force: true });
-    openEntityMergeDialog({
-      typeLabel: "角色",
-      source: item,
-      candidates: state.characters,
-      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
-      body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
-      refresh: renderCharacters,
-      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
-    });
+    const workId = state.work?.id;
+    if (!workId) return;
+    try {
+      const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`);
+      if (state.work?.id !== workId || characterEditorItem?.id !== item.id) return;
+      state.characters = candidates;
+      if (candidates.length < 2) return toast("至少需要两个角色才能合并", "error");
+      await closeEntityEditor({ force: true });
+      openEntityMergeDialog({
+        typeLabel: "角色",
+        source: item,
+        candidates,
+        endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
+        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
+        refresh: renderCharacters,
+        impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+      });
+    } catch (error) {
+      toast(error.message, "error");
+    }
   };
   characterDeleteButton.onclick = () => {
     if (!item) return;
@@ -9336,7 +9363,6 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
-    if (canReadModule("relationships")) void loadCharacterEditorRelationships(item.id);
     void loadCharacterMarkdownSections(item.id);
   }
 }
@@ -9693,7 +9719,7 @@ function openTimelineSplitDialog(item) {
 
 async function openRelationshipDialog(item, options = {}) {
   if (!canReadModule("characters")) return toast("配置人物关系前需要角色模块读取权限", "error");
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
