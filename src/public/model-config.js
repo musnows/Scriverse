@@ -52,6 +52,8 @@ export function modelFormValues(model = null) {
       : (configuredTemperature ?? 0.7),
     maxTokens: model?.preset?.max_tokens ?? 32000,
     thinkingEnabled: model?.thinkingEnabled ?? true,
+    multimodalEnabled: model?.multimodalEnabled ?? false,
+    imageToolDefault: model?.imageToolDefault ?? false,
     enabled: model?.enabled ?? true
   };
 }
@@ -69,6 +71,8 @@ export function modelPayload(values, existingPreset = {}) {
       max_tokens: Number(values.maxTokens)
     },
     thinkingEnabled: Boolean(values.thinkingEnabled),
+    multimodalEnabled: Boolean(values.multimodalEnabled),
+    imageToolDefault: Boolean(values.imageToolDefault),
     enabled: Boolean(values.enabled)
   };
 }

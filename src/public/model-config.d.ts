@@ -10,6 +10,8 @@ export type ModelFormValues = {
   temperature: number;
   maxTokens: number;
   thinkingEnabled: boolean;
+  multimodalEnabled: boolean;
+  imageToolDefault: boolean;
   enabled: boolean;
 };
 

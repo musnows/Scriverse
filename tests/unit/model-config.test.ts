@@ -14,6 +14,16 @@ describe("AI 模型配置", () => {
     expect(modelPayload({ ...values, displayName: "普通模型", modelId: "plain-model" }).thinkingEnabled).toBe(false);
   });
 
+  it("保留多模态能力和默认读图模型选项", () => {
+    const values = modelFormValues({ multimodalEnabled: true, imageToolDefault: true });
+    expect(values.multimodalEnabled).toBe(true);
+    expect(values.imageToolDefault).toBe(true);
+    expect(modelPayload({ ...values, displayName: "视觉模型", modelId: "vision-model" })).toMatchObject({
+      multimodalEnabled: true,
+      imageToolDefault: true
+    });
+  });
+
   it("Kimi 模型默认温度为 1 并允许手动调整", () => {
     expect(isKimiModelId("kimi-for-coding")).toBe(true);
     expect(modelFormValues({ modelId: "kimi-for-coding" }).temperature).toBe(1);
