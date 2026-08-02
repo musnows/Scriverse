@@ -1487,8 +1487,9 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
   search_drafts: "搜索想法",
+  recall_self: "回忆自身",
   image: "读取设定图片",
-  recall_self: "回忆自身"
+  recall_relationship: "回忆人物关系"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1498,8 +1499,9 @@ const AI_TOOL_DESCRIPTIONS = {
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
+  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。"
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
 };
 
 let aiFeedScrollFrame = null;

@@ -1213,7 +1213,30 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     const otherRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "顾潮",
+      aliases: ["潮哥"],
       profile: { secret: "这段其他角色的私密档案不得被读取" }
+    }).expect(201);
+    const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: role.body.data.id,
+      toCharacterId: otherRole.body.data.id,
+      category: "social",
+      subtype: "旧友",
+      keywords: ["共同远航"],
+      directed: false,
+      currentStatus: "active",
+      confirmationStatus: "confirmed",
+      evidence: [{ quote: "林舟和顾潮曾共同远航" }]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
+      fromCharacterId: otherRole.body.data.id,
+      toCharacterId: thirdRole.body.data.id,
+      category: "conflict",
+      subtype: "秘密对手",
+      keywords: ["其他两人的关系"],
+      directed: false,
+      currentStatus: "active",
+      confirmationStatus: "confirmed"
     }).expect(201);
     await request(runtime.app).patch(`/api/chapters/${chapterId}`).send({
       content: "林舟启动了飞船。\n\n顾潮独自藏起了只有自己知道的密钥。"
@@ -1263,14 +1286,18 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship"]);
       expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
       expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
+      expect(body.tools?.[1]?.function?.description).toContain("只能返回当前角色参与的关系");
+      expect(body.tools?.[1]?.function?.description).toContain("未传入 characters");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
+      expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
         expect(JSON.stringify(body.messages)).not.toContain("顾潮独自藏起");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
+          { id: "relationship-list", type: "function", function: { name: "recall_relationship", arguments: "{}" } },
           { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
         ] } }] }), { status: 200 });
       }
@@ -1282,7 +1309,25 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[0]).toContain("林舟启动了飞船");
         expect(toolMessages[0]).not.toContain("其他角色的私密档案");
         expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
-        expect(toolMessages[1]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[1]).toContain("顾潮");
+        expect(toolMessages[1]).toContain("潮哥");
+        expect(toolMessages[1]).toContain("relationshipCount");
+        expect(toolMessages[1]).not.toContain("旧友");
+        expect(toolMessages[1]).not.toContain("共同远航");
+        expect(toolMessages[2]).toContain("TOOL_NOT_AVAILABLE");
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
+          { id: "relationship-details", type: "function", function: { name: "recall_relationship", arguments: JSON.stringify({ characters: ["潮哥", "沈星"] }) } }
+        ] } }] }), { status: 200 });
+      }
+      if (completionCount === 3) {
+        const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
+        const relationshipDetails = toolMessages.at(-1) ?? "";
+        expect(relationshipDetails).toContain('"mode":"details"');
+        expect(relationshipDetails).toContain("顾潮");
+        expect(relationshipDetails).toContain("旧友");
+        expect(relationshipDetails).toContain("共同远航");
+        expect(relationshipDetails).not.toContain("秘密对手");
+        expect(relationshipDetails).not.toContain("其他两人的关系");
         return new Response(JSON.stringify({ choices: [{ message: { content: "我记得第一次看见星舰，也记得自己在北港启动了飞船。" } }] }), { status: 200 });
       }
       return new Response(JSON.stringify({ choices: [{ message: { content: "我还在北港。你想知道什么？" } }] }), { status: 200 });
@@ -1305,7 +1350,7 @@ describe("AI 供应商、模型与建议 API", () => {
       conversationId: conversation.body.data.id
     }).expect(200);
     expect(secondTurn.text).toContain("我还在北港");
-    expect(roleplaySystemPrompts).toHaveLength(3);
+    expect(roleplaySystemPrompts).toHaveLength(4);
     expect(new Set(roleplaySystemPrompts).size).toBe(1);
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
