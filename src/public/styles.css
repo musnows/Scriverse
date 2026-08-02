@@ -1281,6 +1281,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .module-header h1 { margin: 0 0 6px; font-weight: 500; font-size: 24px; line-height: 1.25; }
 .module-header p { margin: 0; color: var(--muted); font-size: 13px; }
 .module-content { padding: 24px 0 80px; }
+#platform-ai-content { width: 100%; max-width: 1400px; margin-inline: auto; }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 13px; }
 .record-card { position: relative; border: 1px solid var(--line); background: var(--surface-soft); padding: 18px; min-height: 130px; border-radius: 4px; }
 .record-card.has-card-edit h3 { padding-right: 34px; }
@@ -1424,7 +1425,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
 .config-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .platform-system-prompt-section { margin-bottom: 36px; }
-.platform-image-tool-section { margin-bottom: 22px; }
+.platform-image-tool-section { margin-bottom: 0; }
 .platform-image-tool-panel { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .platform-image-tool-field { display: grid; flex: 1 1 360px; gap: 7px; min-width: 0; color: var(--muted); font-size: 10px; }
 .platform-image-tool-field select { width: 100%; height: 36px; min-height: 36px; padding: 8px 10px; font-size: 12px; }
