@@ -265,7 +265,11 @@ describe("AI 供应商、模型与建议 API", () => {
         expect.objectContaining({ type: "image_url", image_url: expect.objectContaining({ detail: "low" }) })
       ]));
       const imageBlock = (content as Array<Record<string, unknown>>).find((block) => block.type === "image_url");
-      expect(String((imageBlock?.image_url as Record<string, unknown>)?.url)).toMatch(/^data:image\/png;base64,/u);
+      const imageUrl = String((imageBlock?.image_url as Record<string, unknown>)?.url);
+      expect(imageUrl).toMatch(/^data:image\/png;base64,/u);
+      const imageBytes = Buffer.from(imageUrl.slice("data:image/png;base64,".length), "base64");
+      expect(imageBytes.subarray(16, 20).readUInt32BE(0)).toBe(128);
+      expect(imageBytes.subarray(20, 24).readUInt32BE(0)).toBe(128);
       return new Response(JSON.stringify({ choices: [{ message: { content: "图片连接成功" } }] }), {
         status: 200,
         headers: { "Content-Type": "application/json" }
