@@ -90,6 +90,8 @@ type ModelInput = {
   outputNote?: string;
   preset?: Record<string, unknown>;
   thinkingEnabled?: boolean;
+  multimodalEnabled?: boolean;
+  imageToolDefault?: boolean;
   enabled?: boolean;
   note?: string;
 };
@@ -2638,24 +2640,39 @@ export class AiManager {
     const provider = this.getProviderRow(providerId);
     const modelId = id("model");
     const timestamp = now();
-    this.store.db.run(
-      `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
-       preset_json, thinking_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      modelId,
-      providerId,
-      input.displayName,
-      input.modelId,
-      JSON.stringify(input.purposes ?? []),
-      input.contextNote ?? "",
-      input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
-      input.outputNote ?? "",
-      JSON.stringify(normalizeModelPreset(input.preset ?? {}, input.modelId)),
-      (input.thinkingEnabled ?? true) ? 1 : 0,
-      (input.enabled ?? true) ? 1 : 0,
-      input.note ?? "",
-      timestamp,
-      timestamp
-    );
+    const multimodalEnabled = input.multimodalEnabled ?? false;
+    const enabled = input.enabled ?? true;
+    if (input.imageToolDefault && !multimodalEnabled) {
+      throw new AppError(400, "MODEL_NOT_MULTIMODAL", "只有多模态模型才能设为默认读图模型");
+    }
+    if (input.imageToolDefault && !enabled) {
+      throw new AppError(400, "MODEL_DISABLED", "停用模型不能设为默认读图模型");
+    }
+    if (input.imageToolDefault && providerProtocol(provider) !== "openai-chat-completions") {
+      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "多模态读图工具当前仅支持 Chat Completions 协议");
+    }
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
+         preset_json, thinking_enabled, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        modelId,
+        providerId,
+        input.displayName,
+        input.modelId,
+        JSON.stringify(input.purposes ?? []),
+        input.contextNote ?? "",
+        input.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+        input.outputNote ?? "",
+        JSON.stringify(normalizeModelPreset(input.preset ?? {}, input.modelId)),
+        (input.thinkingEnabled ?? true) ? 1 : 0,
+        multimodalEnabled ? 1 : 0,
+        enabled ? 1 : 0,
+        input.note ?? "",
+        timestamp,
+        timestamp
+      );
+      if (input.imageToolDefault) this.setPlatformImageToolModel(modelId);
+    });
     this.store.audit(PLATFORM_AI_WORK_ID, "model.created", "model", modelId, { providerId, modelId: input.modelId });
     return this.getModel(modelId);
   }
@@ -2744,30 +2761,50 @@ export class AiManager {
 
   updateModel(modelId: string, input: Partial<ModelInput>): Record<string, unknown> {
     const row = this.getModelRow(modelId);
+    const provider = this.getProviderRow(stringValue(row, "provider_id"));
     const nextModelId = input.modelId ?? stringValue(row, "model_id");
     const preset = normalizeModelPreset(input.preset ?? safeJsonObject(stringValue(row, "preset_json")), nextModelId);
-    this.store.db.run(
-      `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
-       preset_json = ?, thinking_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
-      input.displayName ?? stringValue(row, "display_name"),
-      nextModelId,
-      JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
-      input.contextNote ?? stringValue(row, "context_note"),
-      input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
-      input.outputNote ?? stringValue(row, "output_note"),
-      JSON.stringify(preset),
-      (input.thinkingEnabled ?? boolValue(row, "thinking_enabled")) ? 1 : 0,
-      (input.enabled ?? boolValue(row, "enabled")) ? 1 : 0,
-      input.note ?? stringValue(row, "note"),
-      now(),
-      modelId
-    );
+    const multimodalEnabled = input.multimodalEnabled ?? boolValue(row, "multimodal_enabled");
+    const enabled = input.enabled ?? boolValue(row, "enabled");
+    if (input.imageToolDefault && !multimodalEnabled) {
+      throw new AppError(400, "MODEL_NOT_MULTIMODAL", "只有多模态模型才能设为默认读图模型");
+    }
+    if (input.imageToolDefault && providerProtocol(provider) !== "openai-chat-completions") {
+      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "多模态读图工具当前仅支持 Chat Completions 协议");
+    }
+    this.store.db.transaction(() => {
+      this.store.db.run(
+        `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
+         preset_json = ?, thinking_enabled = ?, multimodal_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
+        input.displayName ?? stringValue(row, "display_name"),
+        nextModelId,
+        JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
+        input.contextNote ?? stringValue(row, "context_note"),
+        input.contextWindow ?? (numberValue(row, "context_window") || DEFAULT_CONTEXT_WINDOW),
+        input.outputNote ?? stringValue(row, "output_note"),
+        JSON.stringify(preset),
+        (input.thinkingEnabled ?? boolValue(row, "thinking_enabled")) ? 1 : 0,
+        multimodalEnabled ? 1 : 0,
+        enabled ? 1 : 0,
+        input.note ?? stringValue(row, "note"),
+        now(),
+        modelId
+      );
+      if (!multimodalEnabled || !enabled) this.clearImageToolModelReferences(modelId);
+      if (input.imageToolDefault === true) this.setPlatformImageToolModel(modelId);
+      else if (input.imageToolDefault === false) {
+        this.store.db.run("UPDATE platform_ai_settings SET image_tool_model_id = NULL WHERE image_tool_model_id = ?", modelId);
+      }
+    });
     return this.getModel(modelId);
   }
 
   deleteModel(modelId: string): void {
     this.getModelRow(modelId);
-    this.store.db.run("DELETE FROM models WHERE id = ?", modelId);
+    this.store.db.transaction(() => {
+      this.clearImageToolModelReferences(modelId);
+      this.store.db.run("DELETE FROM models WHERE id = ?", modelId);
+    });
   }
 
   setTaskDefault(workId: string, taskType: TaskType, modelId: string): Record<string, unknown> {
@@ -9086,6 +9123,36 @@ export class AiManager {
     if (!boolValue(model, "enabled")) throw new AppError(409, "MODEL_DISABLED", "模型已停用，不能创建新任务");
   }
 
+  assertImageToolModelAvailable(modelId: string): void {
+    const model = this.getModelRow(modelId);
+    const provider = this.getProviderRow(stringValue(model, "provider_id"));
+    if (stringValue(provider, "work_id") !== PLATFORM_AI_WORK_ID) {
+      throw new AppError(400, "MODEL_PLATFORM_MISMATCH", "模型不属于平台 AI 配置");
+    }
+    if (!boolValue(model, "multimodal_enabled")) {
+      throw new AppError(400, "MODEL_NOT_MULTIMODAL", "模型未启用多模态能力");
+    }
+    if (providerProtocol(provider) !== "openai-chat-completions") {
+      throw new AppError(400, "IMAGE_MODEL_PROTOCOL_UNSUPPORTED", "多模态读图工具当前仅支持 Chat Completions 协议");
+    }
+    this.assertAvailable(provider, model);
+  }
+
+  private clearImageToolModelReferences(modelId: string): void {
+    this.store.db.run("UPDATE platform_ai_settings SET image_tool_model_id = NULL WHERE image_tool_model_id = ?", modelId);
+    this.store.db.run("UPDATE work_ai_settings SET image_tool_model_id = NULL WHERE image_tool_model_id = ?", modelId);
+  }
+
+  private setPlatformImageToolModel(modelId: string | null): void {
+    this.store.db.run(
+      `INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, updated_at) VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET image_tool_model_id = excluded.image_tool_model_id, updated_at = excluded.updated_at`,
+      String(this.store.getPlatformAiSettings().systemPrompt ?? ""),
+      modelId,
+      now()
+    );
+  }
+
   private sanitizeParameters(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
     const output: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(input)) {
@@ -9165,6 +9232,8 @@ export class AiManager {
       outputNote: stringValue(row, "output_note"),
       preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json")), stringValue(row, "model_id")),
       thinkingEnabled: boolValue(row, "thinking_enabled"),
+      multimodalEnabled: boolValue(row, "multimodal_enabled"),
+      imageToolDefault: String(this.store.getPlatformAiSettings().imageToolModelId ?? "") === stringValue(row, "id"),
       enabled: boolValue(row, "enabled"),
       note: stringValue(row, "note"),
       createdAt: stringValue(row, "created_at"),
