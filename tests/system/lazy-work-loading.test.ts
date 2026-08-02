@@ -118,7 +118,10 @@ describe("作品工作台按需加载", () => {
     expect(renderRacesSource).toContain("dismissLoadingToast();");
     expect(renderRacesSource).not.toContain("apiAllPages");
     expect(renderRacesSource).not.toContain('/characters');
-    expect(openKnowledgeEditorSource).toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
+    expect(openKnowledgeEditorSource).toContain('const memberCharacters = readOnly');
+    expect(openKnowledgeEditorSource).toContain('await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)');
+    expect(openKnowledgeEditorSource).toContain('if (!readOnly) state.characters = memberCharacters;');
+    expect(openKnowledgeEditorSource).not.toContain('state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : []');
   });
 
   it("角色分页不覆盖跨模块全量引用缓存", async () => {

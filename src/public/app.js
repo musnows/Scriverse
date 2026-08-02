@@ -9409,8 +9409,13 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
   if (kind === "race" && !(await ensureCompleteRaceList())) return;
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
+  const memberCharacters = readOnly
+    ? (Array.isArray(item?.members) ? item.members : []).map((member) => ({ id: member.characterId, name: member.name, aliases: [] }))
+    : canReadModule("characters")
+      ? await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
+      : [];
+  if (!readOnly) state.characters = memberCharacters;
+  const memberOptions = memberCharacters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
   const module = isRace ? "races" : "organizations";
   const label = isRace ? "种族" : "组织";
