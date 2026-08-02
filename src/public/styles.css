@@ -400,6 +400,7 @@ input[type="checkbox"][hidden] { display: none; }
 .presence-person-copy small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .presence-same-page { color: var(--accent-dark); font-size: 9px; white-space: nowrap; }
 .theme-toggle, .settings-button, .topbar-icon-button {
+  position: relative;
   display: grid;
   flex: 0 0 34px;
   place-items: center;
@@ -410,6 +411,16 @@ input[type="checkbox"][hidden] { display: none; }
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
+}
+.settings-update-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  background: #d9363e;
 }
 .theme-toggle:hover, .theme-toggle:focus-visible,
 .settings-button:hover, .settings-button:focus-visible, .settings-button[aria-current="page"],
@@ -720,6 +731,8 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .product-footer a { color: inherit; text-decoration: none; text-underline-offset: 3px; transition: color .14s ease; }
 .product-footer a:hover, .product-footer a:focus-visible { color: var(--accent-dark); text-decoration: underline; }
 .product-footer-development { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent-dark); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 9px; font-weight: 700; letter-spacing: .05em; }
+.product-footer .product-footer-update { padding: 2px 8px; border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--accent-dark); font-weight: 700; }
+.product-footer .product-footer-update:hover, .product-footer .product-footer-update:focus-visible { color: var(--accent-dark); }
 .auth-product-footer { align-self: end; max-width: 440px; margin: 0; padding-top: 14px; }
 .settings-product-footer { max-width: 1000px; }
 .access-dialog-body { display: grid; gap: 16px; max-height: calc(88vh - 82px); overflow-y: auto; padding: 18px 24px 22px; }
@@ -2500,6 +2513,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .background-task-row > div small { color: var(--muted); font-size: 9px; }
 .background-task-row .task-status-badge { min-height: 24px; padding: 3px 8px; font-size: 9px; }
 .background-task-row .ghost-button { min-height: 30px; padding: 5px 9px; font-size: 10px; }
+.background-update-link { display: grid; place-items: center; text-decoration: none; }
+.background-task-action-placeholder { width: 42px; }
 .background-task-progress { color: var(--muted); font-family: var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; text-align: right; }
 .background-task-empty, .background-task-error { margin: 0; padding: 12px; color: var(--muted); font-size: 10px; text-align: center; }
 .background-task-error { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); color: var(--accent-dark); text-align: left; }

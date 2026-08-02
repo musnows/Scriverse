@@ -20,6 +20,9 @@ describe("全局后台任务中心界面", () => {
     expect(script).toContain("collectBackgroundTaskTransitions");
     expect(script).toContain('data-background-index-action="sync"');
     expect(script).toContain('data-background-index-action="rebuild"');
+    expect(script).toContain("function backgroundProductUpdateMarkup()");
+    expect(script).toContain("版本更新探测");
+    expect(script).toContain("refreshProductUpdate()");
     expect(styles).toContain(".background-task-row");
     expect(styles).toContain(".background-task-count");
     expect(styles).toContain(".background-task-row > div { grid-column: 1; grid-row: 2; }");

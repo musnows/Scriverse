@@ -1,5 +1,5 @@
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 import { APP_VERSION } from "../../src/version.js";
 
@@ -34,7 +34,12 @@ describe("产品信息页脚", () => {
     expect(page.text.match(/aria-label="在 GitHub 查看叙界仓库">GitHub<\/a>/gu)).toHaveLength(3);
     expect(page.text).not.toContain(">GitHub · musnows/Scriverse</a>");
     expect(page.text.match(/data-product-footer-development>开发模式<\/span>/gu)).toHaveLength(3);
+    expect(page.text).toContain('class="settings-update-dot hidden" data-settings-update-dot');
+    expect(page.text).toContain('class="product-footer-update hidden" data-product-footer-update');
     expect(application.text).toContain("async function initializeProductFooters()");
+    expect(application.text).toContain("function applyProductUpdateMetadata(update)");
+    expect(application.text).toContain('api("/api/update-check")');
+    expect(application.text).toContain('element.textContent = `发现新版本 v${latestVersion}，查看更新说明`;');
     expect(application.text).toContain('const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);');
     expect(styles.text).toContain(".shelf-view { display: flex; flex-direction: column; height: 100%;");
     expect(styles.text).toContain("#shelf-view, #settings-hub-view { padding-bottom: 24px; }");
@@ -43,8 +48,38 @@ describe("产品信息页脚", () => {
     expect(styles.text).toContain("grid-template-rows: minmax(min-content, 1fr) auto;");
     expect(styles.text).toContain(".product-footer-meta { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }");
     expect(styles.text).toContain(".product-footer-development {");
+    expect(styles.text).toContain(".settings-update-dot {");
+    expect(styles.text).toContain(".product-footer .product-footer-update {");
     expect(health.body.data).toMatchObject({ version: APP_VERSION, development: true });
     expect(health.body.data.bootId).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it("通过公开接口返回最新稳定版探测结果", async () => {
+    const releaseFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      tag_name: "v99.0.0",
+      html_url: "https://github.com/musnows/Scriverse/releases/tag/v99.0.0"
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const releaseRuntime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "release-update-system-test-secret",
+      disableUserAuth: true,
+      serveUi: false,
+      releaseFetchImpl: releaseFetch
+    });
+    try {
+      const update = await request(releaseRuntime.app).get("/api/update-check").expect(200);
+      expect(update.body.data).toMatchObject({
+        checked: true,
+        updateAvailable: true,
+        currentVersion: APP_VERSION,
+        latestVersion: "99.0.0",
+        releaseUrl: "https://github.com/musnows/Scriverse/releases/tag/v99.0.0"
+      });
+      expect(update.body.data.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+      expect(update.body.data.nextCheckAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+    } finally {
+      releaseRuntime.close();
+    }
   });
 
   it("缓存带版本静态资源并保持页面和接口不可缓存", async () => {
