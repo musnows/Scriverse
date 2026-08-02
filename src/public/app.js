@@ -642,12 +642,12 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "platform-backup") return null;
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
-  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "work-audit") return { kind: "settings" };
+  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "platform-backup" || route.view === "work-audit") return { kind: "settings" };
   return { kind: "welcome" };
 }
 
@@ -3321,6 +3321,11 @@ async function initializePage() {
       settingsReturnContext = restoredSettingsReturnContext(route);
       return;
     }
+    if (route.view === "platform-backup") {
+      await showPlatformBackup();
+      settingsReturnContext = restoredSettingsReturnContext(route);
+      return;
+    }
     if (route.view === "work-audit") {
       await showWorkAudit();
       settingsReturnContext = restoredSettingsReturnContext(route);
@@ -4385,6 +4390,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
