@@ -224,10 +224,13 @@ describe("平台数据备份 API", () => {
       endpoint: "http://127.0.0.1:9000",
       region: "us-east-1",
       bucket: "test-bucket",
+      accessKeyId: "minioadmin",
       prefix: "backups/novel-a",
       enabled: true,
       hasSecretKey: true
     }));
+    // Access Key 允许回显，Secret Key 永不下发
+    expect(JSON.stringify(listResponse.body.data.targets)).toContain("minioadmin");
     expect(JSON.stringify(listResponse.body.data.targets)).not.toContain("minio-secret-123");
 
     const updatedTarget = await patch(admin, `/api/platform/backup/targets/${targetId}`, {

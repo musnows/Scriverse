@@ -58,6 +58,7 @@ export type BackupTargetView = {
   endpoint: string;
   region: string;
   bucket: string;
+  accessKeyId: string;
   prefix: string;
   enabled: boolean;
   hasSecretKey: boolean;
@@ -446,6 +447,7 @@ export class BackupManager {
       endpoint: row.endpoint,
       region: row.region,
       bucket: row.bucket,
+      accessKeyId: row.access_key_id,
       prefix: row.prefix,
       enabled: row.enabled === 1,
       hasSecretKey: Boolean(row.secret_access_key_json),
