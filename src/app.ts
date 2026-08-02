@@ -1011,7 +1011,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         read: requiredModules,
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
-    }
+    },
+    attachmentStorage
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);

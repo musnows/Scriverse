@@ -4959,6 +4959,21 @@ export class Store {
     return this.mapAttachment(row);
   }
 
+  getSettingAttachment(workId: string, attachmentId: string): Record<string, unknown> {
+    const row = this.db.get(
+      `SELECT attachment.*
+       FROM attachments attachment
+       JOIN attachment_references reference ON reference.attachment_id = attachment.id
+       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ? AND reference.entity_type = 'setting'
+       LIMIT 1`,
+      attachmentId,
+      workId,
+      workId
+    );
+    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被设定正文引用");
+    return this.mapAttachment(row);
+  }
+
   attachmentModules(attachmentId: string): AttachmentPermissionModule[] {
     this.getAttachment(attachmentId);
     const modules = new Set<AttachmentPermissionModule>();
