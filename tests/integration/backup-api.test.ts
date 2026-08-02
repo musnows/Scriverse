@@ -185,6 +185,8 @@ describe("平台数据备份 API", () => {
     }).expect(400);
     await post(admin, "/api/platform/backup/targets", { ...targetInput, endpoint: "ftp://x" }).expect(400);
     await post(admin, "/api/platform/backup/targets", { ...targetInput, endpoint: "https://user:pass@host" }).expect(400);
+    await post(admin, "/api/platform/backup/targets", { ...targetInput, endpoint: "http://169.254.169.254/latest/meta-data" }).expect(400);
+    await post(admin, "/api/platform/backup/targets", { ...targetInput, endpoint: "http://metadata.google.internal" }).expect(400);
     await post(admin, "/api/platform/backup/targets", { ...targetInput, bucket: "Bad Bucket" }).expect(400);
     await post(admin, "/api/platform/backup/targets", { ...targetInput, prefix: "a/../b" }).expect(400);
     await post(admin, "/api/platform/backup/targets", { ...targetInput, name: "" }).expect(400);

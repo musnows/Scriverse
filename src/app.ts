@@ -450,6 +450,14 @@ function assertBackupEndpoint(value: string): void {
   if (url.search || url.hash) {
     throw new AppError(400, "BACKUP_ENDPOINT_INVALID", "备份端点不允许携带查询参数或锚点");
   }
+  // 纵深防御：禁止指向云元数据与链路本地地址，防止备份请求被用于探测内网元数据；
+  // 私有网段（如内网 MinIO）属于备份目标的合法部署场景，仍允许。
+  const hostname = url.hostname.toLocaleLowerCase().replace(/^\[|\]$/gu, "");
+  const linkLocalIpv4 = /^169\.254\.\d{1,3}\.\d{1,3}$/u.test(hostname);
+  const unspecified = hostname === "0.0.0.0" || hostname === "::" || hostname === "metadata.google.internal";
+  if (linkLocalIpv4 || unspecified) {
+    throw new AppError(400, "BACKUP_ENDPOINT_INVALID", "备份端点不允许指向云元数据或链路本地地址");
+  }
 }
 
 const backupSettingsInputSchema = z.object({
