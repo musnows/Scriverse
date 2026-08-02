@@ -31,6 +31,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
+import { ReleaseUpdateChecker } from "./release-update.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -580,6 +581,14 @@ export type RuntimeOptions = {
   masterSecret: string;
   attachmentDirectory?: string;
   fetchImpl?: typeof fetch;
+  /** 测试用：覆盖 GitHub Release 探测请求。 */
+  releaseFetchImpl?: typeof fetch;
+  /** GitHub Release 实际探测间隔，最短为 10 分钟。 */
+  releaseCheckIntervalMs?: number;
+  /** GitHub Release 单次请求超时，最长为 300 秒。 */
+  releaseCheckTimeoutMs?: number;
+  /** GitHub Release 请求失败后的内部重试次数。 */
+  releaseCheckRetries?: number;
   serveUi?: boolean;
   publicPath?: string;
   security?: RuntimeSecurityOptions;
@@ -970,6 +979,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const releaseUpdateChecker = new ReleaseUpdateChecker(
+    APP_VERSION,
+    options.releaseFetchImpl ?? fetch,
+    {
+      intervalMs: options.releaseCheckIntervalMs,
+      timeoutMs: options.releaseCheckTimeoutMs,
+      retries: options.releaseCheckRetries
+    }
+  );
   const ai = new AiManager(
     store,
     new CredentialVault(options.masterSecret),
@@ -1031,6 +1049,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       protocols: [...AI_PROVIDER_PROTOCOLS],
       development: options.developmentServer === true
     });
+  });
+  app.get("/api/update-check", async (_request, response) => {
+    data(response, await releaseUpdateChecker.check());
   });
 
   if (options.security?.auth) app.use(createBasicAuthMiddleware(options.security.auth));

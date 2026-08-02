@@ -195,6 +195,10 @@ let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+let productUpdateStatus = null;
+let productUpdateChecking = false;
+let productUpdateTimer = null;
+const fallbackProductUpdatePollInterval = 60 * 60 * 1000;
 const systemHealthPollInterval = 30_000;
 let systemHealthTimer = null;
 let systemHealthSnapshot = { status: "checking", version: "" };
@@ -2647,6 +2651,35 @@ function applyProductHealthMetadata(health) {
   });
 }
 
+function applyProductUpdateMetadata(update) {
+  if (update && typeof update === "object") productUpdateStatus = update;
+  if (update?.checked !== true) {
+    renderBackgroundTaskCenter();
+    return;
+  }
+  const latestVersion = String(update.latestVersion ?? "").trim();
+  const releaseUrl = String(update.releaseUrl ?? "").trim();
+  const updateAvailable = update.updateAvailable === true && Boolean(latestVersion) && Boolean(releaseUrl);
+  const updateDot = document.querySelector("[data-settings-update-dot]");
+  updateDot?.classList.toggle("hidden", !updateAvailable);
+  const settingsButton = $("#settings-button");
+  settingsButton.setAttribute("aria-label", updateAvailable ? `设置，有新版本 v${latestVersion}` : "设置");
+  settingsButton.title = updateAvailable ? `设置，有新版本 v${latestVersion}` : "设置";
+  document.querySelectorAll("[data-product-footer-update]").forEach((element) => {
+    element.classList.toggle("hidden", !updateAvailable);
+    if (updateAvailable) {
+      element.textContent = `发现新版本 v${latestVersion}，查看更新说明`;
+      element.href = releaseUrl;
+      element.setAttribute("aria-label", `查看叙界 v${latestVersion} 更新说明`);
+    } else {
+      element.textContent = "";
+      element.removeAttribute("href");
+      element.removeAttribute("aria-label");
+    }
+  });
+  renderBackgroundTaskCenter();
+}
+
 function scheduleSystemHealthCheck() {
   if (systemHealthTimer !== null) window.clearTimeout(systemHealthTimer);
   systemHealthTimer = window.setTimeout(() => {
@@ -2666,11 +2699,40 @@ async function refreshSystemHealth() {
   }
 }
 
+function scheduleProductUpdateCheck() {
+  if (productUpdateTimer !== null) window.clearTimeout(productUpdateTimer);
+  const nextCheckAt = Date.parse(String(productUpdateStatus?.nextCheckAt ?? ""));
+  const delay = Number.isFinite(nextCheckAt)
+    ? Math.max(1000, nextCheckAt - Date.now())
+    : fallbackProductUpdatePollInterval;
+  productUpdateTimer = window.setTimeout(() => {
+    productUpdateTimer = null;
+    void refreshProductUpdate();
+  }, Math.min(delay, 2_147_483_647));
+}
+
+async function refreshProductUpdate() {
+  if (productUpdateChecking) return;
+  productUpdateChecking = true;
+  renderBackgroundTaskCenter();
+  try {
+    applyProductUpdateMetadata(await api("/api/update-check"));
+  } catch {
+    // 更新探测失败时静默保留当前展示状态
+  } finally {
+    productUpdateChecking = false;
+    renderBackgroundTaskCenter();
+    scheduleProductUpdateCheck();
+  }
+}
+
 async function initializeProductFooters() {
   const year = String(new Date().getFullYear());
   document.querySelectorAll("[data-product-footer-year]").forEach((element) => { element.textContent = year; });
   applyProductHealthMetadata(null);
+  applyProductUpdateMetadata(null);
   await refreshSystemHealth();
+  void refreshProductUpdate();
 }
 
 function observeSystemBootId(value) {
@@ -6875,8 +6937,7 @@ function relationshipIndexStatusMarkup(status) {
 function updateBackgroundTaskCenterVisibility() {
   const button = $("#background-task-button");
   if (!button) return;
-  const visible = Boolean(state.work)
-    && (canReadModule("tasks") || canReadModule("ai-settings"));
+  const visible = Boolean(state.user);
   button.classList.toggle("hidden", !visible);
   if (!visible) {
     $("#background-task-count")?.classList.add("hidden");
@@ -6885,13 +6946,41 @@ function updateBackgroundTaskCenterVisibility() {
   const activityCount = backgroundTaskActivityCount(
     backgroundTaskCenterSnapshot.taskPage,
     backgroundTaskCenterSnapshot.relationshipIndex
-  );
+  ) + (productUpdateChecking ? 1 : 0);
   const badge = $("#background-task-count");
   badge.textContent = activityCount > 99 ? "99+" : String(activityCount);
   badge.classList.toggle("hidden", activityCount === 0);
   button.classList.toggle("is-active", activityCount > 0);
   button.setAttribute("aria-label", activityCount > 0 ? `后台任务中心，${activityCount} 项进行中` : "后台任务中心");
   button.setAttribute("title", activityCount > 0 ? `后台任务中心 · ${activityCount} 项进行中` : "后台任务中心");
+}
+
+function backgroundProductUpdateMarkup() {
+  const status = productUpdateStatus;
+  const currentVersion = String(status?.currentVersion ?? "").trim();
+  const latestVersion = String(status?.latestVersion ?? "").trim();
+  const nextCheckAt = formatDateTime(status?.nextCheckAt) || "等待首次探测";
+  const updateAvailable = status?.updateAvailable === true && Boolean(status?.releaseUrl);
+  const badgeClass = productUpdateChecking ? "running" : updateAvailable ? "partial" : status?.checked === true ? "completed" : status ? "unknown" : "pending";
+  const badgeLabel = productUpdateChecking ? "探测中" : updateAvailable ? "有新版本" : status?.checked === true ? "已是最新" : status ? "本次未探测" : "等待探测";
+  const detail = productUpdateChecking
+    ? "正在请求 GitHub 最新 Release"
+    : updateAvailable
+      ? `当前 v${currentVersion || "—"} · 最新 v${latestVersion} · 下次探测 ${nextCheckAt}`
+      : status?.checked === true
+        ? `当前 v${currentVersion || "—"} · 下次探测 ${nextCheckAt}`
+        : status
+          ? `GitHub 暂不可用 · 下次探测 ${nextCheckAt}`
+          : "应用启动后将在后台探测 GitHub Release";
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading"><div><strong>版本更新探测</strong><small>按服务端配置定期检查 GitHub Release</small></div></div>
+    <div class="background-task-list"><article class="background-task-row">
+      <span class="task-status-badge is-${badgeClass}"><span class="task-status-indicator" aria-hidden="true"></span><span>${badgeLabel}</span></span>
+      <div><strong>叙界版本更新</strong><small>${esc(detail)}</small></div>
+      <span class="background-task-progress">${updateAvailable ? `v${esc(latestVersion)}` : "系统"}</span>
+      ${updateAvailable ? `<a class="ghost-button background-update-link" href="${esc(status.releaseUrl)}" target="_blank" rel="noopener noreferrer" aria-label="查看叙界 v${esc(latestVersion)} 更新说明">说明</a>` : '<span class="background-task-action-placeholder" aria-hidden="true"></span>'}
+    </article></div>
+  </section>`;
 }
 
 function backgroundTaskTransitionMessage(transition) {
@@ -6952,17 +7041,17 @@ function renderBackgroundTaskCenter() {
   updateBackgroundTaskCenterVisibility();
   const content = $("#background-task-content");
   if (!content) return;
-  content.innerHTML = `${backgroundTaskListMarkup(
+  content.innerHTML = `${backgroundProductUpdateMarkup()}${state.work ? `${backgroundTaskListMarkup(
     backgroundTaskCenterSnapshot.taskPage,
     backgroundTaskCenterSnapshot.errors.tasks
   )}${backgroundIndexMarkup(
     backgroundTaskCenterSnapshot.relationshipIndex,
     backgroundTaskCenterSnapshot.errors.index
-  )}`;
+  )}` : ""}`;
   $("#background-task-dialog-meta").textContent = state.work
-    ? `《${state.work.title}》的分析任务与索引队列`
-    : "当前作品的分析任务与索引队列";
-  $("#background-task-open-analysis").classList.toggle("hidden", !canReadModule("tasks"));
+    ? `系统更新与《${state.work.title}》的分析任务、索引队列`
+    : "系统更新探测状态";
+  $("#background-task-open-analysis").classList.toggle("hidden", !state.work || !canReadModule("tasks"));
   content.querySelectorAll("[data-background-task-detail]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -7081,8 +7170,7 @@ function stopBackgroundTaskCenter() {
   backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
   const dialog = $("#background-task-dialog");
   if (dialog?.open) dialog.close();
-  $("#background-task-button")?.classList.add("hidden");
-  $("#background-task-count")?.classList.add("hidden");
+  updateBackgroundTaskCenterVisibility();
 }
 
 function startBackgroundTaskCenter(workId) {
@@ -11975,13 +12063,14 @@ $("#background-task-button").addEventListener("click", () => {
   const dialog = $("#background-task-dialog");
   if (!dialog.open) dialog.showModal();
   void refreshBackgroundTaskCenter();
+  void refreshProductUpdate();
 });
 $("#background-task-dialog").addEventListener("close", scheduleBackgroundTaskCenterRefresh);
 $("#background-task-refresh").addEventListener("click", async () => {
   const button = $("#background-task-refresh");
   button.disabled = true;
   try {
-    await refreshBackgroundTaskCenter();
+    await Promise.all([refreshBackgroundTaskCenter(), refreshProductUpdate()]);
   } finally {
     button.disabled = false;
   }
