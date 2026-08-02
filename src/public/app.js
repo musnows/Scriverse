@@ -5993,10 +5993,11 @@ async function renderReviews(page = moduleListPages.reviews) {
   const canResolveReview = canEditModule("reviews");
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
-  const [reviews, characters] = await Promise.all([
-    moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`),
-    canReadCharacters ? moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
-  ]);
+  const reviews = await moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`);
+  const hasCharacterDuplicateReviews = reviews.some((item) => item.itemType === "character-duplicate");
+  const characters = canReadCharacters && hasCharacterDuplicateReviews
+    ? await moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`)
+    : [];
   mountModuleCount(reviews.length);
   const pageResult = paginateModuleItems(reviews, page, "reviews");
   moduleListPages.reviews = pageResult.page;

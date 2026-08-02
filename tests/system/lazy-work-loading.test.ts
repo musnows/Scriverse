@@ -136,6 +136,19 @@ describe("作品工作台按需加载", () => {
     expect(renderOrganizationsSource).toContain("item.members");
   });
 
+  it("审核面板仅为角色查重审核项加载角色目录", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderReviewsSource = application.slice(
+      application.indexOf("async function renderReviews("),
+      application.indexOf("async function renderTasks(")
+    );
+
+    expect(renderReviewsSource).toContain('const reviews = await moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`)');
+    expect(renderReviewsSource).toContain('const hasCharacterDuplicateReviews = reviews.some((item) => item.itemType === "character-duplicate");');
+    expect(renderReviewsSource).toContain('canReadCharacters && hasCharacterDuplicateReviews');
+    expect(renderReviewsSource).toContain('`/api/works/${state.work.id}/characters?includeMerged=1`');
+  });
+
   it("角色分页不覆盖跨模块全量引用缓存", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const renderCharactersSource = application.slice(
