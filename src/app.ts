@@ -13,10 +13,11 @@ import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
-import { Database } from "./database.js";
+import { Database, PLATFORM_AI_WORK_ID } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
+import { BackupManager, buildS3Url, normalizeBackupPrefix, normalizeScheduleTime } from "./s3-backup.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
@@ -435,6 +436,39 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  includeImages: z.boolean().optional(),
+  scheduleTime: z.string().trim().max(5).optional(),
+  retentionCount: z.number().int().min(1).max(365).optional()
+}).strict().refine((input) => Object.keys(input).length > 0, {
+  message: "至少需要提供一项备份设置"
+});
+
+const backupTargetSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  endpoint: z.string().trim().min(1).max(2000),
+  region: z.string().trim().min(1).max(100),
+  bucket: z.string().trim().min(1).max(200),
+  prefix: z.string().trim().max(500),
+  accessKeyId: z.string().trim().min(1).max(200),
+  secretAccessKey: z.string().trim().min(1).max(2000),
+  pathStyle: z.boolean()
+}).strict();
+
+const backupTargetUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  endpoint: z.string().trim().min(1).max(2000).optional(),
+  region: z.string().trim().min(1).max(100).optional(),
+  bucket: z.string().trim().min(1).max(200).optional(),
+  prefix: z.string().trim().max(500).optional(),
+  accessKeyId: z.string().trim().min(1).max(200).optional(),
+  secretAccessKey: z.string().trim().min(1).max(2000).optional(),
+  pathStyle: z.boolean().optional()
+}).strict().refine((input) => Object.keys(input).length > 0, {
+  message: "至少需要提供一项备份目标设置"
+});
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -598,6 +632,7 @@ export type Runtime = {
   store: Store;
   ai: AiManager;
   auth: UserAuthService;
+  backup: BackupManager;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
@@ -970,9 +1005,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const credentialVault = new CredentialVault(options.masterSecret);
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    credentialVault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +1027,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backup = new BackupManager(database, credentialVault, attachmentStorage.rootDirectory, options.fetchImpl ?? fetch);
+  backup.start();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2098,66 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  app.get("/api/platform/backup/settings", (_request, response) => {
+    data(response, { settings: backup.getSettings(), targets: backup.listTargets() });
+  });
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    const input = parse(backupSettingsSchema, request.body);
+    if (input.scheduleTime !== undefined) normalizeScheduleTime(input.scheduleTime);
+    const updated = backup.updateSettings(input);
+    store.audit(PLATFORM_AI_WORK_ID, "platform.backup-settings.updated", "platform-backup-settings", "platform-backup-settings", {
+      enabled: updated.enabled,
+      includeImages: updated.includeImages,
+      scheduleTime: updated.scheduleTime,
+      retentionCount: updated.retentionCount
+    });
+    data(response, { settings: updated, targets: backup.listTargets() });
+  });
+  app.post("/api/platform/backup/targets", (request, response) => {
+    const input = parse(backupTargetSchema, request.body);
+    const prefix = normalizeBackupPrefix(input.prefix);
+    buildS3Url({ endpoint: input.endpoint, bucket: input.bucket, pathStyle: input.pathStyle });
+    const created = backup.createTarget({ ...input, prefix });
+    store.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.created", "platform-backup-settings", created.id, { name: created.name });
+    data(response, created, 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", (request, response) => {
+    const input = parse(backupTargetUpdateSchema, request.body);
+    const patch = {
+      ...input,
+      ...(input.prefix !== undefined ? { prefix: normalizeBackupPrefix(input.prefix) } : {})
+    };
+    if (patch.endpoint || patch.bucket || patch.pathStyle !== undefined) {
+      const current = backup.listTargets().find((target) => target.id === request.params.targetId);
+      if (!current) throw new AppError(404, "BACKUP_TARGET_NOT_FOUND", "备份目标不存在");
+      buildS3Url({
+        endpoint: patch.endpoint ?? current.endpoint,
+        bucket: patch.bucket ?? current.bucket,
+        pathStyle: patch.pathStyle ?? current.pathStyle
+      });
+    }
+    const updated = backup.updateTarget(request.params.targetId, patch);
+    store.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.updated", "platform-backup-settings", updated.id, { name: updated.name });
+    data(response, updated);
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    backup.deleteTarget(request.params.targetId);
+    store.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.deleted", "platform-backup-settings", request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/run", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    const result = await backup.runBackup("manual");
+    store.audit(PLATFORM_AI_WORK_ID, "platform.backup.run", "platform-backup-settings", "platform-backup-settings", {
+      trigger: result.trigger,
+      status: result.status
+    });
+    if (result.status !== "success") {
+      throw new AppError(502, "S3_BACKUP_FAILED", `备份未全部完成：${result.error}`, result);
+    }
+    data(response, result);
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,8 +2672,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, backup, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });

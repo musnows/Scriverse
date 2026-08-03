@@ -2446,6 +2446,26 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
 .dialog { width: min(570px, 92vw); max-height: 88vh; border: 1px solid var(--line); border-radius: 5px; padding: 0; background: var(--panel); box-shadow: var(--shadow); }
 .wide-dialog { width: min(800px, 92vw); }
+.backup-settings-body { display: grid; gap: 18px; padding: 20px 24px; max-height: 70vh; overflow-y: auto; }
+.backup-checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.backup-checkbox-row input { width: auto; }
+.backup-targets-section { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
+.backup-targets-header { display: flex; justify-content: space-between; align-items: center; }
+.backup-targets-header h3 { margin: 0; font-size: 15px; font-weight: 500; }
+.backup-target-list { display: grid; gap: 8px; }
+.backup-target-empty { margin: 0; color: var(--muted); font-size: 11px; }
+.backup-target-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 5px; padding: 10px 12px; }
+.backup-target-info { display: grid; gap: 3px; min-width: 0; }
+.backup-target-info strong { font-size: 12px; }
+.backup-target-info small { color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+.backup-target-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.backup-target-form { border: 1px solid var(--line); border-radius: 5px; padding: 14px; display: grid; gap: 12px; }
+.backup-target-form h4 { margin: 0; font-size: 13px; font-weight: 500; }
+.backup-last-run { margin: 0; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .backup-target-row { flex-direction: column; align-items: stretch; }
+  .backup-target-actions { justify-content: flex-end; }
+}
 .trace-dialog { width: min(1180px, 94vw); }
 .trace-dialog .dialog-fields { max-height: 68vh; }
 .large-dialog { width: min(1120px, 94vw); max-height: 94dvh; }
