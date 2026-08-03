@@ -4845,14 +4845,16 @@ export class Store {
     const rows = [...normalized].length <= 2
       ? this.db.all(
         `${columns} JOIN character_profile_section_short_terms term ON term.search_id = search.id
-         WHERE search.work_id = ? AND term.term = ? ORDER BY character.name, section.sort_order LIMIT ?`,
+         WHERE search.work_id = ? AND character.merged_into_character_id IS NULL AND term.term = ?
+         ORDER BY character.name, section.sort_order LIMIT ?`,
         workId,
         normalized,
         limit
       )
       : this.db.all(
         `${columns} JOIN character_profile_section_search_fts fts ON fts.rowid = search.id
-         WHERE search.work_id = ? AND character_profile_section_search_fts MATCH ?
+         WHERE search.work_id = ? AND character.merged_into_character_id IS NULL
+           AND character_profile_section_search_fts MATCH ?
          ORDER BY bm25(character_profile_section_search_fts), character.name, section.sort_order LIMIT ?`,
         workId,
         `"${normalized.replaceAll('"', '""')}"`,
@@ -8248,7 +8250,7 @@ export class Store {
        SELECT character.id, character.name, character.aliases_json, character.species, character.is_dead,
               COALESCE(path.path, character.species) AS race_path
        FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
-       WHERE character.work_id = ? AND (
+       WHERE character.work_id = ? AND character.merged_into_character_id IS NULL AND (
          character.name LIKE ? ESCAPE '\\' OR character.aliases_json LIKE ? ESCAPE '\\' OR character.species LIKE ? ESCAPE '\\'
          OR EXISTS (SELECT 1 FROM character_race_lineage lineage WHERE lineage.character_id = character.id AND lineage.name LIKE ? ESCAPE '\\')
        ) LIMIT 50`,
