@@ -24,6 +24,15 @@ import {
   now,
   splitDocumentParagraphs
 } from "./utils.js";
+import {
+  createS3BackupTargetId,
+  credentialHint,
+  normalizeS3Prefix,
+  type S3BackupSettingsInput,
+  type S3BackupSettingsPublic,
+  type S3BackupTargetPublic
+} from "./s3-backup-service.js";
+import type { CredentialVault } from "./credential-vault.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
 
 type WorkInput = {
@@ -1140,6 +1149,232 @@ export class Store {
       });
     });
     return this.getPlatformUiSettings();
+  }
+
+  private mapS3BackupTarget(row: Row): S3BackupTargetPublic {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      enabled: Number(row.enabled) === 1,
+      endpoint: String(row.endpoint),
+      region: String(row.region ?? ""),
+      bucket: String(row.bucket),
+      prefix: String(row.prefix ?? ""),
+      accessKeyHint: String(row.access_key_hint ?? ""),
+      secretKeyHint: String(row.secret_key_hint ?? ""),
+      hasAccessKey: Boolean(row.encrypted_access_key),
+      hasSecretKey: Boolean(row.encrypted_secret_key),
+      sortOrder: Number(row.sort_order ?? 0)
+    };
+  }
+
+  private parsePendingAlerts(value: unknown): string[] {
+    if (typeof value !== "string" || !value.trim()) return [];
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  getPlatformS3BackupSettings(): S3BackupSettingsPublic {
+    const row = this.db.get("SELECT * FROM platform_s3_backup_settings WHERE id = 1");
+    const targets = this.db.all("SELECT * FROM platform_s3_backup_targets ORDER BY sort_order, created_at, id")
+      .map((targetRow) => this.mapS3BackupTarget(targetRow));
+    return {
+      enabled: Number(row?.enabled) === 1,
+      backupImages: Number(row?.backup_images ?? 1) === 1,
+      scheduleTime: String(row?.schedule_time ?? "02:00"),
+      retentionCount: Number(row?.retention_count ?? 7),
+      targets,
+      lastRunAt: String(row?.last_run_at ?? ""),
+      lastRunStatus: (["idle", "running", "success", "failed", "partial"].includes(String(row?.last_run_status))
+        ? String(row?.last_run_status)
+        : "idle") as S3BackupSettingsPublic["lastRunStatus"],
+      lastRunMessage: String(row?.last_run_message ?? ""),
+      lastScheduledDate: String(row?.last_scheduled_date ?? ""),
+      pendingAlerts: this.parsePendingAlerts(row?.pending_alerts_json),
+      updatedAt: String(row?.updated_at ?? "")
+    };
+  }
+
+  updatePlatformS3BackupSettings(input: S3BackupSettingsInput, vault: CredentialVault): S3BackupSettingsPublic {
+    const timestamp = now();
+    const current = this.getPlatformS3BackupSettings();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_s3_backup_settings (
+          id, enabled, backup_images, schedule_time, retention_count, last_run_at, last_run_status,
+          last_run_message, last_scheduled_date, pending_alerts_json, updated_at
+        ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          enabled = excluded.enabled,
+          backup_images = excluded.backup_images,
+          schedule_time = excluded.schedule_time,
+          retention_count = excluded.retention_count,
+          updated_at = excluded.updated_at`,
+        input.enabled === true ? 1 : input.enabled === false ? 0 : current.enabled ? 1 : 0,
+        input.backupImages === false ? 0 : input.backupImages === true ? 1 : current.backupImages ? 1 : 0,
+        input.scheduleTime ?? current.scheduleTime,
+        input.retentionCount ?? current.retentionCount,
+        current.lastRunAt,
+        current.lastRunStatus,
+        current.lastRunMessage,
+        current.lastScheduledDate,
+        JSON.stringify(current.pendingAlerts),
+        timestamp
+      );
+      if (input.targets) {
+        const existing = new Map(
+          this.db.all("SELECT * FROM platform_s3_backup_targets").map((row) => [String(row.id), row])
+        );
+        const nextIds = new Set<string>();
+        input.targets.forEach((target, index) => {
+          const targetId = target.id && existing.has(target.id) ? target.id : createS3BackupTargetId();
+          nextIds.add(targetId);
+          const previous = existing.get(targetId);
+          let encryptedAccessKey = String(previous?.encrypted_access_key ?? "");
+          let accessKeyIv = String(previous?.access_key_iv ?? "");
+          let accessKeyTag = String(previous?.access_key_tag ?? "");
+          let accessKeyHint = String(previous?.access_key_hint ?? "");
+          if (target.accessKey?.trim()) {
+            const encrypted = vault.encrypt(target.accessKey.trim());
+            encryptedAccessKey = encrypted.encrypted;
+            accessKeyIv = encrypted.iv;
+            accessKeyTag = encrypted.tag;
+            accessKeyHint = credentialHint(target.accessKey);
+          } else if (!previous) {
+            throw new AppError(400, "BACKUP_TARGET_CREDENTIALS_REQUIRED", "新建 S3 目标必须提供 Access Key");
+          }
+          let encryptedSecretKey = String(previous?.encrypted_secret_key ?? "");
+          let secretKeyIv = String(previous?.secret_key_iv ?? "");
+          let secretKeyTag = String(previous?.secret_key_tag ?? "");
+          let secretKeyHint = String(previous?.secret_key_hint ?? "");
+          if (target.secretKey?.trim()) {
+            const encrypted = vault.encrypt(target.secretKey.trim());
+            encryptedSecretKey = encrypted.encrypted;
+            secretKeyIv = encrypted.iv;
+            secretKeyTag = encrypted.tag;
+            secretKeyHint = credentialHint(target.secretKey);
+          } else if (!previous) {
+            throw new AppError(400, "BACKUP_TARGET_CREDENTIALS_REQUIRED", "新建 S3 目标必须提供 Secret Key");
+          }
+          const createdAt = String(previous?.created_at ?? timestamp);
+          this.db.run(
+            `INSERT INTO platform_s3_backup_targets (
+              id, name, enabled, endpoint, region, bucket, prefix,
+              encrypted_access_key, access_key_iv, access_key_tag, access_key_hint,
+              encrypted_secret_key, secret_key_iv, secret_key_tag, secret_key_hint,
+              sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              enabled = excluded.enabled,
+              endpoint = excluded.endpoint,
+              region = excluded.region,
+              bucket = excluded.bucket,
+              prefix = excluded.prefix,
+              encrypted_access_key = excluded.encrypted_access_key,
+              access_key_iv = excluded.access_key_iv,
+              access_key_tag = excluded.access_key_tag,
+              access_key_hint = excluded.access_key_hint,
+              encrypted_secret_key = excluded.encrypted_secret_key,
+              secret_key_iv = excluded.secret_key_iv,
+              secret_key_tag = excluded.secret_key_tag,
+              secret_key_hint = excluded.secret_key_hint,
+              sort_order = excluded.sort_order,
+              updated_at = excluded.updated_at`,
+            targetId,
+            target.name.trim(),
+            target.enabled ? 1 : 0,
+            target.endpoint.trim(),
+            target.region?.trim() ?? "",
+            target.bucket.trim(),
+            normalizeS3Prefix(target.prefix ?? ""),
+            encryptedAccessKey,
+            accessKeyIv,
+            accessKeyTag,
+            accessKeyHint,
+            encryptedSecretKey,
+            secretKeyIv,
+            secretKeyTag,
+            secretKeyHint,
+            index,
+            createdAt,
+            timestamp
+          );
+        });
+        for (const [targetId] of existing) {
+          if (!nextIds.has(targetId)) {
+            this.db.run("DELETE FROM platform_s3_backup_targets WHERE id = ?", targetId);
+          }
+        }
+      }
+      this.audit(PLATFORM_AI_WORK_ID, "platform.s3-backup.updated", "platform-s3-backup", "platform-s3-backup", {
+        enabled: input.enabled ?? current.enabled,
+        backupImages: input.backupImages ?? current.backupImages,
+        scheduleTime: input.scheduleTime ?? current.scheduleTime,
+        retentionCount: input.retentionCount ?? current.retentionCount,
+        targetCount: input.targets?.length ?? current.targets.length
+      });
+    });
+    return this.getPlatformS3BackupSettings();
+  }
+
+  updatePlatformS3BackupRunState(input: {
+    lastRunAt?: string;
+    lastRunStatus?: S3BackupSettingsPublic["lastRunStatus"];
+    lastRunMessage?: string;
+    lastScheduledDate?: string;
+    pendingAlerts?: string[];
+  }): S3BackupSettingsPublic {
+    const current = this.getPlatformS3BackupSettings();
+    const timestamp = now();
+    this.db.run(
+      `UPDATE platform_s3_backup_settings SET
+        last_run_at = ?,
+        last_run_status = ?,
+        last_run_message = ?,
+        last_scheduled_date = ?,
+        pending_alerts_json = ?,
+        updated_at = ?
+      WHERE id = 1`,
+      input.lastRunAt ?? current.lastRunAt,
+      input.lastRunStatus ?? current.lastRunStatus,
+      input.lastRunMessage ?? current.lastRunMessage,
+      input.lastScheduledDate ?? current.lastScheduledDate,
+      JSON.stringify(input.pendingAlerts ?? current.pendingAlerts),
+      timestamp
+    );
+    return this.getPlatformS3BackupSettings();
+  }
+
+  acknowledgePlatformS3BackupAlerts(): S3BackupSettingsPublic {
+    return this.updatePlatformS3BackupRunState({ pendingAlerts: [] });
+  }
+
+  listResolvedS3BackupTargets(vault: CredentialVault): Array<S3BackupTargetPublic & {
+    accessKey: string;
+    secretKey: string;
+  }> {
+    return this.getPlatformS3BackupSettings().targets.map((target) => {
+      const row = this.db.get("SELECT * FROM platform_s3_backup_targets WHERE id = ?", target.id);
+      if (!row) throw notFound("S3 备份目标");
+      return {
+        ...target,
+        accessKey: vault.decrypt({
+          encrypted: String(row.encrypted_access_key),
+          iv: String(row.access_key_iv),
+          tag: String(row.access_key_tag)
+        }),
+        secretKey: vault.decrypt({
+          encrypted: String(row.encrypted_secret_key),
+          iv: String(row.secret_key_iv),
+          tag: String(row.secret_key_tag)
+        })
+      };
+    });
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
