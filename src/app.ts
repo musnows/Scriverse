@@ -12,6 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { BackupManager } from "./backup-manager.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -435,6 +436,47 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupScheduleTimeSchema = z.string().trim().regex(/^([01]\d|2[0-3]):[0-5]\d$/u, "备份时间格式必须为 HH:MM（24 小时制）");
+
+const backupConfigCreateSchema = z.object({
+  name: nonEmpty.max(60),
+  endpointUrl: nonEmpty.max(2048),
+  region: z.string().trim().regex(/^[a-z0-9-]{1,64}$/u, "S3 区域格式无效"),
+  bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u, "S3 桶名格式无效"),
+  pathPrefix: z.string().trim().max(200).default(""),
+  forcePathStyle: z.boolean().default(true),
+  includeImages: z.boolean().default(true),
+  scheduleTime: backupScheduleTimeSchema.default("03:00"),
+  retentionCount: z.number().int().min(1).max(365).default(7),
+  enabled: z.boolean().default(true),
+  accessKeyId: z.string().trim().min(1).max(128),
+  secretAccessKey: z.string().trim().min(1).max(512)
+}).strict();
+
+const backupConfigUpdateSchema = z.object({
+  name: nonEmpty.max(60).optional(),
+  endpointUrl: nonEmpty.max(2048).optional(),
+  region: z.string().trim().regex(/^[a-z0-9-]{1,64}$/u, "S3 区域格式无效").optional(),
+  bucket: z.string().trim().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u, "S3 桶名格式无效").optional(),
+  pathPrefix: z.string().trim().max(200).optional(),
+  forcePathStyle: z.boolean().optional(),
+  includeImages: z.boolean().optional(),
+  scheduleTime: backupScheduleTimeSchema.optional(),
+  retentionCount: z.number().int().min(1).max(365).optional(),
+  enabled: z.boolean().optional(),
+  accessKeyId: z.string().trim().min(1).max(128).optional(),
+  secretAccessKey: z.string().trim().min(1).max(512).optional()
+}).strict().refine((input) => Object.values(input).some((value) => value !== undefined), {
+  message: "至少需要提供一项备份目标设置"
+});
+
+const backupRunsQuerySchema = z.object({
+  configId: z.string().max(64).optional(),
+  status: z.enum(["queued", "running", "success", "failed"]).optional(),
+  since: z.string().datetime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50)
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -579,6 +621,8 @@ export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
   attachmentDirectory?: string;
+  /** S3 备份快照临时目录；缺省时派生自数据库目录，:memory: 时使用系统临时目录。 */
+  backupStagingDirectory?: string;
   fetchImpl?: typeof fetch;
   serveUi?: boolean;
   publicPath?: string;
@@ -597,6 +641,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  backup: BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -991,6 +1036,25 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const temporaryBackupStagingDirectory = options.databasePath === ":memory:" && !options.backupStagingDirectory
+    ? mkdtempSync(join(tmpdir(), "scriverse-backup-staging-"))
+    : null;
+  const backupStagingDirectory = options.backupStagingDirectory
+    ?? temporaryBackupStagingDirectory
+    ?? join(dirname(options.databasePath), "backups", "s3-staging");
+  mkdirSync(backupStagingDirectory, { recursive: true, mode: 0o700 });
+  const backup = new BackupManager({
+    store,
+    vault: new CredentialVault(options.masterSecret),
+    database,
+    attachmentRoot: attachmentStorage.rootDirectory,
+    stagingDirectory: backupStagingDirectory,
+    fetchImpl: options.fetchImpl ?? fetch,
+    validateOutboundUrl: options.security
+      ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints, "S3 备份服务")
+      : undefined
+  });
+  backup.start();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2124,24 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  app.get("/api/platform/backup-configs", (_request, response) => data(response, backup.listConfigs()));
+  app.post("/api/platform/backup-configs", (request, response) => {
+    data(response, backup.createConfig(parse(backupConfigCreateSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup-configs/:configId", (request, response) => {
+    data(response, backup.updateConfig(request.params.configId, parse(backupConfigUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup-configs/:configId", (request, response) => {
+    backup.deleteConfig(request.params.configId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup-configs/:configId/run", (request, response) => {
+    data(response, backup.requestRun(request.params.configId, "manual"), 202);
+  });
+  app.get("/api/platform/backup-runs", (request, response) => {
+    data(response, backup.listRuns(parse(backupRunsQuerySchema, request.query)));
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,11 +2656,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, backup, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+    if (temporaryBackupStagingDirectory) rmSync(temporaryBackupStagingDirectory, { recursive: true, force: true });
     logger.info("runtime.closed");
   } };
 }

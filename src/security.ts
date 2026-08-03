@@ -336,10 +336,10 @@ function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAd
   pinnedAiAddresses.set(key, addresses);
 }
 
-export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false, subject = "AI 供应商"): Promise<SafeAiEndpointAddress[]> {
   const endpoint = new URL(value);
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
-    throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
+    throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", `${subject}地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址`);
   }
   const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
     ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
@@ -347,16 +347,16 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
       address,
       family: family as 4 | 6
     }));
-  if (!addresses.length) throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商域名无法解析");
+  if (!addresses.length) throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", `${subject}域名无法解析`);
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
     if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
       logger.warn("security.ai_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
-      throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
+      throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", `${subject}地址指向受保护的本机、内网或链路本地网络`);
     }
   }
   if (endpoint.protocol === "http:" && addresses.some(({ address }) => unsafeIpKind(address) !== "private")) {
-    throw new AppError(400, "INSECURE_PROVIDER_ENDPOINT", "公网 AI 供应商地址必须使用 HTTPS");
+    throw new AppError(400, "INSECURE_PROVIDER_ENDPOINT", `公网${subject}地址必须使用 HTTPS`);
   }
   return addresses;
 }

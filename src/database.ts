@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -53,6 +53,15 @@ export class Database {
     logger.info("database.closing");
     this.raw.close();
     logger.info("database.closed");
+  }
+
+  /**
+   * 把当前数据库一致性快照写入 targetPath（VACUUM INTO）。
+   * targetPath 只可能来自服务端受控代码（备份流程的临时目录），不接受用户输入；
+   * node:sqlite 无法把 VACUUM INTO 的目标作为绑定参数，这里按 SQL 字符串字面量规则转义单引号。
+   */
+  vacuumInto(targetPath: string): void {
+    this.raw.exec("VACUUM INTO '" + targetPath.replace(/'/g, "''") + "'");
   }
 
   run(sql: string, ...params: SQLInputValue[]): { changes: number; lastInsertRowid: number | bigint } {
@@ -440,6 +449,46 @@ export class Database {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS s3_backup_configs (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        endpoint_url TEXT NOT NULL,
+        region TEXT NOT NULL DEFAULT 'us-east-1',
+        bucket TEXT NOT NULL,
+        path_prefix TEXT NOT NULL DEFAULT '',
+        force_path_style INTEGER NOT NULL DEFAULT 1 CHECK(force_path_style IN (0, 1)),
+        include_images INTEGER NOT NULL DEFAULT 1 CHECK(include_images IN (0, 1)),
+        schedule_time TEXT NOT NULL DEFAULT '03:00',
+        retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 365),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        encrypted_access_key TEXT NOT NULL,
+        access_key_iv TEXT NOT NULL,
+        access_key_tag TEXT NOT NULL,
+        access_key_hint TEXT NOT NULL,
+        encrypted_secret_key TEXT NOT NULL,
+        secret_key_iv TEXT NOT NULL,
+        secret_key_tag TEXT NOT NULL,
+        secret_key_hint TEXT NOT NULL,
+        last_run_at TEXT,
+        last_run_status TEXT CHECK(last_run_status IN ('success', 'failed') OR last_run_status IS NULL),
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_runs (
+        id TEXT PRIMARY KEY,
+        config_id TEXT NOT NULL REFERENCES s3_backup_configs(id) ON DELETE CASCADE,
+        trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('schedule', 'manual')),
+        status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'success', 'failed')),
+        error TEXT,
+        db_key TEXT,
+        images_uploaded INTEGER NOT NULL DEFAULT 0,
+        images_skipped INTEGER NOT NULL DEFAULT 0,
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS work_ai_settings (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
         system_prompt TEXT NOT NULL DEFAULT '',
@@ -686,6 +735,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_foreshadows_work ON foreshadows(work_id, status, importance);
       CREATE INDEX IF NOT EXISTS idx_foreshadow_occurrences_chapter ON foreshadow_occurrences(chapter_id, role);
       CREATE INDEX IF NOT EXISTS idx_continuation_guards_suggestion ON continuation_guard_runs(suggestion_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_config ON s3_backup_runs(config_id, started_at);
     `);
     this.applyDataMigrations();
   }
@@ -2766,6 +2816,57 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        // 基表 exec 已用 IF NOT EXISTS 创建这两张表；此处再兜底一次，保证从旧版本升级的库结构一致。
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_configs (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          endpoint_url TEXT NOT NULL,
+          region TEXT NOT NULL DEFAULT 'us-east-1',
+          bucket TEXT NOT NULL,
+          path_prefix TEXT NOT NULL DEFAULT '',
+          force_path_style INTEGER NOT NULL DEFAULT 1 CHECK(force_path_style IN (0, 1)),
+          include_images INTEGER NOT NULL DEFAULT 1 CHECK(include_images IN (0, 1)),
+          schedule_time TEXT NOT NULL DEFAULT '03:00',
+          retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 365),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          encrypted_access_key TEXT NOT NULL,
+          access_key_iv TEXT NOT NULL,
+          access_key_tag TEXT NOT NULL,
+          access_key_hint TEXT NOT NULL,
+          encrypted_secret_key TEXT NOT NULL,
+          secret_key_iv TEXT NOT NULL,
+          secret_key_tag TEXT NOT NULL,
+          secret_key_hint TEXT NOT NULL,
+          last_run_at TEXT,
+          last_run_status TEXT CHECK(last_run_status IN ('success', 'failed') OR last_run_status IS NULL),
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_runs (
+          id TEXT PRIMARY KEY,
+          config_id TEXT NOT NULL REFERENCES s3_backup_configs(id) ON DELETE CASCADE,
+          trigger_kind TEXT NOT NULL CHECK(trigger_kind IN ('schedule', 'manual')),
+          status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'success', 'failed')),
+          error TEXT,
+          db_key TEXT,
+          images_uploaded INTEGER NOT NULL DEFAULT 0,
+          images_skipped INTEGER NOT NULL DEFAULT 0,
+          started_at TEXT NOT NULL,
+          finished_at TEXT
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_config ON s3_backup_runs(config_id, started_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

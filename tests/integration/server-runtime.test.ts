@@ -114,7 +114,8 @@ describe("本地服务运行时", () => {
     });
     runningServers.push(running);
 
-    const backupNames = readdirSync(join(root, "backups"));
+    // backups/ 下还会有 S3 备份的 s3-staging 目录，这里只断言迁移前备份本身。
+    const backupNames = readdirSync(join(root, "backups")).filter((name) => name.startsWith("pre-migration-"));
     expect(backupNames).toHaveLength(1);
     expect(backupNames[0]).toContain(`pre-migration-v57-to-v${DATABASE_SCHEMA_VERSION}`);
     const backupDirectory = join(root, "backups", backupNames[0]!);

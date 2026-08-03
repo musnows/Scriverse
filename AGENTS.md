@@ -28,6 +28,9 @@ src/
   security.ts             安全响应头、部署网关、限速、同源校验和 SSRF 防护
   credential-vault.ts     AI 供应商密钥加密与解密
   ai.ts                   AI 供应商调用、上下文组装、任务编排和流式输出
+  s3-client.ts            S3 兼容存储客户端、SigV4 签名
+  backup-plan.ts          备份路径、对象键、留存与调度纯函数
+  backup-manager.ts       备份目标配置、定时调度与同步执行
   parser.ts               小说文本、分卷和章节结构解析
   import-security.ts      TXT/DOCX 解压文本的注入与危险内容检查
   domain.ts               公共领域类型和枚举
