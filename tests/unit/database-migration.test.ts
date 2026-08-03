@@ -78,6 +78,18 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at", "is_dead"]));
     expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).toContain("is_extinct");
     expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toContain("is_dissolved");
+    expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "endpoint",
+      "bucket",
+      "base_path",
+      "access_key_encrypted",
+      "secret_key_encrypted",
+      "backup_images",
+      "schedule_time",
+      "retention_count"
+    ]));
+    expect(first.all("PRAGMA index_list(s3_backup_targets)").some((index) => index.name === "idx_s3_backup_targets_schedule")).toBe(true);
     expect(first.get("SELECT is_dead FROM characters WHERE id = 'character-a'")).toEqual({ is_dead: 0 });
     expect(first.get("SELECT is_extinct FROM races WHERE id = 'race_migration_1'")).toEqual({ is_extinct: 0 });
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);

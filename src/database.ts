@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2766,6 +2766,46 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_targets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          endpoint TEXT NOT NULL,
+          region TEXT NOT NULL DEFAULT 'us-east-1',
+          bucket TEXT NOT NULL,
+          base_path TEXT NOT NULL DEFAULT '',
+          access_key_encrypted TEXT NOT NULL,
+          access_key_iv TEXT NOT NULL,
+          access_key_tag TEXT NOT NULL,
+          secret_key_encrypted TEXT NOT NULL,
+          secret_key_iv TEXT NOT NULL,
+          secret_key_tag TEXT NOT NULL,
+          force_path_style INTEGER NOT NULL DEFAULT 1 CHECK(force_path_style IN (0, 1)),
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          backup_images INTEGER NOT NULL DEFAULT 1 CHECK(backup_images IN (0, 1)),
+          schedule_time TEXT NOT NULL DEFAULT '03:00' CHECK(
+            schedule_time GLOB '[0-2][0-9]:[0-5][0-9]'
+            AND substr(schedule_time, 1, 2) <= '23'
+          ),
+          retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 365),
+          last_started_at TEXT,
+          last_success_at TEXT,
+          last_failure_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_targets_schedule ON s3_backup_targets(enabled, schedule_time, created_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
