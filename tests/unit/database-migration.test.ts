@@ -605,4 +605,56 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
+
+  it("迁移 73 创建 S3 备份配置与执行记录表并支持幂等重启", () => {
+    const filename = createLegacyDatabase();
+    const first = new Database(filename);
+    expect(first.all("PRAGMA table_info(s3_backup_configs)").map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "id", "name", "endpoint_url", "region", "bucket", "path_prefix", "force_path_style", "include_images",
+        "schedule_time", "retention_count", "enabled", "encrypted_access_key", "access_key_iv", "access_key_tag",
+        "access_key_hint", "encrypted_secret_key", "secret_key_iv", "secret_key_tag", "secret_key_hint",
+        "last_run_at", "last_run_status", "last_error", "created_at", "updated_at"
+      ])
+    );
+    expect(first.all("PRAGMA table_info(s3_backup_runs)").map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "id", "config_id", "trigger_kind", "status", "error", "db_key",
+        "images_uploaded", "images_skipped", "started_at", "finished_at"
+      ])
+    );
+    expect(first.all("PRAGMA index_list(s3_backup_runs)").some((index) => index.name === "idx_s3_backup_runs_config")).toBe(true);
+    expect(first.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 73")?.count).toBe(1);
+    first.run(
+      `INSERT INTO s3_backup_configs (
+        id, name, endpoint_url, region, bucket, encrypted_access_key, access_key_iv, access_key_tag, access_key_hint,
+        encrypted_secret_key, secret_key_iv, secret_key_tag, secret_key_hint, created_at, updated_at
+      ) VALUES (
+        'backup-old', '旧目标', 'https://s3.example.com', 'us-east-1', 'bucket-old', 'enc', 'iv', 'tag', '***',
+        'enc2', 'iv2', 'tag2', '***', '2025-01-01', '2025-01-01'
+      )`
+    );
+    first.close();
+
+    // 幂等重启：迁移不重复执行，既有配置数据完整保留
+    const second = new Database(filename);
+    expect(second.get("SELECT name FROM s3_backup_configs WHERE id = 'backup-old'")?.name).toBe("旧目标");
+    expect(second.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(second.all("PRAGMA foreign_key_check")).toEqual([]);
+    second.close();
+
+    // 丢失版本记录与表后重新迁移可完整重建
+    const third = new Database(filename);
+    third.run("DELETE FROM schema_migrations WHERE version = 73");
+    third.run("DROP TABLE s3_backup_runs");
+    third.run("DROP TABLE s3_backup_configs");
+    third.close();
+    const fourth = new Database(filename);
+    expect(fourth.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 73")?.count).toBe(1);
+    expect(fourth.all("PRAGMA table_info(s3_backup_configs)").length).toBeGreaterThan(0);
+    expect(fourth.all("PRAGMA table_info(s3_backup_runs)").length).toBeGreaterThan(0);
+    expect(fourth.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(fourth.all("PRAGMA foreign_key_check")).toEqual([]);
+    fourth.close();
+  });
 });
