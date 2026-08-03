@@ -1142,6 +1142,255 @@ export class Store {
     return this.getPlatformUiSettings();
   }
 
+  getPlatformBackupSettings(): {
+    enabled: boolean;
+    scheduleTime: string;
+    retentionCount: number;
+    includeImages: boolean;
+    lastRunAt: string | null;
+    lastRunStatus: "idle" | "running" | "success" | "failed";
+    lastRunError: string;
+    lastRunSummary: Record<string, unknown> | null;
+    updatedAt: string;
+  } {
+    const row = this.db.get("SELECT * FROM platform_backup_settings WHERE id = 1");
+    if (!row) {
+      const timestamp = now();
+      this.db.run(
+        "INSERT INTO platform_backup_settings (id, enabled, schedule_time, retention_count, include_images, last_run_status, last_run_error, updated_at) VALUES (1, 0, '03:00', 7, 1, 'idle', '', ?)",
+        timestamp
+      );
+      return this.getPlatformBackupSettings();
+    }
+    let lastRunSummary: Record<string, unknown> | null = null;
+    if (typeof row.last_run_summary_json === "string" && row.last_run_summary_json.trim()) {
+      try {
+        const parsed = JSON.parse(row.last_run_summary_json) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) lastRunSummary = parsed as Record<string, unknown>;
+      } catch {
+        lastRunSummary = null;
+      }
+    }
+    const status = String(row.last_run_status);
+    return {
+      enabled: Number(row.enabled) === 1,
+      scheduleTime: String(row.schedule_time ?? "03:00"),
+      retentionCount: Number(row.retention_count ?? 7),
+      includeImages: Number(row.include_images) === 1,
+      lastRunAt: row.last_run_at ? String(row.last_run_at) : null,
+      lastRunStatus: status === "running" || status === "success" || status === "failed" ? status : "idle",
+      lastRunError: String(row.last_run_error ?? ""),
+      lastRunSummary,
+      updatedAt: String(row.updated_at ?? "")
+    };
+  }
+
+  updatePlatformBackupSettings(input: {
+    enabled?: boolean;
+    scheduleTime?: string;
+    retentionCount?: number;
+    includeImages?: boolean;
+  }): ReturnType<Store["getPlatformBackupSettings"]> {
+    const timestamp = now();
+    const current = this.getPlatformBackupSettings();
+    const enabled = input.enabled ?? current.enabled;
+    const scheduleTime = input.scheduleTime ?? current.scheduleTime;
+    const retentionCount = input.retentionCount ?? current.retentionCount;
+    const includeImages = input.includeImages ?? current.includeImages;
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_backup_settings (
+           id, enabled, schedule_time, retention_count, include_images,
+           last_run_at, last_run_status, last_run_error, last_run_summary_json, updated_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           enabled = excluded.enabled,
+           schedule_time = excluded.schedule_time,
+           retention_count = excluded.retention_count,
+           include_images = excluded.include_images,
+           updated_at = excluded.updated_at`,
+        enabled ? 1 : 0,
+        scheduleTime,
+        retentionCount,
+        includeImages ? 1 : 0,
+        current.lastRunAt,
+        current.lastRunStatus,
+        current.lastRunError,
+        current.lastRunSummary ? JSON.stringify(current.lastRunSummary) : null,
+        timestamp
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-settings.updated", "platform-backup-settings", "platform-backup-settings", {
+        enabled,
+        scheduleTime,
+        retentionCount,
+        includeImages
+      });
+    });
+    return this.getPlatformBackupSettings();
+  }
+
+  updatePlatformBackupRunState(input: {
+    lastRunAt: string;
+    lastRunStatus: "idle" | "running" | "success" | "failed";
+    lastRunError: string;
+    lastRunSummary: Record<string, unknown> | null;
+  }): void {
+    const current = this.getPlatformBackupSettings();
+    this.db.run(
+      `INSERT INTO platform_backup_settings (
+         id, enabled, schedule_time, retention_count, include_images,
+         last_run_at, last_run_status, last_run_error, last_run_summary_json, updated_at
+       ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         last_run_at = excluded.last_run_at,
+         last_run_status = excluded.last_run_status,
+         last_run_error = excluded.last_run_error,
+         last_run_summary_json = excluded.last_run_summary_json,
+         updated_at = excluded.updated_at`,
+      current.enabled ? 1 : 0,
+      current.scheduleTime,
+      current.retentionCount,
+      current.includeImages ? 1 : 0,
+      input.lastRunAt,
+      input.lastRunStatus,
+      input.lastRunError,
+      input.lastRunSummary ? JSON.stringify(input.lastRunSummary) : null,
+      now()
+    );
+  }
+
+  listPlatformBackupTargets(): Row[] {
+    return this.db.all("SELECT * FROM platform_backup_targets ORDER BY sort_order ASC, created_at ASC");
+  }
+
+  getPlatformBackupTargetRow(targetId: string): Row {
+    const row = this.db.get("SELECT * FROM platform_backup_targets WHERE id = ?", targetId);
+    if (!row) throw notFound("备份目标");
+    return row;
+  }
+
+  nextPlatformBackupTargetSortOrder(): number {
+    return Number(this.db.get("SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM platform_backup_targets")?.next_order ?? 0);
+  }
+
+  createPlatformBackupTarget(input: {
+    id: string;
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    encryptedSecretKey: string;
+    secretKeyIv: string;
+    secretKeyTag: string;
+    secretKeyHint: string;
+    pathPrefix: string;
+    enabled: boolean;
+    forcePathStyle: boolean;
+    sortOrder: number;
+    createdAt: string;
+    updatedAt: string;
+  }): void {
+    const count = Number(this.db.get("SELECT COUNT(*) AS count FROM platform_backup_targets")?.count ?? 0);
+    if (count >= 20) throw new AppError(400, "BACKUP_TARGET_LIMIT", "最多可配置 20 个 S3 备份目标");
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_backup_targets (
+           id, name, endpoint, region, bucket, access_key_id,
+           encrypted_secret_key, secret_key_iv, secret_key_tag, secret_key_hint,
+           path_prefix, enabled, force_path_style, sort_order, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        input.id,
+        input.name,
+        input.endpoint,
+        input.region,
+        input.bucket,
+        input.accessKeyId,
+        input.encryptedSecretKey,
+        input.secretKeyIv,
+        input.secretKeyTag,
+        input.secretKeyHint,
+        input.pathPrefix,
+        input.enabled ? 1 : 0,
+        input.forcePathStyle ? 1 : 0,
+        input.sortOrder,
+        input.createdAt,
+        input.updatedAt
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.created", "platform-backup-target", input.id, {
+        name: input.name,
+        endpoint: input.endpoint,
+        region: input.region,
+        bucket: input.bucket,
+        pathPrefix: input.pathPrefix,
+        enabled: input.enabled
+      });
+    });
+  }
+
+  updatePlatformBackupTarget(targetId: string, input: {
+    name: string;
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    encryptedSecretKey: string;
+    secretKeyIv: string;
+    secretKeyTag: string;
+    secretKeyHint: string;
+    pathPrefix: string;
+    enabled: boolean;
+    forcePathStyle: boolean;
+    sortOrder: number;
+    updatedAt: string;
+  }): void {
+    this.getPlatformBackupTargetRow(targetId);
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE platform_backup_targets SET
+           name = ?, endpoint = ?, region = ?, bucket = ?, access_key_id = ?,
+           encrypted_secret_key = ?, secret_key_iv = ?, secret_key_tag = ?, secret_key_hint = ?,
+           path_prefix = ?, enabled = ?, force_path_style = ?, sort_order = ?, updated_at = ?
+         WHERE id = ?`,
+        input.name,
+        input.endpoint,
+        input.region,
+        input.bucket,
+        input.accessKeyId,
+        input.encryptedSecretKey,
+        input.secretKeyIv,
+        input.secretKeyTag,
+        input.secretKeyHint,
+        input.pathPrefix,
+        input.enabled ? 1 : 0,
+        input.forcePathStyle ? 1 : 0,
+        input.sortOrder,
+        input.updatedAt,
+        targetId
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.updated", "platform-backup-target", targetId, {
+        name: input.name,
+        endpoint: input.endpoint,
+        region: input.region,
+        bucket: input.bucket,
+        pathPrefix: input.pathPrefix,
+        enabled: input.enabled
+      });
+    });
+  }
+
+  deletePlatformBackupTarget(targetId: string): void {
+    this.getPlatformBackupTargetRow(targetId);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM platform_backup_targets WHERE id = ?", targetId);
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.deleted", "platform-backup-target", targetId, {});
+    });
+  }
+
+  auditPlatformBackup(action: string, details: Record<string, unknown>): void {
+    this.audit(PLATFORM_AI_WORK_ID, action, "platform-backup", "platform-backup", details);
+  }
+
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
   private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 

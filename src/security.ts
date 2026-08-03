@@ -250,7 +250,7 @@ export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, 
   };
 }
 
-type ExpensiveApiKind = "ai" | "export" | "search";
+type ExpensiveApiKind = "ai" | "export" | "search" | "backup";
 
 function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
   if (method === "GET" && /^\/api\/works\/[^/]+\/export$/u.test(path)) return "export";
@@ -264,13 +264,20 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
   ) {
     return "ai";
   }
+  if (
+    path === "/api/platform/backup/run"
+    || /^\/api\/platform\/backup\/targets\/[^/]+\/test$/u.test(path)
+  ) {
+    return "backup";
+  }
   return null;
 }
 
 const expensiveApiLimits: Record<ExpensiveApiKind, number> = {
   ai: 30,
   export: 10,
-  search: 60
+  search: 60,
+  backup: 5
 };
 
 export function createExpensiveApiRateLimitMiddleware(windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {

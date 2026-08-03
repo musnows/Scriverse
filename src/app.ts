@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { BackupManager } from "./backup-manager.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
@@ -435,6 +436,47 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupScheduleTimeSchema = z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "备份触发时间必须是 HH:MM 格式");
+const platformBackupSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  scheduleTime: backupScheduleTimeSchema.optional(),
+  retentionCount: z.number().int().min(1).max(100).optional(),
+  includeImages: z.boolean().optional()
+}).strict().refine((input) => (
+  input.enabled !== undefined
+  || input.scheduleTime !== undefined
+  || input.retentionCount !== undefined
+  || input.includeImages !== undefined
+), {
+  message: "至少需要提供一项备份设置"
+});
+const platformBackupTargetCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  endpoint: z.string().trim().url().max(500),
+  region: z.string().trim().min(1).max(64).default("us-east-1"),
+  bucket: z.string().trim().min(3).max(63).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,61}[a-zA-Z0-9]$/u, "Bucket 名称格式无效"),
+  accessKeyId: z.string().trim().min(1).max(200),
+  secretAccessKey: z.string().min(1).max(500),
+  pathPrefix: z.string().trim().max(200).regex(/^[a-zA-Z0-9._/-]*$/u, "子目录只能包含字母、数字、点、下划线、短横线和斜杠").optional(),
+  enabled: z.boolean().optional(),
+  forcePathStyle: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(10_000).optional()
+}).strict();
+const platformBackupTargetUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  endpoint: z.string().trim().url().max(500).optional(),
+  region: z.string().trim().min(1).max(64).optional(),
+  bucket: z.string().trim().min(3).max(63).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{1,61}[a-zA-Z0-9]$/u, "Bucket 名称格式无效").optional(),
+  accessKeyId: z.string().trim().min(1).max(200).optional(),
+  secretAccessKey: z.string().min(1).max(500).optional(),
+  pathPrefix: z.string().trim().max(200).regex(/^[a-zA-Z0-9._/-]*$/u, "子目录只能包含字母、数字、点、下划线、短横线和斜杠").optional(),
+  enabled: z.boolean().optional(),
+  forcePathStyle: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(10_000).optional()
+}).strict().refine((input) => Object.keys(input).length > 0, {
+  message: "至少需要提供一项备份目标字段"
+});
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -597,6 +639,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  backup: BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -938,6 +981,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const temporaryDataRoot = options.databasePath === ":memory:"
+    ? mkdtempSync(join(tmpdir(), "scriverse-data-"))
+    : null;
+  const dataDirectory = temporaryDataRoot ?? dirname(options.databasePath);
+  const vault = new CredentialVault(options.masterSecret);
+  const backup = new BackupManager({
+    store,
+    vault,
+    databasePath: options.databasePath,
+    attachmentDirectory: attachmentStorage.rootDirectory,
+    dataDirectory,
+    fetchImpl: options.fetchImpl ?? fetch,
+    allowPrivateEndpoints: options.security?.allowPrivateAiEndpoints === true,
+    validateEndpoint: options.security
+      ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints)
+      : undefined
+  });
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -972,7 +1032,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -2060,6 +2120,32 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  app.get("/api/platform/backup/settings", (_request, response) => {
+    data(response, {
+      settings: backup.getSettings(),
+      targets: backup.listTargets()
+    });
+  });
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    data(response, backup.updateSettings(parse(platformBackupSettingsSchema, request.body)));
+  });
+  app.post("/api/platform/backup/targets", async (request, response) => {
+    data(response, await backup.createTarget(parse(platformBackupTargetCreateSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", async (request, response) => {
+    data(response, await backup.updateTarget(request.params.targetId, parse(platformBackupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/targets/:targetId/test", async (request, response) => {
+    data(response, await backup.testTarget(request.params.targetId));
+  });
+  app.post("/api/platform/backup/run", async (_request, response) => {
+    data(response, await backup.runNow());
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,11 +2660,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, backup, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+    if (temporaryDataRoot) rmSync(temporaryDataRoot, { recursive: true, force: true });
     logger.info("runtime.closed");
   } };
 }

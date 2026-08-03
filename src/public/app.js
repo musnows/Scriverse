@@ -642,12 +642,12 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "platform-backup") return null;
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
-  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "work-audit") return { kind: "settings" };
+  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "platform-backup" || route.view === "work-audit") return { kind: "settings" };
   return { kind: "welcome" };
 }
 
@@ -813,6 +813,7 @@ function currentPageRoute() {
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
   if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
   if (!$("#platform-usage-view").classList.contains("hidden")) return { view: "platform-usage", workId, ...settingsRouteContext() };
+  if (!$("#platform-backup-view").classList.contains("hidden")) return { view: "platform-backup", workId, ...settingsRouteContext() };
   if (!$("#work-audit-view").classList.contains("hidden")) return { view: "work-audit", workId, ...settingsRouteContext() };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!workId) return { view: "shelf" };
@@ -3320,6 +3321,11 @@ async function initializePage() {
       settingsReturnContext = restoredSettingsReturnContext(route);
       return;
     }
+    if (route.view === "platform-backup") {
+      await showPlatformBackup();
+      settingsReturnContext = restoredSettingsReturnContext(route);
+      return;
+    }
     if (route.view === "work-audit") {
       await showWorkAudit();
       settingsReturnContext = restoredSettingsReturnContext(route);
@@ -3342,6 +3348,7 @@ function showShelf() {
   $("#shelf-view").classList.remove("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -3373,6 +3380,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3638,6 +3646,7 @@ async function showWorkAudit() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#work-audit-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -3986,6 +3995,7 @@ async function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
+    || !$("#platform-backup-view").classList.contains("hidden")
     || !$("#work-audit-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
@@ -3998,6 +4008,7 @@ async function showSettingsHub() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -4025,6 +4036,7 @@ async function returnFromSettings() {
   $("#settings-hub-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
@@ -4045,6 +4057,7 @@ async function showPlatformAi() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.remove("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -4058,6 +4071,160 @@ async function showPlatformAi() {
   return true;
 }
 
+async function showPlatformBackup() {
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入数据备份将放弃本地修改。是否继续？"))) return false;
+  state.dirty = false;
+  dismissChapterInsightToast();
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.remove("hidden");
+  $("#work-audit-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "数据备份";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setTopbarViewState("数据备份");
+  await renderPlatformBackupConfig();
+  replacePageRoute({ view: "platform-backup", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  return true;
+}
+
+function backupRunStatusLabel(status) {
+  if (status === "running") return "执行中";
+  if (status === "success") return "成功";
+  if (status === "failed") return "失败";
+  return "尚未执行";
+}
+
+function renderBackupTargetCards(targets) {
+  if (!targets.length) {
+    return emptyModule("尚未配置备份目标", "添加一个或多个 S3 兼容存储后，可立即备份或启用每日定时任务。");
+  }
+  return `<div class="card-grid">${targets.map((target) => `
+    <article class="record-card">
+      <div class="provider-card-meta"><small>${esc(target.endpoint)}</small><span class="provider-status-badge ${target.enabled ? "is-enabled" : "is-disabled"}">${target.enabled ? "已启用" : "已停用"}</span></div>
+      <h3>${esc(target.name)}</h3>
+      <p>Bucket：${esc(target.bucket)}
+Region：${esc(target.region)}
+子目录：${esc(target.pathPrefix || "（桶根目录）")} → /scriverse
+Access Key：${esc(target.accessKeyId)}
+Secret：${esc(target.secretAccessKeyHint)}
+访问风格：${target.forcePathStyle ? "路径风格" : "虚拟主机风格"}</p>
+      <div class="card-actions">
+        <button type="button" data-edit-backup-target="${esc(target.id)}">编辑</button>
+        <button type="button" data-test-backup-target="${esc(target.id)}">测试连接</button>
+        <button type="button" data-delete-backup-target="${esc(target.id)}">删除</button>
+      </div>
+    </article>`).join("")}</div>`;
+}
+
+async function renderPlatformBackupConfig() {
+  const payload = await api("/api/platform/backup/settings");
+  const settings = payload.settings;
+  const targets = payload.targets;
+  const host = $("#platform-backup-content");
+  const lastError = settings.lastRunError
+    ? `<p class="background-task-error" role="alert">最近失败：${esc(settings.lastRunError)}</p>`
+    : "";
+  host.innerHTML = `
+    <section class="config-section">
+      <div class="config-section-header"><div><h2>定时备份</h2><p>按服务器本地时区每日触发；启用后会依次同步到所有已开启的目标。不勾选备份图片时仅上传数据库快照。</p></div></div>
+      <form id="platform-backup-settings-form" class="dialog-fields">
+        <label class="checkbox-field"><input id="backup-schedule-enabled" type="checkbox" ${settings.enabled ? "checked" : ""}>启用每日定时备份</label>
+        <label>触发时间<input id="backup-schedule-time" type="time" required value="${esc(settings.scheduleTime)}" aria-label="备份触发时间"></label>
+        <label>数据库备份留存个数<input id="backup-retention-count" type="number" min="1" max="100" step="1" required value="${esc(String(settings.retentionCount))}" aria-label="数据库备份留存个数"></label>
+        <label class="checkbox-field"><input id="backup-include-images" type="checkbox" ${settings.includeImages ? "checked" : ""}>同时备份附件图片</label>
+        <small>最近执行：${esc(backupRunStatusLabel(settings.lastRunStatus))}${settings.lastRunAt ? ` · ${esc(settings.lastRunAt)}` : ""}</small>
+        ${lastError}
+        <div class="card-actions"><button id="save-platform-backup-settings" class="primary-button" type="submit">保存定时设置</button></div>
+      </form>
+    </section>
+    <section class="config-section">
+      <div class="config-section-header"><div><h2>备份目标</h2><p>可同时启用多个目标；每次备份会按列表顺序依次同步。图片已存在时跳过上传，数据库文件始终带时间戳保留快照。</p></div></div>
+      ${renderBackupTargetCards(targets)}
+    </section>`;
+  $("#platform-backup-settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = $("#save-platform-backup-settings");
+    button.disabled = true;
+    try {
+      await api("/api/platform/backup/settings", {
+        method: "PATCH",
+        body: {
+          enabled: $("#backup-schedule-enabled").checked,
+          scheduleTime: $("#backup-schedule-time").value,
+          retentionCount: Number($("#backup-retention-count").value),
+          includeImages: $("#backup-include-images").checked
+        }
+      });
+      toast("备份定时设置已保存");
+      await renderPlatformBackupConfig();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  host.querySelectorAll("[data-edit-backup-target]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openBackupTargetDialog(targets.find((target) => target.id === button.dataset.editBackupTarget));
+    });
+  });
+  host.querySelectorAll("[data-test-backup-target]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = "测试中";
+      try {
+        await api(`/api/platform/backup/targets/${encodeURIComponent(button.dataset.testBackupTarget)}/test`, { method: "POST", body: {} });
+        toast("备份目标连接成功");
+      } catch (error) {
+        toast(error.message, "error");
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    });
+  });
+  host.querySelectorAll("[data-delete-backup-target]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm("确定删除这个备份目标？不会删除远端已有备份文件。")) return;
+      button.disabled = true;
+      try {
+        await api(`/api/platform/backup/targets/${encodeURIComponent(button.dataset.deleteBackupTarget)}`, { method: "DELETE" });
+        toast("备份目标已删除");
+        await renderPlatformBackupConfig();
+      } catch (error) {
+        toast(error.message, "error");
+        button.disabled = false;
+      }
+    });
+  });
+}
+
+function openBackupTargetDialog(item) {
+  $("#backup-target-id").value = item?.id ?? "";
+  $("#backup-target-name").value = item?.name ?? "";
+  $("#backup-target-endpoint").value = item?.endpoint ?? "";
+  $("#backup-target-region").value = item?.region ?? "us-east-1";
+  $("#backup-target-bucket").value = item?.bucket ?? "";
+  $("#backup-target-access-key").value = item?.accessKeyId ?? "";
+  $("#backup-target-secret-key").value = "";
+  $("#backup-target-secret-key").required = !item;
+  $("#backup-target-secret-key").placeholder = item ? "留空则保留原密钥" : "";
+  $("#backup-target-path-prefix").value = item?.pathPrefix ?? "";
+  $("#backup-target-enabled").checked = item ? item.enabled !== false : true;
+  $("#backup-target-force-path-style").checked = item ? item.forcePathStyle !== false : true;
+  $("#platform-backup-target-title").textContent = item ? "编辑备份目标" : "添加备份目标";
+  $("#platform-backup-target-dialog").showModal();
+  queueMicrotask(() => $("#backup-target-name").focus());
+}
+
 async function showPlatformUsage() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
@@ -4066,6 +4233,7 @@ async function showPlatformUsage() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.remove("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -4174,6 +4342,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
@@ -11308,6 +11477,68 @@ $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch(
 $("#platform-ai-return").addEventListener("click", () => returnToSettingsHub("#platform-ai-button").catch((error) => toast(error.message, "error")));
 $("#platform-usage-button").addEventListener("click", () => showPlatformUsage().catch((error) => toast(error.message, "error")));
 $("#platform-usage-return").addEventListener("click", () => returnToSettingsHub("#platform-usage-button").catch((error) => toast(error.message, "error")));
+$("#platform-backup-button").addEventListener("click", () => showPlatformBackup().catch((error) => toast(error.message, "error")));
+$("#platform-backup-return").addEventListener("click", () => returnToSettingsHub("#platform-backup-button").catch((error) => toast(error.message, "error")));
+$("#platform-new-backup-target").addEventListener("click", () => openBackupTargetDialog());
+$("#platform-backup-run").addEventListener("click", async () => {
+  const button = $("#platform-backup-run");
+  button.disabled = true;
+  const dismiss = persistentToast("正在执行系统备份…");
+  try {
+    const result = await api("/api/platform/backup/run", { method: "POST", body: {} });
+    dismiss();
+    toast(result.status === "success" ? "系统备份完成" : `系统备份失败：${result.error || "未知错误"}`, result.status === "success" ? "info" : "error");
+    await renderPlatformBackupConfig();
+  } catch (error) {
+    dismiss();
+    toast(error.message, "error");
+    if (!$("#platform-backup-view").classList.contains("hidden")) {
+      await renderPlatformBackupConfig().catch(() => undefined);
+    }
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#platform-backup-target-close").addEventListener("click", () => $("#platform-backup-target-dialog").close());
+$("#platform-backup-target-cancel").addEventListener("click", () => $("#platform-backup-target-dialog").close());
+$("#platform-backup-target-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#platform-backup-target-save");
+  button.disabled = true;
+  const targetId = $("#backup-target-id").value.trim();
+  const body = {
+    name: $("#backup-target-name").value.trim(),
+    endpoint: $("#backup-target-endpoint").value.trim(),
+    region: $("#backup-target-region").value.trim() || "us-east-1",
+    bucket: $("#backup-target-bucket").value.trim(),
+    accessKeyId: $("#backup-target-access-key").value.trim(),
+    pathPrefix: $("#backup-target-path-prefix").value.trim(),
+    enabled: $("#backup-target-enabled").checked,
+    forcePathStyle: $("#backup-target-force-path-style").checked
+  };
+  const secretAccessKey = $("#backup-target-secret-key").value;
+  if (secretAccessKey) body.secretAccessKey = secretAccessKey;
+  try {
+    if (targetId) {
+      await api(`/api/platform/backup/targets/${encodeURIComponent(targetId)}`, { method: "PATCH", body });
+      toast("备份目标已更新");
+    } else {
+      if (!secretAccessKey) {
+        toast("创建备份目标时必须填写 Secret Access Key", "error");
+        return;
+      }
+      body.secretAccessKey = secretAccessKey;
+      await api("/api/platform/backup/targets", { method: "POST", body });
+      toast("备份目标已添加");
+    }
+    $("#platform-backup-target-dialog").close();
+    await renderPlatformBackupConfig();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
 $("#platform-usage-refresh").addEventListener("click", async () => {
   const button = $("#platform-usage-refresh");
   button.disabled = true;
