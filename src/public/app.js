@@ -37,7 +37,7 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260801-google-vertex";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260803-s3-backup-v1";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
@@ -55,6 +55,7 @@ import {
   timelineTrackColorIndex
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import { backupConfigScheduleSummary, backupConfigTargetSummary, backupFailureToastMessage, backupRunStatusLabel, backupRunTriggerLabel, nextBackupAlertWatermark } from "/backup-config.js?v=20260803-s3-backup-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import {
@@ -198,6 +199,16 @@ let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, er
 const systemHealthPollInterval = 30_000;
 let systemHealthTimer = null;
 let systemHealthSnapshot = { status: "checking", version: "" };
+const backupRunPollInterval = 3_000;
+const backupRunPollTimeout = 600_000;
+let backupRunPollTimer = null;
+let backupRunPollConfigId = null;
+let backupRunPollRunId = null;
+let backupRunPollStartedAt = 0;
+const backupAlertPollInterval = 30_000;
+let backupAlertTimer = null;
+let backupAlertWatermark = null;
+let backupAlertInitialized = false;
 let topbarStatusSource = "view";
 const taskProgressRefreshInterval = 2_500;
 const taskStatusSnapshots = new Map();
@@ -642,12 +653,12 @@ function replacePageRoute(route) {
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
-  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "platform-backup") return null;
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
   if (route.view === "module") return { kind: "module", module: route.module };
-  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "work-audit") return { kind: "settings" };
+  if (route.view === "settings" || route.view === "platform-ai" || route.view === "platform-usage" || route.view === "platform-backup" || route.view === "work-audit") return { kind: "settings" };
   return { kind: "welcome" };
 }
 
@@ -813,6 +824,7 @@ function currentPageRoute() {
   if (!$("#settings-hub-view").classList.contains("hidden")) return { view: "settings", workId, ...settingsRouteContext() };
   if (!$("#platform-ai-view").classList.contains("hidden")) return { view: "platform-ai", workId, ...settingsRouteContext() };
   if (!$("#platform-usage-view").classList.contains("hidden")) return { view: "platform-usage", workId, ...settingsRouteContext() };
+  if (!$("#platform-backup-view").classList.contains("hidden")) return { view: "platform-backup", workId, ...settingsRouteContext() };
   if (!$("#work-audit-view").classList.contains("hidden")) return { view: "work-audit", workId, ...settingsRouteContext() };
   if (!$("#shelf-view").classList.contains("hidden")) return { view: "shelf" };
   if (!workId) return { view: "shelf" };
@@ -2510,6 +2522,8 @@ async function api(path, options = {}) {
         state.user = null;
         state.csrfToken = null;
         moduleRequestCache.clear();
+        stopBackupRunPolling();
+        stopBackupAlertPolling();
         showAuth(false);
       }
     }
@@ -2875,6 +2889,7 @@ async function initializeAuthentication() {
   observeSystemBootId(session.bootId);
   applyAuthenticatedUser(session);
   scheduleSystemBootCheck();
+  void refreshBackupFailureAlert();
   await loadPlatformUiSettings();
   return true;
 }
@@ -3320,6 +3335,11 @@ async function initializePage() {
       settingsReturnContext = restoredSettingsReturnContext(route);
       return;
     }
+    if (route.view === "platform-backup") {
+      await showPlatformBackup();
+      settingsReturnContext = restoredSettingsReturnContext(route);
+      return;
+    }
     if (route.view === "work-audit") {
       await showWorkAudit();
       settingsReturnContext = restoredSettingsReturnContext(route);
@@ -3334,6 +3354,7 @@ async function initializePage() {
 
 function showShelf() {
   stopBackgroundTaskCenter();
+  stopBackupRunPolling();
   dismissChapterInsightToast();
   state.dirty = false;
   settingsReturnContext = null;
@@ -3342,6 +3363,7 @@ function showShelf() {
   $("#shelf-view").classList.remove("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -3373,6 +3395,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3638,6 +3661,7 @@ async function showWorkAudit() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#work-audit-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -3959,6 +3983,7 @@ async function openSearchResult(result) {
   const inSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
+    || !$("#platform-backup-view").classList.contains("hidden")
     || !$("#work-audit-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
   if (target.kind === "chapter") {
@@ -3986,6 +4011,7 @@ async function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
+    || !$("#platform-backup-view").classList.contains("hidden")
     || !$("#work-audit-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
@@ -3998,6 +4024,7 @@ async function showSettingsHub() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -4025,6 +4052,7 @@ async function returnFromSettings() {
   $("#settings-hub-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
@@ -4045,6 +4073,7 @@ async function showPlatformAi() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.remove("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -4066,6 +4095,7 @@ async function showPlatformUsage() {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.remove("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
@@ -4076,6 +4106,29 @@ async function showPlatformUsage() {
   setTopbarViewState("Token 用量");
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  return true;
+}
+
+async function showPlatformBackup() {
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入数据备份将放弃本地修改。是否继续？"))) return false;
+  state.dirty = false;
+  dismissChapterInsightToast();
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.remove("hidden");
+  $("#work-audit-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "数据备份";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setTopbarViewState("数据备份");
+  await renderPlatformBackup();
+  replacePageRoute({ view: "platform-backup", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
 }
 
@@ -4174,6 +4227,7 @@ async function selectWork(workId, preferredChapterId = null) {
   $("#shelf-view").classList.add("hidden");
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
+  $("#platform-backup-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#settings-button").removeAttribute("aria-current");
@@ -7095,6 +7149,213 @@ async function renderPlatformAiConfig() {
     }
   });
   bindPlatformProviderActions(host, providers, models);
+}
+
+function renderBackupConfigCards(configs) {
+  return configs.length ? `<div class="card-grid provider-card-grid">${configs.map((config) => {
+    const lastRunLine = config.lastRunAt
+      ? `\n上次备份：${formatDateTime(config.lastRunAt)} ${backupRunStatusLabel(String(config.lastRunStatus ?? ""))}${config.lastError ? ` · ${config.lastError}` : ""}`
+      : "\n上次备份：尚未执行";
+    return `
+    <article class="record-card provider-card"><div class="provider-card-meta"><small>平台级 · ${esc(backupConfigTargetSummary(config))}</small><span class="provider-status-badge ${config.enabled ? "is-enabled" : "is-disabled"}">${config.enabled ? "已启用" : "已停用"}</span></div><h3>${esc(config.name)}</h3>
+    <p>${esc(backupConfigScheduleSummary(config))}\n端点：${esc(config.endpointUrl)}\nAK：${esc(config.accessKeyHint)}${esc(lastRunLine)}</p>
+    <div class="card-actions"><button data-backup-edit="${esc(config.id)}">编辑配置</button><button data-backup-run="${esc(config.id)}">立即备份</button><button data-backup-delete="${esc(config.id)}">删除</button></div></article>`;
+  }).join("")}</div>`
+    : emptyModule("尚未配置备份目标", "添加 S3 兼容存储后，系统将按设定时间每日自动备份数据库与图片。");
+}
+
+function renderBackupRunTable(runs) {
+  const table = runs.length ? `<table class="table-list"><thead><tr><th>时间</th><th>目标</th><th>触发</th><th>状态</th><th>详情</th></tr></thead><tbody>${runs.map((run) => {
+    const statusLabel = backupRunStatusLabel(run.status);
+    const statusCell = run.status === "failed" && run.error ? `${esc(statusLabel)}<br><small>${esc(run.error)}</small>` : esc(statusLabel);
+    const skipped = Number(run.imagesSkipped ?? 0);
+    const detail = run.status === "success"
+      ? `数据库快照 + 图片 ${Number(run.imagesUploaded ?? 0)} 张${skipped > 0 ? `，跳过 ${skipped} 张` : ""}`
+      : "—";
+    return `<tr><td>${esc(formatDateTime(run.startedAt))}</td><td>${esc(run.configName || "未知目标")}</td><td>${esc(backupRunTriggerLabel(run.trigger))}</td><td>${statusCell}</td><td>${esc(detail)}</td></tr>`;
+  }).join("")}</tbody></table>`
+    : emptyModule("还没有备份记录", "点击「立即备份」或等待每日定时备份后，这里会显示执行结果。");
+  return `<section class="config-section"><div class="config-section-header"><div><h2>最近备份记录</h2><p>按开始时间倒序展示最近 20 次手动与定时备份。</p></div></div>${table}</section>`;
+}
+
+async function renderPlatformBackup() {
+  const [configs, runs] = await Promise.all([
+    api("/api/platform/backup-configs"),
+    api("/api/platform/backup-runs?limit=20")
+  ]);
+  const host = $("#platform-backup-content");
+  host.innerHTML = `${renderBackupConfigCards(Array.isArray(configs) ? configs : [])}${renderBackupRunTable(Array.isArray(runs) ? runs : [])}`;
+  bindBackupConfigActions(host, Array.isArray(configs) ? configs : []);
+}
+
+function bindBackupConfigActions(host, configs) {
+  host.querySelectorAll("[data-backup-edit]").forEach((button) => button.addEventListener("click", () => {
+    openBackupConfigDialog(configs.find((config) => config.id === button.dataset.backupEdit));
+  }));
+  host.querySelectorAll("[data-backup-delete]").forEach((button) => button.addEventListener("click", async () => {
+    const config = configs.find((item) => item.id === button.dataset.backupDelete);
+    if (!config) return;
+    if (!(await confirmToast(`确定删除备份目标「${config.name}」吗？远端已上传的备份文件不会被删除。`, { title: "删除备份目标", confirmLabel: "确认删除" }))) return;
+    try {
+      await api(`/api/platform/backup-configs/${encodeURIComponent(config.id)}`, { method: "DELETE" });
+      toast(`备份目标「${config.name}」已删除`);
+      await renderPlatformBackup();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }));
+  host.querySelectorAll("[data-backup-run]").forEach((button) => button.addEventListener("click", async () => {
+    const config = configs.find((item) => item.id === button.dataset.backupRun);
+    if (!config) return;
+    button.disabled = true;
+    try {
+      const run = await api(`/api/platform/backup-configs/${encodeURIComponent(config.id)}/run`, { method: "POST", body: {} });
+      toast(`已开始备份到「${config.name}」`);
+      startBackupRunPolling(config.id, run);
+      await renderPlatformBackup();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }));
+}
+
+function stopBackupRunPolling() {
+  if (backupRunPollTimer !== null) window.clearTimeout(backupRunPollTimer);
+  backupRunPollTimer = null;
+  backupRunPollConfigId = null;
+  backupRunPollRunId = null;
+}
+
+function startBackupRunPolling(configId, run) {
+  stopBackupRunPolling();
+  const runId = String(run?.id ?? "");
+  if (!runId) return;
+  backupRunPollConfigId = String(configId);
+  backupRunPollRunId = runId;
+  backupRunPollStartedAt = Date.now();
+  scheduleBackupRunPoll(backupRunPollInterval);
+}
+
+function scheduleBackupRunPoll(delay) {
+  if (backupRunPollTimer !== null) window.clearTimeout(backupRunPollTimer);
+  backupRunPollTimer = window.setTimeout(() => {
+    backupRunPollTimer = null;
+    void pollBackupRun();
+  }, delay);
+}
+
+async function pollBackupRun() {
+  const configId = backupRunPollConfigId;
+  const runId = backupRunPollRunId;
+  if (!configId || !runId || !state.user) return;
+  if (Date.now() - backupRunPollStartedAt > backupRunPollTimeout) {
+    stopBackupRunPolling();
+    return;
+  }
+  let run = null;
+  try {
+    const runs = await api(`/api/platform/backup-runs?configId=${encodeURIComponent(configId)}&limit=5`);
+    run = (Array.isArray(runs) ? runs : []).find((item) => String(item?.id) === runId) ?? null;
+  } catch {
+    // 单次轮询失败保持静默，下一轮自动重试
+  }
+  if (backupRunPollRunId !== runId) return;
+  if (!run || !["success", "failed"].includes(String(run.status))) {
+    scheduleBackupRunPoll(backupRunPollInterval);
+    return;
+  }
+  stopBackupRunPolling();
+  if (run.status === "success") {
+    const uploaded = Number(run.imagesUploaded ?? 0);
+    const skipped = Number(run.imagesSkipped ?? 0);
+    const imageSummary = `${uploaded > 0 ? `，图片上传 ${uploaded} 张` : ""}${skipped > 0 ? `，跳过 ${skipped} 张` : ""}`;
+    toast(`备份到「${run.configName || "未知目标"}」完成：数据库快照已上传${imageSummary}`);
+  } else {
+    toast(backupFailureToastMessage(run), "error");
+  }
+  if (!$("#platform-backup-view").classList.contains("hidden")) {
+    renderPlatformBackup().catch(() => {});
+  }
+}
+
+function stopBackupAlertPolling() {
+  if (backupAlertTimer !== null) window.clearTimeout(backupAlertTimer);
+  backupAlertTimer = null;
+  backupAlertWatermark = null;
+  backupAlertInitialized = false;
+}
+
+function scheduleBackupAlertCheck() {
+  if (backupAlertTimer !== null) window.clearTimeout(backupAlertTimer);
+  backupAlertTimer = window.setTimeout(() => {
+    backupAlertTimer = null;
+    void refreshBackupFailureAlert();
+  }, backupAlertPollInterval);
+}
+
+async function refreshBackupFailureAlert() {
+  try {
+    if (state.user?.role !== "admin") return;
+    const since = backupAlertWatermark ? `&since=${encodeURIComponent(backupAlertWatermark)}` : "";
+    const runs = await api(`/api/platform/backup-runs?status=failed&limit=20${since}`);
+    const list = Array.isArray(runs) ? runs : [];
+    const previousWatermark = backupAlertWatermark;
+    // 首轮只建立水位线，避免登录时把历史失败全部弹出
+    if (backupAlertInitialized) {
+      for (const run of list) {
+        const finishedAt = typeof run?.finishedAt === "string" ? run.finishedAt : "";
+        if (!finishedAt) continue;
+        if (previousWatermark === null || finishedAt > previousWatermark) toast(backupFailureToastMessage(run), "error");
+      }
+    }
+    backupAlertInitialized = true;
+    backupAlertWatermark = nextBackupAlertWatermark(list, previousWatermark);
+  } catch {
+    // 告警轮询失败保持静默，下一轮自动重试
+  } finally {
+    // 401 回登录墙时 api 已停止告警轮询，不再复活计时器
+    if (state.user) scheduleBackupAlertCheck();
+  }
+}
+
+function openBackupConfigDialog(item) {
+  openDialog(
+    item ? "编辑备份目标" : "新增备份目标",
+    field("name", "显示名称", "text", item?.name)
+      + field("endpointUrl", "端点地址（Endpoint）", "url", item?.endpointUrl ?? "https://s3.us-east-1.amazonaws.com")
+      + field("region", "区域（Region）", "text", item?.region ?? "us-east-1")
+      + field("bucket", "存储桶（Bucket）", "text", item?.bucket)
+      + field("pathPrefix", "子目录前缀（可选，同步到其下的 scriverse/ 目录）", "text", item?.pathPrefix ?? "")
+      + field("accessKeyId", item ? "替换 Access Key ID（留空则不变）" : "Access Key ID", "password")
+      + field("secretAccessKey", item ? "替换 Secret Access Key（留空则不变）" : "Secret Access Key", "password")
+      + field("scheduleTime", "每日备份时间（服务器本地时间）", "time", item?.scheduleTime ?? "03:00")
+      + field("retentionCount", "数据库备份留存份数", "number", item?.retentionCount ?? 7)
+      + field("includeImages", "同时备份图片附件（已存在的跳过）", "checkbox", item?.includeImages ?? true)
+      + field("forcePathStyle", "使用路径风格（Path Style，MinIO 等自建服务通常需要）", "checkbox", item?.forcePathStyle ?? true)
+      + field("enabled", "启用每日自动备份", "checkbox", item?.enabled ?? true),
+    async (form) => {
+      const body = {
+        name: form.get("name"),
+        endpointUrl: form.get("endpointUrl"),
+        region: form.get("region"),
+        bucket: form.get("bucket"),
+        pathPrefix: form.get("pathPrefix"),
+        scheduleTime: form.get("scheduleTime"),
+        retentionCount: Number(form.get("retentionCount")),
+        includeImages: form.get("includeImages") === "on",
+        forcePathStyle: form.get("forcePathStyle") === "on",
+        enabled: form.get("enabled") === "on"
+      };
+      if (!item || String(form.get("accessKeyId") ?? "").trim()) body.accessKeyId = form.get("accessKeyId");
+      if (!item || String(form.get("secretAccessKey") ?? "").trim()) body.secretAccessKey = form.get("secretAccessKey");
+      await api(item ? `/api/platform/backup-configs/${encodeURIComponent(item.id)}` : "/api/platform/backup-configs", { method: item ? "PATCH" : "POST", body });
+      toast(item ? "备份目标已保存" : "备份目标已创建");
+      await renderPlatformBackup();
+    },
+    "S3 兼容存储"
+  );
 }
 
 function tokenUsageDateLabel(date) {
@@ -11306,6 +11567,9 @@ $("#register-form").addEventListener("submit", async (event) => {
 $("#settings-return").addEventListener("click", () => returnFromSettings().catch((error) => toast(error.message, "error")));
 $("#platform-ai-button").addEventListener("click", () => showPlatformAi().catch((error) => toast(error.message, "error")));
 $("#platform-ai-return").addEventListener("click", () => returnToSettingsHub("#platform-ai-button").catch((error) => toast(error.message, "error")));
+$("#platform-backup-button").addEventListener("click", () => showPlatformBackup().catch((error) => toast(error.message, "error")));
+$("#platform-backup-return").addEventListener("click", () => returnToSettingsHub("#platform-backup-button").catch((error) => toast(error.message, "error")));
+$("#platform-backup-new").addEventListener("click", () => openBackupConfigDialog());
 $("#platform-usage-button").addEventListener("click", () => showPlatformUsage().catch((error) => toast(error.message, "error")));
 $("#platform-usage-return").addEventListener("click", () => returnToSettingsHub("#platform-usage-button").catch((error) => toast(error.message, "error")));
 $("#platform-usage-refresh").addEventListener("click", async () => {
