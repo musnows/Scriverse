@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 73;
+export const DATABASE_SCHEMA_VERSION = 74;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2804,6 +2804,139 @@ export class Database {
           this.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(tools), String(row.work_id));
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(74)) {
+      this.transaction(() => {
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS ai_history_search (
+            id INTEGER PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL CHECK(source_type IN ('conversation', 'message')),
+            source_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT '' CHECK(role IN ('', 'user', 'assistant')),
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            search_content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(source_type, source_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_history_search_work
+            ON ai_history_search(work_id, created_at DESC, id DESC);
+          CREATE INDEX IF NOT EXISTS idx_ai_history_search_conversation
+            ON ai_history_search(work_id, conversation_id, source_type, created_at DESC, id DESC);
+          CREATE VIRTUAL TABLE IF NOT EXISTS ai_history_search_fts USING fts5(
+            search_content,
+            content='ai_history_search',
+            content_rowid='id',
+            tokenize='trigram'
+          );
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_ai AFTER INSERT ON ai_history_search BEGIN
+            INSERT INTO ai_history_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_ad AFTER DELETE ON ai_history_search BEGIN
+            INSERT INTO ai_history_search_fts(ai_history_search_fts, rowid, search_content)
+            VALUES ('delete', old.id, old.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_au AFTER UPDATE ON ai_history_search BEGIN
+            INSERT INTO ai_history_search_fts(ai_history_search_fts, rowid, search_content)
+            VALUES ('delete', old.id, old.search_content);
+            INSERT INTO ai_history_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_conversation_ai AFTER INSERT ON ai_conversations BEGIN
+            INSERT INTO ai_history_search
+              (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+            VALUES
+              (new.work_id, new.id, NULL, 'conversation', new.id, '', new.title, COALESCE(new.compacted_summary, ''),
+               lower(new.title || char(10) || COALESCE(new.compacted_summary, '')), new.created_at);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_conversation_au AFTER UPDATE OF title, compacted_summary ON ai_conversations BEGIN
+            UPDATE ai_history_search
+            SET title = new.title,
+                content = COALESCE(new.compacted_summary, ''),
+                search_content = lower(new.title || char(10) || COALESCE(new.compacted_summary, ''))
+            WHERE source_type = 'conversation' AND source_id = new.id;
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_message_ai AFTER INSERT ON ai_conversation_messages BEGIN
+            INSERT INTO ai_history_search
+              (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+            SELECT conversation.work_id, new.conversation_id, new.id, 'message', new.id, new.role, conversation.title,
+                   new.content, lower(new.content), new.created_at
+            FROM ai_conversations conversation
+            WHERE conversation.id = new.conversation_id;
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_message_au AFTER UPDATE OF role, content ON ai_conversation_messages BEGIN
+            UPDATE ai_history_search
+            SET role = new.role, content = new.content, search_content = lower(new.content)
+            WHERE source_type = 'message' AND source_id = new.id;
+          END;
+          CREATE TABLE IF NOT EXISTS ai_history_search_short_terms (
+            search_id INTEGER NOT NULL REFERENCES ai_history_search(id) ON DELETE CASCADE,
+            term TEXT NOT NULL,
+            PRIMARY KEY(term, search_id)
+          ) WITHOUT ROWID;
+          CREATE INDEX IF NOT EXISTS idx_ai_history_search_short_terms_search
+            ON ai_history_search_short_terms(search_id);
+        `);
+        this.run(`
+          INSERT INTO ai_history_search
+            (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+          SELECT conversation.work_id, conversation.id, NULL, 'conversation', conversation.id, '', conversation.title,
+                 COALESCE(conversation.compacted_summary, ''),
+                 lower(conversation.title || char(10) || COALESCE(conversation.compacted_summary, '')),
+                 conversation.created_at
+          FROM ai_conversations conversation
+          WHERE 1
+          ON CONFLICT(source_type, source_id) DO UPDATE SET
+            work_id = excluded.work_id,
+            conversation_id = excluded.conversation_id,
+            title = excluded.title,
+            content = excluded.content,
+            search_content = excluded.search_content,
+            created_at = excluded.created_at
+        `);
+        this.run(`
+          INSERT INTO ai_history_search
+            (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+          SELECT conversation.work_id, message.conversation_id, message.id, 'message', message.id, message.role, conversation.title,
+                 message.content, lower(message.content), message.created_at
+          FROM ai_conversation_messages message
+          JOIN ai_conversations conversation ON conversation.id = message.conversation_id
+          WHERE 1
+          ON CONFLICT(source_type, source_id) DO UPDATE SET
+            work_id = excluded.work_id,
+            conversation_id = excluded.conversation_id,
+            message_id = excluded.message_id,
+            role = excluded.role,
+            title = excluded.title,
+            content = excluded.content,
+            search_content = excluded.search_content,
+            created_at = excluded.created_at
+        `);
+        for (const row of this.all<{ id: number; source_type: string; title: string; content: string }>(
+          "SELECT id, source_type, title, content FROM ai_history_search"
+        )) {
+          const searchContent = row.source_type === "message"
+            ? normalizeDocumentSearchText(row.content)
+            : normalizeDocumentSearchText(`${row.title}\n${row.content}`);
+          this.run("UPDATE ai_history_search SET search_content = ? WHERE id = ?", searchContent, row.id);
+        }
+        this.run("INSERT INTO ai_history_search_fts(ai_history_search_fts) VALUES ('rebuild')");
+        const insertTerm = this.raw.prepare(
+          "INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?)"
+        );
+        for (const row of this.all<{ id: number; search_content: string }>("SELECT id, search_content FROM ai_history_search")) {
+          for (const term of documentShortSearchTerms(String(row.search_content))) insertTerm.run(row.id, term);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (74, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

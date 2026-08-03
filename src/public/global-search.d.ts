@@ -1,5 +1,6 @@
 export type GlobalSearchTarget =
   | { kind: "chapter"; type: "chapter"; id: string; module: "editor"; startLine?: number; endLine?: number }
+  | { kind: "agent-history"; type: "agent-history"; id: string; module: "editor"; conversationId: string; messageId?: string }
   | {
       kind: "entity";
       type: "setting" | "character" | "race" | "organization" | "timeline-track" | "timeline-event" | "relationship" | "chapter-outline" | "foreshadow" | "review";
@@ -11,4 +12,4 @@ export type GlobalSearchTarget =
 
 export function prioritizeGlobalSearchResults<T extends { type?: unknown }>(results: readonly T[]): T[];
 export function splitGlobalSearchHighlight(value: unknown, query: unknown): Array<{ text: string; match: boolean }>;
-export function resolveGlobalSearchTarget(result?: { type?: unknown; id?: unknown; startLine?: unknown; endLine?: unknown }): GlobalSearchTarget | null;
+export function resolveGlobalSearchTarget(result?: { type?: unknown; id?: unknown; startLine?: unknown; endLine?: unknown; conversationId?: unknown; messageId?: unknown }): GlobalSearchTarget | null;
