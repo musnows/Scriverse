@@ -6841,11 +6841,9 @@ function renderProviderCards(providers, models) {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
         ? `<span class="model-status-badge is-disabled">模型已停用</span>`
-        : provider.status !== "enabled"
-          ? `<span class="model-status-badge is-disabled">供应商已停用</span>`
-          : provider.connectionStatus !== "success"
-            ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
-            : "";
+        : provider.connectionStatus !== "success"
+          ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
+          : "";
       const capability = model.multimodalEnabled ? " · 多模态" : "";
       const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
       return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
