@@ -11,6 +11,15 @@ const entityTargets = Object.freeze({
   review: Object.freeze({ module: "reviews", entity: "review", resource: "reviews" })
 });
 
+export function prioritizeGlobalSearchResults(results = []) {
+  const settingResults = [];
+  const proseResults = [];
+  for (const result of Array.isArray(results) ? results : []) {
+    (String(result?.type ?? "") === "chapter" ? proseResults : settingResults).push(result);
+  }
+  return [...settingResults, ...proseResults];
+}
+
 function positiveLine(value) {
   const line = Number(value);
   return Number.isInteger(line) && line > 0 ? line : null;

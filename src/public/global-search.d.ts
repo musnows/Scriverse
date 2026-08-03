@@ -9,5 +9,6 @@ export type GlobalSearchTarget =
       apiPath: string;
     };
 
+export function prioritizeGlobalSearchResults<T extends { type?: unknown }>(results: readonly T[]): T[];
 export function splitGlobalSearchHighlight(value: unknown, query: unknown): Array<{ text: string; match: boolean }>;
 export function resolveGlobalSearchTarget(result?: { type?: unknown; id?: unknown; startLine?: unknown; endLine?: unknown }): GlobalSearchTarget | null;

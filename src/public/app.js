@@ -45,7 +45,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
-import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
+import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-search-result-priority-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import {
@@ -3965,8 +3965,9 @@ function renderSearchResults(results, query) {
     $("#search-results").innerHTML = '<p class="search-results-status">未找到相关内容。</p>';
     return;
   }
+  const orderedResults = prioritizeGlobalSearchResults(results);
   const matchKindLabel = { metadata: "资料命中", exact: "精确命中", phonetic: "拼音命中" };
-  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${results.length} 条结果，按综合相关度排序。</p>${results.map((item) => {
+  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${orderedResults.length} 条结果，设定库结果优先，正文条目随后展示。</p>${orderedResults.map((item) => {
     const matchKinds = Array.isArray(item.matchKinds) ? item.matchKinds : [];
     const lineRange = Number.isInteger(item.startLine)
       ? `<span class="search-result-chip">${item.startLine === item.endLine ? `第 ${item.startLine} 行` : `第 ${item.startLine}-${item.endLine} 行`}</span>`
@@ -3981,7 +3982,7 @@ function renderSearchResults(results, query) {
   }).join("")}`;
   $("#search-results").querySelectorAll(".search-result").forEach((button, index) => {
     button.addEventListener("click", () => {
-      openSearchResult(results[index])
+      openSearchResult(orderedResults[index])
         .catch((error) => toast(error.message, "error"));
     });
   });
