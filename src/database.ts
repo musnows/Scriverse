@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -86,6 +86,12 @@ export class Database {
       });
       throw error;
     }
+  }
+
+  /** 生成独立的数据库快照文件，供远程备份使用（VACUUM INTO 产出一致且不含 WAL 的副本）。 */
+  snapshotToFile(destinationPath: string): void {
+    const safePath = destinationPath.replace(/'/gu, "''");
+    this.raw.exec(`VACUUM INTO '${safePath}'`);
   }
 
   rollbackTransaction<T>(operation: () => T): T {
@@ -2766,6 +2772,38 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS platform_backup_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          targets_json TEXT NOT NULL,
+          backup_images INTEGER NOT NULL DEFAULT 1 CHECK(backup_images IN (0, 1)),
+          schedule_time TEXT NOT NULL DEFAULT '03:00',
+          retention_count INTEGER NOT NULL DEFAULT 7,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS system_notifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          type TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          read_at TEXT
+        )`);
+        this.run(
+          `INSERT INTO platform_backup_settings (id, targets_json, backup_images, schedule_time, retention_count, updated_at)
+           VALUES (1, '[]', 1, '03:00', 7, ?)
+           ON CONFLICT(id) DO NOTHING`,
+          new Date().toISOString()
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

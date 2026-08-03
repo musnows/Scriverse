@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
+import { CredentialVault, type EncryptedSecret } from "./credential-vault.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -25,6 +26,15 @@ import {
   splitDocumentParagraphs
 } from "./utils.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
+
+function normalizeScheduleTime(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^([0-2]\d):([0-5]\d)$/u.exec(value.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  if (hour > 23) return null;
+  return `${match[1]}:${match[2]}`;
+}
 
 type WorkInput = {
   title: string;
@@ -568,7 +578,7 @@ function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInje
 }
 
 export class Store {
-  constructor(readonly db: Database) {
+  constructor(readonly db: Database, readonly credentialVault?: CredentialVault) {
     this.backfillEntityVersionBaselines();
   }
 
@@ -1140,6 +1150,193 @@ export class Store {
       });
     });
     return this.getPlatformUiSettings();
+  }
+
+  // ===== 系统数据备份（S3 兼容） =====
+
+  private decryptBackupSecret(stored: string): string {
+    if (!stored) return "";
+    if (this.credentialVault) {
+      try {
+        const parsed = JSON.parse(stored) as EncryptedSecret;
+        if (parsed && typeof parsed.encrypted === "string" && typeof parsed.iv === "string" && typeof parsed.tag === "string") {
+          return this.credentialVault.decrypt(parsed);
+        }
+      } catch {
+        // 未加密的明文（例如未配置主密钥的测试环境），按原值返回。
+      }
+    }
+    return stored;
+  }
+
+  private encryptBackupSecret(plain: string): string {
+    if (!plain) return "";
+    if (this.credentialVault) return JSON.stringify(this.credentialVault.encrypt(plain));
+    return plain;
+  }
+
+  /** 内部使用：返回含明文字符串的备份配置，绝不对外暴露。 */
+  getDecryptedBackupSettings(): {
+    targets: Array<{
+      id: string;
+      name: string;
+      enabled: boolean;
+      endpoint: string;
+      region: string;
+      bucket: string;
+      accessKeyId: string;
+      secretAccessKey: string;
+      subDirectory: string;
+    }>;
+    backupImages: boolean;
+    scheduleTime: string;
+    retentionCount: number;
+  } {
+    const row = this.db.get("SELECT * FROM platform_backup_settings WHERE id = 1");
+    const targets = row ? json<Array<{
+      id: string;
+      name: string;
+      enabled: boolean;
+      endpoint: string;
+      region: string;
+      bucket: string;
+      accessKeyId: string;
+      secretAccessKey: string;
+      subDirectory: string;
+    }>>(String(row?.targets_json ?? "[]"), []) : [];
+    return {
+      targets: targets.map((target) => ({ ...target, secretAccessKey: this.decryptBackupSecret(target.secretAccessKey) })),
+      backupImages: Number(row?.backup_images ?? 1) === 1,
+      scheduleTime: String(row?.schedule_time ?? "03:00"),
+      retentionCount: Math.max(0, Number(row?.retention_count ?? 7))
+    };
+  }
+
+  /** 对外视图：密钥不回显，仅以 hasSecretAccessKey 标记是否已配置。 */
+  getPlatformBackupSettings(): Record<string, unknown> {
+    const settings = this.getDecryptedBackupSettings();
+    const updatedAt = String(this.db.get("SELECT updated_at FROM platform_backup_settings WHERE id = 1")?.updated_at ?? "");
+    return {
+      targets: settings.targets.map((target) => ({
+        id: target.id,
+        name: target.name,
+        enabled: target.enabled,
+        endpoint: target.endpoint,
+        region: target.region,
+        bucket: target.bucket,
+        accessKeyId: target.accessKeyId,
+        subDirectory: target.subDirectory,
+        hasSecretAccessKey: Boolean(target.secretAccessKey)
+      })),
+      backupImages: settings.backupImages,
+      scheduleTime: settings.scheduleTime,
+      retentionCount: settings.retentionCount,
+      updatedAt
+    };
+  }
+
+  updatePlatformBackupSettings(input: {
+    targets?: Array<{
+      id: string;
+      name: string;
+      enabled: boolean;
+      endpoint: string;
+      region: string;
+      bucket: string;
+      accessKeyId: string;
+      secretAccessKey?: string;
+      hasSecretAccessKey?: boolean;
+      subDirectory: string;
+    }>;
+    backupImages?: boolean;
+    scheduleTime?: string;
+    retentionCount?: number;
+  }): Record<string, unknown> {
+    const current = this.getDecryptedBackupSettings();
+    const timestamp = now();
+    type BackupTargetInput = {
+      id?: string;
+      name?: string;
+      enabled?: boolean;
+      endpoint?: string;
+      region?: string;
+      bucket?: string;
+      accessKeyId?: string;
+      secretAccessKey?: string;
+      hasSecretAccessKey?: boolean;
+      subDirectory?: string;
+    };
+    const sourceTargets: BackupTargetInput[] = input.targets
+      ?? current.targets.map((target) => ({ ...target, hasSecretAccessKey: Boolean(target.secretAccessKey) }));
+    const targets = sourceTargets.map((incoming) => {
+      const existing = current.targets.find((target) => target.id === incoming.id);
+      let secret = existing?.secretAccessKey ?? "";
+      if (incoming.secretAccessKey && incoming.secretAccessKey.length > 0) {
+        secret = this.encryptBackupSecret(incoming.secretAccessKey);
+      } else if (incoming.hasSecretAccessKey && existing) {
+        secret = existing.secretAccessKey;
+      } else {
+        secret = "";
+      }
+      return {
+        id: String(incoming.id ?? "").slice(0, 64),
+        name: String(incoming.name ?? "").slice(0, 120),
+        enabled: Boolean(incoming.enabled),
+        endpoint: String(incoming.endpoint ?? "").slice(0, 512),
+        region: String(incoming.region ?? "").slice(0, 64),
+        bucket: String(incoming.bucket ?? "").slice(0, 128),
+        accessKeyId: String(incoming.accessKeyId ?? "").slice(0, 256),
+        secretAccessKey: secret,
+        subDirectory: String(incoming.subDirectory ?? "").slice(0, 256)
+      };
+    });
+    const nextBackupImages = input.backupImages ?? current.backupImages;
+    const backupImages = nextBackupImages ? 1 : 0;
+    const scheduleTime = normalizeScheduleTime(input.scheduleTime) ?? current.scheduleTime;
+    const retentionCount = Number.isInteger(input.retentionCount) && Number(input.retentionCount) >= 0
+      ? Number(input.retentionCount)
+      : current.retentionCount;
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_backup_settings (id, targets_json, backup_images, schedule_time, retention_count, updated_at)
+         VALUES (1, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           targets_json = excluded.targets_json,
+           backup_images = excluded.backup_images,
+           schedule_time = excluded.schedule_time,
+           retention_count = excluded.retention_count,
+           updated_at = excluded.updated_at`,
+        JSON.stringify(targets),
+        backupImages,
+        scheduleTime,
+        retentionCount,
+        timestamp
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.backup-settings.updated", "platform-backup-settings", "platform-backup-settings", {
+        targetCount: targets.length,
+        backupImages,
+        scheduleTime,
+        retentionCount
+      });
+    });
+    return this.getPlatformBackupSettings();
+  }
+
+  createSystemNotification(type: string, message: string): void {
+    this.db.run("INSERT INTO system_notifications (type, message, created_at) VALUES (?, ?, ?)", type, message, now());
+  }
+
+  listUnreadSystemNotifications(): Record<string, unknown>[] {
+    return this.db.all(
+      "SELECT id, type, message, created_at FROM system_notifications WHERE read_at IS NULL ORDER BY id DESC LIMIT 100"
+    );
+  }
+
+  markSystemNotificationsRead(ids: number[]): void {
+    const safeIds = ids.filter((id) => Number.isInteger(id) && id > 0);
+    if (safeIds.length === 0) return;
+    const placeholders = safeIds.map(() => "?").join(",");
+    this.db.run(`UPDATE system_notifications SET read_at = ? WHERE id IN (${placeholders})`, now(), ...safeIds);
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;

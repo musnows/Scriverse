@@ -209,6 +209,7 @@
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="platform-backup-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">备</span><strong>数据备份</strong><small>将数据库与图片备份到 S3 兼容对象存储</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
@@ -795,6 +796,25 @@
           </fieldset>
         </div>
         <div class="dialog-actions"><button class="ghost-button" id="platform-ui-settings-cancel" type="button">取消</button><button class="primary-button" id="platform-ui-settings-save" type="submit">保存设置</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="platform-backup-dialog" class="dialog large-dialog" aria-labelledby="platform-backup-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-backup-title">数据备份</h2></div><div class="settings-dialog-header-actions"><button id="platform-backup-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="platform-backup-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
+      <form id="platform-backup-form">
+        <div class="dialog-fields">
+          <p class="form-field-note">备份范围为整个系统的数据库与附件图片，不区分作品；所有文件统一存放在每个目标的 <code>/scriverse</code> 目录下（图片在 <code>/scriverse/img</code>，数据库快照在 <code>/scriverse/db</code>）。</p>
+          <div class="dialog-section-head"><strong>备份目标（S3 兼容）</strong><button id="backup-target-add" class="ghost-button" type="button">添加目标</button></div>
+          <div id="backup-targets" class="backup-targets"></div>
+          <label class="checkbox-row"><input id="backup-images" type="checkbox">同时备份附件图片（关闭则仅备份数据库）</label>
+          <div class="backup-schedule-row">
+            <label>每日自动备份时间<input id="backup-schedule-time" type="time" required aria-label="每日自动备份时间"></label>
+            <label>数据库备份留存份数<input id="backup-retention-count" type="number" min="1" max="1000" step="1" required aria-label="数据库备份留存份数"></label>
+          </div>
+          <small>超过留存份数后，按时间顺序自动删除最旧的数据库快照（不会删除任何图片）。</small>
+          <div id="backup-result" class="backup-result" role="status" aria-live="polite"></div>
+        </div>
+        <div class="dialog-actions"><button class="ghost-button" id="backup-run-now" type="button">立即备份一次</button><button class="ghost-button" id="platform-backup-cancel" type="button">取消</button><button class="primary-button" id="platform-backup-save" type="submit">保存设置</button></div>
       </form>
     </dialog>
 

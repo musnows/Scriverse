@@ -2455,6 +2455,19 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .editor-dialog .dialog-fields > .form-field-note, .editor-dialog .dialog-fields > .markdown-editor-field { grid-column: 1 / -1; }
 .dialog::backdrop { background: rgba(34,30,25,.42); backdrop-filter: blur(3px); }
 .dialog-header { display: flex; justify-content: space-between; align-items: flex-start; padding: 22px 24px 16px; border-bottom: 1px solid var(--line); }
+
+.backup-targets { display: flex; flex-direction: column; gap: 14px; }
+.backup-target { margin: 0; padding: 16px 18px; border: 1px solid var(--line); border-radius: 8px; gap: 10px; }
+.backup-target-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.backup-target-head .ghost-button { white-space: nowrap; }
+.backup-schedule-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); }
+.checkbox-row input { width: auto; }
+.dialog-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; margin-top: 4px; }
+.dialog-section-head strong { font-weight: 600; }
+.backup-result { font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; min-height: 0; }
+.backup-result:empty { display: none; }
+.backup-result .backup-result-error { color: var(--danger, #c0392b); }
 .dialog-header h2 { margin: 0; font-size: 23px; font-weight: 500; }
 .dialog-header-meta { margin: 7px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .dialog-close {

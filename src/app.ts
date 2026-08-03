@@ -21,6 +21,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
+import { runSystemBackupNow, BackupScheduler } from "./backup-runner.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -121,6 +122,26 @@ const passwordChangeSchema = z.object({ currentPassword: z.string().max(200), ne
 });
 const changeNoteSchema = z.string().trim().max(500).optional();
 const expectedVersionNoSchema = z.coerce.number().int().positive().optional();
+
+const backupTargetSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  name: z.string().trim().max(120).default(""),
+  enabled: z.boolean(),
+  endpoint: z.string().trim().max(512).default(""),
+  region: z.string().trim().max(64).default(""),
+  bucket: z.string().trim().max(128),
+  accessKeyId: z.string().trim().max(256).default(""),
+  secretAccessKey: z.string().max(2048).optional(),
+  hasSecretAccessKey: z.boolean().optional(),
+  subDirectory: z.string().trim().max(256).default("")
+}).strict();
+const backupSettingsSchema = z.object({
+  targets: z.array(backupTargetSchema).max(50),
+  backupImages: z.boolean().optional(),
+  scheduleTime: z.string().trim().max(5).optional(),
+  retentionCount: z.number().int().min(0).max(1000).optional()
+}).strict();
+const notificationReadSchema = z.object({ ids: z.array(z.number().int().positive()).max(200) }).strict();
 const presenceHeartbeatSchema = z.object({
   clientId: z.string().uuid(),
   page: z.discriminatedUnion("kind", [
@@ -937,7 +958,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const getDevelopmentUser = (): AuthUser | null => options.devAuthBypass
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
-  const store = new Store(database);
+  const store = new Store(database, new CredentialVault(options.masterSecret));
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -2060,6 +2081,41 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  // ===== 系统数据备份（S3 兼容） =====
+  const assertAdmin = (request: Request): void => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+  };
+  app.get("/api/platform/backup-settings", (request, response) => {
+    assertAdmin(request);
+    data(response, store.getPlatformBackupSettings());
+  });
+  app.put("/api/platform/backup-settings", (request, response) => {
+    assertAdmin(request);
+    data(response, store.updatePlatformBackupSettings(parse(backupSettingsSchema, request.body)));
+  });
+  app.post("/api/platform/backup/run", async (request, response) => {
+    assertAdmin(request);
+    const summary = await runSystemBackupNow({
+      store,
+      database,
+      attachmentDirectory: attachmentStorage.rootDirectory,
+      databasePath: options.databasePath,
+      logger
+    });
+    data(response, summary, 202);
+  });
+  app.get("/api/notifications", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    data(response, store.listUnreadSystemNotifications());
+  });
+  app.post("/api/notifications/read", (request, response) => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    const { ids } = parse(notificationReadSchema, request.body);
+    store.markSystemNotificationsRead(ids);
+    noContent(response);
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2573,9 +2629,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
+  const backupScheduler = new BackupScheduler(
+    async () => {
+      await runSystemBackupNow({
+        store,
+        database,
+        attachmentDirectory: attachmentStorage.rootDirectory,
+        databasePath: options.databasePath,
+        logger
+      });
+    },
+    () => String(store.getPlatformBackupSettings().scheduleTime),
+    logger
+  );
+  // 内存数据库（单元测试 / 集成测试）不启动定时调度，避免悬挂事件循环。
+  if (options.databasePath !== ":memory:") backupScheduler.start();
+
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backupScheduler.stop();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
