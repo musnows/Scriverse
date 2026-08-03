@@ -195,6 +195,93 @@ describe("作品混合检索", () => {
     ]));
   });
 
+  it("搜索和 Agent 实体工具不返回已合并角色", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "马克博士曾经守护北港。马克·罗素接替了他。 ");
+    const workId = String(seeded.work.id);
+    const source = runtime.store.createCharacter(workId, { name: "马克博士" });
+    const target = runtime.store.createCharacter(workId, { name: "马克·罗素" });
+    runtime.store.createCharacterProfileSection(String(source.id), {
+      sectionType: "background",
+      title: "旧身份",
+      contentMarkdown: "马克博士曾经守护北港。"
+    });
+    runtime.store.mergeCharacters({
+      reviewId: null,
+      sourceCharacterId: String(source.id),
+      targetCharacterId: String(target.id),
+      expectedSourceVersionNo: Number(source.versionNo),
+      expectedTargetVersionNo: Number(target.versionNo)
+    });
+
+    const metadataResults = runtime.store.search(workId, "马克博士");
+    expect(metadataResults).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", id: source.id })
+    ]));
+    expect(metadataResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素" })
+    ]));
+    const sectionResults = runtime.store.searchCharacterProfileSections(workId, "旧身份");
+    expect(sectionResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({ characterId: target.id, characterName: "马克·罗素" })
+    ]));
+    expect(sectionResults).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ characterId: source.id })
+    ]));
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "马克博士", type: "character", limit: 100 })
+      .expect(200);
+    expect(response.body.data).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", id: source.id })
+    ]));
+    expect(response.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素" })
+    ]));
+
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        candidateWorkId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number,
+        roleplayCharacterId?: string | null,
+        allowedToolIds?: ReadonlySet<string>
+      ) => Promise<Record<string, unknown>>;
+    };
+    const execution = await internalAi.executeAgentTool(workId, {
+      id: "search-merged-character",
+      type: "function",
+      function: {
+        name: "search_story_entities",
+        arguments: JSON.stringify({ query: "马克博士", categories: ["character"], limit: 30, cursor: 0 })
+      }
+    });
+    const result = execution.result as Record<string, unknown>;
+    const resultData = result.data as Record<string, unknown>;
+    const matches = resultData.matches as Array<Record<string, unknown>>;
+    expect(execution.status).toBe("completed");
+    expect(matches).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", id: source.id })
+    ]));
+    expect(matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素" })
+    ]));
+
+    const relationshipExecution = await internalAi.executeAgentTool(workId, {
+      id: "recall-merged-character",
+      type: "function",
+      function: {
+        name: "recall_relationship",
+        arguments: JSON.stringify({ characters: [source.id], cursor: 0 })
+      }
+    }, 20_000, String(target.id), new Set(["recall_relationship"]));
+    const relationshipResult = relationshipExecution.result as Record<string, unknown>;
+    const relationshipData = relationshipResult.data as Record<string, unknown>;
+    expect(relationshipExecution.status).toBe("completed");
+    expect(relationshipData.unresolvedCharacters).toEqual([source.id]);
+  });
+
   it("拒绝未知类型和越界数量", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime);

@@ -4444,7 +4444,7 @@ export class AiManager {
       const { characters: requestedCharacters, cursor } = args as z.infer<typeof recallRelationshipArguments>;
       const character = this.store.getCharacter(roleplayCharacterId);
       if (String(character.workId) !== workId) throw new Error("Roleplay character belongs to a different work");
-      const characterList = this.store.listCharacters(workId, false, true);
+      const characterList = this.store.listCharacters(workId);
       const characters = new Map(characterList.map((item) => [String(item.id), item]));
       const characterSearchText = (item: Record<string, unknown> | null): string => {
         if (!item) return "";
@@ -7741,6 +7741,7 @@ export class AiManager {
       if (sourceType === "character") {
         const item = this.store.getCharacter(sourceId);
         if (String(item.workId) !== workId) return null;
+        if (item.mergedIntoCharacterId) return null;
         return source(`人物档案：${String(item.name)}`, {
           name: item.name, isDead: item.isDead, aliases: item.aliases, code: item.code, species: item.species, race: item.race,
           organizations: item.organizations, attributes: item.attributes, profile: item.profile,
