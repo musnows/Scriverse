@@ -31,6 +31,10 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
+import { BackupStore } from "./backup-store.js";
+import { BackupService } from "./backup-service.js";
+import { S3Client } from "./s3-client.js";
+import { buildDailyCron, buildIntervalCron, parseCron } from "./cron.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -392,6 +396,38 @@ const providerUpdateSchema = providerBaseSchema.partial().superRefine((value, ct
   refineProviderApiKey(value, ctx);
 });
 
+const backupTargetBaseSchema = z.object({
+  name: nonEmpty.max(200),
+  endpoint: z.string().trim().min(1).max(2000).refine((value) => value.startsWith("http://") || value.startsWith("https://"), "端点地址必须使用 HTTP 或 HTTPS"),
+  region: z.string().trim().max(100).optional(),
+  bucket: nonEmpty.max(200),
+  subdirectory: z.string().trim().max(500).optional(),
+  accessKeyId: z.string().trim().min(1).max(200),
+  secretAccessKey: z.string().trim().min(1).max(200),
+  forcePathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional()
+}).strict();
+
+const backupTargetSchema = backupTargetBaseSchema;
+
+const backupTargetUpdateSchema = z.object({
+  name: nonEmpty.max(200).optional(),
+  endpoint: z.string().trim().min(1).max(2000).refine((value) => value.startsWith("http://") || value.startsWith("https://"), "端点地址必须使用 HTTP 或 HTTPS").optional(),
+  region: z.string().trim().max(100).optional(),
+  bucket: nonEmpty.max(200).optional(),
+  subdirectory: z.string().trim().max(500).optional(),
+  accessKeyId: z.string().trim().min(1).max(200).optional(),
+  secretAccessKey: z.string().trim().min(1).max(200).optional(),
+  forcePathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional()
+}).strict();
+
+const backupSettingsSchema = z.object({
+  includeImages: z.boolean().optional(),
+  scheduleCron: z.string().trim().max(100).optional(),
+  retentionCount: z.number().int().min(0).max(100).optional()
+}).strict();
+
 const modelSchema = z.object({
   displayName: nonEmpty.max(200),
   modelId: nonEmpty.max(300),
@@ -599,6 +635,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backup: BackupService;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -991,6 +1028,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backupVault = new CredentialVault(options.masterSecret);
+  const backupStore = new BackupStore(database, backupVault);
+  const backupService = new BackupService({
+    db: database,
+    store: backupStore,
+    attachmentStorage,
+    databasePath: options.databasePath,
+    s3Client: new S3Client({ fetchImpl: options.fetchImpl })
+  });
+  if (!options.devAuthBypass && options.databasePath !== ":memory:") backupService.startScheduler();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2107,61 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  const assertBackupAdmin = (request: Request): void => {
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+  };
+
+  app.get("/api/platform/backup/settings", (request, response) => {
+    assertBackupAdmin(request);
+    data(response, backupStore.getSettings());
+  });
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    assertBackupAdmin(request);
+    const updated = backupStore.updateSettings(parse(backupSettingsSchema, request.body));
+    store.audit(null, "backup.settings.updated", "backup-settings", "backup-settings", updated);
+    data(response, updated);
+  });
+  app.get("/api/platform/backup/targets", (request, response) => {
+    assertBackupAdmin(request);
+    data(response, backupStore.listTargets());
+  });
+  app.post("/api/platform/backup/targets", (request, response) => {
+    assertBackupAdmin(request);
+    const created = backupStore.createTarget(parse(backupTargetSchema, request.body));
+    store.audit(null, "backup.target.created", "backup-target", String(created.id), { name: created.name, endpoint: created.endpoint, bucket: created.bucket });
+    data(response, created, 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", (request, response) => {
+    assertBackupAdmin(request);
+    const updated = backupStore.updateTarget(request.params.targetId, parse(backupTargetUpdateSchema, request.body));
+    store.audit(null, "backup.target.updated", "backup-target", String(updated.id), { name: updated.name, fields: Object.keys(request.body).filter((key) => key !== "secretAccessKey" && key !== "accessKeyId") });
+    data(response, updated);
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    assertBackupAdmin(request);
+    backupStore.deleteTarget(request.params.targetId);
+    store.audit(null, "backup.target.deleted", "backup-target", request.params.targetId, {});
+    noContent(response);
+  });
+  app.post("/api/platform/backup/targets/:targetId/test", async (request, response) => {
+    assertBackupAdmin(request);
+    data(response, await backupService.testBackupTarget(request.params.targetId));
+  });
+  app.post("/api/platform/backup/run", async (request, response) => {
+    assertBackupAdmin(request);
+    const result = await backupService.runBackup();
+    store.audit(null, "backup.run.completed", "backup", "backup", { status: result.status, targets: result.targets.length });
+    data(response, result);
+  });
+  app.get("/api/platform/backup/cron-presets", (_request, response) => {
+    data(response, {
+      daily: { label: "每天定时", build: (hour: number, minute: number) => buildDailyCron(hour, minute) },
+      interval: { label: "每隔 N 小时", build: (hours: number) => buildIntervalCron(hours) },
+      validate: (cron: string) => { try { parseCron(cron); return { ok: true }; } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "无效" }; } }
+    });
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,8 +2676,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, backup: backupService, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backupService.stopScheduler();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
