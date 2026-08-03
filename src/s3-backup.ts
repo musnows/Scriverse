@@ -56,6 +56,7 @@ export type S3BackupTarget = {
 export type S3BackupTrigger = "manual" | "scheduled";
 
 export type S3BackupRun = {
+  sequence: number;
   id: string;
   targetId: string | null;
   targetName: string;
@@ -98,6 +99,11 @@ export type S3BackupManagerOptions = {
   validateEndpoint?: (endpoint: string) => Promise<unknown>;
   now?: () => Date;
   logger?: Logger;
+};
+
+export type S3BackupQueueReceipt = {
+  acceptedTargetIds: string[];
+  skippedTargetIds: string[];
 };
 
 type RuntimeTarget = S3BackupTarget & {
@@ -281,6 +287,10 @@ export class S3BackupManager {
   private readonly validateEndpoint?: (endpoint: string) => Promise<unknown>;
   private readonly now: () => Date;
   private readonly log: Logger;
+  private readonly queuedTargetIds = new Set<string>();
+  private executionChain: Promise<void> = Promise.resolve();
+  private schedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private disposed = false;
 
   constructor(
     private readonly database: Database,
@@ -402,9 +412,101 @@ export class S3BackupManager {
   }
 
   getRun(runId: string): S3BackupRun {
-    const row = this.database.get("SELECT * FROM s3_backup_runs WHERE id = ?", runId);
+    const row = this.database.get("SELECT rowid AS sequence, * FROM s3_backup_runs WHERE id = ?", runId);
     if (!row) throw new AppError(404, "BACKUP_RUN_NOT_FOUND", "S3 备份记录不存在");
     return this.mapRun(row);
+  }
+
+  listRuns(options: { afterSequence?: number; limit?: number } = {}): { items: S3BackupRun[]; latestSequence: number } {
+    const limit = Math.min(100, Math.max(1, options.limit ?? 30));
+    const rows = options.afterSequence === undefined
+      ? this.database.all("SELECT rowid AS sequence, * FROM s3_backup_runs ORDER BY rowid DESC LIMIT ?", limit)
+      : this.database.all(
+        "SELECT rowid AS sequence, * FROM s3_backup_runs WHERE rowid > ? ORDER BY rowid LIMIT ?",
+        options.afterSequence,
+        limit
+      );
+    const latestSequence = Number(this.database.get("SELECT COALESCE(MAX(rowid), 0) AS value FROM s3_backup_runs")?.value ?? 0);
+    return { items: rows.map((row) => this.mapRun(row)), latestSequence };
+  }
+
+  enabledTargetIds(): string[] {
+    return this.database.all<{ id: string }>(
+      "SELECT id FROM s3_backup_targets WHERE enabled = 1 ORDER BY sort_order, created_at, id"
+    ).map((row) => String(row.id));
+  }
+
+  enqueueTargets(targetIds: readonly string[], trigger: S3BackupTrigger): S3BackupQueueReceipt {
+    if (this.disposed) throw new AppError(503, "BACKUP_MANAGER_STOPPED", "S3 备份服务正在停止");
+    const uniqueIds = [...new Set(targetIds)];
+    for (const targetId of uniqueIds) this.requireTargetRow(targetId);
+    const acceptedTargetIds = uniqueIds.filter((targetId) => !this.queuedTargetIds.has(targetId));
+    const skippedTargetIds = uniqueIds.filter((targetId) => this.queuedTargetIds.has(targetId));
+    for (const targetId of acceptedTargetIds) this.queuedTargetIds.add(targetId);
+    if (acceptedTargetIds.length) {
+      const execute = async (): Promise<void> => {
+        for (const targetId of acceptedTargetIds) {
+          try {
+            if (!this.disposed) await this.runTarget(targetId, trigger);
+          } catch (error) {
+            this.log.error("backup.queue.target_failed", { targetId, trigger, error: sanitizeError(error) });
+          } finally {
+            this.queuedTargetIds.delete(targetId);
+          }
+        }
+      };
+      this.executionChain = this.executionChain.then(execute, execute).catch((error: unknown) => {
+        this.log.error("backup.queue.failed", { trigger, error: sanitizeError(error) });
+      });
+    }
+    return { acceptedTargetIds, skippedTargetIds };
+  }
+
+  enqueueEnabledTargets(trigger: S3BackupTrigger): S3BackupQueueReceipt {
+    return this.enqueueTargets(this.enabledTargetIds(), trigger);
+  }
+
+  enqueueDueTargets(value = this.now()): S3BackupQueueReceipt {
+    const currentTime = `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
+    const dateKey = this.localDateKey(value);
+    const dueTargetIds = this.database.all(
+      `SELECT target.id, target.schedule_time,
+        (SELECT run.started_at FROM s3_backup_runs run
+         WHERE run.target_id = target.id AND run.trigger = 'scheduled'
+         ORDER BY run.rowid DESC LIMIT 1) AS last_scheduled_at
+       FROM s3_backup_targets target
+       WHERE target.enabled = 1
+       ORDER BY target.sort_order, target.created_at, target.id`
+    ).filter((row) => {
+      if (requiredString(row, "schedule_time") > currentTime) return false;
+      const lastScheduledAt = nullableString(row, "last_scheduled_at");
+      return !lastScheduledAt || this.localDateKey(new Date(lastScheduledAt)) !== dateKey;
+    }).map((row) => requiredString(row, "id"));
+    return this.enqueueTargets(dueTargetIds, "scheduled");
+  }
+
+  startScheduler(): void {
+    if (this.schedulerTimer || this.disposed) return;
+    const poll = (): void => {
+      try {
+        this.enqueueDueTargets();
+      } catch (error) {
+        this.log.error("backup.scheduler.poll_failed", { error: sanitizeError(error) });
+      }
+    };
+    poll();
+    this.schedulerTimer = setInterval(poll, 30_000);
+    this.schedulerTimer.unref();
+  }
+
+  async waitForIdle(): Promise<void> {
+    await this.executionChain;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    if (this.schedulerTimer) clearInterval(this.schedulerTimer);
+    this.schedulerTimer = null;
   }
 
   async runEnabledTargets(trigger: S3BackupTrigger): Promise<S3BackupRun[]> {
@@ -605,6 +707,7 @@ export class S3BackupManager {
       throw new AppError(500, "BACKUP_RUN_INVALID", "S3 备份触发类型无效");
     }
     return {
+      sequence: Number(row.sequence),
       id: requiredString(row, "id"),
       targetId: nullableString(row, "target_id"),
       targetName: requiredString(row, "target_name"),
@@ -677,6 +780,10 @@ export class S3BackupManager {
 
   private snapshotTimestamp(value: Date): string {
     return value.toISOString().replace(/[-:.]/gu, "");
+  }
+
+  private localDateKey(value: Date): string {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
   }
 
   private targetForLog(target: RuntimeTarget): S3BackupTarget {

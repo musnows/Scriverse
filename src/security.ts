@@ -361,6 +361,31 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   return addresses;
 }
 
+export async function assertSafeS3Endpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+  const endpoint = new URL(value);
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+    throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
+  }
+  const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
+    ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
+    : (await lookup(endpoint.hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
+      address,
+      family: family as 4 | 6
+    }));
+  if (!addresses.length) throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务域名无法解析");
+  for (const { address } of addresses) {
+    const kind = unsafeIpKind(address);
+    if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
+      logger.warn("security.s3_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
+      throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务地址指向受保护的本机、内网或链路本地网络");
+    }
+  }
+  if (endpoint.protocol === "http:" && addresses.some(({ address }) => unsafeIpKind(address) !== "private")) {
+    throw new AppError(400, "INSECURE_S3_ENDPOINT", "公网 S3 服务地址必须使用 HTTPS");
+  }
+  return addresses;
+}
+
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 
 /**

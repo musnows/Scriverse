@@ -143,8 +143,11 @@ describe("S3 备份目标配置 API", () => {
     };
     await request(runtime.app).get("/api/platform/backups/targets").expect(401);
     await writer.agent.get("/api/platform/backups/targets").expect(403);
+    await writer.agent.get("/api/platform/backups/runs").expect(403);
     await writer.agent.post("/api/platform/backups/targets").set("X-CSRF-Token", writer.csrfToken).send(body).expect(403);
+    await writer.agent.post("/api/platform/backups/run").set("X-CSRF-Token", writer.csrfToken).send({}).expect(403);
     await admin.agent.post("/api/platform/backups/targets").send(body).expect(403);
+    await admin.agent.post("/api/platform/backups/run").send({}).expect(403);
     await admin.agent.post("/api/platform/backups/targets").set("X-CSRF-Token", admin.csrfToken).send(body).expect(201);
   });
 });

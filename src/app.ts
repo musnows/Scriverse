@@ -23,7 +23,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -477,6 +477,13 @@ const s3BackupTargetUpdateSchema = s3BackupTargetBaseSchema.partial().refine(
   (input) => Object.keys(input).length > 0,
   "至少需要提供一项 S3 备份配置"
 );
+const s3BackupRunSchema = z.object({
+  targetIds: z.array(identifier).min(1).max(100).refine((items) => new Set(items).size === items.length, "S3 备份目标不能重复").optional()
+}).strict();
+const s3BackupRunQuerySchema = z.object({
+  afterSequence: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional()
+}).strict();
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -1020,7 +1027,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
     ...options.backupOptions,
     validateEndpoint: options.backupOptions?.validateEndpoint
-      ?? (options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
+      ?? (options.security ? (url) => assertSafeS3Endpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
   });
   const ai = new AiManager(
     store,
@@ -2122,6 +2129,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     backups.deleteTarget(request.params.targetId);
     noContent(response);
   });
+  app.get("/api/platform/backups/runs", (request, response) => {
+    data(response, backups.listRuns(parse(s3BackupRunQuerySchema, request.query)));
+  });
+  app.post("/api/platform/backups/run", (request, response) => {
+    const input = parse(s3BackupRunSchema, request.body ?? {});
+    const queued = input.targetIds
+      ? backups.enqueueTargets(input.targetIds, "manual")
+      : backups.enqueueEnabledTargets("manual");
+    data(response, { ...queued, queuedAt: new Date().toISOString() }, 202);
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
@@ -2636,9 +2653,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
+  backups.startScheduler();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backups.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
