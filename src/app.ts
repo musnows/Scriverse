@@ -30,7 +30,7 @@ import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metada
 import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
-import { S3BackupManager } from "./s3-backup.js";
+import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
@@ -633,6 +633,8 @@ export type RuntimeOptions = {
   revealCaptchaAnswer?: boolean;
   /** 当前服务是否由开发模式启动。 */
   developmentServer?: boolean;
+  /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
+  backupOptions?: S3BackupManagerOptions;
 };
 
 export type Runtime = {
@@ -1015,7 +1017,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const credentialVault = new CredentialVault(options.masterSecret);
-  const backups = new S3BackupManager(database, credentialVault, store);
+  const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
+    ...options.backupOptions,
+    validateEndpoint: options.backupOptions?.validateEndpoint
+      ?? (options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
+  });
   const ai = new AiManager(
     store,
     credentialVault,

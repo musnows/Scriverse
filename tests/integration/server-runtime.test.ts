@@ -84,6 +84,8 @@ describe("本地服务运行时", () => {
     expect(statSync(root).mode & 0o777).toBe(0o700);
     expect(statSync(databasePath).mode & 0o777).toBe(0o600);
     expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
+    const snapshot = running.runtime.database.createSnapshotBuffer();
+    expect(snapshot.subarray(0, 16).toString("utf8")).toBe("SQLite format 3\u0000");
     for (const sqliteSidecar of [`${databasePath}-wal`, `${databasePath}-shm`]) {
       if (existsSync(sqliteSidecar)) expect(statSync(sqliteSidecar).mode & 0o777).toBe(0o600);
     }
