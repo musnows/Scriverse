@@ -2146,8 +2146,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/ai-conversations/:conversationId", (request, response) => {
     const pagination = parsePagination(request.query);
+    const focusMessageId = request.query.messageId === undefined
+      ? undefined
+      : parse(identifier, request.query.messageId);
     const conversation = pagination
-      ? store.getAiConversationPage(request.params.conversationId, pagination)
+      ? store.getAiConversationPage(request.params.conversationId, pagination, focusMessageId)
       : store.getAiConversation(request.params.conversationId);
     const permissions = requestPermissions(request, String(conversation.workId));
     data(response, redactAiConversation(conversation, permissions));
@@ -2455,7 +2458,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       type: z.enum(HYBRID_SEARCH_TYPES).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional()
     }).strict(), request.query);
-    data(response, await ai.searchWork(request.params.workId, query.q, { type: query.type, limit: query.limit }));
+    const permissions = requestPermissions(request, request.params.workId);
+    data(response, await ai.searchWork(request.params.workId, query.q, {
+      type: query.type,
+      limit: query.limit,
+      includeAgentHistory: permissions["ai-chat"] !== "none"
+    }));
   });
   app.get("/api/works/:workId/export", async (request, response) => {
     const format = parse(z.enum(["json", "txt", "markdown", "docx"]), request.query.format ?? "json");

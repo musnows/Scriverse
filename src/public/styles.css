@@ -2193,6 +2193,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-context-compaction-divider span { letter-spacing: .08em; white-space: nowrap; }
 .assistant-message, .user-message { position: relative; margin-bottom: 12px; padding: 12px 13px; border-radius: 5px; font-size: 12px; line-height: 1.55; }
 .assistant-message { background: var(--paper-deep); }
+.assistant-message.is-search-target, .user-message.is-search-target { outline: 2px solid var(--accent); outline-offset: 3px; }
 .assistant-message.is-error { border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line)); border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--paper-deep)); }
 .assistant-message.has-message-actions, .user-message.has-message-actions { margin-bottom: 42px; }
 .user-message { margin-left: 24px; background: var(--accent); color: #fff; }

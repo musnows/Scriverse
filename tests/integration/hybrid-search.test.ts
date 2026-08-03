@@ -110,6 +110,91 @@ describe("作品混合检索", () => {
     expect(updated.body.data).toEqual([expect.objectContaining({ id: setting.id, type: "setting" })]);
   });
 
+  it("通过增量全文索引检索 Agent history，并支持短词和标题更新", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "正文记录了跃迁冷却规则，作者后来继续追问。 ");
+    const workId = String(seeded.work.id);
+    const conversation = runtime.store.createAiConversation(workId, "跃迁规则讨论");
+    const userMessage = runtime.store.addAiConversationMessage(String(conversation.id), {
+      role: "user",
+      content: "请记住跃迁冷却规则。"
+    });
+    runtime.store.addAiConversationMessage(String(conversation.id), {
+      role: "assistant",
+      content: "已记录跃迁冷却规则，后续会继续遵守。"
+    });
+
+    const fullText = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "跃迁冷却", limit: 100 })
+      .expect(200);
+    const historyResults = fullText.body.data.filter((item: { type: string }) => item.type === "agent-history");
+    expect(historyResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: userMessage.id,
+        type: "agent-history",
+        conversationId: conversation.id,
+        messageId: userMessage.id,
+        matchKinds: expect.arrayContaining(["exact"])
+      })
+    ]));
+    expect(fullText.body.data.some((item: { type: string }) => item.type === "chapter")).toBe(true);
+    expect(runtime.store.db.get("SELECT COUNT(*) AS count FROM ai_history_search")?.count).toBe(3);
+    expect(runtime.store.db.get("SELECT COUNT(*) AS count FROM ai_history_search_fts")?.count).toBe(3);
+
+    const shortText = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "跃迁", type: "agent-history" })
+      .expect(200);
+    expect(shortText.body.data.length).toBeGreaterThanOrEqual(2);
+    expect(shortText.body.data.every((item: { type: string }) => item.type === "agent-history")).toBe(true);
+
+    runtime.store.setAiConversationTitle(String(conversation.id), "星门校准讨论");
+    const renamed = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "星门校准", type: "agent-history" })
+      .expect(200);
+    expect(renamed.body.data).toEqual([
+      expect.objectContaining({
+        id: conversation.id,
+        type: "agent-history",
+        conversationId: conversation.id
+      })
+    ]);
+  });
+
+  it("从搜索结果打开超过首屏的历史消息时定位到对应分页", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime);
+    const workId = String(seeded.work.id);
+    const conversation = runtime.store.createAiConversation(workId);
+    const firstMessage = runtime.store.addAiConversationMessage(String(conversation.id), {
+      role: "user",
+      content: "超长历史定位标记"
+    });
+    for (let index = 0; index < 101; index += 1) {
+      runtime.store.addAiConversationMessage(String(conversation.id), {
+        role: index % 2 === 0 ? "assistant" : "user",
+        content: `历史分页消息 ${index}`
+      });
+    }
+
+    const search = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "超长历史定位标记", type: "agent-history" })
+      .expect(200);
+    const result = search.body.data.find((item: { messageId?: string }) => item.messageId === firstMessage.id);
+    expect(result).toMatchObject({ type: "agent-history", conversationId: conversation.id, messageId: firstMessage.id });
+
+    const focusedPage = await request(runtime.app)
+      .get(`/api/ai-conversations/${conversation.id}?page=1&limit=100&messageId=${encodeURIComponent(String(firstMessage.id))}`)
+      .expect(200);
+    expect(focusedPage.body.data.messagesPage.page).toBe(2);
+    expect(focusedPage.body.data.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: firstMessage.id, content: "超长历史定位标记" })
+    ]));
+  });
+
   it("搜索和 Agent 实体工具不返回已合并角色", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "马克博士曾经守护北港。马克·罗素接替了他。 ");

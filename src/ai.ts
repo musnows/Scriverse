@@ -1931,44 +1931,50 @@ export class AiManager {
   async searchWork(
     workId: string,
     query: string,
-    options: { type?: HybridSearchType; limit?: number } = {}
+    options: { type?: HybridSearchType; limit?: number; includeAgentHistory?: boolean } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
     const normalizedQuery = normalizeRelationshipSearchText(query).trim();
     if (!normalizedQuery) return [];
-    await this.ensureRelationshipSearchIndex(workId);
     const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
+    if (options.includeAgentHistory === false) requestedTypes.delete("agent-history");
+    if (requestedTypes.size === 0) return [];
+    const hasIndexedSourceTypes = [...requestedTypes].some((type) => type !== "chapter" && type !== "agent-history");
+    if (requestedTypes.has("chapter") || hasIndexedSourceTypes) await this.ensureRelationshipSearchIndex(workId);
     const resultLimit = Math.min(100, Math.max(1, Math.trunc(options.limit ?? 50)));
     const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
     const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
     const metadataDetails = new Map<string, Record<string, unknown>>();
 
-    const metadataCandidates = this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
-      const type = String(item.type);
-      const itemId = String(item.id ?? "");
-      if (!itemId || !accepts(type)) return [];
-      const key = `${type}:${itemId}`;
-      const { type: _type, id: _id, title: _title, snippet: _snippet, ...details } = item;
-      metadataDetails.set(key, { ...(metadataDetails.get(key) ?? {}), ...details });
-      return [{
-        key,
-        type,
-        id: itemId,
-        title: String(item.title ?? "未命名资料"),
-        subtitle: typeof item.category === "string" ? item.category : undefined,
-        snippet: buildHybridSearchSnippet(String(item.snippet ?? ""), normalizedQuery),
-        sectionId: typeof item.sectionId === "string" ? item.sectionId : undefined,
-        matchKind: "metadata"
-      }];
-    }).slice(0, channelLimit);
+    const metadataCandidates = [...requestedTypes].some((type) => type !== "agent-history")
+      ? this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
+        const type = String(item.type);
+        const itemId = String(item.id ?? "");
+        if (!itemId || !accepts(type)) return [];
+        const key = `${type}:${itemId}`;
+        const { type: _type, id: _id, title: _title, snippet: _snippet, ...details } = item;
+        metadataDetails.set(key, { ...(metadataDetails.get(key) ?? {}), ...details });
+        return [{
+          key,
+          type,
+          id: itemId,
+          title: String(item.title ?? "未命名资料"),
+          subtitle: typeof item.category === "string" ? item.category : undefined,
+          snippet: buildHybridSearchSnippet(String(item.snippet ?? ""), normalizedQuery),
+          sectionId: typeof item.sectionId === "string" ? item.sectionId : undefined,
+          matchKind: "metadata"
+        }];
+      }).slice(0, channelLimit)
+      : [];
 
     const exactCandidates = [
       ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit) : []),
-      ...this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit)
+      ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit) : []),
+      ...(requestedTypes.has("agent-history") ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit) : [])
     ];
     const phoneticCandidates = [
       ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit) : []),
-      ...this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit)
+      ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit) : [])
     ];
     return fuseHybridSearchChannels([
       { weight: 1.4, candidates: metadataCandidates },
@@ -1978,6 +1984,55 @@ export class AiManager {
       ...(metadataDetails.get(`${item.type}:${item.id}`) ?? {}),
       ...item
     }));
+  }
+
+  private hybridAgentHistoryMatches(workId: string, query: string, limit: number): HybridSearchCandidate[] {
+    const columns = `SELECT history.source_type, history.source_id, history.conversation_id, history.message_id,
+                            history.role, history.content, conversation.title AS conversation_title
+                     FROM ai_history_search history
+                     JOIN ai_conversations conversation ON conversation.id = history.conversation_id`;
+    const rows = [...query].length < 3
+      ? this.store.db.all(
+        `${columns}
+         JOIN ai_history_search_short_terms term ON term.search_id = history.id
+         WHERE history.work_id = ? AND term.term = ?
+         ORDER BY history.created_at DESC, history.id DESC
+         LIMIT ?`,
+        workId,
+        query,
+        limit
+      )
+      : this.store.db.all(
+        `${columns}
+         JOIN ai_history_search_fts fts ON fts.rowid = history.id
+         WHERE history.work_id = ? AND ai_history_search_fts MATCH ?
+         ORDER BY bm25(ai_history_search_fts), history.created_at DESC, history.id DESC
+         LIMIT ?`,
+        workId,
+        `"${query.replaceAll('"', '""')}"`,
+        limit
+      );
+    return rows.map((row): HybridSearchCandidate => {
+      const sourceType = String(row.source_type ?? "");
+      const sourceId = String(row.source_id ?? "");
+      const conversationId = String(row.conversation_id ?? "");
+      const messageId = sourceType === "message" ? String(row.message_id ?? "") : "";
+      const title = String(row.conversation_title ?? "新对话");
+      const isMessage = sourceType === "message";
+      const role = String(row.role ?? "");
+      const content = String(row.content ?? "");
+      return {
+        key: `agent-history:${sourceType}:${sourceId}`,
+        type: "agent-history",
+        id: sourceId,
+        title,
+        subtitle: isMessage ? (role === "assistant" ? "Agent 回复" : "作者指令") : "对话标题与摘要",
+        snippet: buildHybridSearchSnippet(isMessage ? content : `对话标题：${title}${content ? ` · ${content}` : ""}`, query),
+        conversationId,
+        ...(messageId ? { messageId } : {}),
+        matchKind: "exact"
+      };
+    }).filter((candidate) => candidate.id && candidate.conversationId);
   }
 
   private hybridChapterMatches(

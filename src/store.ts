@@ -6355,17 +6355,20 @@ export class Store {
     const conversationId = id("conversation");
     const timestamp = now();
     const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
-    this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, task_type, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      conversationId,
-      workId,
-      taskType,
-      title.trim() || "新对话",
-      JSON.stringify(agentTools),
-      timestamp,
-      timestamp,
-      currentRequestActor()?.userId ?? null
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO ai_conversations (id, work_id, task_type, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        conversationId,
+        workId,
+        taskType,
+        title.trim() || "新对话",
+        JSON.stringify(agentTools),
+        timestamp,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+    });
     return this.getAiConversation(conversationId);
   }
 
@@ -6422,17 +6425,42 @@ export class Store {
     return { ...this.mapAiConversation(row), messageCount: messages.length, messages };
   }
 
-  getAiConversationPage(conversationId: string, pagination: Pagination): Record<string, unknown> {
+  getAiConversationPage(conversationId: string, pagination: Pagination, focusMessageId?: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!row) throw notFound("AI 对话");
     const countRow = this.db.get("SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?", conversationId);
-    const page = paginationSql(pagination);
+    let effectivePagination = pagination;
+    if (focusMessageId) {
+      const focused = this.db.get(
+        "SELECT rowid, created_at FROM ai_conversation_messages WHERE conversation_id = ? AND id = ?",
+        conversationId,
+        focusMessageId
+      );
+      if (focused) {
+        const newerCount = this.db.get(
+          `SELECT COUNT(*) AS count FROM ai_conversation_messages
+           WHERE conversation_id = ?
+             AND (created_at > ? OR (created_at = ? AND rowid > ?))`,
+          conversationId,
+          String(focused.created_at ?? ""),
+          String(focused.created_at ?? ""),
+          Number(focused.rowid ?? 0)
+        );
+        const focusPage = Math.floor(Number(newerCount?.count ?? 0) / pagination.limit) + 1;
+        effectivePagination = {
+          ...pagination,
+          page: focusPage,
+          offset: (focusPage - 1) * pagination.limit
+        };
+      }
+    }
+    const page = paginationSql(effectivePagination);
     const rows = this.db.all(
       `SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC${page.sql}`,
       conversationId,
       ...page.params
     );
-    const messagesPage = paginated(rows.map((message) => this.mapAiConversationMessage(message)), pagination);
+    const messagesPage = paginated(rows.map((message) => this.mapAiConversationMessage(message)), effectivePagination);
     messagesPage.items.reverse();
     return {
       ...this.mapAiConversation(row),
@@ -6552,13 +6580,16 @@ export class Store {
   saveAiConversationCompaction(conversationId: string, summary: string, compactedMessageCount: number): Record<string, unknown> {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
-    this.db.run(
-      "UPDATE ai_conversations SET compacted_summary = ?, compacted_message_count = ?, context_warning_at = NULL, updated_at = ? WHERE id = ?",
-      summary,
-      Math.max(0, compactedMessageCount),
-      now(),
-      conversationId
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET compacted_summary = ?, compacted_message_count = ?, context_warning_at = NULL, updated_at = ? WHERE id = ?",
+        summary,
+        Math.max(0, compactedMessageCount),
+        now(),
+        conversationId
+      );
+      this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+    });
     return this.getAiConversation(conversationId);
   }
 
@@ -6566,7 +6597,10 @@ export class Store {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
-    this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
+      this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+    });
     return this.getAiConversation(conversationId);
   }
 
@@ -6693,9 +6727,10 @@ export class Store {
     }
     const messageId = id("message");
     const timestamp = now();
-    const title = requiredString(conversation, "title") === "新对话" && input.role === "user"
+    const previousTitle = requiredString(conversation, "title");
+    const title = previousTitle === "新对话" && input.role === "user"
       ? defaultAiConversationTitle(input.content)
-      : requiredString(conversation, "title");
+      : previousTitle;
     this.db.transaction(() => {
       this.db.run(
         "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id, request_id) WHERE request_id IS NOT NULL DO NOTHING",
@@ -6710,7 +6745,11 @@ export class Store {
         currentRequestActor()?.userId ?? null
       );
       const inserted = this.db.get("SELECT id FROM ai_conversation_messages WHERE id = ?", messageId);
-      if (inserted) this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+      if (inserted) {
+        this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+        if (title !== previousTitle) this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+        this.syncAiHistorySearchShortTermsForSource("message", messageId);
+      }
     });
     const message = requestId
       ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
@@ -6772,8 +6811,40 @@ export class Store {
           currentRequestActor()?.userId ?? null
         );
       }
+      this.syncAiHistorySearchShortTermsForConversation(forkId);
     });
     return this.getAiConversation(forkId);
+  }
+
+  private syncAiHistorySearchShortTermsForSource(sourceType: "conversation" | "message", sourceId: string): void {
+    const row = this.db.get(
+      "SELECT id, title, content, search_content FROM ai_history_search WHERE source_type = ? AND source_id = ?",
+      sourceType,
+      sourceId
+    );
+    if (!row) return;
+    const searchId = numberValue(row, "id");
+    const searchContent = sourceType === "message"
+      ? normalizeDocumentSearchText(String(row.content ?? ""))
+      : normalizeDocumentSearchText(`${String(row.title ?? "")}\n${String(row.content ?? "")}`);
+    if (String(row.search_content ?? "") !== searchContent) {
+      this.db.run("UPDATE ai_history_search SET search_content = ? WHERE id = ?", searchContent, searchId);
+    }
+    this.db.run("DELETE FROM ai_history_search_short_terms WHERE search_id = ?", searchId);
+    for (const term of documentShortSearchTerms(searchContent)) {
+      this.db.run("INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?)", searchId, term);
+    }
+  }
+
+  private syncAiHistorySearchShortTermsForConversation(conversationId: string): void {
+    const rows = this.db.all<{ source_type: string; source_id: string }>(
+      "SELECT source_type, source_id FROM ai_history_search WHERE conversation_id = ?",
+      conversationId
+    );
+    for (const row of rows) {
+      const sourceType = row.source_type === "message" ? "message" : "conversation";
+      this.syncAiHistorySearchShortTermsForSource(sourceType, String(row.source_id));
+    }
   }
 
   private mapAiConversation(row: Row): Record<string, unknown> {

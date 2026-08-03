@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260803-mobile-scroll-v1">
+<link rel="stylesheet" href="/styles.css?v=20260804-agent-history-search-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -613,7 +613,7 @@
       </div>
       <div class="access-dialog-body">
         <form id="search-form" class="search-form">
-          <label>关键词<input id="search-query" name="query" type="search" maxlength="500" placeholder="搜索正文、设定、人物、时间线、关系、大纲或伏笔" required></label>
+          <label>关键词<input id="search-query" name="query" type="search" maxlength="500" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
           <label>资料类型<select id="search-type" name="type">
             <option value="">全部资料</option>
             <option value="chapter">章节</option>
@@ -627,6 +627,7 @@
             <option value="chapter-outline">章节大纲</option>
             <option value="foreshadow">伏笔</option>
             <option value="review">审核项</option>
+            <option value="agent-history">Agent 历史</option>
           </select></label>
           <button class="primary-button" type="submit">搜索</button>
         </form>
@@ -953,6 +954,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260803-model-list-v1"></script>
+    <script type="module" src="/app.js?v=20260804-agent-history-search-v1"></script>
   </body>
 </html>
