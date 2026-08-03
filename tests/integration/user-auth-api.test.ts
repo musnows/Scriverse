@@ -1828,6 +1828,32 @@ describe("用户、作品权限与操作者追踪 API", () => {
     )).toEqual({ action: "platform.ui-settings.updated", user_id: admin.user.userId });
   });
 
+  it("S3 备份设置仅允许管理员访问并且不返回凭据", async () => {
+    const admin = await register(runtime, "s3_settings_admin");
+    const writer = await register(runtime, "s3_settings_writer");
+    await writer.agent.get("/api/platform/backup/settings").expect(403);
+    await writer.agent.patch("/api/platform/backup/settings")
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({ backupImages: false })
+      .expect(403);
+    const defaults = await admin.agent.get("/api/platform/backup/settings").expect(200);
+    expect(defaults.body.data).toMatchObject({ backupImages: true, scheduleTime: "03:00", retentionCount: 7, targets: [] });
+    await admin.agent.patch("/api/platform/backup/settings").send({ backupImages: false }).expect(403);
+    const target = await admin.agent.post("/api/platform/backup/targets")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({
+        name: "权限测试目标",
+        endpoint: "https://s3.example.com",
+        bucket: "test-bucket",
+        region: "us-east-1",
+        accessKeyId: "AKIA_AUTH_TEST",
+        secretAccessKey: "auth-test-secret"
+      })
+      .expect(201);
+    expect(JSON.stringify(target.body.data)).not.toContain("AKIA_AUTH_TEST");
+    expect(JSON.stringify(target.body.data)).not.toContain("auth-test-secret");
+  });
+
   it("用户可修改自己的显示名称和密码", async () => {
     const user = await register(runtime, "profile_user");
     const profile = await user.agent.patch("/api/auth/profile").set("X-CSRF-Token", user.csrfToken).send({ displayName: "新名称" }).expect(200);

@@ -179,6 +179,7 @@ let systemRestartDetected = false;
 let chapterAnnotations = [];
 let workAuditRecords = [];
 let workAuditNextPage = null;
+let platformBackupSettings = null;
 const chapterBatchSelectedIds = new Set();
 let chapterMovePending = false;
 
@@ -3373,6 +3374,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-backup-settings-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3745,6 +3747,169 @@ async function openPlatformUiSettingsDialog() {
     $("#page-size-analysis-tasks").value = String(pageSizes.analysisTasks);
     $("#page-size-file-versions").value = String(pageSizes.fileVersions);
     $("#platform-ui-settings-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function s3BackupTargetMarkup(target, index) {
+  const isNew = String(target.id ?? "").startsWith("new-");
+  const targetLabel = target.name || `备份目标 ${index + 1}`;
+  return `<form class="s3-backup-target-card" data-s3-target-form data-target-id="${esc(target.id)}">
+    <div class="config-section-header"><div><h3>${esc(targetLabel)}</h3><p>${isNew ? "填写新的亚马逊 S3 兼容服务配置。" : "修改连接信息时，已保存的凭据可以留空以保持不变。"}</p></div><label class="s3-backup-enabled"><input type="checkbox" data-s3-target-field="enabled" ${target.enabled === false ? "" : "checked"}>启用目标</label></div>
+    <div class="s3-backup-target-grid">
+      <label>名称<input data-s3-target-field="name" maxlength="100" value="${esc(target.name ?? "")}" required></label>
+      <label>服务地址<input data-s3-target-field="endpoint" type="url" maxlength="2000" placeholder="https://s3.example.com" value="${esc(target.endpoint ?? "")}" required></label>
+      <label>桶名称<input data-s3-target-field="bucket" maxlength="63" placeholder="my-bucket" value="${esc(target.bucket ?? "")}" required></label>
+      <label>区域<input data-s3-target-field="region" maxlength="64" placeholder="us-east-1" value="${esc(target.region ?? "us-east-1")}" required></label>
+      <label>子目录（可选）<input data-s3-target-field="prefix" maxlength="500" placeholder="例如 backups" value="${esc(target.prefix ?? "")}"><small>最终路径为“子目录/scriverse”；不填写时从桶根目录下的 scriverse 开始。</small></label>
+      <label>AK<input data-s3-target-field="accessKeyId" maxlength="300" autocomplete="off" placeholder="${isNew ? "请输入 AK" : target.accessKeyIdConfigured ? "已保存，留空保持不变" : "请输入 AK"}"></label>
+      <label>SK<input data-s3-target-field="secretAccessKey" type="password" maxlength="500" autocomplete="new-password" placeholder="${isNew ? "请输入 SK" : target.secretAccessKeyConfigured ? "已保存，留空保持不变" : "请输入 SK"}"></label>
+      <label class="s3-backup-path-style"><input type="checkbox" data-s3-target-field="forcePathStyle" ${target.forcePathStyle ? "checked" : ""}>使用 Path-style 请求</label>
+    </div>
+    <div class="s3-backup-target-actions"><small>${isNew ? "凭据会在服务端使用 master key 加密保存。" : `AK：${target.accessKeyIdConfigured ? "已配置" : "未配置"} · SK：${target.secretAccessKeyConfigured ? "已配置" : "未配置"}`}</small><div><button class="ghost-button" type="button" data-s3-target-remove="${esc(target.id)}">${isNew ? "取消" : "删除目标"}</button><button class="primary-button" type="submit" data-s3-target-save>保存目标</button></div></div>
+  </form>`;
+}
+
+function s3BackupRunStatusMarkup(lastRun) {
+  if (!lastRun) return '<div class="s3-backup-status" role="status">尚未执行备份。保存目标后可以手动执行，定时任务按服务端本地时间触发。</div>';
+  const failed = lastRun.success !== true;
+  const targetSummary = Array.isArray(lastRun.targets)
+    ? lastRun.targets.map((target) => `${target.targetName || "目标"}：${target.status === "success" ? "成功" : "失败"}`).join("；")
+    : "";
+  return `<div class="s3-backup-status${failed ? " is-error" : " is-success"}" role="status"><strong>${failed ? "最近一次备份存在失败目标" : "最近一次备份已完成"}</strong><span>${esc(formatDateTime(lastRun.completedAt))}${targetSummary ? ` · ${esc(targetSummary)}` : ""}</span></div>`;
+}
+
+function s3BackupTargetPayload(form) {
+  const read = (field) => form.querySelector(`[data-s3-target-field="${field}"]`);
+  const payload = {
+    name: read("name").value.trim(),
+    endpoint: read("endpoint").value.trim(),
+    bucket: read("bucket").value.trim(),
+    region: read("region").value.trim(),
+    prefix: read("prefix").value,
+    enabled: read("enabled").checked,
+    forcePathStyle: read("forcePathStyle").checked
+  };
+  const accessKeyId = read("accessKeyId").value.trim();
+  const secretAccessKey = read("secretAccessKey").value;
+  if (accessKeyId) payload.accessKeyId = accessKeyId;
+  if (secretAccessKey) payload.secretAccessKey = secretAccessKey;
+  return payload;
+}
+
+async function loadPlatformBackupSettings() {
+  platformBackupSettings = await api("/api/platform/backup/settings");
+  renderPlatformBackupSettings(platformBackupSettings);
+}
+
+function renderPlatformBackupSettings(settings) {
+  platformBackupSettings = settings;
+  const targets = Array.isArray(settings?.targets) ? settings.targets : [];
+  const host = $("#platform-backup-body");
+  host.innerHTML = `<section class="config-section"><div class="config-section-header"><div><h2>备份计划</h2><p>系统数据库以带时间戳的新文件保存到每个启用目标的 scriverse/db 目录；超过留存数量时只删除最老的数据库快照，不清理图片。</p></div><button id="platform-backup-run" class="primary-button" type="button">立即备份</button></div><form id="platform-backup-settings-form" class="s3-backup-settings-form"><div class="s3-backup-settings-grid"><label class="s3-backup-checkbox"><input id="platform-backup-images" type="checkbox" ${settings?.backupImages === false ? "" : "checked"}>同时备份图片</label><label>每日触发时间<input id="platform-backup-schedule-time" type="time" value="${esc(settings?.scheduleTime ?? "03:00")}" required><small>使用服务端所在时区，每天执行一次。</small></label><label>数据库快照留存个数<input id="platform-backup-retention-count" type="number" min="1" max="1000" step="1" value="${esc(String(settings?.retentionCount ?? 7))}" required><small>每个目标单独清理，图片始终保留。</small></label></div><div class="card-actions"><button class="ghost-button config-save-button" type="submit">保存备份计划</button></div></form>${s3BackupRunStatusMarkup(settings?.lastRun)}</section><section class="config-section"><div class="config-section-header"><div><h2>同步目标</h2><p>启用多个目标后，系统会按照列表顺序依次同步；单个目标失败不会阻止后续目标尝试。</p></div><button id="platform-backup-add-target" class="ghost-button" type="button">添加目标</button></div><div id="platform-backup-targets" class="s3-backup-targets">${targets.length ? targets.map(s3BackupTargetMarkup).join("") : '<p class="empty-state">尚未配置 S3 备份目标。</p>'}</div></section>`;
+  $("#platform-backup-settings-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector(".config-save-button");
+    button.disabled = true;
+    try {
+      await api("/api/platform/backup/settings", {
+        method: "PATCH",
+        body: {
+          backupImages: $("#platform-backup-images").checked,
+          scheduleTime: $("#platform-backup-schedule-time").value,
+          retentionCount: Number($("#platform-backup-retention-count").value)
+        }
+      });
+      await loadPlatformBackupSettings();
+      toast("S3 备份计划已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#platform-backup-run").addEventListener("click", async () => {
+    const button = $("#platform-backup-run");
+    button.disabled = true;
+    try {
+      const result = await api("/api/platform/backup/run", { method: "POST", body: {} });
+      await loadPlatformBackupSettings();
+      const targetCount = Array.isArray(result?.targets) ? result.targets.length : 0;
+      toast(`S3 备份完成，已同步 ${targetCount} 个目标`);
+    } catch (error) {
+      await loadPlatformBackupSettings().catch(() => {});
+      toast(`S3 备份失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#platform-backup-add-target").addEventListener("click", () => {
+    const draft = {
+      id: `new-${Date.now()}`,
+      name: "",
+      endpoint: "",
+      bucket: "",
+      region: "us-east-1",
+      prefix: "",
+      enabled: true,
+      forcePathStyle: false,
+      accessKeyIdConfigured: false,
+      secretAccessKeyConfigured: false
+    };
+    platformBackupSettings = { ...platformBackupSettings, targets: [...(platformBackupSettings.targets ?? []), draft] };
+    renderPlatformBackupSettings(platformBackupSettings);
+    const newForm = $("#platform-backup-targets").querySelector(`[data-target-id="${CSS.escape(draft.id)}"]`);
+    newForm?.querySelector('[data-s3-target-field="name"]')?.focus();
+  });
+  host.querySelectorAll("[data-s3-target-form]").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const targetId = form.dataset.targetId;
+    const isNew = String(targetId).startsWith("new-");
+    const button = form.querySelector("[data-s3-target-save]");
+    button.disabled = true;
+    try {
+      await api(isNew ? "/api/platform/backup/targets" : `/api/platform/backup/targets/${encodeURIComponent(targetId)}`, {
+        method: isNew ? "POST" : "PATCH",
+        body: s3BackupTargetPayload(form)
+      });
+      await loadPlatformBackupSettings();
+      toast("S3 备份目标已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }));
+  host.querySelectorAll("[data-s3-target-remove]").forEach((button) => button.addEventListener("click", async () => {
+    const targetId = button.dataset.s3TargetRemove;
+    if (String(targetId).startsWith("new-")) {
+      platformBackupSettings = { ...platformBackupSettings, targets: platformBackupSettings.targets.filter((target) => target.id !== targetId) };
+      renderPlatformBackupSettings(platformBackupSettings);
+      return;
+    }
+    const target = targets.find((item) => item.id === targetId);
+    if (!target || !await confirmToast(`删除“${target.name}”后将停止向该目标同步，已上传的对象不会被删除。`, { title: "删除 S3 目标", confirmLabel: "确认删除" })) return;
+    button.disabled = true;
+    try {
+      await api(`/api/platform/backup/targets/${encodeURIComponent(targetId)}`, { method: "DELETE", body: {} });
+      await loadPlatformBackupSettings();
+      toast("S3 备份目标已删除");
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+}
+
+async function openPlatformBackupDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  try {
+    await loadPlatformBackupSettings();
+    $("#platform-backup-dialog").showModal();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -11343,6 +11508,7 @@ $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
+$("#platform-backup-settings-button").addEventListener("click", openPlatformBackupDialog);
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
   const panel = $("#presence-panel");
@@ -11354,6 +11520,8 @@ $("#users-settings-return").addEventListener("click", () => returnToSettingsHub(
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-return").addEventListener("click", () => returnToSettingsHub("#platform-ui-settings-button", "#platform-ui-settings-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#platform-backup-close").addEventListener("click", () => $("#platform-backup-dialog").close());
+$("#platform-backup-return").addEventListener("click", () => returnToSettingsHub("#platform-backup-settings-button", "#platform-backup-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = $("#platform-ui-settings-save");

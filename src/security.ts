@@ -308,8 +308,8 @@ function unsafeIpKind(address: string): "private" | "blocked" | null {
   return null;
 }
 
-type SafeAiEndpointAddress = { address: string; family: 4 | 6 };
-type SafeAiEndpointValidator = (url: string) => Promise<readonly SafeAiEndpointAddress[] | void>;
+export type SafeAiEndpointAddress = { address: string; family: 4 | 6 };
+export type SafeAiEndpointValidator = (url: string) => Promise<readonly SafeAiEndpointAddress[] | void>;
 
 const pinnedAiAddresses = new Map<string, SafeAiEndpointAddress[]>();
 const maximumPinnedAiHosts = 1_000;
