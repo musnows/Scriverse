@@ -12,6 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { BackupManager } from "./backup-manager.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -434,6 +435,44 @@ const platformUiSettingsSchema = z.object({
 }).strict().refine((input) => input.toastPosition !== undefined || input.pageSizes !== undefined, {
   message: "至少需要提供一项界面设置"
 });
+
+const platformBackupSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  includeImages: z.boolean().optional(),
+  scheduleTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "备份时间格式须为 HH:MM").optional(),
+  retentionCount: z.number().int().min(1).max(365).optional()
+}).strict().refine((input) => (
+  input.enabled !== undefined
+  || input.includeImages !== undefined
+  || input.scheduleTime !== undefined
+  || input.retentionCount !== undefined
+), { message: "至少需要提供一项备份设置" });
+
+const platformBackupTargetCreateSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  endpoint: z.string().trim().min(1).max(500),
+  region: z.string().trim().min(1).max(64).optional(),
+  bucket: z.string().trim().min(3).max(63),
+  prefix: z.string().max(200).optional(),
+  accessKeyId: z.string().min(1).max(200),
+  secretAccessKey: z.string().min(1).max(500),
+  forcePathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(10_000).optional()
+}).strict();
+
+const platformBackupTargetUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(100).optional(),
+  endpoint: z.string().trim().min(1).max(500).optional(),
+  region: z.string().trim().min(1).max(64).optional(),
+  bucket: z.string().trim().min(3).max(63).optional(),
+  prefix: z.string().max(200).optional(),
+  accessKeyId: z.string().min(1).max(200).optional(),
+  secretAccessKey: z.string().min(1).max(500).optional(),
+  forcePathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  sortOrder: z.number().int().min(0).max(10_000).optional()
+}).strict().refine((input) => Object.keys(input).length > 0, { message: "至少需要提供一项备份目标字段" });
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -970,9 +1009,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const vault = new CredentialVault(options.masterSecret);
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +1031,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backup = new BackupManager(
+    store,
+    database,
+    vault,
+    attachmentStorage.rootDirectory,
+    options.fetchImpl ?? fetch
+  );
+  backup.startScheduler();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2108,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  app.get("/api/platform/backup/settings", (_request, response) => data(response, backup.getSettings()));
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    data(response, backup.updateSettings(parse(platformBackupSettingsSchema, request.body)));
+  });
+  app.get("/api/platform/backup/status", (_request, response) => data(response, backup.getStatus()));
+  app.get("/api/platform/backup/targets", (_request, response) => data(response, backup.listTargets()));
+  app.post("/api/platform/backup/targets", (request, response) => {
+    data(response, backup.createTarget(parse(platformBackupTargetCreateSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", (request, response) => {
+    data(response, backup.updateTarget(request.params.targetId, parse(platformBackupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/run", async (_request, response) => {
+    data(response, await backup.runBackup("manual"));
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2576,6 +2644,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
   return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
