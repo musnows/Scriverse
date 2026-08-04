@@ -37,6 +37,18 @@ describe("页面刷新路由", () => {
       workId: "work-1",
       returnView: "shelf"
     });
+    const backupHash = serializePageRoute({
+      view: "platform-backup",
+      workId: "work-1",
+      returnView: "editor",
+      returnChapterId: "chapter-3"
+    });
+    expect(parsePageRoute(backupHash)).toEqual({
+      view: "platform-backup",
+      workId: "work-1",
+      returnView: "editor",
+      returnChapterId: "chapter-3"
+    });
     const auditHash = serializePageRoute({
       view: "work-audit",
       workId: "work-1",
@@ -49,6 +61,13 @@ describe("页面刷新路由", () => {
       returnView: "module",
       returnModule: "timeline"
     });
+  });
+
+  it("平台级设置页面在没有选中作品时也能恢复", () => {
+    for (const view of ["settings", "platform-ai", "platform-usage", "platform-backup"]) {
+      expect(parsePageRoute(serializePageRoute({ view }))).toEqual({ view, workId: null });
+    }
+    expect(serializePageRoute({ view: "work-audit" })).toBe("#view=shelf");
   });
 
   it("往返保存登录页路由", () => {

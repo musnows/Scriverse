@@ -16,6 +16,8 @@ export const RESTORABLE_MODULES = Object.freeze([
 const moduleSet = new Set(RESTORABLE_MODULES);
 const returnViewSet = new Set(["shelf", "editor", "module", "welcome"]);
 const entityEditorSet = new Set(["setting", "character", "race", "organization"]);
+/** 不依赖具体作品的平台级设置页面，刷新后可直接恢复。 */
+const platformViewSet = new Set(["settings", "platform-ai", "platform-usage", "platform-backup"]);
 
 function value(params, key) {
   return String(params.get(key) ?? "").trim();
@@ -53,7 +55,7 @@ export function serializePageRoute(route = {}) {
   } else if (view === "welcome" && workId) {
     params.set("view", "welcome");
     params.set("work", workId);
-  } else if (view === "settings" || view === "platform-ai" || view === "platform-usage" || (view === "work-audit" && workId)) {
+  } else if (platformViewSet.has(view) || (view === "work-audit" && workId)) {
     params.set("view", view);
     if (workId) params.set("work", workId);
     appendReturnContext(params, route);
@@ -87,7 +89,7 @@ export function parsePageRoute(hash = "") {
     return { view, workId, entity, entityId: entityId || null, entityMode };
   }
   if (view === "welcome" && workId) return { view, workId };
-  if (view === "settings" || view === "platform-ai" || view === "platform-usage" || (view === "work-audit" && workId)) {
+  if (platformViewSet.has(view) || (view === "work-audit" && workId)) {
     const route = { view, workId: workId || null };
     const returnView = value(params, "from");
     if (returnViewSet.has(returnView)) route.returnView = returnView;

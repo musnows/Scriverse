@@ -329,7 +329,7 @@ expect(page.text).toContain('/app.js?v=20260804-s3-backup-v1');
     expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
     expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
-    expect(application.text).toContain('/page-route.js?v=20260731-work-comments-v2');
+    expect(application.text).toContain('/page-route.js?v=20260804-s3-backup-v1');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
