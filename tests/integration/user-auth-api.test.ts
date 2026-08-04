@@ -974,6 +974,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const owner = await register(runtime, "ai_split_owner");
     const chatOnly = await register(runtime, "ai_chat_only");
     const analysisOnly = await register(runtime, "ai_analysis_only");
+    const historyOnly = await register(runtime, "ai_history_only");
     const work = await owner.agent.post("/api/works")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "AI 权限拆分作品" })
@@ -1002,13 +1003,56 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ userId: analysisOnly.user.userId, permissions: { ...basePermissions, "ai-analysis": "write" } })
       .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: historyOnly.user.userId,
+        permissions: {
+          ...basePermissions,
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          "ai-chat": "write"
+        }
+      })
+      .expect(201);
 
     await chatOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
     await chatOnly.agent.get(`/api/works/${workId}/chapter-annotations`).expect(200);
-    await chatOnly.agent.post(`/api/works/${workId}/ai-conversations`)
+    const chatConversation = await chatOnly.agent.post(`/api/works/${workId}/ai-conversations`)
       .set("X-CSRF-Token", chatOnly.csrfToken)
       .send({})
       .expect(201);
+    await chatOnly.agent.post(`/api/ai-conversations/${String(chatConversation.body.data.id)}/messages`)
+      .set("X-CSRF-Token", chatOnly.csrfToken)
+      .send({ role: "user", content: "检索专用的 Agent 历史内容" })
+      .expect(201);
+    const historySearch = await chatOnly.agent
+      .get(`/api/works/${workId}/search?q=检索专用&type=agent-history`)
+      .expect(200);
+    expect(historySearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "agent-history", conversationId: chatConversation.body.data.id })
+    ]));
+    const historyOnlyConversation = await historyOnly.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", historyOnly.csrfToken)
+      .send({})
+      .expect(201);
+    await historyOnly.agent.post(`/api/ai-conversations/${String(historyOnlyConversation.body.data.id)}/messages`)
+      .set("X-CSRF-Token", historyOnly.csrfToken)
+      .send({ role: "user", content: "正文权限之外的 Agent 历史内容" })
+      .expect(201);
+    const historyOnlySearch = await historyOnly.agent
+      .get(`/api/works/${workId}/search?q=正文权限之外&type=agent-history`)
+      .expect(200);
+    expect(historyOnlySearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "agent-history", conversationId: historyOnlyConversation.body.data.id })
+    ]));
     await chatOnly.agent.get(`/api/works/${workId}/models`).expect(200);
     const chatTasksDenied = await chatOnly.agent.get(`/api/works/${workId}/tasks`).expect(403);
     expect(chatTasksDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
@@ -1028,6 +1072,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(taskDefaultWriteDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     const analysisChatDenied = await analysisOnly.agent.get(`/api/works/${workId}/ai-conversations`).expect(403);
     expect(analysisChatDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await analysisOnly.agent.get(`/api/works/${workId}/search?q=检索专用&type=agent-history`).expect(403);
     await analysisOnly.agent.post(`/api/works/${workId}/ai-conversations`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})

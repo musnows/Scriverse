@@ -36,7 +36,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260801-google-vertex";
+} from "/display-labels.js?v=20260804-agent-history-search-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -45,7 +45,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
-import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
+import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-search-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import {
@@ -1812,8 +1812,10 @@ async function ensureAiConversationsLoaded() {
   }
 }
 
-async function openAiConversation(conversationId, hideHistory = true) {
-  const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
+async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
+  const parameters = new URLSearchParams({ page: "1", limit: "100" });
+  if (focusMessageId) parameters.set("messageId", String(focusMessageId));
+  const conversation = await api(`/api/ai-conversations/${conversationId}?${parameters}`);
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
@@ -1837,6 +1839,15 @@ async function openAiConversation(conversationId, hideHistory = true) {
   if (conversation.contextWarningPending) showAiContextWarning();
   else hideAiContextWarning();
   if (hideHistory) setAiHistoryVisible(false);
+}
+
+function focusAiConversationMessage(messageId) {
+  const message = [...$("#ai-feed").querySelectorAll("[data-message-id]")]
+    .find((candidate) => candidate.dataset.messageId === String(messageId));
+  if (!message) return;
+  message.scrollIntoView({ behavior: "smooth", block: "center" });
+  message.classList.add("is-search-target");
+  window.setTimeout(() => message.classList.remove("is-search-target"), 1800);
 }
 
 async function createNewAiConversation(taskType = "chat") {
@@ -3965,8 +3976,9 @@ function renderSearchResults(results, query) {
     $("#search-results").innerHTML = '<p class="search-results-status">未找到相关内容。</p>';
     return;
   }
+  const orderedResults = prioritizeGlobalSearchResults(results);
   const matchKindLabel = { metadata: "资料命中", exact: "精确命中", phonetic: "拼音命中" };
-  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${results.length} 条结果，按综合相关度排序。</p>${results.map((item) => {
+  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${orderedResults.length} 条结果，非正文结果优先，正文条目随后展示。</p>${orderedResults.map((item) => {
     const matchKinds = Array.isArray(item.matchKinds) ? item.matchKinds : [];
     const lineRange = Number.isInteger(item.startLine)
       ? `<span class="search-result-chip">${item.startLine === item.endLine ? `第 ${item.startLine} 行` : `第 ${item.startLine}-${item.endLine} 行`}</span>`
@@ -3981,7 +3993,7 @@ function renderSearchResults(results, query) {
   }).join("")}`;
   $("#search-results").querySelectorAll(".search-result").forEach((button, index) => {
     button.addEventListener("click", () => {
-      openSearchResult(results[index])
+      openSearchResult(orderedResults[index])
         .catch((error) => toast(error.message, "error"));
     });
   });
@@ -4050,6 +4062,12 @@ async function openSearchResult(result) {
     || !$("#platform-usage-view").classList.contains("hidden")
     || !$("#work-audit-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
+  if (target.kind === "agent-history") {
+    ensureAiPanelExpanded();
+    await openAiConversation(target.conversationId, true, target.messageId);
+    if (target.messageId) focusAiConversationMessage(target.messageId);
+    return;
+  }
   if (target.kind === "chapter") {
     await selectChapter(target.id);
     if (state.chapter?.id === target.id && target.startLine) {
@@ -6841,11 +6859,9 @@ function renderProviderCards(providers, models) {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
         ? `<span class="model-status-badge is-disabled">模型已停用</span>`
-        : provider.status !== "enabled"
-          ? `<span class="model-status-badge is-disabled">供应商已停用</span>`
-          : provider.connectionStatus !== "success"
-            ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
-            : "";
+        : provider.connectionStatus !== "success"
+          ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
+          : "";
       const capability = model.multimodalEnabled ? " · 多模态" : "";
       const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
       return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
