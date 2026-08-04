@@ -199,6 +199,15 @@ describe("数据库版本化迁移", () => {
         "title_generation_model_id"
       ])
     );
+    const workAiSettingsSql = String(first.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_ai_settings'")?.sql ?? "");
+    expect(workAiSettingsSql).toContain("agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000)");
+    first.run(
+      "INSERT INTO work_ai_settings (work_id, agent_tool_call_limit, updated_at) VALUES (?, ?, ?)",
+      "work-old",
+      80,
+      "2025-01-01"
+    );
+    expect(first.get("SELECT agent_tool_call_limit FROM work_ai_settings WHERE work_id = 'work-old'")).toEqual({ agent_tool_call_limit: 80 });
     expect(first.all("PRAGMA table_info(analysis_tasks)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );

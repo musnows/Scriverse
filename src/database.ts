@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 74;
+export const DATABASE_SCHEMA_VERSION = 75;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -457,7 +457,7 @@ export class Database {
         auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 48),
+        agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000),
         agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
         agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts","image"]',
         title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
@@ -2938,6 +2938,67 @@ export class Database {
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (74, ?)", new Date().toISOString());
       });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(75)) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          this.run(`CREATE TABLE work_ai_settings_v75 (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            system_prompt TEXT NOT NULL DEFAULT '',
+            daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000),
+            auto_run_enabled INTEGER NOT NULL DEFAULT 0,
+            auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
+            auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
+            auto_run_daily_task_limit INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_daily_task_limit BETWEEN 0 AND 10000),
+            auto_run_failure_threshold INTEGER NOT NULL DEFAULT 3 CHECK(auto_run_failure_threshold BETWEEN 1 AND 10),
+            auto_run_paused INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_paused IN (0, 1)),
+            auto_run_pause_reason TEXT NOT NULL DEFAULT '',
+            auto_run_resume_at TEXT,
+            auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
+            context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
+            agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000),
+            agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
+            agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts","image"]',
+            title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO work_ai_settings_v75 (
+            work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+            auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+            auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+            context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+            agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+          )
+          SELECT
+            work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+            auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+            auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+            context_compact_threshold,
+            CASE
+              WHEN agent_tool_call_limit < 5 THEN 5
+              WHEN agent_tool_call_limit > 1000 THEN 1000
+              ELSE agent_tool_call_limit
+            END,
+            agent_tool_call_global_multiplier,
+            agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+          FROM work_ai_settings`);
+          this.run("DROP TABLE work_ai_settings");
+          this.run("ALTER TABLE work_ai_settings_v75 RENAME TO work_ai_settings");
+          this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);

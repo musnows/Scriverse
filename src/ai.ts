@@ -24,6 +24,7 @@ import {
   agentToolCallSoftWarningThreshold,
   clampAgentToolCallGlobalMultiplier,
   paginateToolResultRecords,
+  resolveMaxAgentToolCallLimit,
   shouldRejectAgentToolCalls,
   shouldRejectGlobalToolCalls,
   structuralToolResultRecords,
@@ -654,7 +655,6 @@ export type AiProcessStep = {
 };
 
 const MAX_AGENT_TOOL_CALLS = 12;
-const MAX_CONFIGURED_AGENT_TOOL_CALLS = 48;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
 const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = 512;
 const IMAGE_TOOL_MAX_BYTES = 30 * 1024 * 1024;
@@ -5212,11 +5212,12 @@ export class AiManager {
       let toolContextStartIndex = baseMessageCount;
       let compactedToolContextMessage: CompletionMessage | null = null;
       const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+      const maximumConfiguredToolCalls = resolveMaxAgentToolCallLimit();
       const configuredToolCallLimit = Math.min(
-        MAX_CONFIGURED_AGENT_TOOL_CALLS,
+        maximumConfiguredToolCalls,
         Math.max(MIN_AGENT_TOOL_CALL_LIMIT, Number(this.store.getWorkAiSettings(input.workId).agentToolCallLimit) || MAX_AGENT_TOOL_CALLS)
       );
-      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, MAX_CONFIGURED_AGENT_TOOL_CALLS));
+      const agentToolCallLimit = Math.round(clamp(input.agentToolCallLimit ?? configuredToolCallLimit, MIN_AGENT_TOOL_CALL_LIMIT, maximumConfiguredToolCalls));
       const agentToolCallGlobalMultiplier = clampAgentToolCallGlobalMultiplier(
         this.store.getWorkAiSettings(input.workId).agentToolCallGlobalMultiplier ?? DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER
       );

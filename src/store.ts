@@ -25,6 +25,7 @@ import {
   splitDocumentParagraphs
 } from "./utils.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
+import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 
 type WorkInput = {
   title: string;
@@ -1173,6 +1174,7 @@ export class Store {
   getWorkAiSettings(workId: string): Record<string, unknown> {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_ai_settings WHERE work_id = ?", workId);
+    const maximumAgentToolCallLimit = resolveMaxAgentToolCallLimit();
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
@@ -1190,7 +1192,8 @@ export class Store {
       autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallLimitMaximum: maximumAgentToolCallLimit,
+      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
@@ -1223,6 +1226,7 @@ export class Store {
   }): Record<string, unknown> {
     this.getWork(workId);
     const current = this.getWorkAiSettings(workId);
+    const maximumAgentToolCallLimit = resolveMaxAgentToolCallLimit();
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
     const nextDailyTokenQuota = input.dailyTokenQuota === undefined
@@ -1288,7 +1292,7 @@ export class Store {
       Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
@@ -1306,7 +1310,7 @@ export class Store {
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
       imageToolModelId: nextImageToolModelId,

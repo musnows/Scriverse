@@ -12,6 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -491,7 +492,7 @@ const workAiSettingsSchema = z.object({
   autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
-  agentToolCallLimit: z.number().int().min(5).max(48).optional(),
+  agentToolCallLimit: z.number().int().min(5).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
@@ -2117,6 +2118,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/works/:workId/ai-settings", (request, response) => {
     const workId = request.params.workId;
     const input = parse(workAiSettingsSchema, request.body);
+    const maximumAgentToolCallLimit = resolveMaxAgentToolCallLimit();
+    if (input.agentToolCallLimit !== undefined && input.agentToolCallLimit > maximumAgentToolCallLimit) {
+      throw new AppError(400, "AGENT_TOOL_CALL_LIMIT_TOO_HIGH", `Agent 工具调用上限不能超过 ${maximumAgentToolCallLimit} 次`);
+    }
     if (input.titleGenerationModelId) ai.assertModelAvailable(input.titleGenerationModelId);
     if (input.imageToolModelId) ai.assertImageToolModelAvailable(input.imageToolModelId);
     const before = store.getWorkAiSettings(workId);

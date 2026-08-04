@@ -1,10 +1,21 @@
 export const AGENT_TOOL_RESULT_MAX_CHARS = 10_000;
 export const MIN_AGENT_TOOL_CALL_LIMIT = 5;
-export const MAX_AGENT_TOOL_CALL_LIMIT = 48;
+export const DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT = 80;
+export const MAX_AGENT_TOOL_CALL_LIMIT = DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT;
+export const MAX_AGENT_TOOL_CALL_LIMIT_ENV = "SCRIVERSE_MAX_AGENT_TOOL_CALL_LIMIT";
+export const MAX_AGENT_TOOL_CALL_LIMIT_HARD_CAP = 1_000;
 export const AGENT_TOOL_CALL_SOFT_WARNING_FLOOR = 3;
 export const DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 3;
 export const MIN_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 1;
 export const MAX_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER = 6;
+
+export function resolveMaxAgentToolCallLimit(environment: NodeJS.ProcessEnv = process.env): number {
+  const raw = environment[MAX_AGENT_TOOL_CALL_LIMIT_ENV]?.trim() ?? "";
+  if (!/^\d+$/u.test(raw)) return DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT;
+  const configured = Number(raw);
+  if (!Number.isSafeInteger(configured)) return DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT;
+  return Math.min(MAX_AGENT_TOOL_CALL_LIMIT_HARD_CAP, Math.max(MIN_AGENT_TOOL_CALL_LIMIT, configured));
+}
 
 export type AgentToolResultPagination = {
   cursor: number;
