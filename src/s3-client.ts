@@ -276,9 +276,9 @@ export class S3Client {
       amazonDateTime: formatAmazonDateTime(this.now()),
       region: this.target.region,
       credentials: this.credentials,
-      additionalHeaders: options.body
-        ? { "content-type": options.contentType ?? "application/octet-stream", "content-length": String(options.body.byteLength) }
-        : {}
+      // 不携带 content-length：undici 在自定义 dispatcher 下会拒绝手工设置的该请求头，
+      // 由 HTTP 层按请求体自动补齐即可，AWS SigV4 也不要求签名这个头。
+      additionalHeaders: options.body ? { "content-type": options.contentType ?? "application/octet-stream" } : {}
     });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error(`S3 请求超时（${Math.round(options.timeoutMs / 1_000)} 秒）`)), options.timeoutMs);

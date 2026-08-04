@@ -1,7 +1,8 @@
 import request from "supertest";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
+import { logger } from "../../src/logger.js";
 import { createTestRuntime, createWork } from "../helpers.js";
 import { MockS3Service } from "../s3-mock.js";
 
@@ -315,6 +316,51 @@ describe("S3 备份执行", () => {
     expect(runs.body.data).toHaveLength(2);
     expect(Date.parse(String(runs.body.data[0].startedAt))).toBeGreaterThanOrEqual(Date.parse(String(runs.body.data[1].startedAt)));
     expect(runs.body.data[0].results[0]).toMatchObject({ targetName: "主备份桶", status: "success" });
+  });
+
+  it("失败日志包含完整目标配置与 S3 返回内容，且不包含 AK/SK", async () => {
+    await createTarget();
+    s3.failure = {
+      status: 403,
+      body: "<Error><Code>SignatureDoesNotMatch</Code><Message>签名不匹配</Message><RequestId>REQ-LOG</RequestId></Error>",
+      match: (item) => item.method === "PUT"
+    };
+    const errorLog = vi.spyOn(logger, "error");
+    let calls: Array<[string, Record<string, unknown> | undefined]> = [];
+    try {
+      await request(runtime.app).post("/api/platform/backup/run").send({}).expect(201);
+      calls = errorLog.mock.calls.map(([event, fields]) => [event, fields]);
+    } finally {
+      errorLog.mockRestore();
+    }
+
+    const uploadFailure = calls.find(([event]) => event === "backup.database.upload_failed");
+    expect(uploadFailure).toBeDefined();
+    const fields = uploadFailure?.[1] as Record<string, unknown>;
+    expect(fields).toMatchObject({
+      targetName: "主备份桶",
+      endpoint: "https://s3.example.com",
+      region: "us-east-1",
+      bucket: "novel-backup",
+      prefix: "team/alpha",
+      objectRoot: "team/alpha/scriverse",
+      pathStyle: true,
+      targetStatus: "enabled",
+      operation: "PutObject",
+      httpMethod: "PUT",
+      httpStatus: 403,
+      s3Code: "SignatureDoesNotMatch",
+      s3Message: "签名不匹配",
+      s3RequestId: "REQ-LOG"
+    });
+    expect(String(fields.s3ResponseBody)).toContain("<Code>SignatureDoesNotMatch</Code>");
+    expect(String(fields.objectKey)).toMatch(/^team\/alpha\/scriverse\/db\//u);
+
+    const serialized = JSON.stringify(calls);
+    expect(serialized).not.toContain(validTarget.accessKeyId);
+    expect(serialized).not.toContain(validTarget.secretAccessKey);
+    expect(serialized).not.toContain("accessKeyId");
+    expect(serialized).not.toContain("secretAccessKey");
   });
 
   it("虚拟主机风格会把桶名放进域名", async () => {
