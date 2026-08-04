@@ -27,9 +27,12 @@ test("服务端渲染叙界介绍页", async () => {
   assert.match(html, /章节回收站/);
   assert.match(html, /Markdown ZIP/);
   assert.match(html, /href="https:\/\/showcase\.scriverse\.top\/"[^>]*>在线体验/);
+  assert.match(html, /href="https:\/\/llm-racing\.scriverse\.top\/\?utm_source=scriverse"/);
+  assert.match(html, /aria-label="查看模型排行榜"/);
+  assert.match(html, /class="[^"]*header-leaderboard[^"]*"/);
   assert.match(html, /href="https:\/\/github\.com\/musnows\/Scriverse"/);
   assert.match(html, /aria-label="在 GitHub 查看源代码"/);
-  assert.match(html, /class="[^"]*header-github[^"]*"/);
+  assert.match(html, /class="[^"]*header-icon-link[^"]*"/);
   assert.match(html, /data-scroll-target="workspace"[^>]*>进入叙界世界/);
   assert.doesNotMatch(html, /打开演示站/);
   assert.doesNotMatch(html, /href="\/demo"/);

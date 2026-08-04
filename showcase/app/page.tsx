@@ -107,6 +107,21 @@ function GitHubIcon() {
   );
 }
 
+function LeaderboardIcon() {
+  return (
+    <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+      <path
+        d="M8 3h8v5a4 4 0 0 1-8 0V3Zm0 2H5v1a3 3 0 0 0 3 3m8-4h3v1a3 3 0 0 1-3 3m-4 3v4m-3 4h6m-5-4h4"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 function RelationshipGraph() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -520,8 +535,17 @@ export default function Home() {
         <div className="header-actions">
           <a className="header-cta" href="https://showcase.scriverse.top/">在线体验 <span>↗</span></a>
           <a
+            aria-label="查看模型排行榜"
+            className="header-icon-link header-leaderboard"
+            href="https://llm-racing.scriverse.top/?utm_source=scriverse"
+            rel="noreferrer"
+            target="_blank"
+          >
+            <LeaderboardIcon />
+          </a>
+          <a
             aria-label="在 GitHub 查看源代码"
-            className="header-github"
+            className="header-icon-link"
             href="https://github.com/musnows/Scriverse"
             rel="noreferrer"
             target="_blank"
