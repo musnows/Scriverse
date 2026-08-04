@@ -25,7 +25,7 @@ function installDemoLoginHint() {
     const hint = document.createElement("p");
     hint.id = "demo-login-hint";
     hint.className = "auth-security-hint";
-    hint.textContent = `演示账号：${demoCredentials.username}　密码：${demoCredentials.password}　验证码：${demoCredentials.captchaAnswer}`;
+    hint.textContent = `演示账号：${demoCredentials.username}　密码：${demoCredentials.password}`;
     description.insertAdjacentElement("afterend", hint);
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount, { once: true });

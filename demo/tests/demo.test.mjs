@@ -209,6 +209,8 @@ test("Demo 使用公开凭据登录且关闭注册", async () => {
   assert.match(adapter, /registrationOpen: false/);
   assert.match(adapter, /sessionStorage\.getItem\(demoAuthStorageKey\)/);
   assert.match(adapter, /Demo 不开放注册/);
+  assert.match(adapter, /hint\.textContent = `演示账号：\$\{demoCredentials\.username\}　密码：\$\{demoCredentials\.password\}`/);
+  assert.doesNotMatch(adapter, /hint\.textContent = `[^`]*验证码/);
 });
 
 test("Demo 版本直接继承主项目版本", async () => {
