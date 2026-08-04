@@ -2139,6 +2139,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-inline-save .context-compact-threshold-field,
 .config-inline-save .agent-tool-call-limit-field,
 .config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .book-summary-context-percent-field,
+.config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(110px, 130px) minmax(180px, 300px); align-items: center; column-gap: 12px; width: min(100%, 442px); }
+.config-inline-save .book-summary-context-percent-field input,
+.config-inline-save .context-compact-threshold-field input { width: 100%; }
 .config-inline-save .daily-token-quota-field { width: 144px; }
 .config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
 .agent-tool-call-global-multiplier-toggle button { min-width: 32px; padding: 0 10px; font-family: var(--font-latin), monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -2172,6 +2176,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .platform-image-tool-field { flex: 0 0 auto; }
   .platform-image-tool-field select, .platform-image-tool-panel .config-save-button { height: 40px; min-height: 40px; }
   .platform-image-tool-panel .config-save-button { width: 100%; }
+}
+@media (max-width: 640px) {
+  .config-inline-save .book-summary-context-percent-field,
+  .config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(0, 1fr); row-gap: 6px; width: 100%; }
 }
 .field-label textarea {
   width: 100%;
