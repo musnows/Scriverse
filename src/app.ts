@@ -30,6 +30,7 @@ import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metada
 import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
+import { S3BackupManager } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
@@ -435,6 +436,31 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const s3BackupScheduleTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u, "备份触发时间必须是 HH:mm 格式");
+const s3BackupBucketSchema = z.string().trim().min(1).max(255).regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/u, "桶名只能包含字母、数字、点、下划线和短横线");
+const s3BackupTargetBaseSchema = z.object({
+  name: nonEmpty.max(100),
+  endpoint: z.string().url().max(1000).refine((value) => value.startsWith("http://") || value.startsWith("https://"), "Endpoint 必须使用 HTTP 或 HTTPS"),
+  region: z.string().trim().min(1).max(100),
+  bucket: s3BackupBucketSchema,
+  subdirectory: z.string().trim().max(512).optional(),
+  pathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  backupImages: z.boolean().optional(),
+  scheduleTime: s3BackupScheduleTimeSchema.optional(),
+  retentionCount: z.number().int().min(1).max(1000).optional()
+}).strict();
+const s3BackupTargetCreateSchema = s3BackupTargetBaseSchema.extend({
+  accessKeyId: z.string().trim().min(1).max(500),
+  secretAccessKey: z.string().min(1).max(1000)
+}).strict();
+const s3BackupTargetUpdateSchema = s3BackupTargetBaseSchema.partial().extend({
+  accessKeyId: z.string().trim().min(1).max(500).optional(),
+  secretAccessKey: z.string().min(1).max(1000).optional()
+}).strict().refine((input) => Object.keys(input).length > 0, {
+  message: "至少需要提供一项 S3 备份配置"
+});
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -597,6 +623,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  backups: S3BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -938,6 +965,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const credentialVault = new CredentialVault(options.masterSecret);
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -972,7 +1000,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    credentialVault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +1019,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backups = new S3BackupManager(
+    database,
+    store,
+    credentialVault,
+    attachmentStorage,
+    options.databasePath,
+    options.fetchImpl ?? fetch,
+    options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined
+  );
+  backups.startScheduler();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2059,6 +2097,25 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ui-settings", (request, response) => {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
+  app.get("/api/platform/backups", (_request, response) => data(response, backups.listTargets()));
+  app.post("/api/platform/backups", (request, response) => {
+    data(response, backups.createTarget(parse(s3BackupTargetCreateSchema, request.body)), 201);
+  });
+  app.post("/api/platform/backups/run", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await backups.runEnabledTargets("manual"), 202);
+  });
+  app.patch("/api/platform/backups/:targetId", (request, response) => {
+    data(response, backups.updateTarget(request.params.targetId, parse(s3BackupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backups/:targetId", (request, response) => {
+    backups.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backups/:targetId/run", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await backups.runTarget(request.params.targetId, "manual"), 202);
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
@@ -2574,8 +2631,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backups.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
