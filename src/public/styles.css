@@ -1453,7 +1453,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 /* 备份计划面板没有进度环，收回自动执行面板为进度环预留的第二列。 */
 .backup-schedule-panel { grid-template-columns: minmax(0, 1fr); column-gap: 0; }
-.backup-schedule-panel .task-auto-run-controls input[type="time"] { min-height: 32px; padding: 6px 8px; font-size: 12px; }
+.backup-schedule-panel .task-auto-run-controls input[type="time"] { box-sizing: border-box; height: 32px; padding: 6px 8px; font-size: 12px; }
 .backup-run-targets { display: grid; gap: 6px; margin: 0; padding-left: 16px; }
 .backup-run-targets li { color: var(--ink); }
 .backup-run-targets small { color: var(--muted); font-size: 10px; line-height: 1.45; }

@@ -24,8 +24,8 @@ describe("数据备份界面", () => {
     expect(page.text).toContain('<button id="platform-backup-run" class="ghost-button" type="button">立即备份</button>');
     expect(page.text).toContain('<button id="platform-new-backup-target" class="primary-button" type="button">新建备份目标</button>');
     expect(page.text).toContain('<div id="platform-backup-content" class="module-content"></div>');
-    expect(page.text).toContain("/app.js?v=20260804-s3-backup-v1");
-    expect(page.text).toContain("/styles.css?v=20260804-s3-backup-v1");
+    expect(page.text).toContain("/app.js?v=20260804-s3-backup-v2");
+    expect(page.text).toContain("/styles.css?v=20260804-s3-backup-v2");
 
     const module = await request(runtime.app).get("/backup-format.js").expect(200);
     expect(module.text).toContain("export function backupAlertMessage(run)");
@@ -35,7 +35,7 @@ describe("数据备份界面", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
 
     expect(application.text).toContain('import {\n  backupAlertMessage,');
-    expect(application.text).toContain('"/backup-format.js?v=20260804-s3-backup-v1"');
+    expect(application.text).toContain('"/backup-format.js?v=20260804-s3-backup-v2"');
     expect(application.text).toContain("async function renderPlatformBackupConfig()");
     expect(application.text).toContain('api("/api/platform/backup/settings")');
     expect(application.text).toContain('api("/api/platform/backup/targets")');
@@ -46,7 +46,7 @@ describe("数据备份界面", () => {
     expect(application.text).toContain('class="config-section backup-targets-section"');
     expect(application.text).toContain('class="config-section backup-runs-section"');
     expect(application.text).toContain('<section class="task-auto-run-panel backup-schedule-panel"');
-    expect(application.text).toContain('<table class="table-list"><thead><tr><th>开始时间</th>');
+    expect(application.text).toContain('<div class="table-scroll"><table class="table-list"><thead><tr><th>开始时间</th>');
     expect(application.text).toContain("function openBackupTargetDialog(item)");
     expect(application.text).toContain('field("prefix", "桶内子目录（留空则使用桶根目录）", "text"');
     expect(application.text).toContain('field("accessKeyId", item ? "替换 Access Key ID（留空则不变）" : "Access Key ID", "password")');
@@ -107,7 +107,7 @@ describe("数据备份界面", () => {
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(styles.text).toContain(".backup-schedule-panel { grid-template-columns: minmax(0, 1fr); column-gap: 0; }");
-    expect(styles.text).toContain('.backup-schedule-panel .task-auto-run-controls input[type="time"] { min-height: 32px; padding: 6px 8px; font-size: 12px; }');
+    expect(styles.text).toContain('.backup-schedule-panel .task-auto-run-controls input[type="time"] { box-sizing: border-box; height: 32px; padding: 6px 8px; font-size: 12px; }');
     expect(styles.text).toContain(".backup-run-targets { display: grid; gap: 6px; margin: 0; padding-left: 16px; }");
   });
 });

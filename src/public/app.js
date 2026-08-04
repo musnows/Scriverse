@@ -37,7 +37,7 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260801-google-vertex";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260804-s3-backup-v1";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260804-s3-backup-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
@@ -67,7 +67,7 @@ import {
   backupTargetStatusLabel,
   backupTriggerLabel,
   formatBackupBytes
-} from "/backup-format.js?v=20260804-s3-backup-v1";
+} from "/backup-format.js?v=20260804-s3-backup-v2";
 import {
   clampCropRect,
   containImageRect,
@@ -7164,7 +7164,7 @@ function renderBackupTargetCards(targets) {
 
 function renderBackupRunRows(runs) {
   if (!runs.length) return '<p class="entity-history-empty">还没有备份记录，配置目标后可点击“立即备份”。</p>';
-  return `<table class="table-list"><thead><tr><th>开始时间</th><th>触发方式</th><th>结果</th><th>数据库快照</th><th>目标明细</th></tr></thead><tbody>${runs.map((run) => {
+  return `<div class="table-scroll"><table class="table-list"><thead><tr><th>开始时间</th><th>触发方式</th><th>结果</th><th>数据库快照</th><th>目标明细</th></tr></thead><tbody>${runs.map((run) => {
     const details = (Array.isArray(run.results) ? run.results : []).map((result) => {
       const failure = result.status === "failed" ? `：${backupFailureSummary(result.error)}` : "";
       return `<li><strong>${esc(result.targetName ?? "未知目标")}</strong> · ${esc(result.status === "success" ? "成功" : "失败")}${esc(failure)}<br><small>${esc(backupTargetResultSummary(result))}</small></li>`;
@@ -7176,7 +7176,7 @@ function renderBackupRunRows(runs) {
       <td>${run.databaseObjectKey ? `<code>${esc(String(run.databaseObjectKey).split("/").pop())}</code><br><small>${esc(formatBackupBytes(run.databaseByteLength))}</small>` : "—"}</td>
       <td>${details ? `<ul class="backup-run-targets">${details}</ul>` : "—"}</td>
     </tr>`;
-  }).join("")}</tbody></table>`;
+  }).join("")}</tbody></table></div>`;
 }
 
 function renderBackupSettingsSection(settings) {
