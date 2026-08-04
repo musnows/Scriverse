@@ -31,6 +31,7 @@ import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logg
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
+import { BackupScheduler } from "./backup-runner.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -599,6 +600,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backupScheduler: BackupScheduler;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -937,7 +939,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const getDevelopmentUser = (): AuthUser | null => options.devAuthBypass
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
+  const credentialVault = new CredentialVault(options.masterSecret);
   const store = new Store(database);
+  store.setCredentialVault(credentialVault);
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -972,7 +976,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    credentialVault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +995,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const backupSnapshotDirectory = options.attachmentDirectory
+    ? join(options.attachmentDirectory, ".backup-snapshots")
+    : join(attachmentStorage.rootDirectory, ".backup-snapshots");
+  const backupScheduler = new BackupScheduler({
+    store: {
+      listPlatformBackupTargetsForScheduler: () => store.listPlatformBackupTargetsForScheduler(),
+      listPlatformBackupTargets: () => store.listPlatformBackupTargets(),
+      decryptPlatformBackupSecretAccessKey: (row) => store.decryptPlatformBackupSecretAccessKey(row),
+      readPlatformBackupTargetForBackup: (targetId) => store.readPlatformBackupTargetForBackup(targetId),
+      recordPlatformBackupRun: (input) => store.recordPlatformBackupRun(input)
+    },
+    databasePath: options.databasePath,
+    attachmentDirectory: attachmentStorage.rootDirectory,
+    snapshotDirectory: backupSnapshotDirectory,
+    enabled: options.databasePath !== ":memory:" && !options.developmentServer
+  });
+  backupScheduler.start();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2081,78 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  const backupTargetInputSchema = z.object({
+    id: z.string().trim().max(120).optional(),
+    displayName: z.string().trim().min(1).max(120),
+    endpoint: z.string().trim().url().max(500),
+    bucket: z.string().trim().min(1).max(120),
+    region: z.string().trim().min(1).max(80),
+    prefix: z.string().trim().max(240).default(""),
+    accessKeyId: z.string().trim().min(1).max(240),
+    secretAccessKey: z.string().min(1).max(240).nullable().optional(),
+    pathStyle: z.boolean(),
+    backupImages: z.boolean(),
+    scheduleHour: z.number().int().min(0).max(23),
+    scheduleMinute: z.number().int().min(0).max(59),
+    retentionCount: z.number().int().min(1).max(365),
+    enabled: z.boolean()
+  }).strict();
+  const backupSettingsSchema = z.object({
+    targets: z.array(backupTargetInputSchema).max(32)
+  }).strict();
+  const requireBackupAdmin = (request: Request): void => {
+    // 与 platform-ui-settings 等系统设置路由保持一致：要求存在会话，由前端负责对非管理员隐藏入口。
+    // 关闭身份验证（测试与开发模式）时放行，依靠平台 AI/设置中心授权模型。
+    if (options.disableUserAuth === true) return;
+    if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
+    if (request.authUser.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "数据备份功能仅限系统管理员使用");
+  };
+  app.get("/api/platform/backup-settings", (request, response) => {
+    requireBackupAdmin(request);
+    data(response, { targets: store.listPlatformBackupTargets() });
+  });
+  app.put("/api/platform/backup-settings", (request, response) => {
+    requireBackupAdmin(request);
+    const input = parse(backupSettingsSchema, request.body);
+    const updated = store.replacePlatformBackupTargets(input.targets.map((target) => ({
+      ...(target.id ? { id: target.id } : {}),
+      displayName: target.displayName,
+      endpoint: target.endpoint,
+      bucket: target.bucket,
+      region: target.region,
+      prefix: target.prefix,
+      accessKeyId: target.accessKeyId,
+      secretAccessKey: target.secretAccessKey ?? null,
+      pathStyle: target.pathStyle,
+      backupImages: target.backupImages,
+      scheduleHour: target.scheduleHour,
+      scheduleMinute: target.scheduleMinute,
+      retentionCount: target.retentionCount,
+      enabled: target.enabled
+    })));
+    data(response, { targets: updated });
+  });
+  app.get("/api/platform/backup/runs", (request, response) => {
+    requireBackupAdmin(request);
+    const limitRaw = Number.parseInt(String(request.query.limit ?? "50"), 10);
+    const limit = Number.isFinite(limitRaw) ? limitRaw : 50;
+    data(response, { runs: store.listPlatformBackupRuns(limit) });
+  });
+  const backupRunSchema = z.object({
+    targetId: z.string().trim().min(1).max(120)
+  }).strict();
+  app.post("/api/platform/backup/run", (request, response) => {
+    requireBackupAdmin(request);
+    const input = parse(backupRunSchema, request.body);
+    backupScheduler.triggerTarget(input.targetId, "manual").then(
+      (result) => data(response, { result }, 200),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : "备份执行失败";
+        data(response, { error: { code: "BACKUP_RUN_FAILED", message } }, 502);
+      }
+    );
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,8 +2667,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, backupScheduler, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backupScheduler.stop();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });

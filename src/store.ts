@@ -1,9 +1,9 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
-import { accountReference, logger } from "./logger.js";
+import { accountReference, logger, sanitizeError } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
@@ -19,6 +19,7 @@ import {
   documentShortSearchTerms,
   id,
   json,
+  maskSecret,
   normalizeDocumentSearchText,
   normalizeParagraphSpacing,
   now,
@@ -1145,12 +1146,283 @@ export class Store {
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
   private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 
-  setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
-    this.analysisTaskQueuedHandler = handler;
+  private credentialVault: import("./credential-vault.js").CredentialVault | null = null;
+
+  setCredentialVault(vault: import("./credential-vault.js").CredentialVault): void {
+    this.credentialVault = vault;
+  }
+
+  decryptPlatformBackupSecretAccessKey(row: { encrypted_secret_access_key: unknown; secret_iv: unknown; secret_tag: unknown }): string | null {
+    if (!this.credentialVault) return null;
+    const encrypted = String(row.encrypted_secret_access_key);
+    const iv = String(row.secret_iv);
+    const tag = String(row.secret_tag);
+    if (!encrypted || !iv || !tag) return null;
+    try {
+      return this.credentialVault.decrypt({ encrypted, iv, tag });
+    } catch (error) {
+      logger.warn("platform.backup.secret_decrypt_failed", { error: sanitizeError(error) });
+      return null;
+    }
+  }
+
+  readPlatformBackupTargetForBackup(targetId: string): {
+    public: Record<string, unknown>;
+    secretAccessKey: string | null;
+  } | null {
+    const row = this.db.get("SELECT * FROM platform_backup_targets WHERE id = ?", targetId);
+    if (!row) return null;
+    const secretAccessKey = this.decryptPlatformBackupSecretAccessKey({
+      encrypted_secret_access_key: row.encrypted_secret_access_key,
+      secret_iv: row.secret_iv,
+      secret_tag: row.secret_tag
+    });
+    return {
+      public: this.mapPlatformBackupTarget(row),
+      secretAccessKey
+    };
+  }
+
+  listPlatformBackupTargets(): Record<string, unknown>[] {
+    return this.db.all("SELECT * FROM platform_backup_targets ORDER BY created_at").map((row) => this.mapPlatformBackupTarget(row));
+  }
+
+  getPlatformBackupTarget(targetId: string): Record<string, unknown> | null {
+    const row = this.db.get("SELECT * FROM platform_backup_targets WHERE id = ?", targetId);
+    return row ? this.mapPlatformBackupTarget(row) : null;
+  }
+
+  private mapPlatformBackupTarget(row: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      displayName: requiredString(row, "display_name"),
+      endpoint: requiredString(row, "endpoint"),
+      bucket: requiredString(row, "bucket"),
+      region: requiredString(row, "region"),
+      prefix: requiredString(row, "prefix"),
+      accessKeyId: requiredString(row, "access_key_id"),
+      hasSecretAccessKey: Boolean(String(row.encrypted_secret_access_key ?? ""))
+        && Boolean(String(row.secret_iv ?? ""))
+        && Boolean(String(row.secret_tag ?? "")),
+      secretKeyHint: requiredString(row, "secret_key_hint"),
+      pathStyle: Number(row.path_style ?? 1) === 1,
+      backupImages: Number(row.backup_images ?? 1) === 1,
+      scheduleHour: Math.min(23, Math.max(0, Number(row.schedule_hour ?? 3))),
+      scheduleMinute: Math.min(59, Math.max(0, Number(row.schedule_minute ?? 0))),
+      retentionCount: Math.min(365, Math.max(1, Number(row.retention_count ?? 7))),
+      enabled: Number(row.enabled ?? 1) === 1,
+      lastRunAt: optionalString(row, "last_run_at"),
+      lastRunStatus: optionalString(row, "last_run_status"),
+      lastError: optionalString(row, "last_error"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  replacePlatformBackupTargets(targets: Array<{
+    id?: string;
+    displayName: string;
+    endpoint: string;
+    bucket: string;
+    region: string;
+    prefix: string;
+    accessKeyId: string;
+    secretAccessKey: string | null;
+    pathStyle: boolean;
+    backupImages: boolean;
+    scheduleHour: number;
+    scheduleMinute: number;
+    retentionCount: number;
+    enabled: boolean;
+  }>): Record<string, unknown>[] {
+    if (!this.credentialVault) {
+      throw new AppError(500, "BACKUP_VAULT_UNAVAILABLE", "凭据保险库未初始化，无法写入备份目标密钥");
+    }
+    if (targets.length > 32) {
+      throw new AppError(400, "BACKUP_TARGETS_LIMIT", "最多支持 32 个备份目标");
+    }
+    const timestamp = now();
+    const incomingIds = new Set(targets.map((target) => target.id).filter((value): value is string => Boolean(value)));
+    const existingRows = this.db.all("SELECT id, secret_key_hint FROM platform_backup_targets");
+    const existingById = new Map(existingRows.map((row) => [requiredString(row, "id"), row]));
+    this.db.transaction(() => {
+      const keepIds = new Set(incomingIds);
+      for (const row of existingRows) {
+        const existingId = requiredString(row, "id");
+        if (!keepIds.has(existingId)) {
+          this.db.run("DELETE FROM platform_backup_targets WHERE id = ?", existingId);
+        }
+      }
+      for (const target of targets) {
+        const id_ = target.id ?? `backup_${randomUUID().replaceAll("-", "")}`;
+        const existing = existingById.get(id_);
+        let encrypted = existing
+          ? {
+              encrypted: String(this.db.get("SELECT encrypted_secret_access_key AS value FROM platform_backup_targets WHERE id = ?", id_)?.value ?? ""),
+              iv: String(this.db.get("SELECT secret_iv AS value FROM platform_backup_targets WHERE id = ?", id_)?.value ?? ""),
+              tag: String(this.db.get("SELECT secret_tag AS value FROM platform_backup_targets WHERE id = ?", id_)?.value ?? "")
+            }
+          : null;
+        let hint = existing ? requiredString(existing, "secret_key_hint") : "";
+        if (target.secretAccessKey !== null && target.secretAccessKey !== undefined && target.secretAccessKey !== "") {
+          encrypted = this.credentialVault!.encrypt(target.secretAccessKey);
+          hint = maskSecret(target.secretAccessKey);
+        } else if (!encrypted || !encrypted.encrypted || !encrypted.iv || !encrypted.tag) {
+          throw new AppError(400, "BACKUP_SECRET_REQUIRED", "新建备份目标必须提供 secretAccessKey");
+        }
+        this.db.run(
+          `INSERT INTO platform_backup_targets (
+             id, display_name, endpoint, bucket, region, prefix, access_key_id,
+             encrypted_secret_access_key, secret_iv, secret_tag, secret_key_hint,
+             path_style, backup_images, schedule_hour, schedule_minute, retention_count,
+             enabled, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             display_name = excluded.display_name,
+             endpoint = excluded.endpoint,
+             bucket = excluded.bucket,
+             region = excluded.region,
+             prefix = excluded.prefix,
+             access_key_id = excluded.access_key_id,
+             encrypted_secret_access_key = excluded.encrypted_secret_access_key,
+             secret_iv = excluded.secret_iv,
+             secret_tag = excluded.secret_tag,
+             secret_key_hint = excluded.secret_key_hint,
+             path_style = excluded.path_style,
+             backup_images = excluded.backup_images,
+             schedule_hour = excluded.schedule_hour,
+             schedule_minute = excluded.schedule_minute,
+             retention_count = excluded.retention_count,
+             enabled = excluded.enabled,
+             updated_at = excluded.updated_at`,
+          id_,
+          target.displayName,
+          target.endpoint,
+          target.bucket,
+          target.region,
+          target.prefix,
+          target.accessKeyId,
+          encrypted.encrypted,
+          encrypted.iv,
+          encrypted.tag,
+          hint,
+          target.pathStyle ? 1 : 0,
+          target.backupImages ? 1 : 0,
+          Math.min(23, Math.max(0, target.scheduleHour)),
+          Math.min(59, Math.max(0, target.scheduleMinute)),
+          Math.min(365, Math.max(1, target.retentionCount)),
+          target.enabled ? 1 : 0,
+          existing ? requiredString(existing ?? this.db.get("SELECT created_at AS value FROM platform_backup_targets WHERE id = ?", id_) ?? {}, "value") ?? timestamp : timestamp,
+          timestamp
+        );
+      }
+      this.audit(null, "platform.backup.targets.replaced", "platform-backup-targets", null, {
+        targetCount: targets.length
+      });
+    });
+    return this.listPlatformBackupTargets();
+  }
+
+  recordPlatformBackupRun(input: {
+    targetId: string;
+    triggeredBy: "schedule" | "manual";
+    status: "succeeded" | "failed" | "partial";
+    startedAt: string;
+    completedAt: string;
+    uploadedImageCount: number;
+    skippedImageCount: number;
+    deletedDbBackupCount: number;
+    uploadedDbKey: string | null;
+    uploadedDbSize: number | null;
+    errorMessage: string | null;
+  }): Record<string, unknown> {
+    if (!["schedule", "manual"].includes(input.triggeredBy)) {
+      throw new AppError(500, "BACKUP_RUN_TRIGGER_INVALID", "备份触发方式非法");
+    }
+    if (!["succeeded", "failed", "partial"].includes(input.status)) {
+      throw new AppError(500, "BACKUP_RUN_STATUS_INVALID", "备份状态非法");
+    }
+    const runId = `backup_run_${randomUUID().replaceAll("-", "")}`;
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO platform_backup_runs (
+           id, target_id, triggered_by, status, started_at, completed_at,
+           uploaded_image_count, skipped_image_count, deleted_db_backup_count,
+           uploaded_db_key, uploaded_db_size, error_message, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        runId,
+        input.targetId,
+        input.triggeredBy,
+        input.status,
+        input.startedAt,
+        input.completedAt,
+        Math.max(0, input.uploadedImageCount),
+        Math.max(0, input.skippedImageCount),
+        Math.max(0, input.deletedDbBackupCount),
+        input.uploadedDbKey,
+        input.uploadedDbSize,
+        input.errorMessage,
+        now()
+      );
+      this.db.run(
+        `UPDATE platform_backup_targets SET last_run_at = ?, last_run_status = ?, last_error = ?, updated_at = ? WHERE id = ?`,
+        input.completedAt,
+        input.status,
+        input.errorMessage,
+        now(),
+        input.targetId
+      );
+      this.audit(null, "platform.backup.run.recorded", "platform-backup-run", runId, {
+        targetId: input.targetId,
+        status: input.status,
+        triggeredBy: input.triggeredBy,
+        uploadedImageCount: input.uploadedImageCount,
+        skippedImageCount: input.skippedImageCount,
+        deletedDbBackupCount: input.deletedDbBackupCount,
+        uploadedDbSize: input.uploadedDbSize,
+        errorMessage: input.errorMessage
+      });
+    });
+    const row = this.db.get("SELECT * FROM platform_backup_runs WHERE id = ?", runId);
+    if (!row) throw new AppError(500, "BACKUP_RUN_PERSIST_FAILED", "备份运行记录写入失败");
+    return this.mapPlatformBackupRun(row);
+  }
+
+  listPlatformBackupRuns(limit = 50): Record<string, unknown>[] {
+    const safeLimit = Math.min(500, Math.max(1, limit));
+    const rows = this.db.all(`SELECT * FROM platform_backup_runs ORDER BY started_at DESC LIMIT ?`, safeLimit);
+    return rows.map((row) => this.mapPlatformBackupRun(row));
+  }
+
+  listPlatformBackupTargetsForScheduler(): Record<string, unknown>[] {
+    const rows = this.db.all("SELECT * FROM platform_backup_targets WHERE enabled = 1 ORDER BY schedule_hour, schedule_minute");
+    return rows.map((row) => this.mapPlatformBackupTarget(row));
+  }
+
+  private mapPlatformBackupRun(row: Record<string, unknown>): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      targetId: requiredString(row, "target_id"),
+      triggeredBy: requiredString(row, "triggered_by"),
+      status: requiredString(row, "status"),
+      startedAt: requiredString(row, "started_at"),
+      completedAt: optionalString(row, "completed_at"),
+      uploadedImageCount: Number(row.uploaded_image_count ?? 0),
+      skippedImageCount: Number(row.skipped_image_count ?? 0),
+      deletedDbBackupCount: Number(row.deleted_db_backup_count ?? 0),
+      uploadedDbKey: optionalString(row, "uploaded_db_key"),
+      uploadedDbSize: row.uploaded_db_size === null || row.uploaded_db_size === undefined ? null : Number(row.uploaded_db_size),
+      errorMessage: optionalString(row, "error_message"),
+      createdAt: requiredString(row, "created_at")
+    };
   }
 
   setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.relationshipIndexQueuedHandler = handler;
+  }
+
+  setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
+    this.analysisTaskQueuedHandler = handler;
   }
 
   private notifyAnalysisTaskQueued(workId: string): void {

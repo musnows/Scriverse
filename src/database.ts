@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -439,6 +439,50 @@ export class Database {
         page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
         updated_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS platform_backup_targets (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        bucket TEXT NOT NULL,
+        region TEXT NOT NULL,
+        prefix TEXT NOT NULL DEFAULT '',
+        access_key_id TEXT NOT NULL,
+        encrypted_secret_access_key TEXT NOT NULL,
+        secret_iv TEXT NOT NULL,
+        secret_tag TEXT NOT NULL,
+        secret_key_hint TEXT NOT NULL DEFAULT '',
+        path_style INTEGER NOT NULL DEFAULT 1 CHECK(path_style IN (0, 1)),
+        backup_images INTEGER NOT NULL DEFAULT 1 CHECK(backup_images IN (0, 1)),
+        schedule_hour INTEGER NOT NULL DEFAULT 3 CHECK(schedule_hour BETWEEN 0 AND 23),
+        schedule_minute INTEGER NOT NULL DEFAULT 0 CHECK(schedule_minute BETWEEN 0 AND 59),
+        retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 365),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        last_run_at TEXT,
+        last_run_status TEXT,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK(instr(endpoint, '://') > 0)
+      );
+
+      CREATE TABLE IF NOT EXISTS platform_backup_runs (
+        id TEXT PRIMARY KEY,
+        target_id TEXT NOT NULL REFERENCES platform_backup_targets(id) ON DELETE CASCADE,
+        triggered_by TEXT NOT NULL CHECK(triggered_by IN ('schedule', 'manual')),
+        status TEXT NOT NULL CHECK(status IN ('succeeded', 'failed', 'partial')),
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        uploaded_image_count INTEGER NOT NULL DEFAULT 0,
+        skipped_image_count INTEGER NOT NULL DEFAULT 0,
+        deleted_db_backup_count INTEGER NOT NULL DEFAULT 0,
+        uploaded_db_key TEXT,
+        uploaded_db_size INTEGER,
+        error_message TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_platform_backup_targets_enabled ON platform_backup_targets(enabled);
+      CREATE INDEX IF NOT EXISTS idx_platform_backup_runs_target_started ON platform_backup_runs(target_id, started_at DESC);
 
       CREATE TABLE IF NOT EXISTS work_ai_settings (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
@@ -2766,6 +2810,59 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS platform_backup_targets (
+          id TEXT PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          endpoint TEXT NOT NULL,
+          bucket TEXT NOT NULL,
+          region TEXT NOT NULL,
+          prefix TEXT NOT NULL DEFAULT '',
+          access_key_id TEXT NOT NULL,
+          encrypted_secret_access_key TEXT NOT NULL,
+          secret_iv TEXT NOT NULL,
+          secret_tag TEXT NOT NULL,
+          secret_key_hint TEXT NOT NULL DEFAULT '',
+          path_style INTEGER NOT NULL DEFAULT 1 CHECK(path_style IN (0, 1)),
+          backup_images INTEGER NOT NULL DEFAULT 1 CHECK(backup_images IN (0, 1)),
+          schedule_hour INTEGER NOT NULL DEFAULT 3 CHECK(schedule_hour BETWEEN 0 AND 23),
+          schedule_minute INTEGER NOT NULL DEFAULT 0 CHECK(schedule_minute BETWEEN 0 AND 59),
+          retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 365),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          last_run_at TEXT,
+          last_run_status TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(instr(endpoint, '://') > 0)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_platform_backup_targets_enabled ON platform_backup_targets(enabled)");
+        this.run(`CREATE TABLE IF NOT EXISTS platform_backup_runs (
+          id TEXT PRIMARY KEY,
+          target_id TEXT NOT NULL REFERENCES platform_backup_targets(id) ON DELETE CASCADE,
+          triggered_by TEXT NOT NULL CHECK(triggered_by IN ('schedule', 'manual')),
+          status TEXT NOT NULL CHECK(status IN ('succeeded', 'failed', 'partial')),
+          started_at TEXT NOT NULL,
+          completed_at TEXT,
+          uploaded_image_count INTEGER NOT NULL DEFAULT 0,
+          skipped_image_count INTEGER NOT NULL DEFAULT 0,
+          deleted_db_backup_count INTEGER NOT NULL DEFAULT 0,
+          uploaded_db_key TEXT,
+          uploaded_db_size INTEGER,
+          error_message TEXT,
+          created_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_platform_backup_runs_target_started ON platform_backup_runs(target_id, started_at DESC)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

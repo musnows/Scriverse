@@ -3373,6 +3373,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3748,6 +3749,188 @@ async function openPlatformUiSettingsDialog() {
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+function normalizeBackupTargetRecord(input) {
+  return {
+    id: typeof input?.id === "string" ? input.id : null,
+    displayName: String(input?.displayName ?? ""),
+    endpoint: String(input?.endpoint ?? ""),
+    bucket: String(input?.bucket ?? ""),
+    region: String(input?.region ?? ""),
+    prefix: String(input?.prefix ?? ""),
+    accessKeyId: String(input?.accessKeyId ?? ""),
+    hasSecretAccessKey: Boolean(input?.hasSecretAccessKey),
+    secretKeyHint: String(input?.secretKeyHint ?? ""),
+    pathStyle: input?.pathStyle !== false,
+    backupImages: input?.backupImages !== false,
+    scheduleHour: clamp(Number(input?.scheduleHour ?? 3), 0, 23),
+    scheduleMinute: clamp(Number(input?.scheduleMinute ?? 0), 0, 59),
+    retentionCount: clamp(Number(input?.retentionCount ?? 7), 1, 365),
+    enabled: input?.enabled !== false,
+    lastRunAt: input?.lastRunAt ?? null,
+    lastRunStatus: input?.lastRunStatus ?? null,
+    lastError: input?.lastError ?? null
+  };
+}
+
+let backupDialogState = { targets: [], includeImagesDefault: true };
+
+function renderBackupTargetFields(target, index) {
+  const statusBadge = target.lastRunAt
+    ? `<span class="backup-status-badge ${esc(target.lastRunStatus ?? "unknown")}" aria-live="polite">${esc(target.lastRunStatus === "succeeded" ? "最近一次成功" : target.lastRunStatus === "failed" ? "最近一次失败" : target.lastRunStatus === "partial" ? "部分完成" : "尚未运行")}</span>`
+    : `<span class="backup-status-badge never">尚未运行</span>`;
+  return `
+    <article class="backup-target" data-backup-index="${index}">
+      <header>
+        <strong>${esc(target.displayName || `目标 ${index + 1}`)}</strong>
+        <label class="backup-target-enabled"><input type="checkbox" data-backup-field="enabled" ${target.enabled ? "checked" : ""} aria-label="启用该备份目标">启用</label>
+        <button type="button" class="ghost-button" data-backup-action="remove" aria-label="删除该备份目标">删除</button>
+      </header>
+      <div class="backup-target-grid">
+        <label class="backup-target-name">名称<input data-backup-field="displayName" required maxlength="120" value="${esc(target.displayName)}"></label>
+        <label class="backup-target-endpoint">S3 兼容 endpoint<input data-backup-field="endpoint" type="url" required placeholder="https://s3.amazonaws.com" value="${esc(target.endpoint)}"></label>
+        <label class="backup-target-bucket">桶名<input data-backup-field="bucket" required maxlength="120" value="${esc(target.bucket)}"></label>
+        <label class="backup-target-region">区域<input data-backup-field="region" required maxlength="80" placeholder="us-east-1" value="${esc(target.region)}"></label>
+        <label class="backup-target-prefix">子目录（可空，追加在桶根目录下）<input data-backup-field="prefix" maxlength="240" placeholder="例如 prod" value="${esc(target.prefix)}"></label>
+        <label class="backup-target-access-key">Access Key ID<input data-backup-field="accessKeyId" required maxlength="240" value="${esc(target.accessKeyId)}" autocomplete="off"></label>
+        <label class="backup-target-secret-key">Secret Access Key${target.hasSecretAccessKey ? `<small>当前已保存（${esc(target.secretKeyHint)}），如需修改请重新输入，否则留空</small>` : ""}<input data-backup-field="secretAccessKey" type="password" maxlength="240" autocomplete="off" placeholder="${target.hasSecretAccessKey ? "已保存，重新输入可覆盖" : ""}"></label>
+        <label class="backup-target-path-style"><input type="checkbox" data-backup-field="pathStyle" ${target.pathStyle ? "checked" : ""}>使用 path-style URL（兼容 MinIO 等非 AWS 服务）</label>
+        <label class="backup-target-images"><input type="checkbox" data-backup-field="backupImages" ${target.backupImages ? "checked" : ""}>同时备份图片</label>
+        <label class="backup-target-schedule-hour">定时小时（0-23）<input data-backup-field="scheduleHour" type="number" min="0" max="23" step="1" required value="${target.scheduleHour}"></label>
+        <label class="backup-target-schedule-minute">定时分钟（0-59）<input data-backup-field="scheduleMinute" type="number" min="0" max="59" step="1" required value="${target.scheduleMinute}"></label>
+        <label class="backup-target-retention">数据库留存个数（1-365）<input data-backup-field="retentionCount" type="number" min="1" max="365" step="1" required value="${target.retentionCount}"></label>
+      </div>
+      <footer class="backup-target-footer">
+        ${statusBadge}
+        ${target.lastRunAt ? `<small>最近运行：${esc(new Date(target.lastRunAt).toLocaleString("zh-CN"))}${target.lastError ? ` · ${esc(target.lastError)}` : ""}</small>` : ""}
+        <button type="button" class="ghost-button" data-backup-action="run-now" ${target.enabled ? "" : "disabled"}>立即备份</button>
+      </footer>
+    </article>`;
+}
+
+function renderBackupTargets() {
+  const includeImages = $("#platform-backup-include-images").checked;
+  backupDialogState.includeImagesDefault = includeImages;
+  const list = $("#platform-backup-list");
+  if (!backupDialogState.targets.length) {
+    list.innerHTML = '<p class="empty-state">尚未配置备份目标，请点击下方按钮添加。</p>';
+  } else {
+    list.innerHTML = backupDialogState.targets.map((target, index) => renderBackupTargetFields(target, index)).join("");
+    list.querySelectorAll(".backup-target").forEach((container) => {
+      const index = Number(container.dataset.backupIndex);
+      container.querySelectorAll("[data-backup-field]").forEach((element) => {
+        element.addEventListener("input", (event) => {
+          const target = backupDialogState.targets[index];
+          if (!target) return;
+          const field = event.target.dataset.backupField;
+          let value;
+          if (event.target.type === "checkbox") value = event.target.checked;
+          else if (event.target.type === "number") value = Number(event.target.value);
+          else value = event.target.value;
+          if (field === "scheduleHour") value = clamp(Number(value) || 0, 0, 23);
+          if (field === "scheduleMinute") value = clamp(Number(value) || 0, 0, 59);
+          if (field === "retentionCount") value = clamp(Math.max(1, Number(value) || 1), 1, 365);
+          target[field] = value;
+        });
+      });
+      container.querySelector('[data-backup-action="remove"]')?.addEventListener("click", async () => {
+        const target = backupDialogState.targets[index];
+        if (!target) return;
+        const confirmed = await confirmDialog(`确定要删除备份目标「${target.displayName || `目标 ${index + 1}`}」吗？此操作不会影响已经同步到 S3 的文件。`);
+        if (!confirmed) return;
+        backupDialogState.targets.splice(index, 1);
+        renderBackupTargets();
+      });
+      container.querySelector('[data-backup-action="run-now"]')?.addEventListener("click", async () => {
+        const target = backupDialogState.targets[index];
+        if (!target) return;
+        if (!target.id) {
+          toast("请先保存当前目标再立即备份", "info");
+          return;
+        }
+        const button = container.querySelector('[data-backup-action="run-now"]');
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = "正在运行…";
+        try {
+          const result = await api("/api/platform/backup/run", { method: "POST", body: { targetId: target.id } });
+          target.lastRunAt = result?.result?.completedAt ?? new Date().toISOString();
+          target.lastRunStatus = "succeeded";
+          target.lastError = null;
+          renderBackupTargets();
+          toast(`「${target.displayName || target.id}」备份完成：上传 ${result?.result?.uploadedImageCount ?? 0} 张图片，生成数据库副本。`, "info");
+        } catch (error) {
+          target.lastRunStatus = "failed";
+          target.lastRunAt = new Date().toISOString();
+          target.lastError = error.message;
+          renderBackupTargets();
+          toast(`「${target.displayName || target.id}」备份失败：${error.message}`, "error");
+        } finally {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      });
+    });
+  }
+  $("#platform-backup-count").textContent = `当前 ${backupDialogState.targets.length}/32 个备份目标。`;
+}
+
+async function openPlatformBackupDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  try {
+    const settings = await api("/api/platform/backup-settings");
+    backupDialogState = {
+      targets: (settings?.targets ?? []).map(normalizeBackupTargetRecord),
+      includeImagesDefault: (settings?.targets ?? []).some((target) => target.backupImages !== false)
+    };
+    $("#platform-backup-include-images").checked = backupDialogState.includeImagesDefault;
+    renderBackupTargets();
+    await refreshPlatformBackupHistory();
+    $("#platform-backup-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function refreshPlatformBackupHistory() {
+  try {
+    const data = await api("/api/platform/backup/runs?limit=20");
+    const runs = data?.runs ?? [];
+    const list = $("#platform-backup-history-list");
+    if (!runs.length) {
+      list.innerHTML = '<p class="empty-state">尚无备份运行记录。</p>';
+      return;
+    }
+    list.innerHTML = runs.map((run) => `<article class="backup-run-row backup-run-${esc(run.status)}">
+      <header>
+        <strong>${esc(run.triggeredBy === "manual" ? "手动" : "定时")} · ${esc(run.status)}</strong>
+        <small>${esc(new Date(run.startedAt).toLocaleString("zh-CN"))}${run.completedAt ? ` → ${esc(new Date(run.completedAt).toLocaleString("zh-CN"))}` : ""}</small>
+      </header>
+      <ul>
+        <li>上传图片 ${run.uploadedImageCount ?? 0}，跳过 ${run.skippedImageCount ?? 0}，清理旧数据库 ${run.deletedDbBackupCount ?? 0}</li>
+        ${run.uploadedDbKey ? `<li>数据库副本 <code>${esc(run.uploadedDbKey)}</code>，${formatBytes(run.uploadedDbSize)}</li>` : ""}
+        ${run.errorMessage ? `<li class="error-message">失败：${esc(run.errorMessage)}</li>` : ""}
+      </ul>
+    </article>`).join("");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function formatBytes(value) {
+  if (!value && value !== 0) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let bytes = Number(value);
+  let unitIndex = 0;
+  while (bytes >= 1024 && unitIndex < units.length - 1) {
+    bytes /= 1024;
+    unitIndex += 1;
+  }
+  return `${bytes.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function renderMemberPermissionGrid(value) {
@@ -11384,6 +11567,95 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
     Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
     $("#platform-ui-settings-dialog").close();
     toast("界面与分页设置已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#platform-backup-button").addEventListener("click", () => openPlatformBackupDialog().catch((error) => toast(error.message, "error")));
+$("#platform-backup-close").addEventListener("click", () => $("#platform-backup-dialog").close());
+$("#platform-backup-cancel").addEventListener("click", () => $("#platform-backup-dialog").close());
+$("#platform-backup-return").addEventListener("click", () => returnToSettingsHub("#platform-backup-button", "#platform-backup-dialog").catch((error) => toast(error.message, "error")));
+$("#platform-backup-refresh").addEventListener("click", () => refreshPlatformBackupHistory().catch((error) => toast(error.message, "error")));
+$("#platform-backup-include-images").addEventListener("change", () => {
+  if (!$("#platform-backup-include-images").checked) {
+    backupDialogState.targets.forEach((target) => { target.backupImages = false; });
+  }
+  renderBackupTargets();
+});
+$("#platform-backup-add-target").addEventListener("click", () => {
+  if (backupDialogState.targets.length >= 32) {
+    toast("最多支持 32 个备份目标", "error");
+    return;
+  }
+  backupDialogState.targets.push({
+    id: null,
+    displayName: "",
+    endpoint: "",
+    bucket: "",
+    region: "",
+    prefix: "",
+    accessKeyId: "",
+    hasSecretAccessKey: false,
+    secretKeyHint: "",
+    pathStyle: true,
+    backupImages: $("#platform-backup-include-images").checked,
+    scheduleHour: 3,
+    scheduleMinute: 0,
+    retentionCount: 7,
+    enabled: true,
+    lastRunAt: null,
+    lastRunStatus: null,
+    lastError: null
+  });
+  renderBackupTargets();
+});
+$("#platform-backup-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("#platform-backup-save");
+  button.disabled = true;
+  try {
+    const includeImages = $("#platform-backup-include-images").checked;
+    const targets = backupDialogState.targets.map((target) => {
+      const payload = {
+        ...(target.id ? { id: target.id } : {}),
+        displayName: String(target.displayName ?? "").trim(),
+        endpoint: String(target.endpoint ?? "").trim(),
+        bucket: String(target.bucket ?? "").trim(),
+        region: String(target.region ?? "").trim(),
+        prefix: String(target.prefix ?? "").trim(),
+        accessKeyId: String(target.accessKeyId ?? "").trim(),
+        pathStyle: Boolean(target.pathStyle),
+        backupImages: includeImages ? Boolean(target.backupImages) : false,
+        scheduleHour: clamp(Number(target.scheduleHour) || 0, 0, 23),
+        scheduleMinute: clamp(Number(target.scheduleMinute) || 0, 0, 59),
+        retentionCount: clamp(Math.max(1, Number(target.retentionCount) || 1), 1, 365),
+        enabled: Boolean(target.enabled)
+      };
+      const secret = (document.querySelector(`[data-backup-index="${backupDialogState.targets.indexOf(target)}"] [data-backup-field="secretAccessKey"]`)?.value ?? "").trim();
+      payload.secretAccessKey = secret || null;
+      return payload;
+    });
+    for (const [index, target] of targets.entries()) {
+      if (!target.displayName) throw new Error(`第 ${index + 1} 个目标缺少名称`);
+      if (!target.endpoint) throw new Error(`第 ${index + 1} 个目标缺少 endpoint`);
+      if (!target.bucket) throw new Error(`第 ${index + 1} 个目标缺少桶名`);
+      if (!target.region) throw new Error(`第 ${index + 1} 个目标缺少 region`);
+      if (!target.accessKeyId) throw new Error(`第 ${index + 1} 个目标缺少 Access Key ID`);
+      if (!target.id && target.secretAccessKey === null) {
+        throw new Error(`第 ${index + 1} 个新目标必须填写 Secret Access Key`);
+      }
+    }
+    const result = await api("/api/platform/backup-settings", { method: "PUT", body: { targets } });
+    backupDialogState = {
+      targets: (result?.targets ?? []).map(normalizeBackupTargetRecord),
+      includeImagesDefault: includeImages
+    };
+    $("#platform-backup-include-images").checked = includeImages;
+    renderBackupTargets();
+    await refreshPlatformBackupHistory();
+    toast("数据备份设置已保存");
   } catch (error) {
     toast(error.message, "error");
   } finally {
