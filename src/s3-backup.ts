@@ -103,7 +103,7 @@ function dateParts(value: Date): { date: string; timestamp: string } {
 
 function databaseTimestamp(value: Date): string {
   const iso = value.toISOString();
-  return `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}T${iso.slice(11, 13)}${iso.slice(14, 16)}${iso.slice(17, 19)}Z`;
+  return `${iso.slice(0, 4)}${iso.slice(5, 7)}${iso.slice(8, 10)}T${iso.slice(11, 13)}${iso.slice(14, 16)}${iso.slice(17, 19)}${iso.slice(20, 23)}Z`;
 }
 
 function normalizeSubdirectory(value: string): string {
@@ -459,14 +459,15 @@ export class S3BackupManager {
 
   private async pruneDatabaseSnapshots(client: SignedS3Client, target: S3BackupTargetForSync, currentObjectKey: string): Promise<number> {
     const prefix = `${s3Root(target)}/db/`;
-    const filePattern = /^scriverse-db-\d{8}T\d{6}Z-[a-f0-9-]{36}\.sqlite$/u;
+    const filePattern = /^scriverse-db-\d{8}T\d{6}(?:\d{3})?Z-[a-f0-9-]{36}\.sqlite$/u;
     const snapshots = (await client.listObjects(prefix))
       .filter((object) => object.key.startsWith(prefix) && filePattern.test(object.key.slice(prefix.length)))
       .sort((left, right) => left.key.localeCompare(right.key));
-    const stale = snapshots.slice(0, Math.max(0, snapshots.length - target.retentionCount));
+    const stale = snapshots
+      .filter((snapshot) => snapshot.key !== currentObjectKey)
+      .slice(0, Math.max(0, snapshots.length - target.retentionCount));
     let deleted = 0;
     for (const snapshot of stale) {
-      if (snapshot.key === currentObjectKey) continue;
       await client.deleteObject(snapshot.key);
       deleted += 1;
     }
