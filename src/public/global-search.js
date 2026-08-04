@@ -12,12 +12,21 @@ const entityTargets = Object.freeze({
 });
 
 export function prioritizeGlobalSearchResults(results = []) {
-  const settingResults = [];
+  const nonProseResults = [];
   const proseResults = [];
   for (const result of Array.isArray(results) ? results : []) {
-    (String(result?.type ?? "") === "chapter" ? proseResults : settingResults).push(result);
+    (String(result?.type ?? "") === "chapter" ? proseResults : nonProseResults).push(result);
   }
-  return [...settingResults, ...proseResults];
+  const sortByRelevance = (group) => group
+    .map((result, index) => ({ result, index, score: Number(result?.score) }))
+    .sort((left, right) => {
+      if (Number.isFinite(left.score) && Number.isFinite(right.score) && left.score !== right.score) {
+        return right.score - left.score;
+      }
+      return left.index - right.index;
+    })
+    .map(({ result }) => result);
+  return [...sortByRelevance(nonProseResults), ...sortByRelevance(proseResults)];
 }
 
 function positiveLine(value) {
