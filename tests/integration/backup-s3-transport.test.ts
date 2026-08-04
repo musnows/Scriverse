@@ -64,6 +64,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // 先断开保持连接的出站套接字，避免端口被回收后影响其他测试文件。
+  server.closeAllConnections();
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
 
