@@ -2206,6 +2206,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body { min-width: 0; overflow-wrap: anywhere; }
 .assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }
 .assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }
+.ai-error-settings-link-wrap { margin: 12px 0 0; }
+.ai-error-settings-link { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.ai-error-settings-link:hover, .ai-error-settings-link:focus-visible { color: var(--accent-dark); }
+.config-section.is-targeted { border-radius: 5px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent); }
 .message-card-actions { position: absolute; right: 0; bottom: -31px; display: flex; align-items: center; gap: 12px; height: 24px; }
 .message-card-actions button { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 2px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }
 .message-card-actions button:hover, .message-card-actions button:focus-visible { color: var(--accent-dark); }
