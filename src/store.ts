@@ -4988,6 +4988,13 @@ export class Store {
     return !this.attachmentStorageKeyInUse(storageKey);
   }
 
+  /** 平台级备份用：列出全部作品去重后的附件存储路径。 */
+  listAllAttachmentStorageKeys(): string[] {
+    return this.db
+      .all("SELECT DISTINCT storage_key FROM attachments ORDER BY storage_key")
+      .map((row) => requiredString(row, "storage_key"));
+  }
+
   completeAttachmentCleanup(storageKey: string): void {
     this.db.run("DELETE FROM attachment_cleanup_queue WHERE storage_key = ?", storageKey);
   }

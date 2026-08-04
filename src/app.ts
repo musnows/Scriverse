@@ -12,6 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { BackupManager } from "./backup.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -23,7 +24,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, assertSafeBackupEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, fetchSafeBackupEndpoint, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -435,6 +436,37 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupSettingsSchema = z.object({
+  scheduleEnabled: z.boolean().optional(),
+  scheduleTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u, "备份时间必须是 24 小时制的 HH:MM").optional(),
+  includeImages: z.boolean().optional(),
+  retentionCount: z.number().int().min(1).max(365).optional()
+}).strict().refine((input) => Object.values(input).some((value) => value !== undefined), {
+  message: "至少需要提供一项备份设置"
+});
+
+const backupTargetBaseSchema = z.object({
+  name: nonEmpty.max(200),
+  endpoint: z.string().trim().url().max(2_000),
+  region: nonEmpty.max(100),
+  bucket: nonEmpty.max(255),
+  prefix: z.string().max(512).optional(),
+  forcePathStyle: z.boolean().optional(),
+  accessKeyId: z.string().trim().min(1).max(500),
+  secretAccessKey: z.string().trim().min(1).max(2_000),
+  status: z.enum(["enabled", "disabled"]).optional()
+}).strict();
+
+const backupTargetSchema = backupTargetBaseSchema;
+const backupTargetUpdateSchema = backupTargetBaseSchema.partial().refine(
+  (input) => Object.values(input).some((value) => value !== undefined),
+  { message: "至少需要提供一项备份目标配置" }
+);
+
+const backupAlertAckSchema = z.object({
+  runIds: z.array(z.string().trim().min(1).max(200)).min(1).max(20)
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -579,6 +611,8 @@ export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
   attachmentDirectory?: string;
+  /** 数据目录；S3 备份的数据库快照写入其 backups 子目录。 */
+  dataDirectory?: string;
   fetchImpl?: typeof fetch;
   serveUi?: boolean;
   publicPath?: string;
@@ -597,6 +631,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  backup: BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -920,6 +955,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const temporaryAttachmentRoot = options.databasePath === ":memory:" && !options.attachmentDirectory
     ? mkdtempSync(join(tmpdir(), "scriverse-attachments-"))
     : null;
+  const temporaryDataRoot = options.databasePath === ":memory:" && !options.dataDirectory
+    ? mkdtempSync(join(tmpdir(), "scriverse-data-"))
+    : null;
+  const dataDirectory = options.dataDirectory ?? temporaryDataRoot ?? dirname(options.databasePath);
   const attachmentStorage = new AttachmentStorage(
     options.attachmentDirectory ?? temporaryAttachmentRoot ?? join(dirname(options.databasePath), "attachments")
   );
@@ -970,9 +1009,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const credentialVault = new CredentialVault(options.masterSecret);
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    credentialVault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -991,6 +1031,22 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const validateBackupEndpoint = options.security
+    ? (endpoint: string) => assertSafeBackupEndpoint(endpoint, options.security?.allowPrivateBackupEndpoints)
+    : undefined;
+  const backup = new BackupManager(database, store, credentialVault, {
+    databasePath: options.databasePath,
+    dataDirectory,
+    attachmentStorage,
+    sendRequest: (url, init) => fetchSafeBackupEndpoint(
+      options.fetchImpl ?? fetch,
+      url,
+      init,
+      validateBackupEndpoint ? (target) => assertSafeBackupEndpoint(target, options.security?.allowPrivateBackupEndpoints) : undefined
+    ),
+    ...(validateBackupEndpoint ? { validateEndpoint: validateBackupEndpoint } : {})
+  });
+  backup.start();
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2060,6 +2116,38 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  app.get("/api/platform/backup/settings", (_request, response) => data(response, backup.getSettings()));
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    data(response, backup.updateSettings(parse(backupSettingsSchema, request.body)));
+  });
+  app.get("/api/platform/backup/targets", (_request, response) => data(response, backup.listTargets()));
+  app.post("/api/platform/backup/targets", async (request, response) => {
+    data(response, await backup.createTarget(parse(backupTargetSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", async (request, response) => {
+    data(response, await backup.updateTarget(request.params.targetId, parse(backupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/targets/:targetId/test", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await backup.testTarget(request.params.targetId));
+  });
+  app.post("/api/platform/backup/run", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await backup.runBackup("manual"), 201);
+  });
+  app.get("/api/platform/backup/runs", (request, response) => {
+    data(response, backup.listRuns(Number(request.query.limit ?? 20)));
+  });
+  app.get("/api/platform/backup/alerts", (_request, response) => data(response, backup.listPendingAlerts()));
+  app.post("/api/platform/backup/alerts/ack", (request, response) => {
+    const input = parse(backupAlertAckSchema, request.body);
+    data(response, { acknowledged: backup.acknowledgeAlerts(input.runIds) });
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,11 +2662,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, backup, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
+    backup.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+    if (temporaryDataRoot) rmSync(temporaryDataRoot, { recursive: true, force: true });
     logger.info("runtime.closed");
   } };
 }
