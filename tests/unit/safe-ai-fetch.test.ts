@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { AppError } from "../../src/errors.js";
-import { assertSafeAiEndpoint, fetchSafeAiEndpoint } from "../../src/security.js";
+import { assertSafeAiEndpoint, assertSafeBackupEndpoint, fetchSafeAiEndpoint } from "../../src/security.js";
 
 const safePublicAddress = { address: "93.184.216.34", family: 4 as const };
 const validateTestEndpoint = async (candidate: string) => {
@@ -26,6 +26,23 @@ describe("assertSafeAiEndpoint", () => {
     await expect(assertSafeAiEndpoint("http://93.184.216.34/v1", false)).rejects.toMatchObject({
       code: "INSECURE_PROVIDER_ENDPOINT"
     });
+  });
+});
+
+describe("assertSafeBackupEndpoint", () => {
+  it("拒绝指向环回或内网的 S3 备份地址", async () => {
+    await expect(assertSafeBackupEndpoint("http://127.0.0.1:9000")).rejects.toMatchObject({
+      code: "UNSAFE_BACKUP_ENDPOINT"
+    });
+    await expect(assertSafeBackupEndpoint("http://10.0.0.8:9000")).rejects.toMatchObject({
+      code: "UNSAFE_BACKUP_ENDPOINT"
+    });
+  });
+
+  it("在显式允许私有网络时可使用本机 S3 兼容端点", async () => {
+    await expect(assertSafeBackupEndpoint("http://127.0.0.1:9000", true)).resolves.toEqual([
+      { address: "127.0.0.1", family: 4 }
+    ]);
   });
 });
 

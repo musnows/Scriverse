@@ -250,11 +250,12 @@ export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, 
   };
 }
 
-type ExpensiveApiKind = "ai" | "export" | "search";
+type ExpensiveApiKind = "ai" | "export" | "search" | "backup";
 
 function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
   if (method === "GET" && /^\/api\/works\/[^/]+\/export$/u.test(path)) return "export";
   if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
+  if (method === "POST" && path === "/api/platform/backup/run") return "backup";
   if (method !== "POST") return null;
   if (
     /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
@@ -270,7 +271,8 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
 const expensiveApiLimits: Record<ExpensiveApiKind, number> = {
   ai: 30,
   export: 10,
-  search: 60
+  search: 60,
+  backup: 5
 };
 
 export function createExpensiveApiRateLimitMiddleware(windowMs = 60_000, entryLimit = maximumRateEntries): RequestHandler {
@@ -336,10 +338,22 @@ function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAd
   pinnedAiAddresses.set(key, addresses);
 }
 
-export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+export async function assertSafeOutboundHttpEndpoint(
+  value: string,
+  options: {
+    allowPrivateNetwork?: boolean;
+    unsafeCode?: string;
+    insecureCode?: string;
+    label?: string;
+  } = {}
+): Promise<SafeAiEndpointAddress[]> {
+  const allowPrivateNetwork = options.allowPrivateNetwork === true;
+  const unsafeCode = options.unsafeCode ?? "UNSAFE_OUTBOUND_ENDPOINT";
+  const insecureCode = options.insecureCode ?? "INSECURE_OUTBOUND_ENDPOINT";
+  const label = options.label ?? "出站";
   const endpoint = new URL(value);
-  if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
-    throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+    throw new AppError(400, unsafeCode, `${label}地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址`);
   }
   const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
     ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
@@ -347,18 +361,40 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
       address,
       family: family as 4 | 6
     }));
-  if (!addresses.length) throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商域名无法解析");
+  if (!addresses.length) throw new AppError(400, unsafeCode, `${label}域名无法解析`);
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
     if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
-      logger.warn("security.ai_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
-      throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
+      logger.warn("security.outbound_endpoint.blocked", {
+        purpose: label,
+        hostname: endpoint.hostname,
+        addressKind: kind
+      });
+      throw new AppError(400, unsafeCode, `${label}地址指向受保护的本机、内网或链路本地网络`);
     }
   }
   if (endpoint.protocol === "http:" && addresses.some(({ address }) => unsafeIpKind(address) !== "private")) {
-    throw new AppError(400, "INSECURE_PROVIDER_ENDPOINT", "公网 AI 供应商地址必须使用 HTTPS");
+    throw new AppError(400, insecureCode, `公网${label}地址必须使用 HTTPS`);
   }
   return addresses;
+}
+
+export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+  return assertSafeOutboundHttpEndpoint(value, {
+    allowPrivateNetwork,
+    unsafeCode: "UNSAFE_PROVIDER_ENDPOINT",
+    insecureCode: "INSECURE_PROVIDER_ENDPOINT",
+    label: "AI 供应商"
+  });
+}
+
+export async function assertSafeBackupEndpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+  return assertSafeOutboundHttpEndpoint(value, {
+    allowPrivateNetwork,
+    unsafeCode: "UNSAFE_BACKUP_ENDPOINT",
+    insecureCode: "INSECURE_BACKUP_ENDPOINT",
+    label: "S3 备份"
+  });
 }
 
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);

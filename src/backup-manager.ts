@@ -197,16 +197,24 @@ export class BackupManager {
   private running: Promise<BackupRunResult> | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly fetchImpl: typeof fetch;
+  private readonly validateEndpoint?: (url: string) => Promise<unknown>;
 
   constructor(
     private readonly store: Store,
     private readonly database: Database,
     private readonly vault: CredentialVault,
     private readonly attachmentDirectory: string,
-    fetchImpl: typeof fetch = fetch
+    fetchImpl: typeof fetch = fetch,
+    validateEndpoint?: (url: string) => Promise<unknown>
   ) {
     this.fetchImpl = fetchImpl;
+    this.validateEndpoint = validateEndpoint;
     this.ensureSettingsRow();
+  }
+
+  private async assertEndpointSafe(endpoint: string): Promise<void> {
+    if (!this.validateEndpoint) return;
+    await this.validateEndpoint(endpoint);
   }
 
   private ensureSettingsRow(): void {
@@ -322,7 +330,7 @@ export class BackupManager {
     return publicTarget(this.getTargetRow(targetId));
   }
 
-  createTarget(input: BackupTargetInput): Record<string, unknown> {
+  async createTarget(input: BackupTargetInput): Promise<Record<string, unknown>> {
     const targetId = id("backup-target");
     const timestamp = now();
     const accessKeyId = input.accessKeyId.trim();
@@ -333,6 +341,8 @@ export class BackupManager {
     if (accessKeyId.length > 200 || secretAccessKey.length > 500) {
       throw new AppError(400, "BACKUP_CREDENTIALS_INVALID", "Access Key 或 Secret Key 过长");
     }
+    const endpoint = normalizeEndpoint(input.endpoint);
+    await this.assertEndpointSafe(endpoint);
     const encryptedAccess = this.vault.encrypt(accessKeyId);
     const encryptedSecret = this.vault.encrypt(secretAccessKey);
     const sortOrder = input.sortOrder ?? (this.listTargets().length + 1);
@@ -346,7 +356,7 @@ export class BackupManager {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         targetId,
         normalizeName(input.name),
-        normalizeEndpoint(input.endpoint),
+        endpoint,
         normalizeRegion(input.region),
         normalizeBucket(input.bucket),
         normalizeBackupPrefix(input.prefix),
@@ -365,16 +375,20 @@ export class BackupManager {
       );
       this.store.audit(PLATFORM_AI_WORK_ID, "platform.backup-target.created", "platform-backup-target", targetId, {
         name: normalizeName(input.name),
-        endpoint: normalizeEndpoint(input.endpoint),
+        endpoint,
         bucket: normalizeBucket(input.bucket)
       });
     });
     return this.getTarget(targetId);
   }
 
-  updateTarget(targetId: string, input: BackupTargetUpdateInput): Record<string, unknown> {
+  async updateTarget(targetId: string, input: BackupTargetUpdateInput): Promise<Record<string, unknown>> {
     const row = this.getTargetRow(targetId);
     const timestamp = now();
+    const endpoint = input.endpoint !== undefined
+      ? normalizeEndpoint(input.endpoint)
+      : requiredString(row, "endpoint");
+    await this.assertEndpointSafe(endpoint);
     let accessEncrypted = requiredString(row, "access_key_encrypted");
     let accessIv = requiredString(row, "access_key_iv");
     let accessTag = requiredString(row, "access_key_tag");
@@ -408,7 +422,7 @@ export class BackupManager {
           access_key_hint = ?, force_path_style = ?, enabled = ?, sort_order = ?, updated_at = ?
          WHERE id = ?`,
         input.name !== undefined ? normalizeName(input.name) : requiredString(row, "name"),
-        input.endpoint !== undefined ? normalizeEndpoint(input.endpoint) : requiredString(row, "endpoint"),
+        endpoint,
         input.region !== undefined ? normalizeRegion(input.region) : requiredString(row, "region"),
         input.bucket !== undefined ? normalizeBucket(input.bucket) : requiredString(row, "bucket"),
         input.prefix !== undefined ? normalizeBackupPrefix(input.prefix) : requiredString(row, "prefix"),
@@ -555,6 +569,7 @@ export class BackupManager {
       error: null
     };
     try {
+      await this.assertEndpointSafe(requiredString(row, "endpoint"));
       const client = this.createClient(row);
       if (options.includeImages) {
         for (const image of options.images) {

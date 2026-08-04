@@ -24,7 +24,7 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, assertSafeBackupEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
@@ -1036,7 +1036,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     database,
     vault,
     attachmentStorage.rootDirectory,
-    options.fetchImpl ?? fetch
+    options.fetchImpl ?? fetch,
+    options.security
+      ? (url) => assertSafeBackupEndpoint(url, options.security?.allowPrivateAiEndpoints)
+      : undefined
   );
   backup.startScheduler();
   const app = express();
@@ -2114,11 +2117,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.get("/api/platform/backup/status", (_request, response) => data(response, backup.getStatus()));
   app.get("/api/platform/backup/targets", (_request, response) => data(response, backup.listTargets()));
-  app.post("/api/platform/backup/targets", (request, response) => {
-    data(response, backup.createTarget(parse(platformBackupTargetCreateSchema, request.body)), 201);
+  app.post("/api/platform/backup/targets", async (request, response) => {
+    data(response, await backup.createTarget(parse(platformBackupTargetCreateSchema, request.body)), 201);
   });
-  app.patch("/api/platform/backup/targets/:targetId", (request, response) => {
-    data(response, backup.updateTarget(request.params.targetId, parse(platformBackupTargetUpdateSchema, request.body)));
+  app.patch("/api/platform/backup/targets/:targetId", async (request, response) => {
+    data(response, await backup.updateTarget(request.params.targetId, parse(platformBackupTargetUpdateSchema, request.body)));
   });
   app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
     backup.deleteTarget(request.params.targetId);

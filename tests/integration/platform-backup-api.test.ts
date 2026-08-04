@@ -218,4 +218,50 @@ describe("platform S3 backup API", () => {
       authRuntime.close();
     }
   });
+
+  it("rejects private s3 endpoints when SSRF validation is enabled", async () => {
+    const setupToken = "backup-ssrf-setup-token-with-at-least-32-chars";
+    const authRuntime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "test-master-secret-with-at-least-32-characters",
+      serveUi: false,
+      revealCaptchaAnswer: true,
+      security: {
+        allowRegistration: true,
+        enforceSameOrigin: true,
+        setupToken,
+        allowPrivateAiEndpoints: false
+      }
+    });
+    const server = authRuntime.app.listen(0);
+    server.unref();
+    try {
+      const adminAgent = request.agent(server);
+      const captcha = await request(server).get("/api/auth/captcha").expect(200);
+      const admin = await adminAgent.post("/api/auth/register").send({
+        username: "backup-ssrf-admin",
+        password: "secure-password-123",
+        passwordConfirmation: "secure-password-123",
+        setupToken,
+        captchaId: captcha.body.data.captchaId,
+        captchaAnswer: captcha.body.data.answer
+      }).expect(201);
+
+      const blocked = await adminAgent.post("/api/platform/backup/targets")
+        .set("X-CSRF-Token", admin.body.data.csrfToken)
+        .send({
+          name: "内网 MinIO",
+          endpoint: "http://127.0.0.1:9000",
+          bucket: "local-bucket",
+          accessKeyId: "minioadmin",
+          secretAccessKey: "minioadmin-secret"
+        })
+        .expect(400);
+      expect(blocked.body.error.code).toBe("UNSAFE_BACKUP_ENDPOINT");
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      authRuntime.close();
+    }
+  });
 });
