@@ -13,7 +13,7 @@ import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
-import { Database } from "./database.js";
+import { Database, PLATFORM_AI_WORK_ID } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
@@ -21,6 +21,7 @@ import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./goog
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
+import { S3BackupManager, S3BackupRunError } from "./s3-backup.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -435,6 +436,54 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const s3EndpointSchema = z.string().trim().min(1).max(500).superRefine((value, context) => {
+  try {
+    const endpoint = new URL(value);
+    if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "S3 服务地址必须是无内嵌凭据、查询参数或片段的 HTTP 或 HTTPS 地址" });
+    }
+  } catch {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "S3 服务地址格式无效" });
+  }
+});
+
+const s3SubdirectorySchema = z.string().trim().max(300).superRefine((value, context) => {
+  const normalized = value.replace(/^\/+|\/+$/gu, "");
+  if (!normalized) return;
+  if (/[\\?#\u0000]/u.test(normalized) || normalized.split("/").some((part) => !part.trim() || part.trim() === "." || part.trim() === "..")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "备份子目录不能包含空段、.、..、反斜杠、问号或井号" });
+  }
+}).transform((value) => value.replace(/^\/+|\/+$/gu, "").split("/").map((part) => part.trim()).filter(Boolean).join("/"));
+
+const s3BackupTargetConfigurationSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  enabled: z.boolean(),
+  endpoint: s3EndpointSchema,
+  region: z.string().trim().min(2).max(64).regex(/^[a-z0-9-]+$/u, "区域只能包含小写字母、数字和短横线"),
+  bucket: z.string().trim().min(3).max(63).regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u, "桶名称格式无效"),
+  subdirectory: s3SubdirectorySchema,
+  backupImages: z.boolean(),
+  scheduleTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u, "触发时间必须为 HH:mm"),
+  retentionCount: z.number().int().min(1).max(10_000)
+});
+
+const s3BackupTargetCreateSchema = s3BackupTargetConfigurationSchema.extend({
+  accessKeyId: z.string().trim().min(1).max(1024),
+  secretAccessKey: z.string().min(1).max(2048)
+}).strict();
+
+const s3BackupTargetUpdateSchema = s3BackupTargetConfigurationSchema.partial().extend({
+  accessKeyId: z.string().trim().min(1).max(1024).optional(),
+  secretAccessKey: z.string().min(1).max(2048).optional()
+}).strict().superRefine((input, context) => {
+  if (Object.keys(input).length === 0) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "至少需要更新一项备份设置" });
+  }
+  if ((input.accessKeyId === undefined) !== (input.secretAccessKey === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["accessKeyId"], message: "访问密钥和访问密钥密码必须同时提供" });
+  }
+});
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -599,6 +648,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  s3Backups: S3BackupManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -970,10 +1020,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const credentialVault = new CredentialVault(options.masterSecret);
+  const outboundFetch = options.fetchImpl ?? fetch;
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
-    options.fetchImpl ?? fetch,
+    credentialVault,
+    outboundFetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
       const requiredModules = analysisTaskReadModules(task.taskType, task.scope);
@@ -991,6 +1043,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     }
   );
+  const s3Backups = new S3BackupManager({
+    database,
+    store,
+    attachmentStorage,
+    credentialVault,
+    fetchImpl: outboundFetch,
+    ...(options.security ? { allowPrivateS3Endpoints: options.security.allowPrivateS3Endpoints } : {})
+  });
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2059,6 +2119,69 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ui-settings", (request, response) => {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
+  app.get("/api/platform/backups", (_request, response) => data(response, store.listS3BackupTargets()));
+  app.post("/api/platform/backups", (request, response) => {
+    if (store.listS3BackupTargets().length >= 50) {
+      throw new AppError(409, "S3_BACKUP_TARGET_LIMIT", "最多可配置 50 个 S3 备份目标");
+    }
+    const input = parse(s3BackupTargetCreateSchema, request.body);
+    data(response, store.createS3BackupTarget({
+      name: input.name,
+      enabled: input.enabled,
+      endpoint: input.endpoint,
+      region: input.region,
+      bucket: input.bucket,
+      subdirectory: input.subdirectory,
+      backupImages: input.backupImages,
+      scheduleTime: input.scheduleTime,
+      retentionCount: input.retentionCount,
+      accessKey: credentialVault.encrypt(input.accessKeyId),
+      secretAccessKey: credentialVault.encrypt(input.secretAccessKey)
+    }), 201);
+  });
+  app.patch("/api/platform/backups/:targetId", (request, response) => {
+    const input = parse(s3BackupTargetUpdateSchema, request.body);
+    const { accessKeyId, secretAccessKey, ...configuration } = input;
+    data(response, store.updateS3BackupTarget(request.params.targetId, {
+      ...configuration,
+      ...(accessKeyId !== undefined && secretAccessKey !== undefined ? {
+        credentials: {
+          accessKey: credentialVault.encrypt(accessKeyId),
+          secretAccessKey: credentialVault.encrypt(secretAccessKey)
+        }
+      } : {})
+    }));
+  });
+  app.delete("/api/platform/backups/:targetId", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    store.deleteS3BackupTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backups/run", async (request, response) => {
+    const input = parse(z.object({ targetId: identifier.optional() }).strict(), request.body ?? {});
+    try {
+      const results = await s3Backups.runAll(input.targetId);
+      if (!results.length) throw new AppError(409, "S3_BACKUP_TARGET_REQUIRED", "没有已启用的 S3 备份目标");
+      store.audit(PLATFORM_AI_WORK_ID, "platform.s3-backup.run", "s3-backup", input.targetId ?? "all", {
+        targetId: input.targetId ?? null,
+        results: results.map((result) => ({
+          targetId: result.targetId,
+          targetName: result.targetName,
+          status: result.status,
+          databaseObjectKey: result.databaseObjectKey ?? null,
+          imageCount: result.imageCount ?? 0,
+          skippedImageCount: result.skippedImageCount ?? 0,
+          deletedDatabaseCount: result.deletedDatabaseCount ?? 0
+        }))
+      });
+      data(response, { results });
+    } catch (error) {
+      if (error instanceof S3BackupRunError) {
+        throw new AppError(502, "S3_BACKUP_FAILED", "S3 备份失败，请查看服务日志", { results: error.results });
+      }
+      throw error;
+    }
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
@@ -2573,9 +2696,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
+  s3Backups.start();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, s3Backups, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    s3Backups.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });

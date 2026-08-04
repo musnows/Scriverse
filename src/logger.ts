@@ -39,6 +39,7 @@ const levelPriority: Record<LogLevel, number> = {
 
 const sensitiveField = /^(?:authorization|cookie|setcookie|password|passwordconfirmation|currentpassword|newpassword|secret|mastersecret|token|csrftoken|captchaanswer|apikey|credential|session|sessionid|username|displayname|email|account|userid|encryptedkey|keyiv|keytag)$/iu;
 const sensitiveFieldPart = /(?:password|passwd|secret|authorization|cookie|csrf|captchaanswer|apikey|accesstoken|refreshtoken|sessiontoken|encryptedkey)/iu;
+const completeS3ResponseBodyField = /^s3serverresponsebody$/iu;
 
 function scrubString(value: string): string {
   return value
@@ -47,7 +48,8 @@ function scrubString(value: string): string {
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/gu, "sk-[REDACTED]")
     .replace(/([?&](?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password)=)[^&\s]+/giu, "$1[REDACTED]")
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, "$1[REDACTED]@")
-    .replace(/("(?:password|secret|token|api[_-]?key|authorization)"\s*:\s*")[^"]*(")/giu, "$1[REDACTED]$2");
+    .replace(/("(?:password|secret|token|api[_-]?key|authorization|access[_-]?key(?:_id)?)"\s*:\s*")[^"]*(")/giu, "$1[REDACTED]$2")
+    .replace(/(<(?:AccessKeyId|SecretAccessKey)>)[\s\S]*?(<\/(?:AccessKeyId|SecretAccessKey)>)/giu, "$1[REDACTED]$2");
 }
 
 function sanitizeValue(value: unknown, key = "", depth = 0, seen = new WeakSet<object>()): unknown {
@@ -55,7 +57,10 @@ function sanitizeValue(value: unknown, key = "", depth = 0, seen = new WeakSet<o
   if (sensitiveField.test(normalizedKey) || sensitiveFieldPart.test(normalizedKey)) return "[REDACTED]";
   if (value === null || value === undefined || typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "bigint") return value.toString();
-  if (typeof value === "string") return scrubString(value).slice(0, 4_000);
+  if (typeof value === "string") {
+    const scrubbed = scrubString(value);
+    return completeS3ResponseBodyField.test(key) ? scrubbed : scrubbed.slice(0, 4_000);
+  }
   if (value instanceof Error) return sanitizeError(value);
   if (Buffer.isBuffer(value)) return { type: "Buffer", byteLength: value.byteLength };
   if (depth >= 6) return "[TRUNCATED]";

@@ -22,6 +22,7 @@ export type RuntimeSecurityOptions = {
   apiRateWindowMs?: number;
   enforceSameOrigin?: boolean;
   allowPrivateAiEndpoints?: boolean;
+  allowPrivateS3Endpoints?: boolean;
   allowRegistration?: boolean;
   setupToken?: string;
 };
@@ -361,6 +362,31 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   return addresses;
 }
 
+export async function assertSafeS3Endpoint(value: string, allowPrivateNetwork = false): Promise<SafeAiEndpointAddress[]> {
+  const endpoint = new URL(value);
+  if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+    throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
+  }
+  const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
+    ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
+    : (await lookup(endpoint.hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
+      address,
+      family: family as 4 | 6
+    }));
+  if (!addresses.length) throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务域名无法解析");
+  for (const { address } of addresses) {
+    const kind = unsafeIpKind(address);
+    if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
+      logger.warn("security.s3_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
+      throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务地址指向受保护的本机、内网或链路本地网络");
+    }
+  }
+  if (endpoint.protocol === "http:" && addresses.some(({ address }) => unsafeIpKind(address) !== "private")) {
+    throw new AppError(400, "INSECURE_S3_ENDPOINT", "公网 S3 服务地址必须使用 HTTPS");
+  }
+  return addresses;
+}
+
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 
 /**
@@ -411,6 +437,27 @@ export async function fetchSafeAiEndpoint(
   throw new AppError(502, "PROVIDER_REDIRECT_LIMIT", "AI 供应商重定向次数过多");
 }
 
+/** S3 请求不跟随重定向，避免带签名的请求被转发到未验证的目标。 */
+export async function fetchSafeS3Endpoint(
+  fetchImpl: typeof fetch,
+  url: string,
+  init: RequestInit,
+  validateOutboundUrl?: SafeAiEndpointValidator
+): Promise<Awaited<ReturnType<typeof fetch>>> {
+  logger.debug("s3.outbound_request.validating", { hostname: new URL(url).hostname });
+  const validatedAddresses = await validateOutboundUrl?.(url);
+  const requestInit: RequestInit & { dispatcher?: Agent } = {
+    ...init,
+    redirect: "manual" as const,
+    ...(Array.isArray(validatedAddresses) && validatedAddresses.length
+      ? (rememberPinnedAiAddresses(new URL(url).hostname, [...validatedAddresses]), { dispatcher: pinnedAiAgent })
+      : {})
+  };
+  const response = await fetchImpl(url, requestInit);
+  logger.debug("s3.outbound_request.response", { hostname: new URL(url).hostname, status: response.status });
+  return response;
+}
+
 export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAuthentication = false): RuntimeSecurityOptions {
   const production = environment.NODE_ENV === "production";
   const username = environment.APP_AUTH_USERNAME?.trim() ?? "";
@@ -429,6 +476,7 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
     trustProxy,
     enforceSameOrigin: true,
     allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production,
+    allowPrivateS3Endpoints: environment.APP_ALLOW_PRIVATE_S3_ENDPOINTS === "true" || !production,
     allowRegistration,
     ...(setupToken ? { setupToken } : {})
   };

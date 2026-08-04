@@ -1,5 +1,6 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
+import type { EncryptedSecret } from "./credential-vault.js";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
@@ -180,6 +181,35 @@ export type AttachmentInput = {
   height: number;
   pageCount: number;
   animated: boolean;
+};
+
+export type S3BackupTargetConfiguration = {
+  name: string;
+  enabled: boolean;
+  endpoint: string;
+  region: string;
+  bucket: string;
+  subdirectory: string;
+  backupImages: boolean;
+  scheduleTime: string;
+  retentionCount: number;
+};
+
+export type S3BackupTargetCredentials = {
+  accessKey: EncryptedSecret;
+  secretAccessKey: EncryptedSecret;
+};
+
+export type S3BackupTargetForSync = S3BackupTargetConfiguration & S3BackupTargetCredentials & {
+  id: string;
+  lastScheduledSlot: string | null;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastStatus: "success" | "failed" | null;
+  lastError: string | null;
+  lastErrorAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type CharacterSnapshot = {
@@ -1140,6 +1170,244 @@ export class Store {
       });
     });
     return this.getPlatformUiSettings();
+  }
+
+  listS3BackupTargets(): Record<string, unknown>[] {
+    return this.db.all("SELECT * FROM s3_backup_targets ORDER BY created_at, id").map((row) => this.mapS3BackupTarget(row));
+  }
+
+  getS3BackupTarget(targetId: string): Record<string, unknown> {
+    const target = this.db.get("SELECT * FROM s3_backup_targets WHERE id = ?", targetId);
+    if (!target) throw notFound("S3 备份目标");
+    return this.mapS3BackupTarget(target);
+  }
+
+  listS3BackupTargetsForSync(enabledOnly = false): S3BackupTargetForSync[] {
+    const rows = enabledOnly
+      ? this.db.all("SELECT * FROM s3_backup_targets WHERE enabled = 1 ORDER BY created_at, id")
+      : this.db.all("SELECT * FROM s3_backup_targets ORDER BY created_at, id");
+    return rows.map((row) => this.mapS3BackupTargetForSync(row));
+  }
+
+  getS3BackupTargetForSync(targetId: string): S3BackupTargetForSync {
+    const target = this.db.get("SELECT * FROM s3_backup_targets WHERE id = ?", targetId);
+    if (!target) throw notFound("S3 备份目标");
+    return this.mapS3BackupTargetForSync(target);
+  }
+
+  createS3BackupTarget(input: S3BackupTargetConfiguration & S3BackupTargetCredentials): Record<string, unknown> {
+    const targetId = id("s3_backup");
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `INSERT INTO s3_backup_targets (
+          id, name, enabled, endpoint, region, bucket, subdirectory,
+          encrypted_access_key, access_key_iv, access_key_tag,
+          encrypted_secret_access_key, secret_access_key_iv, secret_access_key_tag,
+          backup_images, schedule_time, retention_count, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        targetId,
+        input.name,
+        input.enabled ? 1 : 0,
+        input.endpoint,
+        input.region,
+        input.bucket,
+        input.subdirectory,
+        input.accessKey.encrypted,
+        input.accessKey.iv,
+        input.accessKey.tag,
+        input.secretAccessKey.encrypted,
+        input.secretAccessKey.iv,
+        input.secretAccessKey.tag,
+        input.backupImages ? 1 : 0,
+        input.scheduleTime,
+        input.retentionCount,
+        timestamp,
+        timestamp
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.s3-backup-target.created", "s3-backup-target", targetId, {
+        name: input.name,
+        enabled: input.enabled,
+        endpoint: input.endpoint,
+        region: input.region,
+        bucket: input.bucket,
+        subdirectory: input.subdirectory,
+        backupImages: input.backupImages,
+        scheduleTime: input.scheduleTime,
+        retentionCount: input.retentionCount,
+        credentialsConfigured: true
+      });
+    });
+    return this.getS3BackupTarget(targetId);
+  }
+
+  updateS3BackupTarget(
+    targetId: string,
+    input: Partial<S3BackupTargetConfiguration> & { credentials?: S3BackupTargetCredentials }
+  ): Record<string, unknown> {
+    const current = this.getS3BackupTargetForSync(targetId);
+    const next = {
+      name: input.name ?? current.name,
+      enabled: input.enabled ?? current.enabled,
+      endpoint: input.endpoint ?? current.endpoint,
+      region: input.region ?? current.region,
+      bucket: input.bucket ?? current.bucket,
+      subdirectory: input.subdirectory ?? current.subdirectory,
+      backupImages: input.backupImages ?? current.backupImages,
+      scheduleTime: input.scheduleTime ?? current.scheduleTime,
+      retentionCount: input.retentionCount ?? current.retentionCount,
+      accessKey: input.credentials?.accessKey ?? current.accessKey,
+      secretAccessKey: input.credentials?.secretAccessKey ?? current.secretAccessKey
+    };
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        `UPDATE s3_backup_targets SET
+          name = ?, enabled = ?, endpoint = ?, region = ?, bucket = ?, subdirectory = ?,
+          encrypted_access_key = ?, access_key_iv = ?, access_key_tag = ?,
+          encrypted_secret_access_key = ?, secret_access_key_iv = ?, secret_access_key_tag = ?,
+          backup_images = ?, schedule_time = ?, retention_count = ?, updated_at = ?
+         WHERE id = ?`,
+        next.name,
+        next.enabled ? 1 : 0,
+        next.endpoint,
+        next.region,
+        next.bucket,
+        next.subdirectory,
+        next.accessKey.encrypted,
+        next.accessKey.iv,
+        next.accessKey.tag,
+        next.secretAccessKey.encrypted,
+        next.secretAccessKey.iv,
+        next.secretAccessKey.tag,
+        next.backupImages ? 1 : 0,
+        next.scheduleTime,
+        next.retentionCount,
+        timestamp,
+        targetId
+      );
+      this.audit(PLATFORM_AI_WORK_ID, "platform.s3-backup-target.updated", "s3-backup-target", targetId, {
+        name: next.name,
+        enabled: next.enabled,
+        endpoint: next.endpoint,
+        region: next.region,
+        bucket: next.bucket,
+        subdirectory: next.subdirectory,
+        backupImages: next.backupImages,
+        scheduleTime: next.scheduleTime,
+        retentionCount: next.retentionCount,
+        credentialsUpdated: input.credentials !== undefined
+      });
+    });
+    return this.getS3BackupTarget(targetId);
+  }
+
+  deleteS3BackupTarget(targetId: string): void {
+    const target = this.getS3BackupTarget(targetId);
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM s3_backup_targets WHERE id = ?", targetId);
+      this.audit(PLATFORM_AI_WORK_ID, "platform.s3-backup-target.deleted", "s3-backup-target", targetId, {
+        name: target.name,
+        endpoint: target.endpoint,
+        bucket: target.bucket,
+        subdirectory: target.subdirectory
+      });
+    });
+  }
+
+  reserveS3BackupScheduleSlot(targetId: string, slot: string): boolean {
+    const result = this.db.run(
+      `UPDATE s3_backup_targets SET last_scheduled_slot = ?
+       WHERE id = ? AND (last_scheduled_slot IS NULL OR last_scheduled_slot <> ?)`,
+      slot,
+      targetId,
+      slot
+    );
+    return result.changes === 1;
+  }
+
+  recordS3BackupStarted(targetId: string, timestamp: string): void {
+    this.db.run(
+      "UPDATE s3_backup_targets SET last_started_at = ?, last_status = NULL, last_error = NULL, last_error_at = NULL WHERE id = ?",
+      timestamp,
+      targetId
+    );
+  }
+
+  recordS3BackupSucceeded(targetId: string, timestamp: string): void {
+    this.db.run(
+      "UPDATE s3_backup_targets SET last_finished_at = ?, last_status = 'success', last_error = NULL, last_error_at = NULL WHERE id = ?",
+      timestamp,
+      targetId
+    );
+  }
+
+  recordS3BackupFailed(targetId: string, timestamp: string, error: string): void {
+    this.db.run(
+      "UPDATE s3_backup_targets SET last_finished_at = ?, last_status = 'failed', last_error = ?, last_error_at = ? WHERE id = ?",
+      timestamp,
+      error,
+      timestamp,
+      targetId
+    );
+  }
+
+  private mapS3BackupTarget(row: Row): Record<string, unknown> {
+    const status = optionalString(row, "last_status");
+    return {
+      id: requiredString(row, "id"),
+      name: requiredString(row, "name"),
+      enabled: booleanValue(row, "enabled"),
+      endpoint: requiredString(row, "endpoint"),
+      region: requiredString(row, "region"),
+      bucket: requiredString(row, "bucket"),
+      subdirectory: requiredString(row, "subdirectory"),
+      hasCredentials: Boolean(requiredString(row, "encrypted_access_key") && requiredString(row, "encrypted_secret_access_key")),
+      backupImages: booleanValue(row, "backup_images"),
+      scheduleTime: requiredString(row, "schedule_time"),
+      retentionCount: numberValue(row, "retention_count"),
+      lastStartedAt: optionalString(row, "last_started_at"),
+      lastFinishedAt: optionalString(row, "last_finished_at"),
+      lastStatus: status === "success" || status === "failed" ? status : null,
+      lastError: optionalString(row, "last_error"),
+      lastErrorAt: optionalString(row, "last_error_at"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private mapS3BackupTargetForSync(row: Row): S3BackupTargetForSync {
+    const publicTarget = this.mapS3BackupTarget(row);
+    return {
+      id: String(publicTarget.id),
+      name: String(publicTarget.name),
+      enabled: Boolean(publicTarget.enabled),
+      endpoint: String(publicTarget.endpoint),
+      region: String(publicTarget.region),
+      bucket: String(publicTarget.bucket),
+      subdirectory: String(publicTarget.subdirectory),
+      backupImages: Boolean(publicTarget.backupImages),
+      scheduleTime: String(publicTarget.scheduleTime),
+      retentionCount: Number(publicTarget.retentionCount),
+      accessKey: {
+        encrypted: requiredString(row, "encrypted_access_key"),
+        iv: requiredString(row, "access_key_iv"),
+        tag: requiredString(row, "access_key_tag")
+      },
+      secretAccessKey: {
+        encrypted: requiredString(row, "encrypted_secret_access_key"),
+        iv: requiredString(row, "secret_access_key_iv"),
+        tag: requiredString(row, "secret_access_key_tag")
+      },
+      lastScheduledSlot: optionalString(row, "last_scheduled_slot"),
+      lastStartedAt: optionalString(row, "last_started_at"),
+      lastFinishedAt: optionalString(row, "last_finished_at"),
+      lastStatus: publicTarget.lastStatus === "success" || publicTarget.lastStatus === "failed" ? publicTarget.lastStatus : null,
+      lastError: typeof publicTarget.lastError === "string" ? publicTarget.lastError : null,
+      lastErrorAt: typeof publicTarget.lastErrorAt === "string" ? publicTarget.lastErrorAt : null,
+      createdAt: String(publicTarget.createdAt),
+      updatedAt: String(publicTarget.updatedAt)
+    };
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;

@@ -1828,6 +1828,39 @@ describe("用户、作品权限与操作者追踪 API", () => {
     )).toEqual({ action: "platform.ui-settings.updated", user_id: admin.user.userId });
   });
 
+  it("S3 系统备份配置要求系统管理员和 CSRF 令牌", async () => {
+    const admin = await register(runtime, "s3_backup_admin");
+    const writer = await register(runtime, "s3_backup_writer");
+    const payload = {
+      name: "S3 备份",
+      enabled: true,
+      endpoint: "https://s3.example.test",
+      region: "us-east-1",
+      bucket: "backup-bucket",
+      subdirectory: "team/scriverse",
+      backupImages: true,
+      scheduleTime: "02:30",
+      retentionCount: 7,
+      accessKeyId: "test-access-key",
+      secretAccessKey: "test-secret-key"
+    };
+
+    await writer.agent.get("/api/platform/backups").expect(403);
+    await writer.agent.post("/api/platform/backups").set("X-CSRF-Token", writer.csrfToken).send(payload).expect(403);
+    await admin.agent.post("/api/platform/backups").send(payload).expect(403);
+    await admin.agent.post("/api/platform/backups")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ ...payload, unknown: true })
+      .expect(400);
+    const created = await admin.agent.post("/api/platform/backups")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send(payload)
+      .expect(201);
+    expect(created.body.data).toMatchObject({ subdirectory: "team/scriverse", hasCredentials: true });
+    expect(JSON.stringify(created.body.data)).not.toContain("test-access-key");
+    expect(JSON.stringify(created.body.data)).not.toContain("test-secret-key");
+  });
+
   it("用户可修改自己的显示名称和密码", async () => {
     const user = await register(runtime, "profile_user");
     const profile = await user.agent.patch("/api/auth/profile").set("X-CSRF-Token", user.csrfToken).send({ displayName: "新名称" }).expect(200);
