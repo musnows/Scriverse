@@ -124,6 +124,36 @@ describe("本地服务运行时", () => {
     expect(JSON.parse(readFileSync(join(root, STARTUP_RETRY_STATE_FILENAME), "utf8"))).toMatchObject({ attempts: 2 });
   });
 
+  it("启动异常重试不会重复生成超过上限的迁移备份", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-startup-retry-backup-"));
+    roots.push(root);
+    const databasePath = join(root, "novel.db");
+    const legacy = new Database(databasePath);
+    legacy.raw.exec("DROP TABLE attachment_cleanup_queue; DROP TABLE attachment_access_modules; DELETE FROM schema_migrations WHERE version >= 58");
+    legacy.close();
+
+    const options = {
+      host: "0.0.0.0",
+      port: 0,
+      dataDirectory: root,
+      databasePath,
+      env: { NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true", [STARTUP_RETRY_LIMIT_ENV]: "2" }
+    } as const;
+    const expectedFailure = "APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址";
+
+    await expect(startLocalServer(options)).rejects.toThrow(expectedFailure);
+    await expect(startLocalServer(options)).rejects.toThrow(expectedFailure);
+    const backupsDirectory = join(root, "backups");
+    const backupNamesAfterFailures = readdirSync(backupsDirectory).filter((name) => name.startsWith("pre-migration-v"));
+    expect(backupNamesAfterFailures).toHaveLength(2);
+    expect(backupNamesAfterFailures.every((name) => existsSync(join(backupsDirectory, name, "backup.json")))).toBe(true);
+
+    await expect(startLocalServer(options)).rejects.toThrow("Startup retry limit reached");
+    const backupNamesAfterBlock = readdirSync(backupsDirectory).filter((name) => name.startsWith("pre-migration-v"));
+    expect(backupNamesAfterBlock).toEqual(backupNamesAfterFailures);
+    expect(JSON.parse(readFileSync(join(root, STARTUP_RETRY_STATE_FILENAME), "utf8"))).toMatchObject({ attempts: 2 });
+  });
+
   it("服务器正常监听后清理启动失败重试次数", async () => {
     const root = mkdtempSync(join(tmpdir(), "scriverse-startup-retry-reset-"));
     roots.push(root);
