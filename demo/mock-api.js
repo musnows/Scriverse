@@ -16,6 +16,12 @@ const demoUser = Object.freeze({
   onboardingCompleted: true,
   avatarUrl: null
 });
+let demoUserState = { ...demoUser };
+let demoApiKey = null;
+let demoUiSettings = { toastPosition: "bottom-right" };
+const demoDirectoryUsers = [
+  { userId: "demo-editor", username: "demo-editor", displayName: "演示协作者", role: "writer", status: "active", avatarUrl: null }
+];
 
 function installDemoLoginHint() {
   const mount = () => {
@@ -62,7 +68,7 @@ function installBrowserAiNotice() {
     const title = document.createElement("h2");
     title.textContent = "演示站前端直连模式";
     const description = document.createElement("p");
-    description.textContent = "供应商、模型和 API Key 仅保存在当前浏览器。AI 请求由浏览器直接发往你配置的 OpenAI 兼容接口，不经过演示站服务器；演示站服务器不会接收、记录或存储 API Key。请仅在可信设备上使用，并确认服务商支持浏览器跨域请求（CORS）。";
+    description.textContent = "供应商、模型和 API Key 仅保存在当前浏览器。AI 请求由浏览器直接发往你配置的 OpenAI 或 Anthropic 接口，不经过演示站服务器；演示站服务器不会接收、记录或存储 API Key。请仅在可信设备上使用，并确认服务商支持浏览器跨域请求（CORS）。Google Vertex 需要服务端 OAuth，演示站不支持浏览器直连。";
     copy.append(title, description);
     header.append(copy);
     section.append(header);
@@ -125,7 +131,7 @@ function buildWork(source) {
         createdAt: now
       }];
     });
-    return { id: volumeId, workId: id, title: volume.name, kind: "main", order: index + 1, sortOrder: index, versionNo: 1, chapters: volumeChapters };
+    return { id: volumeId, workId: id, title: volume.name, kind: "main", order: index + 1, sortOrder: index, versionNo: 1, chapters: volumeChapters, versions: [] };
   });
   const races = source.races.map((race, index) => ({
     id: `${id}-race-${index + 1}`,
@@ -137,8 +143,12 @@ function buildWork(source) {
     path: [race.name],
     settings: [{ title: "族群概况", value: `${race.population}。${race.traits}` }],
     effectiveSettings: [{ title: "族群概况", value: `${race.population}。${race.traits}`, inherited: false, sourceRaceName: race.name }],
+    settingsMarkdown: `## 族群概况\n\n${race.population}。${race.traits}`,
+    settingsSections: [{ id: `${id}-race-${index + 1}-section`, title: "族群概况", contentMarkdown: `${race.population}。${race.traits}`, summary: "", sortOrder: 0 }],
     memberIds: [],
     members: [],
+    isExtinct: false,
+    versions: [],
     versionNo: 1
   }));
   races.forEach((race) => {
@@ -155,6 +165,8 @@ function buildWork(source) {
     settingsSections: [{ id: `${id}-organization-${index + 1}-section`, title: "组织立场", contentMarkdown: organization.stance }],
     memberIds: [],
     members: [],
+    isDissolved: false,
+    versions: [],
     versionNo: 1
   }));
   const characters = source.characters.map((character) => {
@@ -172,8 +184,10 @@ function buildWork(source) {
       attributes: { identity: character.role, details: [{ label: "年龄", value: character.age }] },
       currentState: { 身份: character.role, 所属: character.org },
       profile: { summary: character.detail },
+      profileSections: [],
       organizations: organization ? [{ id: organization.id, name: organization.name }] : [],
       lockedFields: [],
+      versions: [],
       profileSectionCount: 0,
       versionNo: 1,
       createdAt: now,
@@ -197,12 +211,17 @@ function buildWork(source) {
     content: setting.content,
     status: "confirmed",
     locked: setting.locked,
+    tags: [],
+    evidence: [],
+    scope: {},
+    authorNote: "",
+    versions: [],
     versionNo: 1,
     createdAt: now,
     updatedAt: now
   }));
   const trackNames = [...new Set(source.timeline.map((item) => item.track))];
-  const timelineTracks = trackNames.map((name, index) => ({ id: `${id}-track-${index + 1}`, workId: id, name, description: `${name}相关的大事件`, sortOrder: index + 1, versionNo: 1 }));
+  const timelineTracks = trackNames.map((name, index) => ({ id: `${id}-track-${index + 1}`, workId: id, name, description: `${name}相关的大事件`, sortOrder: index + 1, versions: [], versionNo: 1 }));
   const timeline = source.timeline.map((event, index) => ({
     id: `${id}-event-${index + 1}`,
     workId: id,
@@ -212,12 +231,20 @@ function buildWork(source) {
     description: `发生于${event.chapter}，推动${event.track}发展。`,
     location: "",
     status: "confirmed",
+    eventType: "other",
+    timeSort: index + 1,
     sortOrder: index + 1,
+    chapterIds: [],
     participantIds: [],
+    causes: [],
+    impactScope: "personal",
     evidence: [],
+    versions: [],
     versionNo: 1
   }));
   const outlines = chapters.map((chapter, index) => ({
+    id: `${id}-outline-${index + 1}`,
+    workId: id,
     chapterId: chapter.id,
     chapterTitle: chapter.title,
     volumeTitle: volumes.find((volume) => volume.id === chapter.volumeId)?.title ?? "正文",
@@ -226,6 +253,8 @@ function buildWork(source) {
     turningPoint: source.chapters[index].content.split("\n\n")[2] ?? "",
     status: index < chapters.length - 2 ? "completed" : "planned",
     unresolvedForeshadowCount: index === chapters.length - 1 ? 1 : 0,
+    notes: "",
+    versions: [],
     versionNo: 1
   }));
   const foreshadows = source.outlines.map((item, index) => ({
@@ -237,7 +266,10 @@ function buildWork(source) {
     status: item.status === "已回收" ? "resolved" : "planted",
     unresolved: item.status !== "已回收",
     overdue: false,
+    plannedPayoffChapterId: null,
+    resolutionNote: item.status === "已回收" ? item.note : "",
     occurrences: [],
+    versions: [],
     versionNo: 1
   }));
   const characterBySourceId = new Map(source.characters.map((character, index) => [character.id, characters[index]]));
@@ -252,7 +284,11 @@ function buildWork(source) {
     directed: false,
     confidence: 0.93,
     confirmationStatus: "confirmed",
+    currentStatus: "active",
+    timeRange: {},
+    locked: false,
     evidence: [{ chapterId: chapters[0].id, quote: relationship.evidence }],
+    versions: [],
     versionNo: 1
   }));
   const tasks = analysisTasks.map((task, index) => ({
@@ -265,6 +301,7 @@ function buildWork(source) {
     progress: task.status === "排队中" ? 0 : 100,
     result: { summary: task.result },
     failures: [],
+    trace: { calls: [], processSteps: [] },
     createdAt: now,
     updatedAt: now
   }));
@@ -289,6 +326,36 @@ function buildWork(source) {
       deletedAt: null
     };
   });
+  const drafts = [
+    {
+      id: `${id}-draft-1`,
+      workId: id,
+      draftType: "prose",
+      volumeId: volumes[0]?.id ?? null,
+      volumeTitle: volumes[0]?.title ?? null,
+      settingModule: null,
+      title: "下一章的开场画面",
+      content: `记录一个还没有定稿的开场方向：${chapters[0]?.title ?? "第一章"}之后，先让角色面对一个无法解释的细节。`,
+      versionNo: 1,
+      createdAt: now,
+      updatedAt: now,
+      versions: []
+    },
+    {
+      id: `${id}-draft-2`,
+      workId: id,
+      draftType: "setting",
+      volumeId: null,
+      volumeTitle: null,
+      settingModule: "settings",
+      title: "待确认的世界规则",
+      content: "这条规则需要在正文证据足够后再写入正式设定库。",
+      versionNo: 1,
+      createdAt: now,
+      updatedAt: now,
+      versions: []
+    }
+  ];
   const wordTotal = chapters.reduce((total, chapter) => total + chapter.wordCount, 0);
   return {
     id,
@@ -313,9 +380,14 @@ function buildWork(source) {
     timeline,
     outlines,
     foreshadows,
+    drafts,
     relationships,
     reviews: [],
     tasks,
+    suggestions: [],
+    fileVersions: [],
+    attachments: [],
+    members: [{ userId: demoUser.userId, username: demoUser.username, displayName: demoUser.displayName, role: "owner", status: "active", permissions: null }],
     chapterAnnotations,
     relationshipSearchIndex: {
       workId: id,
@@ -351,6 +423,286 @@ const bodyOf = async (init) => {
   if (!init?.body || init.body instanceof FormData) return {};
   try { return JSON.parse(String(init.body)); } catch { return {}; }
 };
+const formValue = (init, key, fallback = "") => String(init?.body?.get?.(key) ?? fallback);
+const formFile = (init) => init?.body?.get?.("file");
+const escapeXml = (value) => String(value ?? "").replace(/[&<>"']/gu, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[character]);
+
+const resourceCollectionKeys = Object.freeze({
+  settings: "settings",
+  characters: "characters",
+  races: "races",
+  organizations: "organizations",
+  "timeline-tracks": "timelineTracks",
+  timeline: "timeline",
+  relationships: "relationships",
+  foreshadows: "foreshadows",
+  reviews: "reviews",
+  drafts: "drafts"
+});
+
+function snapshotEntity(item) {
+  const { versions, ...snapshot } = item;
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
+function entityVersion(item, source = "manual", changeNote = "") {
+  return {
+    id: demoId("entity-version"),
+    versionNo: Number(item.versionNo ?? 1),
+    snapshot: snapshotEntity(item),
+    source,
+    changeNote,
+    actor: demoUser.displayName,
+    createdAt: String(item.updatedAt ?? new Date().toISOString())
+  };
+}
+
+function ensureEntityHistory(item) {
+  if (!Array.isArray(item.versions)) item.versions = [];
+  if (!item.versions.length) item.versions.push(entityVersion(item, "create", "演示站预制版本"));
+  return item.versions;
+}
+
+function bumpEntity(work, item, entityType, changeNote = "更新创作资料", source = "manual") {
+  ensureEntityHistory(item);
+  item.versionNo = Number(item.versionNo ?? 1) + 1;
+  item.updatedAt = new Date().toISOString();
+  item.versions.unshift(entityVersion(item, source, changeNote));
+  recordAudit(work, `${entityType}.updated`, entityType, String(item.id), { versionNo: item.versionNo, source });
+  return item;
+}
+
+function resourceCollection(work, resource) {
+  const key = resourceCollectionKeys[resource];
+  return key ? work[key] : null;
+}
+
+function findResourceRecord(resourceId, includeDeleted = false) {
+  for (const work of works) {
+    for (const resource of Object.keys(resourceCollectionKeys)) {
+      const collection = resourceCollection(work, resource) ?? [];
+      const item = collection.find((candidate) => String(candidate.id) === String(resourceId));
+      if (item && (includeDeleted || !item.deletedAt)) return { work, resource, item };
+    }
+  }
+  return null;
+}
+
+function listEntityVersions(entityType, entityId) {
+  const found = findResourceRecord(entityId, true);
+  if (!found) return [];
+  const versions = ensureEntityHistory(found.item);
+  return versions.map((version) => ({ ...version, snapshot: snapshotEntity(version.snapshot ?? found.item) }));
+}
+
+function createDraft(work, body) {
+  const timestamp = new Date().toISOString();
+  const draftType = body.draftType === "setting" ? "setting" : "prose";
+  const volume = draftType === "prose" ? work.volumes.find((item) => item.id === body.volumeId) : null;
+  const draft = {
+    id: demoId("draft"),
+    workId: work.id,
+    draftType,
+    volumeId: volume?.id ?? null,
+    volumeTitle: volume?.title ?? null,
+    settingModule: draftType === "setting" ? body.settingModule ?? null : null,
+    title: String(body.title ?? "新想法").trim() || "新想法",
+    content: String(body.content ?? ""),
+    versionNo: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    versions: []
+  };
+  ensureEntityHistory(draft);
+  work.drafts.unshift(draft);
+  recordAudit(work, "draft.created", "draft", draft.id, { draftType });
+  return draft;
+}
+
+function draftView(draft, includeContent = true) {
+  const { versions, content, ...rest } = draft;
+  return includeContent ? { ...rest, content } : { ...rest, contentPreview: content.replace(/\s+/gu, " ").trim().slice(0, 320) };
+}
+
+function findCharacterSection(sectionId) {
+  for (const work of works) {
+    for (const character of work.characters) {
+      const section = (character.profileSections ?? []).find((item) => item.id === sectionId);
+      if (section) return { work, character, section };
+    }
+  }
+  return null;
+}
+
+function createEmptyWork(body) {
+  const timestamp = new Date().toISOString();
+  const work = {
+    id: demoId("work"),
+    title: String(body.title ?? "未命名作品").trim() || "未命名作品",
+    author: String(body.author ?? demoUserState.displayName),
+    description: String(body.description ?? ""),
+    language: String(body.language ?? "zh-CN"),
+    tags: Array.isArray(body.tags) ? body.tags : [],
+    accessRole: "owner",
+    modulePermissions: null,
+    coverUrl: null,
+    chapterCount: 0,
+    wordCount: 0,
+    versionNo: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    volumes: [],
+    chapters: [],
+    characters: [],
+    settings: [],
+    races: [],
+    organizations: [],
+    timelineTracks: [],
+    timeline: [],
+    outlines: [],
+    foreshadows: [],
+    drafts: [],
+    relationships: [],
+    reviews: [],
+    tasks: [],
+    suggestions: [],
+    chapterAnnotations: [],
+    fileVersions: [],
+    attachments: [],
+    members: [{ userId: demoUser.userId, username: demoUser.username, displayName: demoUser.displayName, role: "owner", status: "active", permissions: null }],
+    relationshipSearchIndex: {
+      workId: "",
+      status: "ready",
+      generation: 1,
+      queuedSourceCount: 0,
+      queuedSources: [],
+      indexedSourceCount: 0,
+      indexedParagraphCount: 0,
+      error: "",
+      updatedAt: timestamp
+    },
+    auditLogs: [],
+    writingGoal: { dailyGoal: 0, targetTotal: 0, deadline: null, updatedAt: null }
+  };
+  work.relationshipSearchIndex.workId = work.id;
+  ensureEntityHistory(work);
+  recordAudit(work, "work.created", "work", work.id);
+  return work;
+}
+
+function createResourceRecord(work, resource, body) {
+  const timestamp = new Date().toISOString();
+  const idPrefix = resource === "timeline-tracks" ? "timeline-track" : resource === "timeline" ? "timeline-event" : resource.slice(0, -1);
+  const item = {
+    id: demoId(idPrefix),
+    workId: work.id,
+    versionNo: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    versions: []
+  };
+  if (resource === "characters") Object.assign(item, {
+    name: String(body.name ?? "新角色").trim() || "新角色",
+    aliases: Array.isArray(body.aliases) ? body.aliases : [],
+    code: String(body.code ?? ""),
+    species: String(body.species ?? ""),
+    raceId: body.raceId ?? null,
+    race: null,
+    attributes: body.attributes ?? {},
+    currentState: body.currentState ?? {},
+    profile: body.profile ?? { summary: "" },
+    profileSections: [],
+    organizations: [],
+    organizationIds: Array.isArray(body.organizationIds) ? body.organizationIds : [],
+    lockedFields: Array.isArray(body.lockedFields) ? body.lockedFields : [],
+    mergedIntoCharacterId: null,
+    isDead: Boolean(body.isDead),
+    profileSectionCount: 0
+  });
+  if (resource === "races") Object.assign(item, {
+    name: String(body.name ?? "新种族").trim() || "新种族",
+    description: String(body.description ?? ""),
+    parentId: body.parentRaceId ?? null,
+    parentName: null,
+    path: [],
+    settings: Array.isArray(body.settings) ? body.settings : [],
+    settingsMarkdown: String(body.settingsMarkdown ?? ""),
+    settingsSections: Array.isArray(body.settingsSections) ? body.settingsSections : [],
+    effectiveSettings: [],
+    memberIds: Array.isArray(body.memberIds) ? body.memberIds : [],
+    members: [],
+    isExtinct: Boolean(body.isExtinct)
+  });
+  if (resource === "organizations") Object.assign(item, {
+    name: String(body.name ?? "新组织").trim() || "新组织",
+    description: String(body.description ?? ""),
+    settings: Array.isArray(body.settings) ? body.settings : [],
+    settingsMarkdown: String(body.settingsMarkdown ?? ""),
+    settingsSections: Array.isArray(body.settingsSections) ? body.settingsSections : [],
+    memberIds: Array.isArray(body.memberIds) ? body.memberIds : [],
+    members: [],
+    isDissolved: Boolean(body.isDissolved)
+  });
+  if (resource === "timeline-tracks") Object.assign(item, {
+    name: String(body.name ?? "新时间轴").trim() || "新时间轴",
+    description: String(body.description ?? ""),
+    sortOrder: Number(body.sortOrder ?? work.timelineTracks.length + 1)
+  });
+  if (resource === "timeline") Object.assign(item, {
+    trackId: body.trackId ?? null,
+    name: String(body.name ?? "新事件").trim() || "新事件",
+    description: String(body.description ?? ""),
+    eventType: String(body.eventType ?? "other"),
+    timeLabel: String(body.timeLabel ?? "时间待定"),
+    timeSort: body.timeSort === null || body.timeSort === undefined ? null : Number(body.timeSort),
+    chapterIds: Array.isArray(body.chapterIds) ? body.chapterIds : [],
+    participantIds: Array.isArray(body.participantIds) ? body.participantIds : [],
+    location: String(body.location ?? ""),
+    causes: Array.isArray(body.causes) ? body.causes : [],
+    impactScope: String(body.impactScope ?? "personal"),
+    evidence: Array.isArray(body.evidence) ? body.evidence : [],
+    status: String(body.status ?? "pending")
+  });
+  if (resource === "relationships") Object.assign(item, {
+    fromCharacterId: body.fromCharacterId,
+    toCharacterId: body.toCharacterId,
+    category: String(body.category ?? "uncertain"),
+    subtype: String(body.subtype ?? ""),
+    keywords: Array.isArray(body.keywords) ? body.keywords : [],
+    directed: Boolean(body.directed),
+    currentStatus: String(body.currentStatus ?? "active"),
+    timeRange: body.timeRange ?? {},
+    confidence: Number(body.confidence ?? 0.5),
+    evidence: Array.isArray(body.evidence) ? body.evidence : [],
+    confirmationStatus: String(body.confirmationStatus ?? "confirmed"),
+    locked: Boolean(body.locked)
+  });
+  if (resource === "foreshadows") Object.assign(item, {
+    title: String(body.title ?? "新伏笔").trim() || "新伏笔",
+    description: String(body.description ?? ""),
+    importance: String(body.importance ?? "minor"),
+    status: String(body.status ?? "planted"),
+    unresolved: !["resolved", "abandoned"].includes(body.status),
+    overdue: false,
+    plannedPayoffChapterId: body.plannedPayoffChapterId ?? null,
+    resolutionNote: String(body.resolutionNote ?? ""),
+    occurrences: Array.isArray(body.occurrences) ? body.occurrences : []
+  });
+  if (resource === "reviews") Object.assign(item, {
+    title: String(body.title ?? "新审核项").trim() || "新审核项",
+    itemType: String(body.itemType ?? "consistency"),
+    dedupeKey: String(body.dedupeKey ?? ""),
+    severity: String(body.severity ?? "medium"),
+    description: String(body.description ?? ""),
+    suggestion: String(body.suggestion ?? ""),
+    status: "pending",
+    evidence: Array.isArray(body.evidence) ? body.evidence : [],
+    entityRefs: Array.isArray(body.entityRefs) ? body.entityRefs : [],
+    resolutionNote: ""
+  });
+  ensureEntityHistory(item);
+  return item;
+}
 
 function findChapterRecord(chapterId, includeDeleted = false) {
   for (const work of works) {
@@ -481,7 +833,39 @@ function writingProgress(work) {
 }
 
 const demoId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
-const defaultWorkAiSettings = () => ({ systemPrompt: "", bookSummaryContextPercent: 20, contextCompactThreshold: 80, agentTools: [], autoRunEnabled: false, autoRunConcurrency: 2, autoRunBatchLimit: 20 });
+
+for (const work of works) {
+  ensureEntityHistory(work);
+  for (const volume of work.volumes) ensureEntityHistory(volume);
+  for (const chapter of work.chapters) ensureEntityHistory(chapter);
+  for (const collection of [work.characters, work.settings, work.races, work.organizations, work.timelineTracks, work.timeline, work.outlines, work.foreshadows, work.relationships, work.reviews, work.drafts]) {
+    for (const item of collection) ensureEntityHistory(item);
+  }
+}
+
+const defaultWorkAiSettings = (workId = null) => ({
+  ...(workId ? { workId } : {}),
+  systemPrompt: "",
+  dailyTokenQuota: null,
+  autoRunEnabled: false,
+  autoRunConcurrency: 2,
+  autoRunBatchLimit: 20,
+  autoRunDailyTaskLimit: 0,
+  autoRunFailureThreshold: 3,
+  autoRunPaused: false,
+  autoRunPauseReason: "",
+  autoRunResumeAt: null,
+  autoRunConsecutiveFailures: 0,
+  bookSummaryContextPercent: 50,
+  contextCompactThreshold: 85,
+  agentToolCallLimit: 12,
+  agentToolCallGlobalMultiplier: 3,
+  agentTools: [],
+  imageToolModelId: null,
+  alwaysIncludeSettingInfo: false,
+  titleGenerationModelId: null,
+  updatedAt: null
+});
 const minimumModelContextWindow = 32_768;
 const modelWithProvider = (model, providers) => {
   const provider = providers.find((item) => item.id === model.providerId);
@@ -527,7 +911,21 @@ function findConversation(state, conversationId) {
 
 function createConversationRecord(workId, title = "新对话") {
   const createdAt = new Date().toISOString();
-  return { id: demoId("conversation"), workId, title, messages: [], createdAt, updatedAt: createdAt, contextWarningPending: false, compactedMessageCount: 0, hasCompactedSummary: false };
+  return {
+    id: demoId("conversation"),
+    workId,
+    title,
+    messages: [],
+    taskType: "chat",
+    contextScope: { type: "none" },
+    roleplayCharacter: null,
+    agentTools: null,
+    createdAt,
+    updatedAt: createdAt,
+    contextWarningPending: false,
+    compactedMessageCount: 0,
+    hasCompactedSummary: false
+  };
 }
 
 function conversationSummary(conversation) {
@@ -542,6 +940,139 @@ function appendConversationMessage(conversation, { role, content, citations = []
   conversation.updatedAt = createdAt;
   if (conversation.title === "新对话" && role === "user") conversation.title = Array.from(message.content.replace(/\s+/gu, " ").trim()).slice(0, 15).join("") || "新对话";
   return message;
+}
+
+function findSuggestion(suggestionId) {
+  for (const work of works) {
+    const suggestion = work.suggestions.find((item) => item.id === suggestionId);
+    if (suggestion) return { work, suggestion };
+  }
+  return null;
+}
+
+function makeSuggestion(work, body, result) {
+  const chapterId = body.scope?.chapterId ?? null;
+  const chapter = chapterId ? work.chapters.find((item) => item.id === chapterId && !item.deletedAt) : null;
+  const taskType = String(body.taskType ?? "chat");
+  return {
+    id: demoId("suggestion"),
+    workId: work.id,
+    taskType,
+    instruction: String(body.instruction ?? ""),
+    scope: body.scope ?? { type: "none" },
+    chapterId: chapter?.id ?? null,
+    chapterVersion: chapter?.versionNo ?? null,
+    sourceText: String(body.scope?.selection ?? body.scope?.selectedText ?? body.scope?.sourceText ?? ""),
+    action: taskType === "continue" ? "append" : taskType === "polish" ? "replace" : "note",
+    content: result.content,
+    status: "pending",
+    guard: null,
+    model: { id: result.model.id, displayName: result.model.displayName },
+    provider: result.model.providerName,
+    outputTokens: result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2)),
+    contextUsage: result.contextUsage ?? contextUsage(result.model),
+    toolCalls: result.toolCalls ?? [],
+    processSteps: result.processSteps ?? [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    decidedAt: null
+  };
+}
+
+function createDemoAttachment(work, init, module) {
+  const file = init?.body?.get?.("file");
+  const fileName = String(file?.name ?? "附件").replace(/[\\/\r\n]/gu, "_").slice(0, 240) || "附件";
+  const mimeType = String(file?.type ?? "application/octet-stream").slice(0, 120);
+  const attachment = {
+    id: demoId("attachment"),
+    workId: work.id,
+    module: String(module ?? "settings"),
+    fileName,
+    originalName: fileName,
+    mimeType,
+    byteLength: Number(file?.size ?? 0),
+    sha256: "demo-attachment",
+    deduplicated: false,
+    contentUrl: `/api/attachments/demo/content`,
+    createdAt: new Date().toISOString()
+  };
+  attachment.contentUrl = `/api/attachments/${encodeURIComponent(attachment.id)}/content`;
+  work.attachments.push(attachment);
+  recordAudit(work, "attachment.created", "attachment", attachment.id, { module: attachment.module, fileName });
+  return attachment;
+}
+
+function findVersionTarget(entityType, entityId) {
+  if (entityType === "work") {
+    const work = findWork(entityId);
+    return work ? { work, item: work, resource: "work" } : null;
+  }
+  if (entityType === "volume") {
+    for (const work of works) {
+      const item = work.volumes.find((candidate) => candidate.id === entityId);
+      if (item) return { work, item, resource: "volume" };
+    }
+  }
+  if (entityType === "chapter") {
+    const found = findChapterRecord(entityId, true);
+    return found ? { work: found.work, item: found.chapter, resource: "chapter" } : null;
+  }
+  if (entityType === "chapter-outline") {
+    for (const work of works) {
+      const item = work.outlines.find((candidate) => candidate.chapterId === entityId || candidate.id === entityId);
+      if (item) return { work, item, resource: "chapter-outline" };
+    }
+  }
+  if (entityType === "character-section") {
+    const found = findCharacterSection(entityId);
+    return found ? { work: found.work, item: found.section, resource: "character-section" } : null;
+  }
+  const resourceByEntity = {
+    setting: "settings",
+    character: "characters",
+    race: "races",
+    organization: "organizations",
+    "timeline-track": "timeline-tracks",
+    "timeline-event": "timeline",
+    relationship: "relationships",
+    foreshadow: "foreshadows",
+    review: "reviews",
+    draft: "drafts"
+  };
+  const found = findResourceRecord(entityId, true);
+  const expectedResource = resourceByEntity[entityType] ?? entityType;
+  return found && found.resource === expectedResource
+    ? { ...found, resource: entityType }
+    : null;
+}
+
+function entityHistory(entityType, entityId) {
+  const target = findVersionTarget(entityType, entityId);
+  if (!target) return null;
+  const versions = ensureEntityHistory(target.item);
+  return { ...target, versions: versions.map((version) => ({
+    ...version,
+    snapshot: snapshotEntity(version.snapshot ?? (target.resource === "chapter"
+      ? { ...target.item, title: version.title, content: version.content, versionNo: version.versionNo }
+      : target.item))
+  })) };
+}
+
+function restoreEntityVersion(target, versionNo) {
+  const version = target.versions.find((item) => Number(item.versionNo) === Number(versionNo));
+  if (!version) return null;
+  Object.assign(target.item, version.snapshot ?? { title: version.title, content: version.content });
+  if (target.resource === "chapter") {
+    target.item.wordCount = wordCount(target.item.content);
+    syncWorkChapters(target.work);
+    target.item.versionNo = Number(target.item.versionNo ?? 1) + 1;
+    target.item.updatedAt = new Date().toISOString();
+    recordChapterVersion(target.item, "restore", `恢复至 v${versionNo}`);
+    recordAudit(target.work, "chapter.restored", "chapter", target.item.id, { versionNo: target.item.versionNo, fromVersion: Number(versionNo) });
+    return target.item;
+  }
+  bumpEntity(target.work, target.item, target.resource, `恢复至 v${versionNo}`, "restore");
+  return target.item;
 }
 
 function demoTokenUsage(workId = null, includeWorks = false) {
@@ -608,7 +1139,7 @@ async function runBrowserAi(body, workId) {
   const work = findWork(workId);
   if (!work) throw new Error("未找到作品");
   const conversation = body.conversationId ? findConversation(state, body.conversationId) : null;
-  const settings = { ...defaultWorkAiSettings(), ...(state.workSettings[workId] ?? {}) };
+  const settings = { ...defaultWorkAiSettings(workId), ...(state.workSettings[workId] ?? {}) };
   const messages = buildBrowserAiMessages({
     work: workView(work),
     scope: body.scope,
@@ -616,7 +1147,8 @@ async function runBrowserAi(body, workId) {
     platformPrompt: state.platformSettings.systemPrompt,
     workPrompt: settings.systemPrompt,
     conversationMessages: conversation?.messages ?? [],
-    citations: body.citations ?? []
+    citations: body.citations ?? [],
+    roleplayCharacter: conversation?.roleplayCharacter ?? null
   });
   const result = await requestBrowserAi({ fetchImpl: nativeFetch, provider, model, messages });
   return { ...result, model: modelWithProvider(model, state.providers) };
@@ -679,9 +1211,17 @@ async function mockApi(input, init = {}) {
   if (!url.pathname.startsWith("/api/")) return nativeFetch(input, init);
   const method = String(init.method ?? (typeof input === "string" ? "GET" : input.method) ?? "GET").toUpperCase();
   const path = url.pathname;
+  let match;
 
   if (path === "/api/health") return success({ ok: true, version: DEMO_VERSION, development: false });
-  if (path === "/api/ui-settings" || path === "/api/platform/ui-settings") return success({ toastPosition: "bottom-right" });
+  if (path === "/api/update-check") return success({ enabled: false, checked: false, updateAvailable: false, latestVersion: null, releaseUrl: null, nextCheckAt: null });
+  if (path === "/api/ui-settings" || path === "/api/platform/ui-settings") {
+    if (method === "PATCH") {
+      const body = await bodyOf(init);
+      demoUiSettings = { ...demoUiSettings, ...body };
+    }
+    return success(demoUiSettings);
+  }
   if (path === "/api/auth/captcha") {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="52" viewBox="0 0 160 52"><rect width="160" height="52" rx="8" fill="#f2ebe3"/><path d="M8 38 152 12M12 10l138 32" stroke="#a96350" stroke-opacity=".22"/><text x="80" y="35" text-anchor="middle" font-family="monospace" font-size="27" font-weight="700" letter-spacing="8" fill="#5b3028">2468</text></svg>`;
     return success({ captchaId: "demo-captcha", imageDataUrl: `data:image/svg+xml;base64,${btoa(svg)}` });
@@ -690,7 +1230,7 @@ async function mockApi(input, init = {}) {
     const body = await bodyOf(init);
     if (!isValidDemoLogin(body)) return failure("演示账号、密码或验证码不正确", 401);
     sessionStorage.setItem(demoAuthStorageKey, "true");
-    return success(demoUser);
+    return success(demoUserState);
   }
   if (path === "/api/auth/session" && method === "DELETE") {
     sessionStorage.removeItem(demoAuthStorageKey);
@@ -699,15 +1239,116 @@ async function mockApi(input, init = {}) {
   if (path === "/api/auth/session") {
     const authenticated = sessionStorage.getItem(demoAuthStorageKey) === "true";
     return success(authenticated
-      ? { authenticated: true, csrfToken: "demo-csrf-token", user: demoUser }
+      ? { authenticated: true, csrfToken: "demo-csrf-token", user: demoUserState }
       : { authenticated: false, setupRequired: false, registrationOpen: false });
   }
   if (path === "/api/auth/register") return failure("Demo 不开放注册，请使用页面提供的演示账号", 403);
   if (sessionStorage.getItem(demoAuthStorageKey) !== "true") return failure("请先登录演示账号", 401);
-  if (path === "/api/auth/api-key") return success({ configured: false });
-  if (path === "/api/auth/onboarding/complete") return success(demoUser);
+  if (path === "/api/cli/session") return failure("Demo 仅支持网页演示账号登录，请不要使用 API Key", 401);
+  if (path === "/api/auth/profile" && method === "PATCH") {
+    const body = await bodyOf(init);
+    demoUserState = { ...demoUserState, displayName: String(body.displayName ?? demoUserState.displayName).trim() || demoUserState.displayName };
+    return success(demoUserState);
+  }
+  if (path === "/api/auth/avatar") {
+    if (method === "DELETE") {
+      demoUserState = { ...demoUserState, avatarUrl: null };
+      return success(demoUserState);
+    }
+    if (method === "PUT") {
+      demoUserState = { ...demoUserState, avatarUrl: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='96'%3E%3Crect width='96' height='96' rx='24' fill='%23c86a52'/%3E%3Ctext x='48' y='62' text-anchor='middle' font-size='44' fill='white'%3E体%3C/text%3E%3C/svg%3E" };
+      return success(demoUserState);
+    }
+  }
+  if (path === "/api/auth/password" && method === "PATCH") return success(null, 204);
+  if (path === "/api/auth/api-key") return success(demoApiKey ? { configured: true, prefix: demoApiKey.slice(0, 12) } : { configured: false });
+  if (path === "/api/auth/api-key/reset" && method === "POST") {
+    demoApiKey = `scrv_demo_${crypto.randomUUID().replaceAll("-", "")}`;
+    return success({ apiKey: demoApiKey, prefix: demoApiKey.slice(0, 12) });
+  }
+  if (path === "/api/auth/onboarding/complete") return success(demoUserState);
+  if (path === "/api/users" && method === "GET") {
+    const users = [{ ...demoUserState }, ...demoDirectoryUsers].map((user) => ({ ...user, role: user.role ?? "writer" }));
+    return success(page(users, url));
+  }
+  if (path === "/api/users/directory" && method === "GET") {
+    const query = String(url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const users = [{ ...demoUserState }, ...demoDirectoryUsers].filter((user) => !query || `${user.username} ${user.displayName}`.toLowerCase().includes(query));
+    return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(users, url) : users);
+  }
+  match = path.match(/^\/api\/user-avatars\/([^/]+)$/u);
+  if (match && method === "GET") {
+    const userId = decodeURIComponent(match[1]);
+    const user = [{ ...demoUserState }, ...demoDirectoryUsers].find((item) => item.userId === userId);
+    if (!user) return failure("未找到用户头像");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><rect width="96" height="96" rx="24" fill="#c86a52"/><text x="48" y="62" text-anchor="middle" font-size="44" fill="white">${escapeXml(user.displayName.slice(0, 1))}</text></svg>`;
+    return new Response(svg, { headers: { "content-type": "image/svg+xml", "cache-control": "private, max-age=3600" } });
+  }
+  match = path.match(/^\/api\/users\/([^/]+)$/u);
+  if (match && method === "PATCH") {
+    const userId = decodeURIComponent(match[1]);
+    const body = await bodyOf(init);
+    if (userId === demoUserState.userId) {
+      demoUserState = { ...demoUserState, ...(body.role ? { role: body.role } : {}), ...(body.status ? { status: body.status } : {}) };
+      return success(demoUserState);
+    }
+    const user = demoDirectoryUsers.find((item) => item.userId === userId);
+    if (!user) return failure("未找到用户");
+    Object.assign(user, body);
+    return success(user);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/presence$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const body = await bodyOf(init);
+    const participants = (work.members ?? [{ userId: demoUserState.userId, username: demoUserState.username, displayName: demoUserState.displayName, role: "owner", status: "active", permissions: null }])
+      .filter((member) => member.status !== "disabled")
+      .map((member) => ({
+        ...member,
+        avatarUrl: member.avatarUrl ?? null,
+        clientId: member.userId === demoUserState.userId ? body.clientId ?? "demo-client" : `demo-client-${member.userId}`,
+        page: body.page ?? { kind: "welcome", key: "welcome", label: "作品首页" },
+        lastSeenAt: new Date().toISOString()
+      }));
+    return success({ participants, recentChanges: [] });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/members$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    work.members ??= [{ userId: demoUserState.userId, username: demoUserState.username, displayName: demoUserState.displayName, role: "owner", status: "active", permissions: null }];
+    if (method === "GET") return url.searchParams.has("page") || url.searchParams.has("limit") ? success(page(work.members, url)) : success(work.members);
+    if (method === "POST") {
+      const body = await bodyOf(init);
+      const user = [{ ...demoUserState }, ...demoDirectoryUsers].find((item) => item.userId === body.userId);
+      if (!user) return failure("未找到要添加的用户");
+      if (!work.members.some((member) => member.userId === user.userId)) work.members.push({ ...user, permissions: body.permissions ?? null, role: body.role ?? "writer" });
+      return success(work.members, 201);
+    }
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/members\/([^/]+)$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    const userId = decodeURIComponent(match[2]);
+    if (!work) return failure("未找到作品");
+    const member = work.members?.find((item) => item.userId === userId);
+    if (!member) return failure("未找到作品成员");
+    if (method === "PATCH") {
+      Object.assign(member, await bodyOf(init));
+      return success(work.members);
+    }
+    if (method === "DELETE") {
+      if (userId === demoUserState.userId) return failure("作品所有者不能移除", 409);
+      work.members = work.members.filter((item) => item.userId !== userId);
+      return success(work.members);
+    }
+  }
   if (path === "/api/platform/ai/providers") {
-    if (method === "GET") return success(browserAiStore.read().providers.map(publicProvider));
+    if (method === "GET") {
+      const providers = browserAiStore.read().providers.map(publicProvider);
+      return url.searchParams.has("page") || url.searchParams.has("limit") ? success(page(providers, url)) : success(providers);
+    }
     const body = await bodyOf(init);
     const provider = {
       id: demoId("provider"),
@@ -732,19 +1373,56 @@ async function mockApi(input, init = {}) {
   }
   if (path === "/api/platform/ai/models") {
     const state = browserAiStore.read();
-    return success(state.models.map((model) => modelWithProvider(model, state.providers)));
+    const models = state.models.map((model) => modelWithProvider(model, state.providers));
+    return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(models, url) : models);
   }
   if (path === "/api/platform/ai/settings") {
-    const state = browserAiStore.read();
-    if (method === "GET") return success(state.platformSettings);
+    if (method === "GET") return success({ imageToolModelId: null, updatedAt: null, ...browserAiStore.read().platformSettings });
     const body = await bodyOf(init);
-    browserAiStore.update((current) => { current.platformSettings = { ...current.platformSettings, ...body }; });
-    return success({ ...state.platformSettings, ...body });
+    let updated;
+    browserAiStore.update((current) => {
+      current.platformSettings = { ...current.platformSettings, ...body, updatedAt: new Date().toISOString() };
+      updated = current.platformSettings;
+    });
+    return success(updated);
   }
   if (path === "/api/platform/ai/usage") return success(demoTokenUsage(null, true));
-  let match = path.match(/^\/api\/providers\/([^/]+)$/u);
+  match = path.match(/^\/api\/works\/([^/]+)\/providers$/u);
+  if (match) {
+    if (!findWork(decodeURIComponent(match[1]))) return failure("未找到作品");
+    if (method === "GET") return success(browserAiStore.read().providers.map(publicProvider));
+    if (method === "POST") {
+      const body = await bodyOf(init);
+      const provider = {
+        id: demoId("provider"),
+        name: String(body.name ?? "").trim(),
+        protocol: body.protocol ?? "openai-chat-completions",
+        baseUrl: normalizeProviderBaseUrl(body.baseUrl),
+        apiKey: String(body.apiKey ?? "").trim(),
+        concurrencyLimit: Number(body.concurrencyLimit ?? 10),
+        rpmLimit: Number(body.rpmLimit ?? 10),
+        note: String(body.note ?? ""),
+        status: body.status === "enabled" ? "enabled" : "disabled",
+        connectionStatus: "unchecked",
+        lastError: null
+      };
+      browserAiStore.update((state) => { state.providers.push(provider); });
+      return success(publicProvider(provider), 201);
+    }
+  }
+  match = path.match(/^\/api\/providers\/([^/]+)$/u);
   if (match) {
     const providerId = decodeURIComponent(match[1]);
+    const current = browserAiStore.read().providers.find((item) => item.id === providerId);
+    if (method === "GET") return current ? success(publicProvider(current)) : failure("未找到 AI 供应商");
+    if (method === "DELETE") {
+      if (!current) return failure("未找到 AI 供应商");
+      browserAiStore.update((state) => {
+        state.providers = state.providers.filter((item) => item.id !== providerId);
+        state.models = state.models.filter((item) => item.providerId !== providerId);
+      });
+      return success(null, 204);
+    }
     const body = await bodyOf(init);
     let updated;
     browserAiStore.update((state) => {
@@ -775,17 +1453,28 @@ async function mockApi(input, init = {}) {
   match = path.match(/^\/api\/providers\/([^/]+)\/models$/u);
   if (match) {
     const providerId = decodeURIComponent(match[1]);
-    const body = await bodyOf(init);
     const state = browserAiStore.read();
     if (!state.providers.some((item) => item.id === providerId)) return failure("未找到 AI 供应商");
+    if (method === "GET") {
+      const models = state.models.filter((item) => item.providerId === providerId).map((model) => modelWithProvider(model, state.providers));
+      return url.searchParams.has("page") || url.searchParams.has("limit") ? success(page(models, url)) : success(models);
+    }
+    const body = await bodyOf(init);
     if (Number(body.contextWindow ?? 128_000) < minimumModelContextWindow) return failure("模型上下文不能低于 32768 Token", 400);
-    const model = { id: demoId("model"), providerId, displayName: String(body.displayName ?? "").trim(), modelId: String(body.modelId ?? "").trim(), purposes: body.purposes ?? ["chat"], contextWindow: Number(body.contextWindow ?? 128000), preset: body.preset ?? { temperature: 0.7, max_tokens: 32000 }, thinkingEnabled: body.thinkingEnabled !== false, enabled: body.enabled !== false };
+    const model = { id: demoId("model"), providerId, displayName: String(body.displayName ?? "").trim(), modelId: String(body.modelId ?? "").trim(), purposes: body.purposes ?? ["chat"], contextNote: String(body.contextNote ?? ""), contextWindow: Number(body.contextWindow ?? 128000), outputNote: String(body.outputNote ?? ""), preset: body.preset ?? { temperature: 0.7, max_tokens: 32000 }, thinkingEnabled: body.thinkingEnabled !== false, multimodalEnabled: Boolean(body.multimodalEnabled), imageToolDefault: Boolean(body.imageToolDefault), enabled: body.enabled !== false, note: String(body.note ?? "") };
     browserAiStore.update((current) => { current.models.push(model); });
     return success(modelWithProvider(model, state.providers), 201);
   }
   match = path.match(/^\/api\/models\/([^/]+)$/u);
   if (match) {
     const modelId = decodeURIComponent(match[1]);
+    const existing = browserAiStore.read().models.find((item) => item.id === modelId);
+    if (method === "GET") return existing ? success(modelWithProvider(existing, browserAiStore.read().providers)) : failure("未找到模型");
+    if (method === "DELETE") {
+      if (!existing) return failure("未找到模型");
+      browserAiStore.update((state) => { state.models = state.models.filter((item) => item.id !== modelId); });
+      return success(null, 204);
+    }
     const body = await bodyOf(init);
     if (body.contextWindow !== undefined && Number(body.contextWindow) < minimumModelContextWindow) return failure("模型上下文不能低于 32768 Token", 400);
     let updated;
@@ -825,10 +1514,12 @@ async function mockApi(input, init = {}) {
   if (match) {
     const workId = decodeURIComponent(match[1]);
     const body = await bodyOf(init);
-    const settings = { ...defaultWorkAiSettings(), ...(browserAiStore.read().workSettings[workId] ?? {}) };
+    if (!findWork(workId)) return failure("未找到作品");
+    const settings = { ...defaultWorkAiSettings(workId), ...(browserAiStore.read().workSettings[workId] ?? {}) };
     if (method === "GET") return success(settings);
-    browserAiStore.update((state) => { state.workSettings[workId] = { ...settings, ...body }; });
-    return success({ ...settings, ...body });
+    const updated = { ...settings, ...body, workId, updatedAt: new Date().toISOString() };
+    browserAiStore.update((state) => { state.workSettings[workId] = updated; });
+    return success(updated);
   }
   match = path.match(/^\/api\/works\/([^/]+)\/ai-settings\/usage$/u);
   if (match) {
@@ -889,7 +1580,9 @@ async function mockApi(input, init = {}) {
   if (match) {
     const workId = decodeURIComponent(match[1]);
     if (method === "GET") return success(page(conversationSummaries(browserAiStore.read(), workId), url));
+    const body = await bodyOf(init);
     const conversation = createConversationRecord(workId);
+    if (["chat", "roleplay", "continue", "polish"].includes(body.taskType)) conversation.taskType = body.taskType;
     browserAiStore.update((state) => { state.conversations[workId] = [conversation, ...(state.conversations[workId] ?? [])]; });
     return success(conversationSummary(conversation), 201);
   }
@@ -897,6 +1590,30 @@ async function mockApi(input, init = {}) {
   if (match) {
     const conversation = findConversation(browserAiStore.read(), decodeURIComponent(match[1]));
     return conversation ? success(conversation) : failure("未找到 AI 对话");
+  }
+  match = path.match(/^\/api\/ai-conversations\/([^/]+)\/(task-type|context-scope|roleplay)$/u);
+  if (match && method === "PATCH") {
+    const conversationId = decodeURIComponent(match[1]);
+    const action = match[2];
+    const body = await bodyOf(init);
+    let updated;
+    browserAiStore.update((state) => {
+      const conversation = findConversation(state, conversationId);
+      if (!conversation) return;
+      if (action === "task-type" && ["chat", "roleplay", "continue", "polish"].includes(body.taskType)) {
+        conversation.taskType = body.taskType;
+        if (body.taskType !== "roleplay") conversation.roleplayCharacter = null;
+      }
+      if (action === "context-scope" && body.scope && typeof body.scope === "object") conversation.contextScope = body.scope;
+      if (action === "roleplay") {
+        const character = body.characterId ? works.flatMap((work) => work.characters).find((item) => item.id === body.characterId) : null;
+        conversation.roleplayCharacter = character ? { id: character.id, name: character.name, code: character.code ?? "" } : null;
+        conversation.taskType = character ? "roleplay" : (conversation.taskType === "roleplay" ? "chat" : conversation.taskType);
+      }
+      conversation.updatedAt = new Date().toISOString();
+      updated = conversationSummary(conversation);
+    });
+    return updated ? success(updated) : failure("未找到 AI 对话");
   }
   match = path.match(/^\/api\/ai-conversations\/([^/]+)\/messages$/u);
   if (match) {
@@ -974,15 +1691,382 @@ async function mockApi(input, init = {}) {
   }
   match = path.match(/^\/api\/works\/([^/]+)\/suggestions$/u);
   if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (method === "GET") {
+      const status = url.searchParams.get("status");
+      const suggestions = work.suggestions.filter((item) => !status || item.status === status);
+      return url.searchParams.has("page") || url.searchParams.has("limit") ? success(page(suggestions, url)) : success(suggestions);
+    }
     try {
       const body = await bodyOf(init);
       const result = await runBrowserAi(body, decodeURIComponent(match[1]));
-      const chapter = allChapters().find((item) => item.id === body.scope?.chapterId);
       const conversation = body.conversationId ? findConversation(browserAiStore.read(), body.conversationId) : null;
-      return success({ id: demoId("suggestion"), content: result.content, action: "note", chapterVersion: chapter?.versionNo ?? 1, outputTokens: result.outputTokens || Math.max(1, Math.ceil(Array.from(result.content).length / 2)), model: { id: result.model.id, displayName: result.model.displayName }, contextUsage: contextUsage(result.model, conversation) }, 201);
+      const suggestion = makeSuggestion(work, body, { ...result, contextUsage: contextUsage(result.model, conversation) });
+      work.suggestions.unshift(suggestion);
+      recordAudit(work, "suggestion.created", "ai-suggestion", suggestion.id, { taskType: suggestion.taskType });
+      return success(suggestion, 201);
     } catch (error) {
       const message = error instanceof TypeError ? "浏览器直连失败，请确认接口地址、网络与 CORS 配置" : error.message;
       return failure(message, 502);
+    }
+  }
+  match = path.match(/^\/api\/suggestions\/([^/]+)(?:\/(guards|guard|accept|reject))?$/u);
+  if (match) {
+    const found = findSuggestion(decodeURIComponent(match[1]));
+    if (!found) return failure("未找到 AI 建议");
+    const { work, suggestion } = found;
+    const action = match[2];
+    if (!action && method === "GET") return success(suggestion);
+    if (action === "guards" && method === "GET") return success(suggestion.guard ? [suggestion.guard] : []);
+    if (action === "guard" && method === "POST") {
+      const body = await bodyOf(init);
+      const chapter = suggestion.chapterId ? work.chapters.find((item) => item.id === suggestion.chapterId) : null;
+      if (suggestion.taskType !== "continue" || !chapter) return failure("只有续写建议可以运行一致性守卫", 409);
+      suggestion.guard = {
+        id: demoId("guard"), suggestionId: suggestion.id, callId: null, chapterVersion: chapter.versionNo,
+        content: String(body.content ?? suggestion.content), status: "clear", issues: [], contextRefs: [], createdAt: new Date().toISOString()
+      };
+      suggestion.updatedAt = new Date().toISOString();
+      return success(suggestion.guard, 201);
+    }
+    if (action === "accept" && method === "POST") {
+      if (suggestion.status !== "pending") return failure("该建议已经处理", 409);
+      if (!suggestion.chapterId || suggestion.action === "note") return failure("问答或分析类建议不能直接写入正文", 409);
+      const chapter = work.chapters.find((item) => item.id === suggestion.chapterId && !item.deletedAt);
+      if (!chapter) return failure("未找到建议对应章节");
+      if (chapter.versionNo !== suggestion.chapterVersion) return failure("正文版本已变化，请重新生成建议", 409);
+      const body = await bodyOf(init);
+      const content = String(body.content ?? suggestion.content).trim();
+      if (suggestion.taskType === "continue" && (!suggestion.guard || suggestion.guard.status !== "clear" || suggestion.guard.chapterVersion !== chapter.versionNo || suggestion.guard.content !== content)) return failure("续写建议尚未完成一致性检查", 409);
+      const nextContent = suggestion.action === "append"
+        ? `${String(chapter.content).trimEnd()}\n\n${content}`.trim()
+        : String(chapter.content).replace(String(suggestion.sourceText), content);
+      if (suggestion.action === "replace" && nextContent === chapter.content) return failure("原选中文本已不存在，请重新生成建议", 409);
+      chapter.content = nextContent;
+      chapter.wordCount = wordCount(nextContent);
+      chapter.versionNo += 1;
+      chapter.updatedAt = new Date().toISOString();
+      recordChapterVersion(chapter, "ai-suggestion", suggestion.id);
+      suggestion.status = "accepted";
+      suggestion.content = content;
+      suggestion.decidedAt = chapter.updatedAt;
+      suggestion.updatedAt = chapter.updatedAt;
+      syncWorkChapters(work);
+      recordAudit(work, "suggestion.accepted", "ai-suggestion", suggestion.id, { chapterId: chapter.id });
+      return success({ suggestion, chapter });
+    }
+    if (action === "reject" && method === "POST") {
+      if (suggestion.status !== "pending") return failure("该建议已经处理", 409);
+      suggestion.status = "rejected";
+      suggestion.decidedAt = new Date().toISOString();
+      suggestion.updatedAt = suggestion.decidedAt;
+      recordAudit(work, "suggestion.rejected", "ai-suggestion", suggestion.id);
+      return success(suggestion);
+    }
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/drafts$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (method === "GET") {
+      const draftType = url.searchParams.get("draftType");
+      const includeContent = url.searchParams.get("includeContent") === "true";
+      const drafts = work.drafts
+        .filter((draft) => !draft.deletedAt && (!draftType || draft.draftType === draftType))
+        .map((draft) => draftView(draft, includeContent));
+      return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(drafts, url) : drafts);
+    }
+    if (method === "POST") return success(createDraft(work, await bodyOf(init)), 201);
+  }
+  match = path.match(/^\/api\/drafts\/([^/]+)$/u);
+  if (match) {
+    const found = findResourceRecord(decodeURIComponent(match[1]), true);
+    if (!found || found.resource !== "drafts") return failure("未找到想法");
+    const draft = found.item;
+    if (method === "GET") return success(draftView(draft, true));
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(draft.versionNo)) return failure("想法版本已变化，请刷新后重试", 409);
+    if (method === "DELETE") {
+      ensureEntityHistory(draft);
+      found.work.drafts = found.work.drafts.filter((item) => item.id !== draft.id);
+      recordAudit(found.work, "draft.deleted", "draft", draft.id, { versionNo: draft.versionNo });
+      return success(null, 204);
+    }
+    if (method === "PATCH") {
+      for (const key of ["title", "content", "settingModule"]) {
+        if (body[key] !== undefined) draft[key] = key === "title" ? String(body[key]).trim() : body[key];
+      }
+      if (body.draftType === "prose" || body.draftType === "setting") draft.draftType = body.draftType;
+      if (body.volumeId !== undefined) {
+        const volume = found.work.volumes.find((item) => item.id === body.volumeId);
+        draft.volumeId = volume?.id ?? null;
+        draft.volumeTitle = volume?.title ?? null;
+      }
+      bumpEntity(found.work, draft, "draft", body.changeNote || "更新创作想法");
+      return success(draftView(draft, true));
+    }
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/settings\/context$/u);
+  if (match && method === "GET") {
+    const work = findWork(decodeURIComponent(match[1]));
+    return work ? success(work.settings) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/settings$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (method === "GET") return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(work.settings, url) : work.settings);
+    if (method === "POST") {
+      const body = await bodyOf(init);
+      const timestamp = new Date().toISOString();
+      const setting = {
+        id: demoId("setting"),
+        workId: work.id,
+        title: String(body.title ?? "新设定").trim() || "新设定",
+        category: String(body.category ?? "其他"),
+        content: String(body.content ?? ""),
+        tags: Array.isArray(body.tags) ? body.tags : [],
+        status: ["draft", "pending", "confirmed", "deprecated"].includes(body.status) ? body.status : "draft",
+        locked: Boolean(body.locked),
+        evidence: Array.isArray(body.evidence) ? body.evidence : [],
+        scope: body.scope && typeof body.scope === "object" ? body.scope : {},
+        authorNote: String(body.authorNote ?? ""),
+        versionNo: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        versions: []
+      };
+      ensureEntityHistory(setting);
+      work.settings.unshift(setting);
+      recordAudit(work, "setting.created", "setting", setting.id);
+      return success(setting, 201);
+    }
+  }
+  match = path.match(/^\/api\/settings\/([^/]+)$/u);
+  if (match) {
+    const found = findResourceRecord(decodeURIComponent(match[1]), true);
+    if (!found || found.resource !== "settings") return failure("未找到设定");
+    const setting = found.item;
+    if (method === "GET") return success(setting);
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(setting.versionNo)) return failure("设定版本已变化，请刷新后重试", 409);
+    if (method === "DELETE") {
+      ensureEntityHistory(setting);
+      found.work.settings = found.work.settings.filter((item) => item.id !== setting.id);
+      recordAudit(found.work, "setting.deleted", "setting", setting.id, { versionNo: setting.versionNo });
+      return success(null, 204);
+    }
+    if (method === "PATCH") {
+      for (const key of ["title", "category", "content", "status", "authorNote"]) if (body[key] !== undefined) setting[key] = String(body[key]);
+      for (const key of ["tags", "evidence"]) if (Array.isArray(body[key])) setting[key] = body[key];
+      if (body.locked !== undefined) setting.locked = Boolean(body.locked);
+      if (body.scope && typeof body.scope === "object") setting.scope = body.scope;
+      bumpEntity(found.work, setting, "setting", body.changeNote || "更新世界观设定");
+      return success(setting);
+    }
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/outline$/u);
+  if (match) {
+    const found = findChapterRecord(decodeURIComponent(match[1]), true);
+    if (!found) return failure("未找到章节");
+    const outline = found.work.outlines.find((item) => item.chapterId === found.chapter.id);
+    if (method === "GET") return success(outline ?? null);
+    const body = await bodyOf(init);
+    if (method === "DELETE") {
+      if (outline) {
+        ensureEntityHistory(outline);
+        found.work.outlines = found.work.outlines.filter((item) => item.chapterId !== found.chapter.id);
+        recordAudit(found.work, "outline.deleted", "chapter-outline", found.chapter.id);
+      }
+      return success(null, 204);
+    }
+    if (method === "PUT") {
+      const current = outline ?? {
+        chapterId: found.chapter.id,
+        workId: found.work.id,
+        chapterTitle: found.chapter.title,
+        volumeId: found.chapter.volumeId,
+        volumeTitle: found.work.volumes.find((item) => item.id === found.chapter.volumeId)?.title ?? "正文",
+        versionNo: 1,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        versions: []
+      };
+      if (body.expectedVersionNo !== undefined && outline && Number(body.expectedVersionNo) !== Number(current.versionNo)) return failure("大纲版本已变化，请刷新后重试", 409);
+      Object.assign(current, {
+        goal: String(body.goal ?? current.goal ?? ""),
+        conflict: String(body.conflict ?? current.conflict ?? ""),
+        turningPoint: String(body.turningPoint ?? current.turningPoint ?? ""),
+        notes: String(body.notes ?? current.notes ?? ""),
+        status: String(body.status ?? current.status ?? "draft")
+      });
+      if (outline) bumpEntity(found.work, current, "chapter-outline", body.changeNote || "更新章节大纲");
+      else ensureEntityHistory(current);
+      if (!outline) found.work.outlines.push(current);
+      recordAudit(found.work, outline ? "outline.updated" : "outline.created", "chapter-outline", current.chapterId);
+      return success(current);
+    }
+  }
+  match = path.match(/^\/api\/chapters\/([^/]+)\/insights$/u);
+  if (match && method === "GET") {
+    const found = findChapterRecord(decodeURIComponent(match[1]), true);
+    if (!found) return failure("未找到章节");
+    return success(found.chapter.insights ?? []);
+  }
+  if (path === "/api/works/import" && method === "POST") {
+    const file = formFile(init);
+    const fileName = String(file?.name ?? "未命名作品.txt").replace(/\.(?:txt|docx)$/iu, "").trim() || "未命名作品";
+    const work = createEmptyWork({
+      title: formValue(init, "title", fileName),
+      author: formValue(init, "author", demoUserState.displayName),
+      description: formValue(init, "description")
+    });
+    const volume = {
+      id: demoId("volume"), workId: work.id, title: "正文", kind: "main", description: "", keywords: [], order: 1, sortOrder: 0, versionNo: 1, chapters: [], versions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    };
+    ensureEntityHistory(volume);
+    const content = file?.text ? await file.text() : "";
+    const chapter = {
+      id: demoId("chapter"), workId: work.id, volumeId: volume.id, title: "第一章", content: content.slice(0, 500_000), chapterType: "正文", order: 1, sortOrder: 0, wordCount: wordCount(content), versionNo: 1, excludedFromAnalysis: false, analysisStatus: "pending", deletedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), versions: []
+    };
+    recordChapterVersion(chapter, "import", `导入文件：${fileName}`);
+    volume.chapters = [chapter];
+    work.volumes = [volume];
+    work.chapters = [chapter];
+    syncWorkChapters(work);
+    works.unshift(work);
+    return success({ work: workView(work), warnings: [], firstImportedChapterId: chapter.id }, 201);
+  }
+  if (path === "/api/works" && method === "POST") {
+    const work = createEmptyWork(await bodyOf(init));
+    works.unshift(work);
+    return success(workView(work), 201);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/import$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    const file = formFile(init);
+    const fileName = String(file?.name ?? "导入文件.txt");
+    const mode = formValue(init, "mode", "overwrite");
+    const content = file?.text ? await file.text() : "";
+    if (mode === "overwrite") {
+      work.chapters = [];
+      for (const volume of work.volumes) volume.chapters = [];
+    }
+    let volume = work.volumes.find((item) => item.kind === "main") ?? work.volumes[0];
+    if (!volume) {
+      volume = { id: demoId("volume"), workId: work.id, title: "正文", kind: "main", description: "", keywords: [], order: 1, sortOrder: 0, versionNo: 1, chapters: [], versions: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      ensureEntityHistory(volume);
+      work.volumes.push(volume);
+    }
+    const chapter = {
+      id: demoId("chapter"), workId: work.id, volumeId: volume.id, title: mode === "append" ? `导入章节 ${work.chapters.length + 1}` : "第一章", content: content.slice(0, 500_000), chapterType: "正文", order: work.chapters.length + 1, sortOrder: volume.chapters.length, wordCount: wordCount(content), versionNo: 1, excludedFromAnalysis: false, analysisStatus: "pending", deletedAt: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), versions: []
+    };
+    recordChapterVersion(chapter, "import", `导入文件：${fileName}`);
+    work.chapters.push(chapter);
+    syncWorkChapters(work);
+    recordAudit(work, "work.imported", "work", work.id, { fileName, mode, chapters: 1 });
+    return success({ tree: workView(work), warnings: [], firstImportedChapterId: chapter.id }, 201);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/file-versions$/u);
+  if (match && method === "GET") {
+    const work = findWork(decodeURIComponent(match[1]));
+    return work ? success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(work.fileVersions, url) : work.fileVersions) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/file-versions\/([^/]+)\/restore$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    const fileVersion = work?.fileVersions.find((item) => item.id === decodeURIComponent(match[2]));
+    return fileVersion ? success(workView(work)) : failure("未找到导入快照");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/cover$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (method === "DELETE") {
+      work.coverUrl = null;
+      return success(workView(work));
+    }
+    if (method === "PUT") {
+      work.coverUrl = `/demo-covers/${work.id}.webp?v=${encodeURIComponent(DEMO_COVER_VERSIONS[work.id] ?? "0")}`;
+      return success(workView(work));
+    }
+    if (method === "GET") return success({ coverUrl: work.coverUrl });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/attachments$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (method === "GET") {
+      const module = url.searchParams.get("module");
+      const attachments = work.attachments.filter((item) => !module || item.module === module);
+      return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(attachments, url) : attachments);
+    }
+    if (method === "POST") return success(createDemoAttachment(work, init, url.searchParams.get("module")), 201);
+  }
+  match = path.match(/^\/api\/attachments\/([^/]+)\/content$/u);
+  if (match && method === "GET") {
+    const attachmentId = decodeURIComponent(match[1]);
+    const found = works.flatMap((work) => work.attachments.map((attachment) => ({ work, attachment }))).find(({ attachment }) => attachment.id === attachmentId);
+    if (!found) return failure("未找到附件");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#eadfd3"/><text x="320" y="190" text-anchor="middle" fill="#6b4a3e" font-family="sans-serif" font-size="24">${escapeXml(found.attachment.fileName)}</text></svg>`;
+    return new Response(svg, { headers: { "content-type": "image/svg+xml", "cache-control": "private, max-age=3600" } });
+  }
+  match = path.match(/^\/api\/attachments\/([^/]+)$/u);
+  if (match && method === "DELETE") {
+    const attachmentId = decodeURIComponent(match[1]);
+    const found = works.flatMap((work) => work.attachments.map((attachment) => ({ work, attachment }))).find(({ attachment }) => attachment.id === attachmentId);
+    if (!found) return failure("未找到附件");
+    found.work.attachments = found.work.attachments.filter((attachment) => attachment.id !== attachmentId);
+    recordAudit(found.work, "attachment.deleted", "attachment", attachmentId);
+    return success(null, 204);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/ai-calls$/u);
+  if (match && method === "GET") {
+    const work = findWork(decodeURIComponent(match[1]));
+    return work ? success([]) : failure("未找到作品");
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/export$/u);
+  if (match && method === "GET") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    return success({
+      schemaVersion: 8,
+      exportedAt: new Date().toISOString(),
+      work: workView(work),
+      drafts: work.drafts.map((draft) => draftView(draft, true)),
+      settings: work.settings,
+      characters: work.characters,
+      races: work.races,
+      organizations: work.organizations,
+      timelineTracks: work.timelineTracks,
+      timeline: work.timeline,
+      relationships: work.relationships,
+      outlines: work.outlines
+    });
+  }
+  match = path.match(/^\/api\/works\/([^/]+)$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (method === "GET") return success(url.searchParams.get("directory") === "volumes"
+      ? { id: work.id, title: work.title, author: work.author, wordCount: work.wordCount, chapterCount: work.chapterCount, versionNo: work.versionNo, volumes: work.volumes.map((volume) => ({ ...volume, chapters: [] })) }
+      : workView(work));
+    if (method === "PATCH") {
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(work.versionNo)) return failure("作品版本已变化，请刷新后重试", 409);
+      for (const key of ["title", "author", "description", "language"]) if (body[key] !== undefined) work[key] = String(body[key]);
+      if (Array.isArray(body.tags)) work.tags = body.tags;
+      work.versionNo += 1;
+      work.updatedAt = new Date().toISOString();
+      recordAudit(work, "work.updated", "work", work.id, { fields: Object.keys(body), versionNo: work.versionNo });
+      return success(workView(work));
+    }
+    if (method === "DELETE") {
+      works.splice(works.indexOf(work), 1);
+      return success(null, 204);
     }
   }
   match = path.match(/^\/api\/works\/([^/]+)\/deleted-chapters$/u);
@@ -1005,7 +2089,7 @@ async function mockApi(input, init = {}) {
   match = path.match(/^\/api\/works\/([^/]+)\/audit-logs$/u);
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
-    return work ? success(page(work.auditLogs, url)) : failure("未找到作品");
+    return work ? success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(work.auditLogs, url) : work.auditLogs) : failure("未找到作品");
   }
   match = path.match(/^\/api\/works\/([^/]+)\/chapter-annotations$/u);
   if (match) {
@@ -1019,7 +2103,7 @@ async function mockApi(input, init = {}) {
         return { ...annotation, chapterTitle: chapter?.title ?? "未找到章节", volumeTitle: volume?.title ?? "正文" };
       })
       .sort((left, right) => Number(left.status === "resolved") - Number(right.status === "resolved") || String(right.createdAt).localeCompare(String(left.createdAt)));
-    return success(page(annotations, url));
+    return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(annotations, url) : annotations);
   }
   match = path.match(/^\/api\/works\/([^/]+)\/writing-progress$/u);
   if (match) {
@@ -1159,12 +2243,328 @@ async function mockApi(input, init = {}) {
     recordAudit(work, "chapter.annotation.updated", "chapter-annotation", annotation.id, { status: annotation.status, versionNo: annotation.versionNo });
     return success(annotation);
   }
+  match = path.match(/^\/api\/characters\/([^/]+)\/sections$/u);
+  if (match) {
+    const found = findResourceRecord(decodeURIComponent(match[1]), true);
+    if (!found || found.resource !== "characters") return failure("未找到角色");
+    if (method === "GET") {
+      const sections = found.item.profileSections ?? [];
+      return url.searchParams.has("page") || url.searchParams.has("limit") ? success(page(sections, url)) : success(sections);
+    }
+    if (method === "POST") {
+      const body = await bodyOf(init);
+      const timestamp = new Date().toISOString();
+      const section = {
+        id: demoId("character-section"),
+        workId: found.work.id,
+        characterId: found.item.id,
+        sectionType: String(body.sectionType ?? "other"),
+        title: String(body.title ?? "新档案章节").trim() || "新档案章节",
+        summary: String(body.summary ?? ""),
+        contentMarkdown: String(body.contentMarkdown ?? ""),
+        versionNo: 1,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        versions: []
+      };
+      ensureEntityHistory(section);
+      found.item.profileSections = [...(found.item.profileSections ?? []), section];
+      found.item.profileSectionCount = found.item.profileSections.length;
+      recordAudit(found.work, "character-section.created", "character-section", section.id, { characterId: found.item.id });
+      return success(section, 201);
+    }
+  }
+  match = path.match(/^\/api\/character-sections\/([^/]+)(?:\/(versions|restore))?$/u);
+  if (match) {
+    const found = findCharacterSection(decodeURIComponent(match[1]));
+    if (!found) return failure("未找到人物档案章节");
+    const action = match[2];
+    if (action === "versions" && method === "GET") return success(ensureEntityHistory(found.section));
+    if (action === "restore" && method === "POST") {
+      const body = await bodyOf(init);
+      const version = ensureEntityHistory(found.section).find((item) => Number(item.versionNo) === Number(body.versionNo));
+      if (!version) return failure("未找到人物档案章节版本");
+      Object.assign(found.section, version.snapshot ?? {});
+      bumpEntity(found.work, found.section, "character-section", `恢复至 v${body.versionNo}`, "restore");
+      return success(found.section);
+    }
+    if (method === "GET") return success(found.section);
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(found.section.versionNo)) return failure("人物档案章节版本已变化，请刷新后重试", 409);
+    if (method === "DELETE") {
+      found.character.profileSections = found.character.profileSections.filter((item) => item.id !== found.section.id);
+      found.character.profileSectionCount = found.character.profileSections.length;
+      recordAudit(found.work, "character-section.deleted", "character-section", found.section.id);
+      return success(null, 204);
+    }
+    if (method === "PATCH") {
+      for (const key of ["sectionType", "title", "summary", "contentMarkdown"]) if (body[key] !== undefined) found.section[key] = String(body[key]);
+      bumpEntity(found.work, found.section, "character-section", body.changeNote || "更新人物档案章节");
+      return success(found.section);
+    }
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/tasks(?:\/relationship-source-preview)?$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    if (path.endsWith("/relationship-source-preview") && method === "POST") {
+      const body = await bodyOf(init);
+      const characterIds = body.scope?.characterIds ?? [];
+      const characters = work.characters.filter((item) => characterIds.includes(item.id));
+      const sources = [
+        ...work.chapters.filter((chapter) => !chapter.deletedAt).slice(0, 8).map((chapter) => ({ sourceType: "chapter", sourceId: chapter.id, version: String(chapter.versionNo), title: chapter.title, characterCount: chapter.content.length, matchType: "range" })),
+        ...work.settings.slice(0, 8).map((setting) => ({ sourceType: "setting", sourceId: setting.id, version: String(setting.versionNo), title: setting.title, characterCount: setting.content.length, matchType: "range" }))
+      ];
+      return success({ sourceCount: sources.length, chapterCount: sources.filter((item) => item.sourceType === "chapter").length, settingCount: sources.filter((item) => item.sourceType === "setting").length, totalCharacters: sources.reduce((total, item) => total + item.characterCount, 0), estimatedBatchCount: Math.max(1, Math.ceil(sources.length / 8)), characters: characters.map((item) => ({ id: item.id, name: item.name })), sources });
+    }
+    if (method === "GET") return success(page(work.tasks, url));
+    if (method === "POST") {
+      const body = await bodyOf(init);
+      const timestamp = new Date().toISOString();
+      const task = {
+        id: demoId("task"),
+        workId: work.id,
+        model: body.modelId ? { id: body.modelId, displayName: "演示模型", modelId: body.modelId } : null,
+        taskType: String(body.taskType ?? "book-analysis"),
+        scope: body.scope ?? { type: "book" },
+        scopeSummary: body.scope?.type === "settings" ? "仅设定集" : body.scope?.chapterId ? "指定章节" : "全书",
+        scopeDetails: [],
+        status: "pending",
+        progress: 0,
+        result: null,
+        failures: [],
+        sourceVersions: {},
+        attemptCount: 0,
+        nextAttemptAt: null,
+        lastAttemptAt: null,
+        trace: { calls: [], processSteps: [] },
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
+      work.tasks.unshift(task);
+      recordAudit(work, "task.created", "analysis-task", task.id, { taskType: task.taskType });
+      return success(task, 201);
+    }
+  }
+  match = path.match(/^\/api\/tasks\/([^/]+)(?:\/(detail|result|trace|run|rerun|cancel|relationship-changes\/(apply|discard)))?(?:\/calls\/([^/]+))?$/u);
+  if (match) {
+    const taskId = decodeURIComponent(match[1]);
+    const found = works.map((work) => ({ work, task: work.tasks.find((item) => item.id === taskId) })).find((value) => value.task);
+    if (!found) return failure("未找到分析任务");
+    const { work, task } = found;
+    const action = match[2];
+    if (!action && method === "GET") return success({ ...task, scopeDetails: task.scopeDetails ?? [] });
+    if (action === "detail" && method === "GET") return success({ ...task, scopeDetails: task.scopeDetails ?? [] });
+    if (action === "result" && method === "GET") return success({ taskId: task.id, result: task.result });
+    if (action === "trace" && method === "GET" && !match[4]) return success(task.trace ?? { calls: [], processSteps: [] });
+    if (action === "trace" && method === "GET" && match[4]) return success((task.trace?.calls ?? []).find((item) => item.id === decodeURIComponent(match[4])) ?? { id: decodeURIComponent(match[4]), status: "completed", input: {}, output: {} });
+    if (action === "run" && method === "POST") {
+      task.status = "completed";
+      task.progress = 100;
+      task.attemptCount = Number(task.attemptCount ?? 0) + 1;
+      task.lastAttemptAt = new Date().toISOString();
+      task.result = task.result ?? { summary: "演示站已完成一次分析，结果可在任务详情中查看。" };
+      task.updatedAt = new Date().toISOString();
+      return success(task);
+    }
+    if (action === "rerun" && method === "POST") {
+      const rerun = { ...task, id: demoId("task"), status: "pending", progress: 0, attemptCount: 0, result: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      work.tasks.unshift(rerun);
+      return success(rerun, 201);
+    }
+    if (action === "cancel" && method === "POST") {
+      task.status = "cancelled";
+      task.updatedAt = new Date().toISOString();
+      return success(task);
+    }
+    if (action === "relationship-changes/apply" || action === "relationship-changes/discard") return success(task);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/tasks\/auto-run$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    if (!work) return failure("未找到作品");
+    for (const task of work.tasks.filter((item) => item.status === "pending")) {
+      task.status = "completed";
+      task.progress = 100;
+      task.result = task.result ?? { summary: "演示站自动执行已完成。" };
+      task.updatedAt = new Date().toISOString();
+    }
+    return success(work.tasks);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/(characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows|reviews)$/u);
+  if (match) {
+    const work = findWork(decodeURIComponent(match[1]));
+    const resource = match[2];
+    const collection = work ? resourceCollection(work, resource) : null;
+    if (!work || !collection) return failure("未找到作品");
+    if (method === "GET") {
+      let items = collection.filter((item) => !item.deletedAt);
+      if (resource === "characters" && url.searchParams.get("includeMerged") !== "1") items = items.filter((item) => !item.mergedIntoCharacterId);
+      if (resource === "races" && url.searchParams.get("scope")) {
+        const scope = url.searchParams.get("scope");
+        const filtered = items.filter((item) => scope === "roots" ? !item.parentId : Boolean(item.parentId));
+        return scope === "roots" ? success({ items: filtered, total: items.length }) : success(filtered);
+      }
+      if (resource === "foreshadows") {
+        const status = url.searchParams.get("status") ?? "all";
+        if (status === "resolved") items = items.filter((item) => item.status === "resolved");
+        if (status === "unresolved") items = items.filter((item) => item.status !== "resolved");
+        const currentChapterId = url.searchParams.get("currentChapterId");
+        if (currentChapterId) items = items.filter((item) => (item.occurrences ?? []).some((occurrence) => occurrence.chapterId === currentChapterId));
+      }
+      if (resource === "reviews" && url.searchParams.get("status")) items = items.filter((item) => item.status === url.searchParams.get("status"));
+      if (resource === "relationships") items = items.filter((item) => Number(item.confidence ?? 0) >= Number(url.searchParams.get("minimumConfidence") ?? url.searchParams.get("minConfidence") ?? 0));
+      if (!url.searchParams.has("page") && !url.searchParams.has("limit")) return success(items);
+      return success(page(items, url));
+    }
+    if (method === "POST") {
+      const item = createResourceRecord(work, resource, await bodyOf(init));
+      collection.unshift(item);
+      recordAudit(work, `${resource}.created`, resource, item.id);
+      return success(item, 201);
+    }
+  }
+  match = path.match(/^\/api\/(characters|races|organizations|timeline-tracks|timeline|relationships|foreshadows|reviews)\/([^/]+)$/u);
+  if (match) {
+    const resource = match[1];
+    const found = findResourceRecord(decodeURIComponent(match[2]), true);
+    if (!found || found.resource !== resource) return failure("未找到创作资料");
+    const item = found.item;
+    if (method === "GET") return success(item);
+    const body = await bodyOf(init);
+    if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(item.versionNo)) return failure("创作资料版本已变化，请刷新后重试", 409);
+    if (method === "DELETE") {
+      ensureEntityHistory(item);
+      const collection = resourceCollection(found.work, resource);
+      collection.splice(collection.indexOf(item), 1);
+      recordAudit(found.work, `${resource}.deleted`, resource, item.id, { versionNo: item.versionNo });
+      return success(null, 204);
+    }
+    if (method === "PATCH") {
+      const ignoredKeys = new Set(["id", "workId", "versionNo", "expectedVersionNo", "changeNote", "createdAt", "updatedAt"]);
+      for (const [key, value] of Object.entries(body)) if (!ignoredKeys.has(key)) item[key] = value;
+      if (resource === "foreshadows") item.unresolved = !["resolved", "abandoned"].includes(item.status);
+      bumpEntity(found.work, item, resource === "timeline-tracks" ? "timeline-track" : resource === "timeline" ? "timeline-event" : resource.slice(0, -1), body.changeNote || "更新创作资料");
+      return success(item);
+    }
+  }
+  match = path.match(/^\/api\/(characters|races|organizations)\/([^/]+)\/merge$/u);
+  if (match && method === "POST") {
+    const resource = match[1];
+    const found = findResourceRecord(decodeURIComponent(match[2]), true);
+    if (!found || found.resource !== resource) return failure("未找到待合并档案");
+    const body = await bodyOf(init);
+    const targetId = body.targetCharacterId ?? body.targetRaceId ?? body.targetOrganizationId;
+    const target = findResourceRecord(targetId, true);
+    if (!target || target.resource !== resource || target.work.id !== found.work.id) return failure("未找到目标档案");
+    if (resource === "characters") {
+      target.item.aliases = [...new Set([...(target.item.aliases ?? []), found.item.name, ...(found.item.aliases ?? [])])];
+      target.item.organizations = [...(target.item.organizations ?? []), ...(found.item.organizations ?? [])];
+      target.item.profile = { ...(found.item.profile ?? {}), ...(target.item.profile ?? {}) };
+      found.item.mergedIntoCharacterId = target.item.id;
+    } else {
+      target.item.description = [target.item.description, found.item.description].filter(Boolean).join("\n\n");
+      target.item.settings = [...(target.item.settings ?? []), ...(found.item.settings ?? [])];
+      target.item.settingsSections = [...(target.item.settingsSections ?? []), ...(found.item.settingsSections ?? [])];
+      target.item.memberIds = [...new Set([...(target.item.memberIds ?? []), ...(found.item.memberIds ?? [])])];
+      found.item.mergedIntoId = target.item.id;
+    }
+    bumpEntity(found.work, target.item, resource === "characters" ? "character" : resource === "races" ? "race" : "organization", "合并创作资料", "merge");
+    const collection = resourceCollection(found.work, resource);
+    collection.splice(collection.indexOf(found.item), 1);
+    recordAudit(found.work, `${resource}.merged`, resource, found.item.id, { targetId: target.item.id });
+    return success({ target: target.item, source: found.item });
+  }
+  match = path.match(/^\/api\/reviews\/([^/]+)\/character-resolution$/u);
+  if (match && method === "POST") {
+    const reviewFound = findResourceRecord(decodeURIComponent(match[1]), true);
+    if (!reviewFound || reviewFound.resource !== "reviews") return failure("未找到审核项");
+    const body = await bodyOf(init);
+    if (body.action === "keep-separate") {
+      reviewFound.item.status = "resolved";
+      reviewFound.item.resolutionNote = "已确认保持角色独立";
+      bumpEntity(reviewFound.work, reviewFound.item, "review", "确认角色保持独立", "manual");
+      return success(reviewFound.item);
+    }
+    if (body.action === "merge") {
+      const source = reviewFound.work.characters.find((item) => item.id === body.sourceCharacterId);
+      const target = reviewFound.work.characters.find((item) => item.id === body.targetCharacterId);
+      if (!source || !target) return failure("未找到待合并角色");
+      target.aliases = [...new Set([...(target.aliases ?? []), source.name, ...(source.aliases ?? [])])];
+      target.profile = { ...(source.profile ?? {}), ...(target.profile ?? {}) };
+      source.mergedIntoCharacterId = target.id;
+      bumpEntity(reviewFound.work, target, "character", "处理审核项并合并角色", "merge");
+      reviewFound.item.status = "resolved";
+      reviewFound.item.resolutionNote = `已合并至 ${target.name}`;
+      bumpEntity(reviewFound.work, reviewFound.item, "review", "完成角色重复审核", "manual");
+      return success({ target, source, review: reviewFound.item });
+    }
+    return failure("不支持的审核处理动作", 400);
+  }
+  match = path.match(/^\/api\/works\/([^/]+)\/timeline\/merge$/u);
+  if (match && method === "POST") {
+    const work = findWork(decodeURIComponent(match[1]));
+    const body = await bodyOf(init);
+    const selected = (body.eventIds ?? []).map((id) => work?.timeline.find((item) => item.id === id)).filter(Boolean);
+    if (!work || selected.length < 2) return failure("合并时间事件至少需要选择两项", 400);
+    const merged = createResourceRecord(work, "timeline", {
+      ...body,
+      trackId: selected.every((item) => item.trackId === selected[0].trackId) ? selected[0].trackId : null,
+      description: body.description ?? selected.map((item) => item.description).filter(Boolean).join("\n"),
+      timeLabel: body.timeLabel ?? selected[0].timeLabel,
+      timeSort: body.timeSort ?? Math.min(...selected.map((item) => Number(item.timeSort)).filter(Number.isFinite)),
+      chapterIds: [...new Set(selected.flatMap((item) => item.chapterIds ?? []))],
+      participantIds: [...new Set(selected.flatMap((item) => item.participantIds ?? []))],
+      evidence: [...new Set(selected.flatMap((item) => item.evidence ?? []).map((item) => JSON.stringify(item)))].map((item) => JSON.parse(item)),
+      status: selected.every((item) => item.status === "confirmed") ? "confirmed" : "pending"
+    });
+    work.timeline = [merged, ...work.timeline.filter((item) => !selected.includes(item))];
+    selected.forEach((item) => recordAudit(work, "timeline.deleted", "timeline-event", item.id, { mergedInto: merged.id }));
+    recordAudit(work, "timeline.merged", "timeline-event", merged.id, { sourceIds: selected.map((item) => item.id) });
+    return success({ merged, deleted: selected });
+  }
+  match = path.match(/^\/api\/timeline\/([^/]+)\/split$/u);
+  if (match && method === "POST") {
+    const found = findResourceRecord(decodeURIComponent(match[1]), true);
+    const body = await bodyOf(init);
+    if (!found || found.resource !== "timeline") return failure("未找到时间事件");
+    if (!Array.isArray(body.parts) || body.parts.length < 2) return failure("拆分时间事件至少需要两项", 400);
+    const created = body.parts.map((part) => createResourceRecord(found.work, "timeline", { ...found.item, ...part, id: undefined }));
+    found.work.timeline = [
+      ...created,
+      ...found.work.timeline.filter((item) => item.id !== found.item.id)
+    ];
+    recordAudit(found.work, "timeline.split", "timeline-event", found.item.id, { createdIds: created.map((item) => item.id) });
+    return success({ source: found.item, created });
+  }
+  match = path.match(/^\/api\/foreshadows\/([^/]+)\/occurrences$/u);
+  if (match && method === "POST") {
+    const found = findResourceRecord(decodeURIComponent(match[1]), true);
+    if (!found || found.resource !== "foreshadows") return failure("未找到伏笔");
+    const occurrence = { id: demoId("foreshadow-occurrence"), ...await bodyOf(init) };
+    found.item.occurrences = [...(found.item.occurrences ?? []), occurrence];
+    bumpEntity(found.work, found.item, "foreshadow", "添加伏笔章节记录");
+    return success(occurrence, 201);
+  }
+  match = path.match(/^\/api\/foreshadow-occurrences\/([^/]+)$/u);
+  if (match && (method === "PATCH" || method === "DELETE")) {
+    const occurrenceId = decodeURIComponent(match[1]);
+    const found = works.map((work) => ({ work, item: work.foreshadows.find((foreshadow) => (foreshadow.occurrences ?? []).some((item) => item.id === occurrenceId)) })).find((value) => value.item);
+    const foreshadow = found?.item;
+    const work = found?.work;
+    if (!work || !foreshadow) return failure("未找到伏笔记录");
+    if (method === "DELETE") foreshadow.occurrences = foreshadow.occurrences.filter((item) => item.id !== occurrenceId);
+    else Object.assign(foreshadow.occurrences.find((item) => item.id === occurrenceId), await bodyOf(init));
+    bumpEntity(work, foreshadow, "foreshadow", method === "DELETE" ? "删除伏笔章节记录" : "更新伏笔章节记录");
+    return success(foreshadow);
+  }
   match = path.match(/^\/api\/volumes\/([^/]+)\/chapters$/u);
   if (match) {
     const volumeId = decodeURIComponent(match[1]);
     const work = works.find((item) => item.volumes.some((volume) => volume.id === volumeId));
     const volume = work?.volumes.find((item) => item.id === volumeId);
-    return volume ? success(page(volume.chapters.filter((chapter) => !chapter.deletedAt), url)) : failure("未找到分卷");
+    const chapters = volume?.chapters.filter((chapter) => !chapter.deletedAt) ?? [];
+    return volume ? success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(chapters, url) : chapters) : failure("未找到分卷");
   }
   match = path.match(/^\/api\/works\/([^/]+)\/volumes$/u);
   if (match && method === "POST") {
@@ -1183,9 +2583,11 @@ async function mockApi(input, init = {}) {
       sortOrder: work.volumes.length,
       versionNo: 1,
       chapters: [],
+      versions: [],
       createdAt: timestamp,
       updatedAt: timestamp
     };
+    ensureEntityHistory(volume);
     work.volumes.push(volume);
     recordAudit(work, "volume.created", "volume", volume.id);
     return success(volume, 201);
@@ -1229,6 +2631,8 @@ async function mockApi(input, init = {}) {
     const volume = work?.volumes.find((item) => item.id === volumeId);
     if (!work || !volume) return failure("未找到分卷");
     if (method === "DELETE") {
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(volume.versionNo)) return failure("分卷版本已变化，请刷新后重试", 409);
       if (work.chapters.some((chapter) => chapter.volumeId === volumeId && !chapter.deletedAt)) return failure("分卷中仍有章节，无法删除", 409);
       if (work.chapters.some((chapter) => chapter.volumeId === volumeId && chapter.deletedAt)) return failure("分卷回收站中仍有章节，请先恢复并移动这些章节后再删除分卷", 409);
       work.volumes = work.volumes.filter((item) => item.id !== volumeId);
@@ -1237,19 +2641,19 @@ async function mockApi(input, init = {}) {
     }
     if (method === "PATCH") {
       const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(volume.versionNo)) return failure("分卷版本已变化，请刷新后重试", 409);
       if (typeof body.title === "string") volume.title = body.title.trim();
       if (typeof body.kind === "string") volume.kind = body.kind;
       if (typeof body.description === "string") volume.description = body.description;
       if (Array.isArray(body.keywords)) volume.keywords = body.keywords;
-      volume.versionNo += 1;
-      volume.updatedAt = new Date().toISOString();
-      recordAudit(work, "volume.updated", "volume", volume.id, { versionNo: volume.versionNo });
+      bumpEntity(work, volume, "volume", body.changeNote || "更新分卷");
     }
     return success(volume);
   }
-  if (path === "/api/works" && method === "GET") return success(page(works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, relationships, reviews, tasks, chapterAnnotations, auditLogs, writingGoal, ...work }) => work), url));
-  if (path === "/api/users") return success(page([], url));
-  if (path === "/api/users/directory") return success([]);
+  if (path === "/api/works" && method === "GET") {
+    const items = works.map(({ chapters, characters, settings, races, organizations, timelineTracks, timeline, outlines, foreshadows, drafts, relationships, reviews, tasks, suggestions, fileVersions, attachments, members, chapterAnnotations, auditLogs, writingGoal, ...work }) => work);
+    return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(items, url) : items);
+  }
   match = path.match(/^\/api\/works\/([^/]+)$/u);
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
@@ -1294,7 +2698,8 @@ async function mockApi(input, init = {}) {
       if (scope === "descendants") return success(work.races.filter((race) => race.parentId));
       if (!url.searchParams.has("page") && !url.searchParams.has("limit")) return success(work.races);
     }
-    return success(page(work[key] ?? [], url));
+    const items = work[key] ?? [];
+    return success(url.searchParams.has("page") || url.searchParams.has("limit") ? page(items, url) : items);
   }
   match = path.match(/^\/api\/works\/([^/]+)\/presence$/u);
   if (match) return success([]);
@@ -1308,13 +2713,45 @@ async function mockApi(input, init = {}) {
   if (match) {
     const work = findWork(decodeURIComponent(match[1]));
     const query = String(url.searchParams.get("q") ?? "").toLowerCase();
+    const requestedType = url.searchParams.get("type");
+    const resultLimit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 50)));
     if (!work) return failure("未找到作品");
-    const results = [
-      ...work.chapters.map((item) => ({ type: "chapter", id: item.id, title: item.title, snippet: item.content.slice(0, 120) })),
-      ...work.characters.map((item) => ({ type: "character", id: item.id, title: item.name, snippet: item.profile.summary })),
-      ...work.settings.map((item) => ({ type: "setting", id: item.id, title: item.title, snippet: item.content }))
-    ].filter((item) => `${item.title} ${item.snippet}`.toLowerCase().includes(query));
-    return success(results);
+    if (!query) return success([]);
+    const matches = [];
+    const add = (type, item, title, snippet, subtitle = "") => {
+      const text = `${title} ${snippet} ${subtitle}`;
+      if (requestedType && requestedType !== type) return;
+      if (!text.toLowerCase().includes(query)) return;
+      const titleHit = String(title).toLowerCase().includes(query);
+      const lineIndex = type === "chapter" ? String(item.content ?? "").split(/\r?\n/u).findIndex((line) => line.toLowerCase().includes(query)) : -1;
+      const line = lineIndex >= 0 ? lineIndex + 1 : undefined;
+      matches.push({ type, id: item.id, title: String(title), snippet: String(snippet).slice(0, 180), subtitle: subtitle || undefined, score: titleHit ? 1 : 0.5, matchKinds: [titleHit ? "metadata" : "exact"], ...(line ? { startLine: line, endLine: line } : {}) });
+    };
+    work.chapters.filter((item) => !item.deletedAt).forEach((item) => add("chapter", item, item.title, item.content));
+    work.settings.forEach((item) => add("setting", item, item.title, item.content, item.category));
+    work.characters.forEach((item) => add("character", item, item.name, item.profile?.summary ?? "", item.species));
+    work.races.forEach((item) => add("race", item, item.name, item.description));
+    work.organizations.forEach((item) => add("organization", item, item.name, item.description));
+    work.timelineTracks.forEach((item) => add("timeline-track", item, item.name, item.description));
+    work.timeline.forEach((item) => add("timeline-event", item, item.name, item.description, item.timeLabel));
+    work.relationships.forEach((item) => {
+      const from = work.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色";
+      const to = work.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色";
+      add("relationship", item, `${from} · ${item.subtype || item.category} · ${to}`, (item.keywords ?? []).join("、"), item.currentStatus);
+    });
+    work.outlines.forEach((item) => add("chapter-outline", item, item.chapterTitle, [item.goal, item.conflict, item.turningPoint, item.notes].filter(Boolean).join("\n"), item.volumeTitle));
+    work.foreshadows.forEach((item) => add("foreshadow", item, item.title, item.description, item.status));
+    work.reviews.forEach((item) => add("review", item, item.title, item.description, item.severity));
+    if (!requestedType || requestedType === "agent-history") {
+      for (const conversation of browserAiStore.read().conversations[work.id] ?? []) {
+        for (const message of conversation.messages ?? []) {
+          add("agent-history", { id: message.id }, conversation.title, message.content, message.role === "assistant" ? "Agent 回复" : "作者指令");
+          const latest = matches.at(-1);
+          if (latest?.type === "agent-history" && latest.id === message.id) Object.assign(latest, { conversationId: conversation.id, messageId: message.id });
+        }
+      }
+    }
+    return success(matches.slice(0, resultLimit));
   }
   match = path.match(/^\/api\/characters\/([^/]+)$/u);
   if (match) {
@@ -1331,9 +2768,32 @@ async function mockApi(input, init = {}) {
     const task = works.flatMap((work) => work.tasks).find((item) => item.id === decodeURIComponent(match[1]));
     return task ? success({ ...task, scopeDetails: [{ type: "book" }] }) : failure("未找到任务");
   }
-  if (/^\/api\/entity-versions\//u.test(path)) return success([]);
-  if (/^\/api\/characters\/[^/]+\/(sections|versions)$/u.test(path)) return success([]);
-  if (/^\/api\/works\/[^/]+\/members$/u.test(path)) return success([{ userId: "demo-user", username: "demo", displayName: "体验作者", role: "owner", status: "active", permissions: null }]);
+  match = path.match(/^\/api\/entity-versions\/([^/]+)\/([^/]+)(?:\/restore)?$/u);
+  if (match) {
+    const entityType = decodeURIComponent(match[1]);
+    const entityId = decodeURIComponent(match[2]);
+    const target = entityHistory(entityType, entityId);
+    if (!target) return failure("未找到版本记录");
+    if (path.endsWith("/restore") && method === "POST") {
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(target.item.versionNo)) return failure("当前版本已变化，请刷新后重试", 409);
+      const restored = restoreEntityVersion(target, Number(body.versionNo));
+      return restored ? success(restored) : failure("未找到指定版本");
+    }
+    return success(target.versions);
+  }
+  match = path.match(/^\/api\/characters\/([^/]+)\/(versions|restore)$/u);
+  if (match) {
+    const target = entityHistory("character", decodeURIComponent(match[1]));
+    if (!target) return failure("未找到角色");
+    if (match[2] === "versions" && method === "GET") return success(target.versions);
+    if (match[2] === "restore" && method === "POST") {
+      const body = await bodyOf(init);
+      if (body.expectedVersionNo !== undefined && Number(body.expectedVersionNo) !== Number(target.item.versionNo)) return failure("角色版本已变化，请刷新后重试", 409);
+      const restored = restoreEntityVersion(target, Number(body.versionNo));
+      return restored ? success(restored) : failure("未找到角色版本");
+    }
+  }
 
   if (method !== "GET") return success({ demo: true });
   return failure(`Demo 尚未预制接口：${path}`);
