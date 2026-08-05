@@ -321,8 +321,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v2');
-    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v2');
+    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v3');
+    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -333,6 +333,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('图片请求已验证');
     expect(application.text).toContain('发送一张测试图片验证图片请求');
     expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
+    expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled"');
     expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
     expect(application.text).toContain('/page-route.js?v=20260731-work-comments-v2');
@@ -849,6 +850,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".config-inline-save .book-summary-context-percent-field,");
     expect(styles.text).toContain("grid-template-columns: minmax(110px, 130px) minmax(180px, 300px)");
     expect(styles.text).toContain(".config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(0, 1fr)");
+    expect(styles.text).toContain(".config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px;");
     expect(application.text).toContain('id="agent-tool-call-global-multiplier"');
     expect(application.text).toContain('class="settings-layout-toggle agent-tool-call-global-multiplier-toggle"');
     expect(application.text).toContain('Agent 工具调用上限');
