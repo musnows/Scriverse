@@ -322,7 +322,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v3');
-    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v3');
+    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v4');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -848,7 +848,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("settings.agentToolCallLimitMaximum");
     expect(application.text).toContain("Agent 工具调用上限不能超过 ${maximum} 次");
     expect(styles.text).toContain(".config-inline-save .book-summary-context-percent-field,");
-    expect(styles.text).toContain("grid-template-columns: minmax(110px, 130px) minmax(180px, 300px)");
+    expect(styles.text).toContain("grid-template-columns: minmax(110px, 130px) 88px");
     expect(styles.text).toContain(".config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(0, 1fr)");
     expect(styles.text).toContain(".config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px;");
     expect(application.text).toContain('id="agent-tool-call-global-multiplier"');

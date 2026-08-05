@@ -70,6 +70,7 @@ describe("全书概要上下文引用", () => {
     expect(styles.text).not.toContain(".ai-book-summary-reference");
     expect(styles.text).not.toContain(".prompt-options .ai-include-setting-info");
     expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input, .daily-token-quota-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
+    expect(styles.text).toContain(".config-inline-save .context-compact-threshold-field input { width: 88px; }");
     expect(styles.text).toContain(".config-inline-save { display: flex; align-items: flex-end; gap: 10px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-limit-field,\n.config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto;");

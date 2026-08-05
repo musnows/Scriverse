@@ -2140,9 +2140,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-inline-save .agent-tool-call-limit-field,
 .config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save .book-summary-context-percent-field,
-.config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(110px, 130px) minmax(180px, 300px); align-items: center; column-gap: 12px; width: min(100%, 442px); }
+.config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(110px, 130px) 88px; align-items: center; column-gap: 12px; width: min(100%, 230px); }
 .config-inline-save .book-summary-context-percent-field input,
-.config-inline-save .context-compact-threshold-field input { width: 100%; }
+.config-inline-save .context-compact-threshold-field input { width: 88px; }
 .config-inline-save .daily-token-quota-field { width: 144px; }
 .config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
 .config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: 10px; line-height: 1.4; white-space: nowrap; }
