@@ -4970,13 +4970,35 @@ export class Store {
       `SELECT attachment.*
        FROM attachments attachment
        JOIN attachment_references reference ON reference.attachment_id = attachment.id
-       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ? AND reference.entity_type = 'setting'
+       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ?
+         AND (
+           (reference.entity_type = 'setting' AND EXISTS (
+             SELECT 1 FROM settings current_setting
+             WHERE current_setting.id = reference.entity_id AND current_setting.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'character-section' AND EXISTS (
+             SELECT 1
+             FROM character_profile_sections current_section
+             JOIN characters current_character ON current_character.id = current_section.character_id
+             WHERE current_section.id = reference.entity_id
+               AND current_section.work_id = reference.work_id
+               AND current_character.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'race' AND EXISTS (
+             SELECT 1 FROM races current_race
+             WHERE current_race.id = reference.entity_id AND current_race.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'organization' AND EXISTS (
+             SELECT 1 FROM organizations current_organization
+             WHERE current_organization.id = reference.entity_id AND current_organization.work_id = reference.work_id
+           ))
+         )
        LIMIT 1`,
       attachmentId,
       workId,
       workId
     );
-    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被设定正文引用");
+    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被生效设定库当前文档引用");
     return this.mapAttachment(row);
   }
 

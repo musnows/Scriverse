@@ -117,6 +117,7 @@ describe("人物 Markdown 章节与附件", () => {
     expect(content.status).toBe(200);
     expect(content.headers["content-type"]).toMatch(/^image\/webp/u);
     expect(content.headers["x-content-type-options"]).toBe("nosniff");
+    expect(runtime.store.getSettingAttachment(String(work.id), attachmentId)).toMatchObject({ id: attachmentId });
 
     const inUse = await request(runtime.app).delete(`/api/attachments/${attachmentId}`);
     expect(inUse.status).toBe(409);
@@ -127,6 +128,7 @@ describe("人物 Markdown 章节与附件", () => {
       .send({ contentMarkdown: "## 远古时期\n\n曾经与其他泰坦发生冲突。", changeNote: "移除旧图" });
     expect(updated.status).toBe(200);
     expect(updated.body.data.versionNo).toBe(2);
+    expect(() => runtime.store.getSettingAttachment(String(work.id), attachmentId)).toThrowError("图片附件不存在或未被生效设定库当前文档引用");
     const versions = await request(runtime.app).get(`/api/character-sections/${sectionId}/versions`);
     expect(versions.body.data.map((version: Record<string, unknown>) => version.changeNote)).toEqual(["移除旧图", "建立人物 Markdown 章节"]);
 
@@ -135,6 +137,7 @@ describe("人物 Markdown 章节与附件", () => {
       .send({ versionNo: 1 });
     expect(restored.status).toBe(200);
     expect(restored.body.data.contentMarkdown).toContain(`attachment://${attachmentId}`);
+    expect(runtime.store.getSettingAttachment(String(work.id), attachmentId)).toMatchObject({ id: attachmentId });
     await request(runtime.app).patch(`/api/character-sections/${sectionId}`).send({ contentMarkdown: "无附件" });
 
     runtime.database.run("UPDATE attachments SET created_at = '2000-01-01T00:00:00.000Z' WHERE id = ?", attachmentId);
