@@ -28,6 +28,7 @@ services:
       APP_ALLOW_REGISTRATION: "${APP_ALLOW_REGISTRATION:-false}"
       APP_SETUP_TOKEN: "${APP_SETUP_TOKEN:-}"
       APP_TRUST_PROXY: "${APP_TRUST_PROXY:-false}"
+      SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION: "${SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION:-5}"
     volumes:
       - scriverse-data:/app/.data
 
@@ -43,6 +44,7 @@ SCRIVERSE_TAG=latest
 APP_ALLOW_REGISTRATION=true
 APP_SETUP_TOKEN=请替换为至少32个字符的随机初始化令牌
 APP_TRUST_PROXY=false
+SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION=5
 ```
 
 启动服务：
@@ -69,6 +71,8 @@ docker compose up -d --force-recreate
 ```
 
 `APP_ALLOW_REGISTRATION` 只有明确设置为 `true` 或 `1` 时才开放注册；`false` 或 `0` 表示关闭，同时必须配置至少 32 个字符的 `APP_SETUP_TOKEN`。未设置或其他值都会同时关闭前端注册入口和后端注册接口，包括空数据库的首位管理员注册。初始化令牌只在创建首位管理员时校验。
+
+`SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` 控制启动迁移前的完整数据库备份保留数量，默认保留 5 个版本，最少保留 2 个版本。每次启动时会清理超出数量的最旧完整备份，再为本次迁移保留一个备份位置，避免迁移失败后的重启循环持续占满磁盘。
 
 ## 固定正式版本
 

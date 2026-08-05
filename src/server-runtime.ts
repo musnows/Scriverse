@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { chmodSync, cpSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { basename, join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
@@ -30,6 +30,9 @@ export type RunningLocalServer = {
 };
 
 const publicPath = fileURLToPath(new URL("./public/", import.meta.url));
+export const PRE_MIGRATION_BACKUP_RETENTION_ENV = "SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION";
+export const DEFAULT_PRE_MIGRATION_BACKUP_RETENTION = 5;
+export const MIN_PRE_MIGRATION_BACKUP_RETENTION = 2;
 
 export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
@@ -40,11 +43,61 @@ export function isLoopbackHost(host: string): boolean {
   return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/u.test(normalized);
 }
 
-export function createPreMigrationBackup(options: Pick<LocalServerOptions, "dataDirectory" | "databasePath">): string | null {
+export function resolvePreMigrationBackupRetention(environment: NodeJS.ProcessEnv): number {
+  const raw = environment[PRE_MIGRATION_BACKUP_RETENTION_ENV]?.trim() ?? "";
+  if (raw === "") return DEFAULT_PRE_MIGRATION_BACKUP_RETENTION;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured)) return DEFAULT_PRE_MIGRATION_BACKUP_RETENTION;
+  return Math.max(MIN_PRE_MIGRATION_BACKUP_RETENTION, Math.floor(configured));
+}
+
+type PreMigrationBackup = {
+  directory: string;
+  modifiedAt: number;
+};
+
+function listPreMigrationBackups(backupsDirectory: string): PreMigrationBackup[] {
+  if (!existsSync(backupsDirectory)) return [];
+  return readdirSync(backupsDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("pre-migration-v") && !entry.name.endsWith(".incomplete"))
+    .map((entry) => {
+      const directory = join(backupsDirectory, entry.name);
+      return { directory, modifiedAt: statSync(directory).mtimeMs };
+    })
+    .filter(({ directory }) => existsSync(join(directory, "backup.json")))
+    .sort((left, right) => left.modifiedAt - right.modifiedAt || left.directory.localeCompare(right.directory));
+}
+
+function prunePreMigrationBackups(backupsDirectory: string, maximumCount: number): void {
+  const backups = listPreMigrationBackups(backupsDirectory);
+  const excessCount = Math.max(0, backups.length - maximumCount);
+  for (const backup of backups.slice(0, excessCount)) {
+    try {
+      rmSync(backup.directory, { recursive: true, force: true });
+      logger.info("database.pre_migration_backup.pruned", {
+        backupDirectory: backup.directory,
+        retentionCount: maximumCount
+      });
+    } catch (error) {
+      logger.warn("database.pre_migration_backup.prune_failed", {
+        backupDirectory: backup.directory,
+        error: sanitizeError(error)
+      });
+    }
+  }
+}
+
+export function createPreMigrationBackup(
+  options: Pick<LocalServerOptions, "dataDirectory" | "databasePath">,
+  environment: NodeJS.ProcessEnv = process.env
+): string | null {
+  const backupsDirectory = join(options.dataDirectory, "backups");
+  const retentionCount = resolvePreMigrationBackupRetention(environment);
+  prunePreMigrationBackups(backupsDirectory, retentionCount);
   const schemaVersion = readDatabaseSchemaVersion(options.databasePath);
   if (schemaVersion === null || schemaVersion >= DATABASE_SCHEMA_VERSION) return null;
+  prunePreMigrationBackups(backupsDirectory, retentionCount - 1);
   const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-  const backupsDirectory = join(options.dataDirectory, "backups");
   const backupName = `pre-migration-v${schemaVersion}-to-v${DATABASE_SCHEMA_VERSION}-${timestamp}`;
   const incompleteDirectory = join(backupsDirectory, `${backupName}.incomplete`);
   const backupDirectory = join(backupsDirectory, backupName);
@@ -89,7 +142,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDirectory, 0o700);
     security = resolveRuntimeSecurity(options.env);
-    createPreMigrationBackup(options);
+    createPreMigrationBackup(options, options.env);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
     if (devAuthBypass && !isLoopbackHost(options.host)) {
       throw new Error("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");

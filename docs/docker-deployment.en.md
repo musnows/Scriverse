@@ -28,6 +28,7 @@ services:
       APP_ALLOW_REGISTRATION: "${APP_ALLOW_REGISTRATION:-false}"
       APP_SETUP_TOKEN: "${APP_SETUP_TOKEN:-}"
       APP_TRUST_PROXY: "${APP_TRUST_PROXY:-false}"
+      SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION: "${SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION:-5}"
     volumes:
       - scriverse-data:/app/.data
 
@@ -43,6 +44,7 @@ SCRIVERSE_TAG=latest
 APP_ALLOW_REGISTRATION=true
 APP_SETUP_TOKEN=replace-with-at-least-32-random-characters
 APP_TRUST_PROXY=false
+SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION=5
 ```
 
 Start the service:
@@ -69,6 +71,8 @@ docker compose up -d --force-recreate
 ```
 
 Registration is enabled only when `APP_ALLOW_REGISTRATION` is `true` or `1`; `false` or `0` disables it, and `APP_SETUP_TOKEN` must contain at least 32 characters. Unset and all other values disable both the UI and backend registration endpoint, including first-administrator setup on an empty database. The setup token is checked only when creating the first administrator.
+
+`SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` controls how many complete pre-migration database backups are retained. It defaults to 5 and is clamped to a minimum of 2. On each startup, the oldest excess complete backups are removed before a new migration backup is created, preventing a failed-migration restart loop from filling the disk.
 
 ## Pin a release
 

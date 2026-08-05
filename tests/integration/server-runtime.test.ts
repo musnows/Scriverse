@@ -1,9 +1,16 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
-import { isDevelopmentServer, isLoopbackHost, startLocalServer, type RunningLocalServer } from "../../src/server-runtime.js";
+import {
+  isDevelopmentServer,
+  isLoopbackHost,
+  PRE_MIGRATION_BACKUP_RETENTION_ENV,
+  resolvePreMigrationBackupRetention,
+  startLocalServer,
+  type RunningLocalServer
+} from "../../src/server-runtime.js";
 import { APP_VERSION } from "../../src/version.js";
 import { loadMasterSecret } from "../../src/credential-vault.js";
 import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
@@ -61,6 +68,14 @@ describe("本地服务运行时", () => {
     expect(isDevelopmentServer({ NODE_ENV: "production", npm_lifecycle_event: "start" })).toBe(false);
     expect(isDevelopmentServer({ NODE_ENV: "development" })).toBe(true);
     expect(isDevelopmentServer({ npm_lifecycle_event: "dev" })).toBe(true);
+  });
+
+  it("解析迁移备份保留数量并限制最低值", () => {
+    expect(resolvePreMigrationBackupRetention({})).toBe(5);
+    expect(resolvePreMigrationBackupRetention({ [PRE_MIGRATION_BACKUP_RETENTION_ENV]: "1" })).toBe(2);
+    expect(resolvePreMigrationBackupRetention({ [PRE_MIGRATION_BACKUP_RETENTION_ENV]: "2.9" })).toBe(2);
+    expect(resolvePreMigrationBackupRetention({ [PRE_MIGRATION_BACKUP_RETENTION_ENV]: "8.9" })).toBe(8);
+    expect(resolvePreMigrationBackupRetention({ [PRE_MIGRATION_BACKUP_RETENTION_ENV]: "invalid" })).toBe(5);
   });
 
   it("开发免登录仅允许绑定回环地址", async () => {
@@ -148,6 +163,42 @@ describe("本地服务运行时", () => {
       toSchemaVersion: DATABASE_SCHEMA_VERSION,
       databaseFile: "novel.db"
     });
+    expect(running.runtime.database.get("SELECT MAX(version) AS version FROM schema_migrations")).toEqual({ version: DATABASE_SCHEMA_VERSION });
+  });
+
+  it("启动时清理超出配置数量的最旧迁移备份", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-migration-backup-retention-"));
+    roots.push(root);
+    const databasePath = join(root, "novel.db");
+    const legacy = new Database(databasePath);
+    legacy.raw.exec("DROP TABLE attachment_cleanup_queue; DROP TABLE attachment_access_modules; DELETE FROM schema_migrations WHERE version >= 58");
+    legacy.close();
+
+    const backupsDirectory = join(root, "backups");
+    const baseTime = Date.parse("2026-01-01T00:00:00.000Z");
+    const backupNames = Array.from({ length: 4 }, (_, index) => `pre-migration-v57-to-v${DATABASE_SCHEMA_VERSION}-2026-01-01T00-00-0${index}.000Z`);
+    for (const [index, backupName] of backupNames.entries()) {
+      const backupDirectory = join(backupsDirectory, backupName);
+      mkdirSync(backupDirectory, { recursive: true });
+      writeFileSync(join(backupDirectory, "backup.json"), JSON.stringify({ fromSchemaVersion: 57 }));
+      const modifiedAt = new Date(baseTime + index * 1000);
+      utimesSync(backupDirectory, modifiedAt, modifiedAt);
+    }
+
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath,
+      env: { NODE_ENV: "test", [PRE_MIGRATION_BACKUP_RETENTION_ENV]: "3" }
+    });
+    runningServers.push(running);
+
+    const retainedNames = readdirSync(backupsDirectory).filter((name) => name.startsWith("pre-migration-v"));
+    expect(retainedNames).toHaveLength(3);
+    expect(retainedNames).not.toContain(backupNames[0]);
+    expect(retainedNames).not.toContain(backupNames[1]);
+    expect(retainedNames).toEqual(expect.arrayContaining([backupNames[2], backupNames[3]]));
     expect(running.runtime.database.get("SELECT MAX(version) AS version FROM schema_migrations")).toEqual({ version: DATABASE_SCHEMA_VERSION });
   });
 
