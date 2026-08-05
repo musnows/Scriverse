@@ -76,7 +76,7 @@ describe("全书概要上下文引用", () => {
     expect(styles.text).toContain(".config-inline-save { display: flex; align-items: flex-end; gap: 10px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-limit-field,\n.config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto;");
-    expect(styles.text).toContain(".agent-tool-call-global-multiplier-toggle button { min-width: 32px;");
+    expect(styles.text).toContain(".agent-tool-call-global-multiplier-toggle button { width: 32px; min-width: 32px; height: 30px; min-height: 30px; padding: 0;");
     expect(styles.text).toContain(".relationship-index-summary { display: grid;");
     expect(styles.text).toContain(".config-section .config-save-button { min-height: 32px; padding: 5px 11px; font-size: 11px; }");
     expect(styles.text).toContain(".config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px;");
