@@ -22,6 +22,10 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain("lines.push(`详细原因：${failure}`)");
     expect(application).toContain('return lines.join("\\n");');
     expect(application).not.toContain('return lines.join("\\n\\n");');
+    expect(application).toContain("function isAgentToolCallLimitFailure(text)");
+    expect(application).toContain("data-ai-tool-call-settings-link");
+    expect(application).toContain("前往本书 AI 设置调整工具调用上限");
+    expect(application).toContain("async function openAiToolCallSettings()");
     expect(sendAiSource).toContain("const failureMessage = formatAiFailureMessage(error);");
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(application).toContain('const isFailure = role === "assistant" && text.startsWith("调用失败：");');
@@ -41,6 +45,8 @@ describe("AI 错误详情界面", () => {
     expect(styles).toContain(".ai-message-status.is-error { border-color: var(--accent); background: var(--accent); color: #fff; }");
     expect(styles).toContain(".assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }");
     expect(styles).toContain(".assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }");
+    expect(styles).toContain(".ai-error-settings-link-wrap");
+    expect(styles).toContain(".config-section.is-targeted");
   });
 
   it("创作助手执行失败时将标题状态点切换为红色", async () => {

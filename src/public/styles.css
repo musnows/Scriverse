@@ -1812,6 +1812,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-agent-tools input { width: 16px; margin-top: 2px; }
 .ai-agent-tools strong { color: var(--ink); font-size: 12px; font-weight: 600; }
 .ai-agent-tools small { display: block; margin-top: 2px; font-size: 10px; }
+.ai-agent-tools-section + .empty-state { margin-top: 24px; border-top: 1px solid var(--line); }
 .default-model-select { min-width: 260px; padding: 7px 9px; font-size: 11px; }
 .empty-state { padding: 70px 30px; text-align: center; color: var(--muted); border: 1px dashed var(--line); }
 .empty-state b { display: block; color: var(--ink); margin-bottom: 8px; }
@@ -2186,9 +2187,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-inline-save .context-compact-threshold-field,
 .config-inline-save .agent-tool-call-limit-field,
 .config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px; margin: 0; color: var(--muted); font-size: 10px; }
+.config-inline-save .book-summary-context-percent-field,
+.config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(110px, 130px) 88px; align-items: center; column-gap: 12px; width: min(100%, 230px); }
+.config-inline-save .book-summary-context-percent-field input,
+.config-inline-save .context-compact-threshold-field input { width: 88px; }
 .config-inline-save .daily-token-quota-field { width: 144px; }
 .config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto; margin: 0; color: var(--muted); font-size: 10px; }
-.agent-tool-call-global-multiplier-toggle button { min-width: 32px; padding: 0 10px; font-family: var(--font-latin), monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+.config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: calc(11px * var(--ui-font-scale)); line-height: 1.4; white-space: nowrap; }
+.config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }
+.agent-tool-call-global-multiplier-toggle button { width: 32px; min-width: 32px; height: 30px; min-height: 30px; padding: 0; font-family: var(--font-latin), monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
 .relationship-index-summary { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .relationship-index-state-row { display: flex; align-items: center; gap: 12px 18px; flex-wrap: wrap; color: var(--muted); font-size: 10px; }
 .relationship-index-state-row strong { color: var(--ink); font-family: var(--font-latin), monospace; font-weight: 600; }
@@ -2219,6 +2226,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .platform-image-tool-field { flex: 0 0 auto; }
   .platform-image-tool-field select, .platform-image-tool-panel .config-save-button { height: 40px; min-height: 40px; }
   .platform-image-tool-panel .config-save-button { width: 100%; }
+}
+@media (max-width: 640px) {
+  .config-inline-save .book-summary-context-percent-field,
+  .config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(0, 1fr); row-gap: 6px; width: 100%; }
 }
 .field-label textarea {
   width: 100%;
@@ -2253,6 +2264,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .message-body { min-width: 0; overflow-wrap: anywhere; }
 .assistant-message.is-error .message-body { font-family: inherit; font-size: inherit; line-height: inherit; }
 .assistant-message.is-error .ai-error-text { margin: 0; white-space: pre-wrap; font: inherit; }
+.ai-error-settings-link-wrap { margin: 12px 0 0; }
+.ai-error-settings-link { color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.ai-error-settings-link:hover, .ai-error-settings-link:focus-visible { color: var(--accent-dark); }
+.config-section.is-targeted { border-radius: 5px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent); }
 .message-card-actions { position: absolute; right: 0; bottom: -31px; display: flex; align-items: center; gap: 12px; height: 24px; }
 .message-card-actions button { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 2px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }
 .message-card-actions button:hover, .message-card-actions button:focus-visible { color: var(--accent-dark); }
