@@ -1026,6 +1026,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const credentialVault = new CredentialVault(options.masterSecret);
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
     ...options.backupOptions,
+    masterKey: options.masterSecret,
     validateEndpoint: options.backupOptions?.validateEndpoint
       ?? (options.security ? (url) => assertSafeS3Endpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
   });

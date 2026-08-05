@@ -74,7 +74,7 @@ describe("S3 备份调度与运行事件 API", () => {
       backupImages: false,
       scheduleTime: "04:00"
     });
-    runtime.backups.createTarget({
+    const disabled = runtime.backups.createTarget({
       name: "停用目标",
       endpoint: "https://disabled.example.com",
       bucket: "backup",
@@ -84,6 +84,7 @@ describe("S3 备份调度与运行事件 API", () => {
       backupImages: false,
       scheduleTime: "02:00"
     });
+    expect(() => runtime.backups.enqueueTargets([disabled.id], "manual")).toThrow("停用的 S3 备份目标不能手动执行");
 
     clock = new Date(2026, 7, 4, 3, 30, 0, 0);
     expect(runtime.backups.enqueueDueTargets(clock)).toEqual({ acceptedTargetIds: [first.id], skippedTargetIds: [] });
@@ -104,8 +105,12 @@ describe("S3 备份调度与运行事件 API", () => {
     expect(concurrency.maximum).toBe(1);
     expect(events.map((event) => event.split(":scriverse", 1)[0])).toEqual([
       "https://first.example.com",
+      "https://first.example.com",
+      "https://second.example.com",
       "https://second.example.com",
       "https://first.example.com",
+      "https://first.example.com",
+      "https://second.example.com",
       "https://second.example.com"
     ]);
     expect(runtime.backups.listRuns().items.map((run) => run.status)).toEqual(["succeeded", "succeeded", "succeeded", "succeeded"]);

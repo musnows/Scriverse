@@ -96,6 +96,8 @@ export type S3ObjectClient = {
 export type S3BackupManagerOptions = {
   clientFactory?: (connection: S3BackupConnection) => S3ObjectClient;
   snapshotDatabase?: () => Buffer | Promise<Buffer>;
+  masterKey?: Buffer | string;
+  requestTimeoutMs?: number;
   validateEndpoint?: (endpoint: string) => Promise<unknown>;
   now?: () => Date;
   logger?: Logger;
@@ -284,6 +286,8 @@ function normalizedEndpoint(value: string): string {
 export class S3BackupManager {
   private readonly clientFactory: (connection: S3BackupConnection) => S3ObjectClient;
   private readonly snapshotDatabase: () => Buffer | Promise<Buffer>;
+  private readonly masterKey: Buffer | null;
+  private readonly requestTimeoutMs: number;
   private readonly validateEndpoint?: (endpoint: string) => Promise<unknown>;
   private readonly now: () => Date;
   private readonly log: Logger;
@@ -301,6 +305,11 @@ export class S3BackupManager {
   ) {
     this.clientFactory = options.clientFactory ?? ((connection) => new AwsS3ObjectClient(connection));
     this.snapshotDatabase = options.snapshotDatabase ?? (() => this.database.createSnapshotBuffer());
+    this.masterKey = options.masterKey === undefined
+      ? null
+      : Buffer.isBuffer(options.masterKey) ? Buffer.from(options.masterKey) : Buffer.from(options.masterKey, "utf8");
+    const requestTimeoutMs = Number(options.requestTimeoutMs ?? 30_000);
+    this.requestTimeoutMs = Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0 ? requestTimeoutMs : 30_000;
     this.validateEndpoint = options.validateEndpoint;
     this.now = options.now ?? (() => new Date());
     this.log = options.logger ?? logger;
@@ -439,7 +448,13 @@ export class S3BackupManager {
   enqueueTargets(targetIds: readonly string[], trigger: S3BackupTrigger): S3BackupQueueReceipt {
     if (this.disposed) throw new AppError(503, "BACKUP_MANAGER_STOPPED", "S3 备份服务正在停止");
     const uniqueIds = [...new Set(targetIds)];
-    for (const targetId of uniqueIds) this.requireTargetRow(targetId);
+    const targetRows = uniqueIds.map((targetId) => this.requireTargetRow(targetId));
+    const disabledTargetIds = trigger === "manual"
+      ? targetRows.filter((row) => Number(row.enabled) !== 1).map((row) => requiredString(row, "id"))
+      : [];
+    if (disabledTargetIds.length > 0) {
+      throw new AppError(400, "BACKUP_TARGET_DISABLED", "停用的 S3 备份目标不能手动执行", { targetIds: disabledTargetIds });
+    }
     const acceptedTargetIds = uniqueIds.filter((targetId) => !this.queuedTargetIds.has(targetId));
     const skippedTargetIds = uniqueIds.filter((targetId) => this.queuedTargetIds.has(targetId));
     for (const targetId of acceptedTargetIds) this.queuedTargetIds.add(targetId);
@@ -558,27 +573,34 @@ export class S3BackupManager {
       });
       const databaseSnapshot = await this.snapshotDatabase();
       databaseKey = `${target.rootPrefix}/db/scriverse-${this.snapshotTimestamp(started)}-${runId.replaceAll("-", "").slice(0, 8)}.db`;
-      await client.putObject({
+      if (!this.masterKey) throw new AppError(500, "BACKUP_MASTER_KEY_UNAVAILABLE", "S3 备份缺少 CredentialVault 恢复密钥");
+      await this.withRequestTimeout(client.putObject({
+        bucket: target.bucket,
+        key: `${target.rootPrefix}/master.key`,
+        body: this.masterKey,
+        contentType: "application/octet-stream"
+      }), "上传 CredentialVault 恢复密钥");
+      await this.withRequestTimeout(client.putObject({
         bucket: target.bucket,
         key: databaseKey,
         body: databaseSnapshot,
         contentType: "application/vnd.sqlite3"
-      });
+      }), "上传数据库快照");
 
       if (target.backupImages) {
         for (const source of this.backupImageSources(target.rootPrefix)) {
-          if (await client.objectExists(target.bucket, source.objectKey)) {
+          if (await this.withRequestTimeout(client.objectExists(target.bucket, source.objectKey), "检查远端图片")) {
             imagesSkipped += 1;
             continue;
           }
           const body = await source.read();
-          await client.putObject({
+          await this.withRequestTimeout(client.putObject({
             bucket: target.bucket,
             key: source.objectKey,
             body,
             contentType: source.contentType,
             metadata: { sha256: source.sha256 }
-          });
+          }), "上传图片");
           imagesUploaded += 1;
         }
       }
@@ -758,16 +780,29 @@ export class S3BackupManager {
 
   private async enforceDatabaseRetention(client: S3ObjectClient, target: RuntimeTarget): Promise<number> {
     const prefix = `${target.rootPrefix}/db/`;
-    const backups = (await client.listObjects(target.bucket, prefix))
-      .filter((item) => item.key.startsWith(prefix) && item.key.endsWith(".db"))
+    const snapshotNamePattern = /^scriverse-\d{8}T\d{9}Z-[0-9a-f]{8}\.db$/u;
+    const backups = (await this.withRequestTimeout(client.listObjects(target.bucket, prefix), "列出数据库快照"))
+      .filter((item) => item.key.startsWith(prefix) && snapshotNamePattern.test(item.key.slice(prefix.length)))
       .sort((left, right) => {
         const timestampDelta = (left.lastModified?.getTime() ?? 0) - (right.lastModified?.getTime() ?? 0);
         return timestampDelta || left.key.localeCompare(right.key, "en");
       });
     const excessCount = Math.max(0, backups.length - target.retentionCount);
     const keys = backups.slice(0, excessCount).map((item) => item.key);
-    if (keys.length) await client.deleteObjects(target.bucket, keys);
+    if (keys.length) await this.withRequestTimeout(client.deleteObjects(target.bucket, keys), "清理过期数据库快照");
     return keys.length;
+  }
+
+  private async withRequestTimeout<T>(operation: Promise<T>, action: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new AppError(504, "S3_REQUEST_TIMEOUT", `${action}超时`)), this.requestTimeoutMs);
+    });
+    try {
+      return await Promise.race([operation, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private imageExtension(contentType: string): string {

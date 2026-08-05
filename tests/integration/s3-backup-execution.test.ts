@@ -55,6 +55,7 @@ class FakeS3Client implements S3ObjectClient {
 function testRuntime(options: {
   clientFactory: (connection: S3BackupConnection) => S3ObjectClient;
   loggerRecords?: LogRecord[];
+  requestTimeoutMs?: number;
 }): Runtime {
   return createRuntime({
     databasePath: ":memory:",
@@ -64,6 +65,7 @@ function testRuntime(options: {
     backupOptions: {
       clientFactory: options.clientFactory,
       snapshotDatabase: () => Buffer.from("consistent-database-snapshot"),
+      requestTimeoutMs: options.requestTimeoutMs,
       now: () => new Date("2026-08-04T03:04:05.678Z"),
       logger: createLogger({
         level: "debug",
@@ -117,11 +119,17 @@ describe("S3 数据库与图片备份执行", () => {
       contentType: "image/png",
       lastModified: new Date("2026-08-01T00:00:00.000Z")
     });
-    client.objects.set(`${rootPrefix}/db/scriverse-20260801T000000000Z-old00001.db`, {
+    client.objects.set(`${rootPrefix}/db/scriverse-20260801T000000000Z-a0d00001.db`, {
       body: Buffer.from("old-1"), contentType: "application/vnd.sqlite3", lastModified: new Date("2026-08-01T00:00:00.000Z")
     });
-    client.objects.set(`${rootPrefix}/db/scriverse-20260802T000000000Z-old00002.db`, {
+    client.objects.set(`${rootPrefix}/db/scriverse-20260802T000000000Z-a0d00002.db`, {
       body: Buffer.from("old-2"), contentType: "application/vnd.sqlite3", lastModified: new Date("2026-08-02T00:00:00.000Z")
+    });
+    client.objects.set(`${rootPrefix}/db/manual.db`, {
+      body: Buffer.from("manual"), contentType: "application/vnd.sqlite3", lastModified: new Date("2026-08-01T00:00:00.000Z")
+    });
+    client.objects.set(`${rootPrefix}/db/archive/scriverse-20260801T000000000Z-a0d00003.db`, {
+      body: Buffer.from("nested"), contentType: "application/vnd.sqlite3", lastModified: new Date("2026-08-01T00:00:00.000Z")
     });
 
     const target = runtime.backups.createTarget({
@@ -149,9 +157,12 @@ describe("S3 数据库与图片备份执行", () => {
       body: Buffer.from("consistent-database-snapshot"),
       contentType: "application/vnd.sqlite3"
     });
+    expect(client.objects.get(`${rootPrefix}/master.key`)?.body.toString()).toBe("s3-execution-test-master-secret-with-enough-length");
     const coverHash = createHash("sha256").update(cover).digest("hex");
     expect(client.objects.get(`${rootPrefix}/img/${coverHash.slice(0, 2)}/${coverHash}.png`)?.body).toEqual(cover);
-    expect(client.deletedKeys).toEqual([`${rootPrefix}/db/scriverse-20260801T000000000Z-old00001.db`]);
+    expect(client.deletedKeys).toEqual([`${rootPrefix}/db/scriverse-20260801T000000000Z-a0d00001.db`]);
+    expect(client.objects.has(`${rootPrefix}/db/manual.db`)).toBe(true);
+    expect(client.objects.has(`${rootPrefix}/db/archive/scriverse-20260801T000000000Z-a0d00003.db`)).toBe(true);
     expect(client.deletedKeys.every((key) => !key.includes("/img/"))).toBe(true);
     expect(client.closed).toBe(true);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
@@ -175,7 +186,7 @@ describe("S3 数据库与图片备份执行", () => {
 
     expect(run).toMatchObject({ status: "succeeded", imagesUploaded: 0, imagesSkipped: 0 });
     expect(client.events.some((event) => event.startsWith("head:"))).toBe(false);
-    expect([...client.objects.keys()]).toEqual([run.databaseKey]);
+    expect([...client.objects.keys()]).toEqual([`${target.rootPrefix}/master.key`, run.databaseKey]);
   });
 
   it("单个目标失败后继续顺序执行其他目标，并完整记录脱敏配置及服务端结果", async () => {
@@ -262,5 +273,35 @@ describe("S3 数据库与图片备份执行", () => {
     const serialized = JSON.stringify({ runs, records });
     for (const secret of ["access-失败目标", "secret-失败目标", "must-not-log"]) expect(serialized).not.toContain(secret);
     expect(clients.get("https://failed.example.com")?.closed).toBe(true);
+  });
+
+  it("S3 请求超时后结束当前目标并关闭客户端", async () => {
+    let closed = false;
+    const hangingClient: S3ObjectClient = {
+      objectExists: async () => false,
+      putObject: async () => new Promise<void>(() => undefined),
+      listObjects: async () => [],
+      deleteObjects: async () => undefined,
+      close: () => {
+        closed = true;
+      }
+    };
+    const runtime = testRuntime({ clientFactory: () => hangingClient, requestTimeoutMs: 10 });
+    runtimes.push(runtime);
+    const target = runtime.backups.createTarget({
+      name: "超时目标",
+      endpoint: "https://timeout.example.com",
+      bucket: "backup-bucket",
+      accessKeyId: "access-timeout",
+      secretAccessKey: "secret-timeout",
+      enabled: true,
+      backupImages: false
+    });
+
+    const run = await runtime.backups.runTarget(target.id, "manual");
+
+    expect(run.status).toBe("failed");
+    expect(run.errorMessage).toContain("上传 CredentialVault 恢复密钥超时");
+    expect(closed).toBe(true);
   });
 });
