@@ -2996,6 +2996,7 @@ export class Database {
           this.run("UPDATE ai_history_search SET search_content = ? WHERE id = ?", searchContent, row.id);
         }
         this.run("INSERT INTO ai_history_search_fts(ai_history_search_fts) VALUES ('rebuild')");
+        this.run("DELETE FROM ai_history_search_short_terms");
         const insertTerm = this.raw.prepare(
           "INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?)"
         );
