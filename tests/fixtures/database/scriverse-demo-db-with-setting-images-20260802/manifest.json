@@ -1,0 +1,87 @@
+{
+  "purpose": "Scriverse v0.4.0 and v0.6.0 demo database recovery",
+  "database": "runtime/demo.db",
+  "source": "demo/data.js",
+  "schemaVersion": 72,
+  "developCommit": "ed521736f6a6de4f4a34f70e8fb047cb87eb4591",
+  "migration": "v57 -> v72",
+  "preMigrationBackup": "not included in public fixture",
+  "username": "demo",
+  "systemAdminUsername": "admin",
+  "preSettingImagesBackup": "not included in public fixture",
+  "works": [
+    {
+      "id": "work_2bea308a222e45e6a7aecae5ea8a21c3",
+      "title": "静默潮汐",
+      "chapters": 28,
+      "characters": 18
+    },
+    {
+      "id": "work_a671b866f122448c800855bb5c40844b",
+      "title": "城市留白",
+      "chapters": 18,
+      "characters": 16
+    }
+  ],
+  "generatedAt": "2026-08-01T14:44:35.980Z",
+  "covers": [
+    {
+      "work": "静默潮汐",
+      "mimeType": "image/webp",
+      "bytes": 183288,
+      "sha256": "be9c84157866c3a9f1aba63214a20cc9b15b8c6156ff221320bef8c3531e1441"
+    },
+    {
+      "work": "城市留白",
+      "mimeType": "image/webp",
+      "bytes": 194170,
+      "sha256": "bb669bed08f13c69debe31a091ffdbb4a2b5be41ceb78734d40bb5eac791d0ff"
+    }
+  ],
+  "settingAttachments": [
+    {
+      "id": "attachment_48338f6bdcf04118929265a0863c9824",
+      "work": "静默潮汐",
+      "setting": "烬城",
+      "originalName": "jincheng-concept.png",
+      "storedMimeType": "image/webp",
+      "storedByteLength": 1827136,
+      "storedSha256": "d8b26fa76747f745fe7bf956fc4a4081427ed838e2bb05a45883e0708fa2de68"
+    },
+    {
+      "id": "attachment_97ee968922c9480f87782edde10f7721",
+      "work": "静默潮汐",
+      "setting": "静默潮",
+      "originalName": "silent-tide-reference.webp",
+      "storedMimeType": "image/webp",
+      "storedByteLength": 183288,
+      "storedSha256": "be9c84157866c3a9f1aba63214a20cc9b15b8c6156ff221320bef8c3531e1441"
+    },
+    {
+      "id": "attachment_bafa775f85f240f5846740c33d74d2e2",
+      "work": "城市留白",
+      "setting": "梧桐里",
+      "originalName": "wutongli-street.png",
+      "storedMimeType": "image/webp",
+      "storedByteLength": 2090190,
+      "storedSha256": "085d819659ca744c57a8acf09e638011b101730faf43f6058f4670a3ee7c9344"
+    },
+    {
+      "id": "attachment_e0be030c7dd44b8dacb5ace5ad6a694a",
+      "work": "城市留白",
+      "setting": "拾页书店",
+      "originalName": "shuye-bookstore-reference.png",
+      "storedMimeType": "image/webp",
+      "storedByteLength": 1873072,
+      "storedSha256": "259b5f5e165f2f503b0084bf2496119b7575a26a090d7248ae18006570d336ad"
+    }
+  ],
+  "updatedAt": "2026-08-01T22:43:30.300Z",
+  "privacySanitization": {
+    "localPaths": "normalized",
+    "userSessions": "removed",
+    "passwordHashes": "replaced with non-login public placeholders",
+    "masterKey": "public demo key",
+    "walAndShm": "removed"
+  }
+}
