@@ -29,6 +29,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");
+    expect(application).toContain("recall_relationship: \"回忆人物关系\"");
     expect(application).toContain("function syncAiTaskOptions()");
     expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
     expect(styles).toContain(".prompt-options .ai-roleplay-character { min-width: 0; }");

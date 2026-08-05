@@ -93,7 +93,8 @@ export function searchResultTypeLabel(value) {
     relationship: "人物关系",
     "chapter-outline": "章节大纲",
     foreshadow: "伏笔",
-    review: "审核项"
+    review: "审核项",
+    "agent-history": "Agent 历史"
   }, value, "其他资料");
 }
 

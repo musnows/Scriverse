@@ -1043,7 +1043,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       ? { read: contextRead, anyWrite: [...aiInteractionModules] }
       : { anyRead: [...aiInteractionModules] };
   }
-  if (/^\/api\/works\/[^/]+\/search$/u.test(pathname)) return { read: [...contentPermissionModules] };
+  if (/^\/api\/works\/[^/]+\/search$/u.test(pathname)) {
+    const searchType = typeof request.query.type === "string" ? request.query.type : "";
+    return searchType === "agent-history"
+      ? { read: ["ai-chat"] }
+      : { read: [...contentPermissionModules] };
+  }
   if (/^\/api\/works\/[^/]+\/export$/u.test(pathname)) {
     return { read: request.query.format === "json" || request.query.format === undefined ? ["drafts", ...contentPermissionModules] : ["prose"] };
   }

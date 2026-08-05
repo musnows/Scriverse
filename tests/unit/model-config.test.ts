@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload } from "../../src/public/model-config.js";
+import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
 
 describe("AI 模型配置", () => {
+  it("仅允许 OpenAI Chat Completions 供应商使用多模态能力", () => {
+    expect(supportsMultimodalModelProtocol("openai-chat-completions")).toBe(true);
+    expect(supportsMultimodalModelProtocol("anthropic-messages")).toBe(false);
+    expect(supportsMultimodalModelProtocol("google-vertex")).toBe(false);
+    expect(supportsMultimodalModelProtocol(undefined)).toBe(false);
+  });
+
   it("新模型默认开启 thinking 并写入配置载荷", () => {
     const values = modelFormValues();
     expect(values.thinkingEnabled).toBe(true);
@@ -12,6 +19,16 @@ describe("AI 模型配置", () => {
     const values = modelFormValues({ thinkingEnabled: false });
     expect(values.thinkingEnabled).toBe(false);
     expect(modelPayload({ ...values, displayName: "普通模型", modelId: "plain-model" }).thinkingEnabled).toBe(false);
+  });
+
+  it("保留多模态能力和默认读图模型选项", () => {
+    const values = modelFormValues({ multimodalEnabled: true, imageToolDefault: true });
+    expect(values.multimodalEnabled).toBe(true);
+    expect(values.imageToolDefault).toBe(true);
+    expect(modelPayload({ ...values, displayName: "视觉模型", modelId: "vision-model" })).toMatchObject({
+      multimodalEnabled: true,
+      imageToolDefault: true
+    });
   });
 
   it("Kimi 模型默认温度为 1 并允许手动调整", () => {

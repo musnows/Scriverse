@@ -27,9 +27,14 @@ export type CompletionToolCall = {
   };
 };
 
+export type CompletionMessageContent = string | Array<Record<string, unknown>>;
+
 type AnthropicReplayContentBlock = Record<string, unknown>;
 
 export type CompletionMessage = AiMessage | {
+  role: "user";
+  content: CompletionMessageContent;
+} | {
   role: "assistant";
   content: string | null;
   reasoning_content?: string | null;
@@ -91,8 +96,10 @@ export function providerRequestHeaders(
   };
 }
 
-function textContent(value: string | null | undefined): Array<Record<string, unknown>> {
-  return typeof value === "string" && value.length > 0 ? [{ type: "text", text: value }] : [];
+function textContent(value: CompletionMessageContent | null | undefined): Array<Record<string, unknown>> {
+  if (typeof value === "string") return value.length > 0 ? [{ type: "text", text: value }] : [];
+  if (!Array.isArray(value)) return [];
+  return value.filter((block) => block.type === "text" && typeof block.text === "string");
 }
 
 function parsedToolInput(value: unknown): Record<string, unknown> {

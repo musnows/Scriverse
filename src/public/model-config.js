@@ -12,6 +12,10 @@ export const MODEL_PURPOSE_OPTIONS = Object.freeze([
 export const MIN_MODEL_CONTEXT_WINDOW = 32_768;
 export const RECOMMENDED_MODEL_CONTEXT_WINDOW = 128_000;
 
+export function supportsMultimodalModelProtocol(protocol) {
+  return protocol === "openai-chat-completions";
+}
+
 const purposeAliases = new Map([
   ...MODEL_PURPOSE_OPTIONS.flatMap(([key, label]) => [[key, key], [label, key]]),
   ["章节分析", "chapter-analysis"],
@@ -52,6 +56,8 @@ export function modelFormValues(model = null) {
       : (configuredTemperature ?? 0.7),
     maxTokens: model?.preset?.max_tokens ?? 32000,
     thinkingEnabled: model?.thinkingEnabled ?? true,
+    multimodalEnabled: model?.multimodalEnabled ?? false,
+    imageToolDefault: model?.imageToolDefault ?? false,
     enabled: model?.enabled ?? true
   };
 }
@@ -69,6 +75,8 @@ export function modelPayload(values, existingPreset = {}) {
       max_tokens: Number(values.maxTokens)
     },
     thinkingEnabled: Boolean(values.thinkingEnabled),
+    multimodalEnabled: Boolean(values.multimodalEnabled),
+    imageToolDefault: Boolean(values.imageToolDefault),
     enabled: Boolean(values.enabled)
   };
 }

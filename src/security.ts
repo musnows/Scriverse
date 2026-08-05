@@ -6,6 +6,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
 import { Agent } from "undici";
 import { AppError } from "./errors.js";
 import { logger } from "./logger.js";
+import { parseBooleanEnvironmentValue } from "./utils.js";
 
 export type BasicAuthOptions = {
   username: string;
@@ -446,14 +447,14 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
   const trustProxyValue = environment.APP_TRUST_PROXY?.trim() ?? "";
   const trustProxy = trustProxyValue === "true" ? true : /^\d+$/u.test(trustProxyValue) ? Number(trustProxyValue) : false;
   if (typeof trustProxy === "number" && (trustProxy < 0 || trustProxy > 10)) throw new Error("APP_TRUST_PROXY 只能是 true 或 0-10 的整数");
-  const allowRegistration = environment.APP_ALLOW_REGISTRATION === "true";
+  const allowRegistration = parseBooleanEnvironmentValue(environment.APP_ALLOW_REGISTRATION) ?? false;
   const setupToken = environment.APP_SETUP_TOKEN ?? "";
   if (allowRegistration && setupToken.length < 32) throw new Error("开放注册时 APP_SETUP_TOKEN 至少需要 32 个字符");
   return {
     ...(username ? { auth: { username, password } } : {}),
     trustProxy,
     enforceSameOrigin: true,
-    allowPrivateAiEndpoints: environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS === "true" || !production,
+    allowPrivateAiEndpoints: parseBooleanEnvironmentValue(environment.APP_ALLOW_PRIVATE_AI_ENDPOINTS) ?? !production,
     allowRegistration,
     ...(setupToken ? { setupToken } : {})
   };
@@ -461,7 +462,7 @@ export function resolveRuntimeSecurity(environment: NodeJS.ProcessEnv, requireAu
 
 export function isDevelopmentAuthBypassEnabled(environment: NodeJS.ProcessEnv, containerRuntime = detectContainerRuntime(environment)): boolean {
   return environment.NODE_ENV === "development"
-    && environment.APP_DEV_SKIP_AUTH === "true"
+    && (parseBooleanEnvironmentValue(environment.APP_DEV_SKIP_AUTH) ?? false)
     && !containerRuntime;
 }
 

@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260804-s3-backup-v3">
+<link rel="stylesheet" href="/styles.css?v=20260805-s3-backup-agent-history-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -102,6 +102,7 @@
           </button>
           <button id="settings-button" class="settings-button" type="button" aria-label="设置" title="设置">
             <svg class="settings-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>
+            <span class="settings-update-dot hidden" data-settings-update-dot aria-hidden="true"></span>
           </button>
         </div>
       </header>
@@ -220,6 +221,7 @@
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
             <span class="product-footer-meta"><span>© <time data-product-footer-year></time></span><span aria-hidden="true">·</span><span>叙界 <span data-product-footer-version>v—</span></span><span aria-hidden="true">·</span><a href="https://github.com/musnows/Scriverse" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 查看叙界仓库">GitHub</a></span>
             <span class="product-footer-development hidden" data-product-footer-development>开发模式</span>
+            <a class="product-footer-update hidden" data-product-footer-update target="_blank" rel="noopener noreferrer"></a>
           </footer>
         </section>
 
@@ -383,7 +385,7 @@
     <dialog id="background-task-dialog" class="dialog wide-dialog background-task-dialog" aria-labelledby="background-task-dialog-title">
       <form method="dialog">
         <div class="dialog-header">
-          <div><span class="eyebrow">全局进度</span><h2 id="background-task-dialog-title">后台任务中心</h2><p id="background-task-dialog-meta" class="dialog-header-meta">当前作品的分析任务与索引队列</p></div>
+          <div><span class="eyebrow">全局进度</span><h2 id="background-task-dialog-title">后台任务中心</h2><p id="background-task-dialog-meta" class="dialog-header-meta">系统更新与当前作品的分析任务、索引队列</p></div>
           <button class="dialog-close" value="cancel" aria-label="关闭后台任务中心" type="submit">×</button>
         </div>
         <div id="background-task-content" class="background-task-content" role="region" aria-label="后台任务状态"></div>
@@ -612,7 +614,7 @@
       </div>
       <div class="access-dialog-body">
         <form id="search-form" class="search-form">
-          <label>关键词<input id="search-query" name="query" type="search" maxlength="500" placeholder="搜索正文、设定、人物、时间线、关系、大纲或伏笔" required></label>
+          <label>关键词<input id="search-query" name="query" type="search" maxlength="500" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
           <label>资料类型<select id="search-type" name="type">
             <option value="">全部资料</option>
             <option value="chapter">章节</option>
@@ -626,6 +628,7 @@
             <option value="chapter-outline">章节大纲</option>
             <option value="foreshadow">伏笔</option>
             <option value="review">审核项</option>
+            <option value="agent-history">Agent 历史</option>
           </select></label>
           <button class="primary-button" type="submit">搜索</button>
         </form>
@@ -995,6 +998,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260804-s3-backup-v1"></script>
+    <script type="module" src="/app.js?v=20260805-s3-backup-agent-history-v1"></script>
   </body>
 </html>
