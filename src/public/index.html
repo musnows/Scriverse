@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260804-agent-history-search-v1">
+<link rel="stylesheet" href="/styles.css?v=20260805-s3-backup-agent-history-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -210,6 +210,7 @@
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="s3-backup-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">S3</span><strong>S3 备份</strong><small>将整个系统的数据库和图片同步到多个目标</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
@@ -801,6 +802,49 @@
       </form>
     </dialog>
 
+    <dialog id="s3-backup-dialog" class="dialog wide-dialog s3-backup-dialog" aria-labelledby="s3-backup-title" aria-describedby="s3-backup-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">系统管理员</span><h2 id="s3-backup-title">S3 系统备份</h2><p id="s3-backup-description" class="dialog-header-meta">备份范围始终是整个 Scriverse 系统，不按作品拆分。所有启用目标会按配置顺序依次执行。</p></div>
+        <div class="settings-dialog-header-actions"><button id="s3-backup-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="s3-backup-close" class="dialog-close" aria-label="关闭 S3 系统备份" type="button">×</button></div>
+      </div>
+      <div class="s3-backup-body">
+        <section class="s3-backup-overview" aria-labelledby="s3-backup-overview-title">
+          <div><h3 id="s3-backup-overview-title">备份目标</h3><p id="s3-backup-summary">正在读取备份配置……</p></div>
+          <div class="s3-backup-overview-actions"><button id="s3-backup-run-all" class="ghost-button" type="button">立即备份已启用目标</button><button id="s3-backup-add" class="primary-button" type="button">新增目标</button></div>
+        </section>
+        <div id="s3-backup-targets" class="s3-backup-target-list" aria-live="polite"></div>
+        <section class="s3-backup-history" aria-labelledby="s3-backup-history-title">
+          <header><div><h3 id="s3-backup-history-title">最近运行</h3><p>数据库快照保留在各目标的 <code>/scriverse/db</code>，图片只增量写入 <code>/scriverse/img</code>。</p></div><button id="s3-backup-refresh" class="ghost-button" type="button">刷新</button></header>
+          <div id="s3-backup-runs" class="s3-backup-run-list" aria-live="polite"></div>
+        </section>
+      </div>
+    </dialog>
+
+    <dialog id="s3-backup-target-dialog" class="dialog editor-dialog s3-backup-target-dialog" aria-labelledby="s3-backup-target-title">
+      <form id="s3-backup-target-form">
+        <div class="dialog-header"><div><span class="eyebrow">系统备份目标</span><h2 id="s3-backup-target-title">新增 S3 目标</h2><p class="dialog-header-meta">AK 与 SK 会使用系统主密钥加密保存，读取配置时不会回显。</p></div><button id="s3-backup-target-close" class="dialog-close" aria-label="关闭 S3 目标编辑" type="button">×</button></div>
+        <div class="dialog-fields s3-backup-target-fields">
+          <label>配置名称<input id="s3-backup-name" name="name" maxlength="100" required autocomplete="off" placeholder="例如：异地 MinIO"></label>
+          <label>S3 服务地址<input id="s3-backup-endpoint" name="endpoint" type="url" maxlength="2000" required spellcheck="false" autocomplete="url" placeholder="https://s3.example.com"></label>
+          <label>区域<input id="s3-backup-region" name="region" maxlength="64" required spellcheck="false" autocomplete="off" value="us-east-1"></label>
+          <label>桶名称<input id="s3-backup-bucket" name="bucket" maxlength="255" required spellcheck="false" autocomplete="off" placeholder="scriverse-backups"></label>
+          <label class="s3-backup-wide-field">可选子目录<input id="s3-backup-base-path" name="basePath" maxlength="512" spellcheck="false" autocomplete="off" placeholder="例如：authors/mothra"><small>实际根路径：<code id="s3-backup-root-preview">scriverse</code></small></label>
+          <label>Access Key<input id="s3-backup-access-key" name="accessKeyId" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"></label>
+          <label>Secret Key<input id="s3-backup-secret-key" name="secretAccessKey" type="password" maxlength="2048" autocomplete="new-password" spellcheck="false"></label>
+          <p id="s3-backup-credentials-note" class="form-field-note s3-backup-wide-field">新增目标时必须填写 AK 和 SK。</p>
+          <label>每日触发时间<input id="s3-backup-schedule-time" name="scheduleTime" type="time" value="03:00" required></label>
+          <label>数据库留存个数<input id="s3-backup-retention-count" name="retentionCount" type="number" min="1" max="365" step="1" value="7" required></label>
+          <fieldset class="s3-backup-options s3-backup-wide-field">
+            <legend>同步选项</legend>
+            <label><input id="s3-backup-enabled" name="enabled" type="checkbox"><span><strong>启用定时备份</strong><small>到达每日触发时间后加入串行同步队列。</small></span></label>
+            <label><input id="s3-backup-images" name="backupImages" type="checkbox" checked><span><strong>备份图片</strong><small>上传附件、作品封面和用户头像；已存在的对象会跳过。</small></span></label>
+            <label><input id="s3-backup-force-path-style" name="forcePathStyle" type="checkbox" checked><span><strong>使用 Path-style</strong><small>大多数 MinIO 与 S3 兼容服务需要开启；AWS 虚拟主机模式可关闭。</small></span></label>
+          </fieldset>
+        </div>
+        <div class="dialog-actions"><button id="s3-backup-target-cancel" class="ghost-button" type="button">取消</button><button id="s3-backup-target-save" class="primary-button" type="submit">保存目标</button></div>
+      </form>
+    </dialog>
+
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="account-settings-body">
@@ -954,6 +998,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260804-agent-history-score-sort-v1"></script>
+    <script type="module" src="/app.js?v=20260805-s3-backup-agent-history-v1"></script>
   </body>
 </html>

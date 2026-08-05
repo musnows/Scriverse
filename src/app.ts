@@ -23,13 +23,14 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
 import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
+import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
@@ -439,6 +440,55 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const s3EndpointSchema = z.string().trim().url().max(2_000).superRefine((value, context) => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "S3 服务地址必须使用 HTTP 或 HTTPS" });
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "S3 服务地址不能包含凭据、查询参数或片段" });
+  }
+});
+const s3BasePathSchema = z.string().trim().max(512).refine((value) => {
+  if (/[\u0000-\u001f\u007f]/u.test(value)) return false;
+  return value.split("/").filter(Boolean).every((segment) => segment !== "." && segment !== "..");
+}, "S3 子目录不能包含控制字符或相对路径段");
+const s3BucketSchema = z.string().trim().min(1).max(255).refine(
+  (value) => !/[\/\\\s\u0000-\u001f\u007f]/u.test(value),
+  "S3 桶名称不能包含空白、斜杠或控制字符"
+);
+const s3ScheduleTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u, "备份触发时间必须使用 HH:mm 格式");
+const s3BackupTargetBaseSchema = z.object({
+  name: nonEmpty.max(100),
+  endpoint: s3EndpointSchema,
+  region: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9-]*$/u, "S3 区域格式无效").optional(),
+  bucket: s3BucketSchema,
+  basePath: s3BasePathSchema.optional(),
+  accessKeyId: z.string().trim().min(1).max(512),
+  secretAccessKey: z.string().min(1).max(2_048),
+  forcePathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  backupImages: z.boolean().optional(),
+  scheduleTime: s3ScheduleTimeSchema.optional(),
+  retentionCount: z.number().int().min(1).max(365).optional()
+}).strict();
+const s3BackupTargetUpdateSchema = s3BackupTargetBaseSchema.partial().refine(
+  (input) => Object.keys(input).length > 0,
+  "至少需要提供一项 S3 备份配置"
+);
+const s3BackupRunSchema = z.object({
+  targetIds: z.array(identifier).min(1).max(100).refine((items) => new Set(items).size === items.length, "S3 备份目标不能重复").optional()
+}).strict();
+const s3BackupRunQuerySchema = z.object({
+  afterSequence: z.coerce.number().int().min(0).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional()
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -603,6 +653,8 @@ export type RuntimeOptions = {
   revealCaptchaAnswer?: boolean;
   /** 当前服务是否由开发模式启动。 */
   developmentServer?: boolean;
+  /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
+  backupOptions?: S3BackupManagerOptions;
 };
 
 export type Runtime = {
@@ -610,6 +662,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  backups: S3BackupManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -983,6 +1036,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const credentialVault = new CredentialVault(options.masterSecret);
+  const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
+    ...options.backupOptions,
+    masterKey: options.masterSecret,
+    validateEndpoint: options.backupOptions?.validateEndpoint
+      ?? (options.security ? (url) => assertSafeS3Endpoint(url, options.security?.allowPrivateAiEndpoints) : undefined)
+  });
   const releaseUpdateChecker = new ReleaseUpdateChecker(
     APP_VERSION,
     options.releaseFetchImpl ?? fetch,
@@ -994,7 +1054,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   );
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    credentialVault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -2089,6 +2149,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ui-settings", (request, response) => {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
+  app.get("/api/platform/backups/targets", (_request, response) => data(response, backups.listTargets()));
+  app.post("/api/platform/backups/targets", (request, response) => {
+    data(response, backups.createTarget(parse(s3BackupTargetBaseSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backups/targets/:targetId", (request, response) => {
+    data(response, backups.updateTarget(request.params.targetId, parse(s3BackupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backups/targets/:targetId", (request, response) => {
+    backups.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.get("/api/platform/backups/runs", (request, response) => {
+    data(response, backups.listRuns(parse(s3BackupRunQuerySchema, request.query)));
+  });
+  app.post("/api/platform/backups/run", (request, response) => {
+    const input = parse(s3BackupRunSchema, request.body ?? {});
+    const queued = input.targetIds
+      ? backups.enqueueTargets(input.targetIds, "manual")
+      : backups.enqueueEnabledTargets("manual");
+    data(response, { ...queued, queuedAt: new Date().toISOString() }, 202);
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
@@ -2612,9 +2693,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "服务器内部错误" } });
   });
 
+  backups.startScheduler();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backups.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
