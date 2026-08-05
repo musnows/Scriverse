@@ -298,6 +298,51 @@ describe("数据库版本化迁移", () => {
     second.close();
   });
 
+  it("从已有迁移 74 平滑升级到 76 并重建 AI 历史短词索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-74-upgrade-"));
+    roots.push(root);
+    const filename = join(root, "migration-74.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("PRAGMA foreign_keys = OFF");
+    legacy.exec(`
+      DELETE FROM ai_history_search_short_terms;
+      DELETE FROM ai_history_search;
+      INSERT INTO works (id, title, created_at, updated_at)
+      VALUES ('work-migration-74', '迁移作品', '2025-01-01', '2025-01-01');
+      INSERT INTO ai_conversations (id, work_id, title, compacted_summary, created_at, updated_at)
+      VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
+      DROP TABLE s3_backup_runs;
+      DROP TABLE s3_backup_targets;
+      DELETE FROM schema_migrations WHERE version IN (75, 76);
+    `);
+    const searchRow = legacy.prepare(
+      "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"
+    ).get() as { id?: unknown } | undefined;
+    const searchId = Number(searchRow?.id);
+    legacy.prepare(
+      "INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?), (?, ?)"
+    ).run(searchId, "重", searchId, "复");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT MAX(version) AS version FROM schema_migrations")?.version).toBe(DATABASE_SCHEMA_VERSION);
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_runs'")?.name).toBe("s3_backup_runs");
+    expect(migrated.all(
+      "SELECT term, COUNT(*) AS count FROM ai_history_search_short_terms WHERE search_id = ? GROUP BY term HAVING COUNT(*) > 1",
+      searchId
+    )).toEqual([]);
+    expect(migrated.all<{ term: string }>(
+      "SELECT term FROM ai_history_search_short_terms WHERE search_id = ?",
+      searchId
+    )).toEqual(expect.arrayContaining([{ term: "重" }, { term: "复" }]));
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
   it("迁移 53 只重排可重建索引并保留领域数据", () => {
     const filename = createLegacyDatabase();
     const current = new Database(filename);
