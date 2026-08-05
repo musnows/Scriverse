@@ -45,7 +45,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
-import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-search-v1";
+import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import {
@@ -57,6 +57,7 @@ import {
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
+import { collectS3BackupRunTransitions, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260804-s3-backup-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -195,6 +196,14 @@ let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+let s3BackupTargets = [];
+let s3BackupRuns = [];
+let editingS3BackupTargetId = null;
+let s3BackupPollTimer = null;
+let s3BackupPollRequest = 0;
+let s3BackupRunsInitialized = false;
+let s3BackupRunSnapshots = new Map();
+const s3BackupPollInterval = 8_000;
 let productUpdateStatus = null;
 let productUpdateChecking = false;
 let productUpdateTimer = null;
@@ -2582,6 +2591,28 @@ function formatAiFailureMessage(error) {
   return lines.join("\n");
 }
 
+function isAgentToolCallLimitFailure(text) {
+  return /more than \d+ tool calls in one response cycle\./u.test(String(text ?? ""));
+}
+
+function aiToolCallSettingsLinkMarkup(text) {
+  if (!isAgentToolCallLimitFailure(text) || !state.work || !canReadModule("ai-settings")) return "";
+  const href = serializePageRoute({ view: "module", workId: state.work.id, module: "ai-settings" });
+  return `<p class="ai-error-settings-link-wrap"><a class="ai-error-settings-link" data-ai-tool-call-settings-link href="${esc(href)}">前往本书 AI 设置调整工具调用上限</a></p>`;
+}
+
+async function openAiToolCallSettings() {
+  if (!state.work || !canReadModule("ai-settings")) return;
+  await showModule("ai-settings");
+  const target = document.getElementById("agent-tool-call-limit-settings");
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  target.classList.add("is-targeted");
+  window.setTimeout(() => target.classList.remove("is-targeted"), 1_800);
+  const input = target.querySelector("#agent-tool-call-limit");
+  if (input instanceof HTMLInputElement) input.focus({ preventScroll: true });
+}
+
 async function apiPage(path, page = 1, limit = 30) {
   const separator = path.includes("?") ? "&" : "?";
   const result = await api(`${path}${separator}page=${page}&limit=${limit}`);
@@ -2857,6 +2888,7 @@ function clearAuthenticationOverlays() {
 }
 
 function invalidateAuthentication() {
+  stopS3BackupEventPolling();
   state.user = null;
   state.csrfToken = null;
   moduleRequestCache.clear();
@@ -2975,6 +3007,7 @@ async function initializeAuthentication() {
   applyAuthenticatedUser(session);
   scheduleSystemBootCheck();
   await loadPlatformUiSettings();
+  startS3BackupEventPolling();
   return true;
 }
 
@@ -3473,6 +3506,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3848,6 +3882,258 @@ async function openPlatformUiSettingsDialog() {
   } catch (error) {
     toast(error.message, "error");
   }
+}
+
+function s3BackupTargetFailed(target) {
+  const failedAt = Date.parse(target.lastFailureAt || "");
+  const succeededAt = Date.parse(target.lastSuccessAt || "");
+  return Number.isFinite(failedAt) && (!Number.isFinite(succeededAt) || failedAt > succeededAt);
+}
+
+function renderS3BackupTargets() {
+  const enabledCount = s3BackupTargets.filter((target) => target.enabled).length;
+  $("#s3-backup-summary").textContent = s3BackupTargets.length
+    ? `共 ${s3BackupTargets.length} 个目标，其中 ${enabledCount} 个已启用；定时任务使用服务器本地时间。`
+    : "尚未配置备份目标。新增目标后可选择定时启用，也可随时手动执行。";
+  $("#s3-backup-run-all").disabled = enabledCount === 0;
+  const host = $("#s3-backup-targets");
+  host.innerHTML = s3BackupTargets.length ? s3BackupTargets.map((target) => {
+    const failed = s3BackupTargetFailed(target);
+    const path = `${target.endpoint} / ${target.bucket} / ${target.rootPrefix}`;
+    return `<article class="s3-backup-target-card${failed ? " is-failed" : ""}" data-s3-backup-target="${esc(target.id)}">
+      <div class="s3-backup-target-heading"><span class="s3-backup-status ${target.enabled ? "is-enabled" : ""}">${target.enabled ? "已启用" : "已停用"}</span><div><strong>${esc(target.name)}</strong><code>${esc(path)}</code></div></div>
+      <div class="s3-backup-target-actions"><button type="button" data-s3-backup-run="${esc(target.id)}" aria-label="立即运行 ${esc(target.name)}">立即备份</button><button type="button" data-s3-backup-edit="${esc(target.id)}" aria-label="编辑 ${esc(target.name)}">编辑</button><button class="danger-button" type="button" data-s3-backup-delete="${esc(target.id)}" aria-label="删除 ${esc(target.name)}">删除</button></div>
+      <dl class="s3-backup-target-meta">
+        <div><dt>定时计划</dt><dd>${target.enabled ? `每天 ${esc(target.scheduleTime)}` : "不自动执行"}</dd></div>
+        <div><dt>同步内容</dt><dd>${target.backupImages ? "数据库与图片" : "仅数据库"}</dd></div>
+        <div><dt>数据库留存</dt><dd>${Number(target.retentionCount)} 个快照</dd></div>
+        <div><dt>最近成功</dt><dd>${target.lastSuccessAt ? esc(formatDateTime(target.lastSuccessAt)) : "尚未成功"}</dd></div>
+      </dl>
+      ${failed ? `<p class="s3-backup-target-error">最近失败：${esc(target.lastError || "S3 服务请求失败")} · ${esc(formatDateTime(target.lastFailureAt))}</p>` : ""}
+    </article>`;
+  }).join("") : '<p class="s3-backup-empty">还没有 S3 备份目标。点击“新增目标”配置第一个全系统备份位置。</p>';
+
+  host.querySelectorAll("[data-s3-backup-run]").forEach((button) => button.addEventListener("click", () => {
+    void queueS3BackupRuns([button.dataset.s3BackupRun], button);
+  }));
+  host.querySelectorAll("[data-s3-backup-edit]").forEach((button) => button.addEventListener("click", () => {
+    const target = s3BackupTargets.find((item) => item.id === button.dataset.s3BackupEdit);
+    if (target) openS3BackupTargetDialog(target);
+  }));
+  host.querySelectorAll("[data-s3-backup-delete]").forEach((button) => button.addEventListener("click", async () => {
+    const target = s3BackupTargets.find((item) => item.id === button.dataset.s3BackupDelete);
+    if (!target) return;
+    const confirmed = await confirmToast(`删除 S3 备份目标“${target.name}”吗？远端已有对象不会被删除。`, {
+      title: "删除备份目标",
+      confirmLabel: "确认删除"
+    });
+    if (!confirmed) return;
+    button.disabled = true;
+    try {
+      await api(`/api/platform/backups/targets/${encodeURIComponent(target.id)}`, { method: "DELETE" });
+      await loadS3BackupData();
+      toast(`备份目标“${target.name}”已删除`);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, "error");
+    }
+  }));
+}
+
+function renderS3BackupRuns() {
+  const host = $("#s3-backup-runs");
+  host.innerHTML = s3BackupRuns.length ? s3BackupRuns.map((run) => {
+    const status = s3BackupStatusLabel(run.status);
+    const details = run.serverResponse ? JSON.stringify(run.serverResponse, null, 2) : "";
+    const metrics = run.status === "running"
+      ? "正在同步"
+      : `图片上传 ${Number(run.imagesUploaded)} · 跳过 ${Number(run.imagesSkipped)} · 清理快照 ${Number(run.databasesDeleted)}`;
+    return `<article class="s3-backup-run-card">
+      <span class="s3-backup-status is-${esc(run.status)}">${esc(status)}</span>
+      <div class="s3-backup-run-copy"><strong>${esc(run.targetName)}</strong><small>${run.trigger === "scheduled" ? "定时任务" : "手动触发"} · ${esc(formatDateTime(run.finishedAt || run.startedAt))}${run.errorMessage ? ` · ${esc(run.errorMessage)}` : ""}</small></div>
+      <span class="s3-backup-run-metrics">${esc(metrics)}</span>
+      ${details ? `<details><summary>查看 S3 服务端返回结果</summary><pre>${esc(details)}</pre></details>` : ""}
+    </article>`;
+  }).join("") : '<p class="s3-backup-empty">还没有备份运行记录。</p>';
+}
+
+async function loadS3BackupData({ loading = false } = {}) {
+  if (loading) {
+    $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">正在读取备份目标……</p>';
+    $("#s3-backup-runs").innerHTML = '<p class="s3-backup-empty">正在读取运行记录……</p>';
+  }
+  const [targets, runs] = await Promise.all([
+    api("/api/platform/backups/targets"),
+    api("/api/platform/backups/runs?limit=30")
+  ]);
+  s3BackupTargets = targets;
+  s3BackupRuns = runs.items;
+  renderS3BackupTargets();
+  renderS3BackupRuns();
+}
+
+async function openS3BackupDialog() {
+  if (state.user?.role !== "admin") return toast("需要系统管理员权限", "error");
+  const dialog = $("#s3-backup-dialog");
+  if (!dialog.open) dialog.showModal();
+  try {
+    await loadS3BackupData({ loading: true });
+  } catch (error) {
+    $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">备份配置加载失败，请稍后刷新。</p>';
+    toast(error.message, "error");
+  }
+}
+
+function updateS3BackupRootPreview() {
+  $("#s3-backup-root-preview").textContent = s3BackupRootPrefix($("#s3-backup-base-path").value);
+}
+
+function openS3BackupTargetDialog(target = null) {
+  editingS3BackupTargetId = target?.id ?? null;
+  const form = $("#s3-backup-target-form");
+  form.reset();
+  $("#s3-backup-target-title").textContent = target ? "编辑 S3 目标" : "新增 S3 目标";
+  $("#s3-backup-name").value = target?.name ?? "";
+  $("#s3-backup-endpoint").value = target?.endpoint ?? "";
+  $("#s3-backup-region").value = target?.region ?? "us-east-1";
+  $("#s3-backup-bucket").value = target?.bucket ?? "";
+  $("#s3-backup-base-path").value = target?.basePath ?? "";
+  $("#s3-backup-schedule-time").value = target?.scheduleTime ?? "03:00";
+  $("#s3-backup-retention-count").value = String(target?.retentionCount ?? 7);
+  $("#s3-backup-enabled").checked = target?.enabled ?? false;
+  $("#s3-backup-images").checked = target?.backupImages ?? true;
+  $("#s3-backup-force-path-style").checked = target?.forcePathStyle ?? true;
+  $("#s3-backup-access-key").required = !target;
+  $("#s3-backup-secret-key").required = !target;
+  $("#s3-backup-access-key").placeholder = target ? "留空则保持现有 Access Key" : "请输入 Access Key";
+  $("#s3-backup-secret-key").placeholder = target ? "留空则保持现有 Secret Key" : "请输入 Secret Key";
+  $("#s3-backup-credentials-note").textContent = target
+    ? "AK 与 SK 均留空时保持现有凭据；只填写其中一项时仅轮换对应凭据。"
+    : "新增目标时必须填写 AK 和 SK。";
+  $("#s3-backup-target-save").textContent = target ? "保存修改" : "保存目标";
+  updateS3BackupRootPreview();
+  const dialog = $("#s3-backup-target-dialog");
+  if (!dialog.open) dialog.showModal();
+  queueMicrotask(() => $("#s3-backup-name").focus());
+}
+
+async function saveS3BackupTarget(event) {
+  event.preventDefault();
+  const button = $("#s3-backup-target-save");
+  const accessKeyId = $("#s3-backup-access-key").value;
+  const secretAccessKey = $("#s3-backup-secret-key").value;
+  const body = {
+    name: $("#s3-backup-name").value.trim(),
+    endpoint: $("#s3-backup-endpoint").value.trim(),
+    region: $("#s3-backup-region").value.trim(),
+    bucket: $("#s3-backup-bucket").value.trim(),
+    basePath: $("#s3-backup-base-path").value.trim(),
+    forcePathStyle: $("#s3-backup-force-path-style").checked,
+    enabled: $("#s3-backup-enabled").checked,
+    backupImages: $("#s3-backup-images").checked,
+    scheduleTime: $("#s3-backup-schedule-time").value,
+    retentionCount: Number($("#s3-backup-retention-count").value),
+    ...(!editingS3BackupTargetId || accessKeyId ? { accessKeyId } : {}),
+    ...(!editingS3BackupTargetId || secretAccessKey ? { secretAccessKey } : {})
+  };
+  button.disabled = true;
+  try {
+    await api(editingS3BackupTargetId
+      ? `/api/platform/backups/targets/${encodeURIComponent(editingS3BackupTargetId)}`
+      : "/api/platform/backups/targets", {
+      method: editingS3BackupTargetId ? "PATCH" : "POST",
+      body
+    });
+    const message = editingS3BackupTargetId ? "S3 备份目标已更新" : "S3 备份目标已创建";
+    $("#s3-backup-target-dialog").close();
+    await loadS3BackupData();
+    toast(message);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function queueS3BackupRuns(targetIds, button = null) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/platform/backups/run", {
+      method: "POST",
+      body: targetIds ? { targetIds } : {}
+    });
+    if (result.acceptedTargetIds.length) {
+      toast(`已将 ${result.acceptedTargetIds.length} 个 S3 备份目标加入串行队列`);
+    } else if (result.skippedTargetIds.length) {
+      toast("所选 S3 备份目标已在队列中");
+    } else {
+      toast("当前没有已启用的 S3 备份目标", "error");
+    }
+    window.setTimeout(() => {
+      void refreshS3BackupEvents();
+      if ($("#s3-backup-dialog").open) void loadS3BackupData().catch((error) => toast(error.message, "error"));
+    }, 500);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function scheduleS3BackupEventPoll(delay = s3BackupPollInterval) {
+  if (s3BackupPollTimer !== null) window.clearTimeout(s3BackupPollTimer);
+  s3BackupPollTimer = null;
+  if (state.user?.role !== "admin" || systemRestartDetected) return;
+  s3BackupPollTimer = window.setTimeout(() => {
+    s3BackupPollTimer = null;
+    void refreshS3BackupEvents();
+  }, delay);
+}
+
+async function refreshS3BackupEvents({ announce = true } = {}) {
+  if (state.user?.role !== "admin" || systemRestartDetected) return;
+  if (s3BackupPollTimer !== null) window.clearTimeout(s3BackupPollTimer);
+  s3BackupPollTimer = null;
+  const requestId = ++s3BackupPollRequest;
+  try {
+    const result = await api("/api/platform/backups/runs?limit=100");
+    if (requestId !== s3BackupPollRequest || state.user?.role !== "admin") return;
+    const transitions = collectS3BackupRunTransitions(
+      s3BackupRunSnapshots,
+      result.items,
+      s3BackupRunsInitialized
+    );
+    s3BackupRunSnapshots = transitions.snapshots;
+    if (s3BackupRunsInitialized && announce) {
+      for (const run of transitions.failures) toast(s3BackupFailureToast(run), "error");
+    }
+    s3BackupRunsInitialized = true;
+    if ($("#s3-backup-dialog").open) {
+      s3BackupRuns = result.items.slice(0, 30);
+      renderS3BackupRuns();
+      s3BackupTargets = await api("/api/platform/backups/targets");
+      renderS3BackupTargets();
+    }
+  } catch (error) {
+    console.error("Failed to refresh S3 backup events", error);
+  } finally {
+    scheduleS3BackupEventPoll();
+  }
+}
+
+function startS3BackupEventPolling() {
+  if (state.user?.role !== "admin") return;
+  s3BackupRunSnapshots = new Map();
+  s3BackupRunsInitialized = false;
+  void refreshS3BackupEvents({ announce: false });
+}
+
+function stopS3BackupEventPolling() {
+  if (s3BackupPollTimer !== null) window.clearTimeout(s3BackupPollTimer);
+  s3BackupPollTimer = null;
+  s3BackupPollRequest += 1;
+  s3BackupRunsInitialized = false;
+  s3BackupRunSnapshots = new Map();
 }
 
 function renderMemberPermissionGrid(value) {
@@ -7416,6 +7702,7 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
+  const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
   const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
@@ -7429,8 +7716,14 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
-  $("#daily-token-quota-status").closest(".config-section").insertAdjacentHTML("afterend", `<section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section>`);
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  const agentToolCallLimitInput = host.querySelector("#agent-tool-call-limit");
+  agentToolCallLimitInput?.setAttribute("max", String(maximumAgentToolCallLimit));
+  const agentToolCallDescription = agentToolCallLimitInput?.closest(".config-section")?.querySelector(".config-section-header p");
+  if (agentToolCallDescription?.firstChild) agentToolCallDescription.firstChild.nodeValue = agentToolCallDescription.firstChild.nodeValue.replace("5–48", `5–${maximumAgentToolCallLimit}`);
+  host.querySelectorAll(".config-section").forEach((section) => {
+    if (section.querySelector("h2")?.textContent === "Agent 工具调用上限") section.id = "agent-tool-call-limit-settings";
+  });
   bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
@@ -7597,12 +7890,25 @@ async function renderBookAiSettings() {
   });
   $("#save-agent-tool-call-limit").addEventListener("click", async () => {
     const button = $("#save-agent-tool-call-limit");
+    const input = $("#agent-tool-call-limit");
+    const value = Number(input.value);
+    const maximum = Number(input.max) || 80;
+    if (!Number.isInteger(value) || value < 5) {
+      toast(`Agent 工具调用上限必须是 5 到 ${maximum} 之间的整数`, "error");
+      input.focus();
+      return;
+    }
+    if (value > maximum) {
+      toast(`Agent 工具调用上限不能超过 ${maximum} 次`, "error");
+      input.focus();
+      return;
+    }
     button.disabled = true;
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, {
         method: "PATCH",
         body: {
-          agentToolCallLimit: Number($("#agent-tool-call-limit").value),
+          agentToolCallLimit: value,
           agentToolCallGlobalMultiplier: Number($("#agent-tool-call-global-multiplier").value)
         }
       });
@@ -10576,9 +10882,13 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   const isFailure = role === "assistant" && text.startsWith("调用失败：");
   message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;
   const messageBody = isFailure
-    ? `<p class="ai-error-text">${esc(text)}</p>`
+    ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
     : renderMarkdown(text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
+  message.querySelector("[data-ai-tool-call-settings-link]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    openAiToolCallSettings().catch((error) => toast(`打开 AI 设置失败：${error.message}`, "error"));
+  });
   const heading = attachMessageHeading(message, role === "user" ? "作者" : aiAssistantLabel(), createdAt ?? undefined);
   if (isFailure) {
     message.dataset.status = "failed";
@@ -11425,6 +11735,7 @@ $("#api-key-copy-button").addEventListener("click", async () => {
 });
 $("#logout-button").addEventListener("click", async () => {
   try {
+    stopS3BackupEventPolling();
     await api("/api/auth/session", { method: "DELETE" });
     state.user = null;
     state.csrfToken = null;
@@ -11555,6 +11866,7 @@ $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
+$("#s3-backup-button").addEventListener("click", () => openS3BackupDialog().catch((error) => toast(error.message, "error")));
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
   const panel = $("#presence-panel");
@@ -11566,6 +11878,30 @@ $("#users-settings-return").addEventListener("click", () => returnToSettingsHub(
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-return").addEventListener("click", () => returnToSettingsHub("#platform-ui-settings-button", "#platform-ui-settings-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#s3-backup-close").addEventListener("click", () => $("#s3-backup-dialog").close());
+$("#s3-backup-settings-return").addEventListener("click", () => returnToSettingsHub("#s3-backup-button", "#s3-backup-dialog").catch((error) => toast(error.message, "error")));
+$("#s3-backup-add").addEventListener("click", () => openS3BackupTargetDialog());
+$("#s3-backup-run-all").addEventListener("click", (event) => void queueS3BackupRuns(null, event.currentTarget));
+$("#s3-backup-refresh").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await loadS3BackupData();
+    toast("S3 备份状态已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#s3-backup-target-close").addEventListener("click", () => $("#s3-backup-target-dialog").close());
+$("#s3-backup-target-cancel").addEventListener("click", () => $("#s3-backup-target-dialog").close());
+$("#s3-backup-target-form").addEventListener("submit", saveS3BackupTarget);
+$("#s3-backup-base-path").addEventListener("input", updateS3BackupRootPreview);
+$("#s3-backup-target-dialog").addEventListener("close", () => {
+  editingS3BackupTargetId = null;
+  $("#s3-backup-target-form").reset();
+});
 $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = $("#platform-ui-settings-save");
@@ -12225,6 +12561,7 @@ $("#manuscript-export-menu").addEventListener("click", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
+  if (state.user?.role === "admin" && !systemRestartDetected) void refreshS3BackupEvents();
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {

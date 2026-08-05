@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { AppError } from "../../src/errors.js";
-import { assertSafeAiEndpoint, fetchSafeAiEndpoint } from "../../src/security.js";
+import { assertSafeAiEndpoint, assertSafeS3Endpoint, fetchSafeAiEndpoint } from "../../src/security.js";
 
 const safePublicAddress = { address: "93.184.216.34", family: 4 as const };
 const validateTestEndpoint = async (candidate: string) => {
@@ -25,6 +25,23 @@ describe("assertSafeAiEndpoint", () => {
   it("拒绝公网 HTTP 地址传输供应商凭据", async () => {
     await expect(assertSafeAiEndpoint("http://93.184.216.34/v1", false)).rejects.toMatchObject({
       code: "INSECURE_PROVIDER_ENDPOINT"
+    });
+  });
+});
+
+describe("assertSafeS3Endpoint", () => {
+  it("拒绝生产环境访问环回 S3 地址", async () => {
+    await expect(assertSafeS3Endpoint("http://127.0.0.1:9000", false)).rejects.toMatchObject({
+      code: "UNSAFE_S3_ENDPOINT"
+    });
+  });
+
+  it("允许显式开放的私有 S3 地址并拒绝公网 HTTP", async () => {
+    await expect(assertSafeS3Endpoint("http://127.0.0.1:9000", true)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ address: "127.0.0.1" })
+    ]));
+    await expect(assertSafeS3Endpoint("http://93.184.216.34", false)).rejects.toMatchObject({
+      code: "INSECURE_S3_ENDPOINT"
     });
   });
 });

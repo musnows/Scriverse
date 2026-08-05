@@ -28,7 +28,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260804-agent-history-search-v1');
+    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v5');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
@@ -37,6 +37,8 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button>');
     expect(application.text).toContain('id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button>');
     expect(application.text).toContain('<h2>设定上下文注入</h2>');
+    expect(application.text.indexOf('<h2>设定上下文注入</h2>')).toBeLessThan(application.text.indexOf('<h2>Agent 工具调用上限</h2>'));
+    expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info"');
     expect(application.text).toContain('id="always-include-setting-info" type="checkbox"');
     expect(application.text).toContain('id="save-always-include-setting-info"');
     expect(application.text).toContain('body: { alwaysIncludeSettingInfo }');
@@ -56,6 +58,7 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('<dt>已索引正文段落</dt>');
     expect(application.text).toContain('<dt>已索引设定来源</dt>');
     expect(application.text).toContain('class="ai-agent-tools"');
+    expect(application.text).toContain('class="config-section ai-agent-tools-section"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
     expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");');
     expect(application.text).not.toContain('syncAiIncludeSettingInfoControl');
@@ -69,13 +72,17 @@ describe("全书概要上下文引用", () => {
     expect(styles.text).not.toContain(".ai-book-summary-reference");
     expect(styles.text).not.toContain(".prompt-options .ai-include-setting-info");
     expect(styles.text).toContain(".book-summary-context-percent-field input, .context-compact-threshold-field input, .agent-tool-call-limit-field input, .daily-token-quota-field input { width: 64px; min-height: 32px; padding: 5px 8px; font-size: 13px;");
+    expect(styles.text).toContain(".config-inline-save .context-compact-threshold-field input { width: 88px; }");
     expect(styles.text).toContain(".config-inline-save { display: flex; align-items: flex-end; gap: 10px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-limit-field,\n.config-inline-save .daily-token-quota-field { display: grid; gap: 6px; width: 64px;");
     expect(styles.text).toContain(".config-inline-save .agent-tool-call-global-multiplier-field { display: grid; gap: 6px; width: auto;");
-    expect(styles.text).toContain(".agent-tool-call-global-multiplier-toggle button { min-width: 32px;");
+    expect(styles.text).toContain(".agent-tool-call-global-multiplier-toggle button { width: 32px; min-width: 32px; height: 30px; min-height: 30px; padding: 0;");
     expect(styles.text).toContain(".relationship-index-summary { display: grid;");
     expect(styles.text).toContain(".config-section .config-save-button { min-height: 32px; padding: 5px 11px; font-size: 11px; }");
+    expect(styles.text).toContain(".config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px;");
+    expect(styles.text).toContain('.config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }');
     expect(styles.text).toContain(".ai-agent-tools { display: grid; gap: 8px; }");
+    expect(styles.text).toContain(".ai-agent-tools-section + .empty-state { margin-top: 24px; border-top: 1px solid var(--line); }");
     expect(styles.text).toContain(".card-actions .primary-button { border-color: var(--accent);");
   });
 });

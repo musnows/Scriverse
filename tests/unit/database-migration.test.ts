@@ -78,6 +78,31 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at", "is_dead"]));
     expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).toContain("is_extinct");
     expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toContain("is_dissolved");
+    expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "endpoint",
+      "bucket",
+      "base_path",
+      "access_key_encrypted",
+      "secret_key_encrypted",
+      "backup_images",
+      "schedule_time",
+      "retention_count",
+      "sort_order"
+    ]));
+    expect(first.all("PRAGMA index_list(s3_backup_targets)").some((index) => index.name === "idx_s3_backup_targets_schedule")).toBe(true);
+    expect(first.all("PRAGMA table_info(s3_backup_runs)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "target_id",
+      "trigger",
+      "status",
+      "database_key",
+      "images_uploaded",
+      "images_skipped",
+      "databases_deleted",
+      "server_response_json"
+    ]));
+    expect(first.all("PRAGMA index_list(s3_backup_runs)").some((index) => index.name === "idx_s3_backup_runs_started")).toBe(true);
     expect(first.get("SELECT is_dead FROM characters WHERE id = 'character-a'")).toEqual({ is_dead: 0 });
     expect(first.get("SELECT is_extinct FROM races WHERE id = 'race_migration_1'")).toEqual({ is_extinct: 0 });
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
@@ -199,6 +224,15 @@ describe("数据库版本化迁移", () => {
         "title_generation_model_id"
       ])
     );
+    const workAiSettingsSql = String(first.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_ai_settings'")?.sql ?? "");
+    expect(workAiSettingsSql).toContain("agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000)");
+    first.run(
+      "INSERT INTO work_ai_settings (work_id, agent_tool_call_limit, updated_at) VALUES (?, ?, ?)",
+      "work-old",
+      80,
+      "2025-01-01"
+    );
+    expect(first.get("SELECT agent_tool_call_limit FROM work_ai_settings WHERE work_id = 'work-old'")).toEqual({ agent_tool_call_limit: 80 });
     expect(first.all("PRAGMA table_info(analysis_tasks)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );

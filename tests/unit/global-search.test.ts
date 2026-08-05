@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "../../src/public/global-search.js";
 
 describe("全局搜索结果导航", () => {
-  it("将设定库结果排在正文条目前并保留各组相关度顺序", () => {
+  it("将非正文结果排在正文条目前并保留无分数结果的稳定顺序", () => {
     const results = [
       { type: "chapter", id: "chapter-1" },
       { type: "setting", id: "setting-1" },
@@ -19,6 +19,24 @@ describe("全局搜索结果导航", () => {
       { type: "chapter", id: "chapter-2" }
     ]);
     expect(results.map((item) => item.id)).toEqual(["chapter-1", "setting-1", "character-1", "message-1", "chapter-2"]);
+  });
+
+  it("将每组结果按相关性分数降序排列", () => {
+    const results = [
+      { type: "chapter", id: "chapter-low", score: 0.1 },
+      { type: "setting", id: "setting-low", score: 0.2 },
+      { type: "character", id: "character-high", score: 0.9 },
+      { type: "agent-history", id: "message-mid", score: 0.5 },
+      { type: "chapter", id: "chapter-high", score: 0.8 }
+    ];
+
+    expect(prioritizeGlobalSearchResults(results).map((item) => item.id)).toEqual([
+      "character-high",
+      "message-mid",
+      "setting-low",
+      "chapter-high",
+      "chapter-low"
+    ]);
   });
 
   it("将章节结果直接定位到正文阅读页", () => {
