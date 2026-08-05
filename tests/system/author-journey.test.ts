@@ -321,8 +321,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v4');
-    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v5');
+    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v5');
+    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v6');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -851,6 +851,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("grid-template-columns: minmax(110px, 130px) 88px");
     expect(styles.text).toContain(".config-inline-save .context-compact-threshold-field { grid-template-columns: minmax(0, 1fr)");
     expect(styles.text).toContain(".config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px; min-height: 32px; margin: 0; color: var(--muted); font-size: calc(11px * var(--ui-font-scale));");
+    expect(styles.text).toContain(".ai-agent-tools-section + .empty-state { margin-top: 24px; border-top: 1px solid var(--line); }");
     expect(application.text).toContain('id="agent-tool-call-global-multiplier"');
     expect(application.text).toContain('class="settings-layout-toggle agent-tool-call-global-multiplier-toggle"');
     expect(application.text).toContain('Agent 工具调用上限');

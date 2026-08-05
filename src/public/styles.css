@@ -1765,6 +1765,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-agent-tools input { width: 16px; margin-top: 2px; }
 .ai-agent-tools strong { color: var(--ink); font-size: 12px; font-weight: 600; }
 .ai-agent-tools small { display: block; margin-top: 2px; font-size: 10px; }
+.ai-agent-tools-section + .empty-state { margin-top: 24px; border-top: 1px solid var(--line); }
 .default-model-select { min-width: 260px; padding: 7px 9px; font-size: 11px; }
 .empty-state { padding: 70px 30px; text-align: center; color: var(--muted); border: 1px dashed var(--line); }
 .empty-state b { display: block; color: var(--ink); margin-bottom: 8px; }

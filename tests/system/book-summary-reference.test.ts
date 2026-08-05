@@ -28,7 +28,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v4');
+    expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v5');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
@@ -58,6 +58,7 @@ describe("全书概要上下文引用", () => {
     expect(application.text).toContain('<dt>已索引正文段落</dt>');
     expect(application.text).toContain('<dt>已索引设定来源</dt>');
     expect(application.text).toContain('class="ai-agent-tools"');
+    expect(application.text).toContain('class="config-section ai-agent-tools-section"');
     expect(application.text).toContain('const includeBookSummary = scopeType === "chapter-summary";');
     expect(application.text).toContain('const requiresChapter = taskType === "polish" || taskType === "continue" || (scopeType !== "none" && scopeType !== "settings-catalog");');
     expect(application.text).not.toContain('syncAiIncludeSettingInfoControl');
@@ -81,6 +82,7 @@ describe("全书概要上下文引用", () => {
     expect(styles.text).toContain(".config-inline-save > .config-checkbox-field { display: inline-flex !important; align-items: center; gap: 8px;");
     expect(styles.text).toContain('.config-inline-save > .config-checkbox-field input[type="checkbox"] { width: 18px; min-width: 18px; height: 18px; }');
     expect(styles.text).toContain(".ai-agent-tools { display: grid; gap: 8px; }");
+    expect(styles.text).toContain(".ai-agent-tools-section + .empty-state { margin-top: 24px; border-top: 1px solid var(--line); }");
     expect(styles.text).toContain(".card-actions .primary-button { border-color: var(--accent);");
   });
 });
