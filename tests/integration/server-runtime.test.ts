@@ -7,7 +7,10 @@ import {
   isDevelopmentServer,
   isLoopbackHost,
   PRE_MIGRATION_BACKUP_RETENTION_ENV,
+  STARTUP_RETRY_LIMIT_ENV,
+  STARTUP_RETRY_STATE_FILENAME,
   resolvePreMigrationBackupRetention,
+  resolveStartupRetryLimit,
   startLocalServer,
   type RunningLocalServer
 } from "../../src/server-runtime.js";
@@ -78,6 +81,14 @@ describe("本地服务运行时", () => {
     expect(resolvePreMigrationBackupRetention({ [PRE_MIGRATION_BACKUP_RETENTION_ENV]: "invalid" })).toBe(5);
   });
 
+  it("解析启动失败重试上限", () => {
+    expect(resolveStartupRetryLimit({})).toBe(2);
+    expect(resolveStartupRetryLimit({ [STARTUP_RETRY_LIMIT_ENV]: "1" })).toBe(1);
+    expect(resolveStartupRetryLimit({ [STARTUP_RETRY_LIMIT_ENV]: "2.9" })).toBe(2);
+    expect(resolveStartupRetryLimit({ [STARTUP_RETRY_LIMIT_ENV]: "0" })).toBe(2);
+    expect(resolveStartupRetryLimit({ [STARTUP_RETRY_LIMIT_ENV]: "invalid" })).toBe(2);
+  });
+
   it("开发免登录仅允许绑定回环地址", async () => {
     expect(isLoopbackHost("localhost")).toBe(true);
     expect(isLoopbackHost("127.0.0.2")).toBe(true);
@@ -93,6 +104,48 @@ describe("本地服务运行时", () => {
       databasePath: join(root, "novel.db"),
       env: { NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true" }
     })).rejects.toThrow("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
+  });
+
+  it("连续启动失败达到上限后阻断后续重试", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-startup-retry-limit-"));
+    roots.push(root);
+    const options = {
+      host: "0.0.0.0",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true", [STARTUP_RETRY_LIMIT_ENV]: "2" }
+    } as const;
+
+    await expect(startLocalServer(options)).rejects.toThrow("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
+    await expect(startLocalServer(options)).rejects.toThrow("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
+    await expect(startLocalServer(options)).rejects.toThrow("Startup retry limit reached");
+
+    expect(JSON.parse(readFileSync(join(root, STARTUP_RETRY_STATE_FILENAME), "utf8"))).toMatchObject({ attempts: 2 });
+  });
+
+  it("服务器正常监听后清理启动失败重试次数", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-startup-retry-reset-"));
+    roots.push(root);
+    const failedOptions = {
+      host: "0.0.0.0",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "development", APP_DEV_SKIP_AUTH: "true", [STARTUP_RETRY_LIMIT_ENV]: "2" }
+    } as const;
+    await expect(startLocalServer(failedOptions)).rejects.toThrow("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
+    expect(existsSync(join(root, STARTUP_RETRY_STATE_FILENAME))).toBe(true);
+
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "test", [STARTUP_RETRY_LIMIT_ENV]: "2" }
+    });
+    runningServers.push(running);
+    expect(existsSync(join(root, STARTUP_RETRY_STATE_FILENAME))).toBe(false);
   });
 
   it("使用隔离数据目录启动 API 和完整网页", async () => {

@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { basename, join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
@@ -33,6 +33,9 @@ const publicPath = fileURLToPath(new URL("./public/", import.meta.url));
 export const PRE_MIGRATION_BACKUP_RETENTION_ENV = "SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION";
 export const DEFAULT_PRE_MIGRATION_BACKUP_RETENTION = 5;
 export const MIN_PRE_MIGRATION_BACKUP_RETENTION = 2;
+export const STARTUP_RETRY_LIMIT_ENV = "SCRIVERSE_STARTUP_RETRY_LIMIT";
+export const DEFAULT_STARTUP_RETRY_LIMIT = 2;
+export const STARTUP_RETRY_STATE_FILENAME = ".startup-retry.json";
 
 export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
@@ -49,6 +52,69 @@ export function resolvePreMigrationBackupRetention(environment: NodeJS.ProcessEn
   const configured = Number(raw);
   if (!Number.isFinite(configured)) return DEFAULT_PRE_MIGRATION_BACKUP_RETENTION;
   return Math.max(MIN_PRE_MIGRATION_BACKUP_RETENTION, Math.floor(configured));
+}
+
+export function resolveStartupRetryLimit(environment: NodeJS.ProcessEnv): number {
+  const raw = environment[STARTUP_RETRY_LIMIT_ENV]?.trim() ?? "";
+  if (raw === "") return DEFAULT_STARTUP_RETRY_LIMIT;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured) || configured < 1) return DEFAULT_STARTUP_RETRY_LIMIT;
+  return Math.floor(configured);
+}
+
+function startupRetryStatePath(dataDirectory: string): string {
+  return join(dataDirectory, STARTUP_RETRY_STATE_FILENAME);
+}
+
+function readStartupRetryCount(dataDirectory: string): number {
+  const statePath = startupRetryStatePath(dataDirectory);
+  if (!existsSync(statePath)) return 0;
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, "utf8")) as { attempts?: unknown };
+    const attempts = Number(parsed.attempts);
+    return Number.isInteger(attempts) && attempts >= 0 ? attempts : 0;
+  } catch (error) {
+    logger.warn("server.startup_retry_state.invalid", { retryStatePath: statePath, error: sanitizeError(error) });
+    return 0;
+  }
+}
+
+function writeStartupRetryCount(dataDirectory: string, attempts: number): void {
+  const statePath = startupRetryStatePath(dataDirectory);
+  const temporaryPath = `${statePath}.tmp`;
+  writeFileSync(temporaryPath, JSON.stringify({ attempts, updatedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
+  chmodSync(temporaryPath, 0o600);
+  renameSync(temporaryPath, statePath);
+  chmodSync(statePath, 0o600);
+}
+
+function recordStartupAttempt(dataDirectory: string, environment: NodeJS.ProcessEnv): void {
+  const retryLimit = resolveStartupRetryLimit(environment);
+  const previousAttempts = readStartupRetryCount(dataDirectory);
+  const retryStatePath = startupRetryStatePath(dataDirectory);
+  if (previousAttempts >= retryLimit) {
+    logger.error("server.startup_retry_limit_reached", {
+      retryStatePath,
+      attempts: previousAttempts,
+      retryLimit,
+      message: "Startup retry limit reached. Fix the previous initialization error, remove the startup retry state file, and restart Scriverse."
+    });
+    throw new Error(`Startup retry limit reached (${retryLimit}); fix the previous initialization error and remove ${retryStatePath} before restarting`);
+  }
+  const attempts = previousAttempts + 1;
+  writeStartupRetryCount(dataDirectory, attempts);
+  logger.warn("server.startup_attempt.recorded", { retryStatePath, attempts, retryLimit });
+}
+
+function clearStartupRetryState(dataDirectory: string): void {
+  const statePath = startupRetryStatePath(dataDirectory);
+  if (!existsSync(statePath)) return;
+  try {
+    rmSync(statePath, { force: true });
+    logger.info("server.startup_retry_state.cleared", { retryStatePath: statePath });
+  } catch (error) {
+    logger.error("server.startup_retry_state.clear_failed", { retryStatePath: statePath, error: sanitizeError(error) });
+  }
 }
 
 type PreMigrationBackup = {
@@ -141,6 +207,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   try {
     mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDirectory, 0o700);
+    recordStartupAttempt(options.dataDirectory, options.env);
     security = resolveRuntimeSecurity(options.env);
     createPreMigrationBackup(options, options.env);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
@@ -185,6 +252,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       }
       const port = address.port;
       const displayHost = options.host.includes(":") ? `[${options.host}]` : options.host;
+      clearStartupRetryState(options.dataDirectory);
       let closed = false;
       const close = async (): Promise<void> => {
         if (closed) return;
