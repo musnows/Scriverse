@@ -32,5 +32,14 @@ describe("真实数据库升级夹具", () => {
     } finally {
       database.close();
     }
+
+    const restartedDatabase = new Database(databasePath);
+    try {
+      expect(Number(restartedDatabase.get("SELECT MAX(version) AS version FROM schema_migrations")?.version)).toBe(DATABASE_SCHEMA_VERSION);
+      expect(restartedDatabase.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+      expect(restartedDatabase.all("PRAGMA foreign_key_check")).toEqual([]);
+    } finally {
+      restartedDatabase.close();
+    }
   });
 });
