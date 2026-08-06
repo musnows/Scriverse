@@ -1479,7 +1479,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .platform-image-tool-panel .config-save-button { flex: 0 0 auto; min-height: 36px; padding: 8px 14px; }
 .task-auto-run-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 148px;
+  grid-template-columns: minmax(0, 1fr) 208px;
   gap: 12px;
   column-gap: 24px;
   margin-bottom: 22px;
@@ -1527,7 +1527,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   grid-column: 2;
   grid-row: 2 / 5;
   align-self: center;
-  justify-self: center;
+  justify-self: start;
   width: 132px;
 }
 .task-auto-run-progress-ring { position: relative; display: grid; width: 132px; height: 132px; place-items: center; }
