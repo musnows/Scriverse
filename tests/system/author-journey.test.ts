@@ -322,7 +322,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v5');
-    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v7');
+    expect(page.text).toContain('/styles.css?v=20260807-task-auto-run-layout-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -640,7 +640,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).not.toContain("消化 pending 任务");
     expect(application.text).toContain("/tasks/auto-run");
     expect(styles.text).toContain(".task-auto-run-panel");
-    expect(styles.text).toContain(".task-auto-run-header { display: grid; grid-column: 1;");
+    expect(styles.text).toContain(".task-auto-run-header { display: grid; grid-column: 1 / -1;");
+    expect(styles.text).toContain("grid-column: 2;\n  grid-row: 2 / 5;");
     expect(styles.text).toContain(".task-auto-run-actions { display: flex; align-items: start;");
     expect(styles.text).not.toContain(".task-auto-run-actions { display: flex; grid-column: 2;");
     expect(styles.text).toContain(".task-auto-run-progress-ring-value { stroke: var(--accent);");

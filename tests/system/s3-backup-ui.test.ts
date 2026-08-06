@@ -31,7 +31,7 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain('id="s3-backup-retention-count"');
     expect(page.text).toContain('id="s3-backup-run-all"');
     expect(page.text).toContain('id="s3-backup-runs"');
-    expect(page.text).toContain('/styles.css?v=20260805-ai-tool-call-settings-v7');
+    expect(page.text).toContain('/styles.css?v=20260807-task-auto-run-layout-v1');
     expect(page.text).toContain('/app.js?v=20260805-ai-tool-call-settings-v5');
 
     expect(application.text).toContain('/s3-backup-ui.js?v=20260804-s3-backup-v1');
