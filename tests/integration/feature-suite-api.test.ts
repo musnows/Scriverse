@@ -677,6 +677,59 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
   });
 });
 
+describe("AI 分析目标导航 API", () => {
+  let runtime: Runtime;
+
+  beforeEach(() => { runtime = createTestRuntime(); });
+  afterEach(() => runtime.close());
+
+  it("仅为单一人物或指定章节返回可导航目标", async () => {
+    const { workId, chapters } = await seedWork(runtime);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const secondCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const characterTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { type: "book", characterIds: [character.body.data.id] }
+    }).expect(201);
+    expect(characterTask.body.data.scopeTarget).toEqual({
+      type: "character",
+      id: character.body.data.id,
+      label: "林舟"
+    });
+    const chapterTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "chapter-analysis",
+      modelId,
+      scope: { type: "chapter", chapterId: chapters[0].id }
+    }).expect(201);
+    expect(chapterTask.body.data.scopeTarget).toEqual({
+      type: "chapter",
+      id: chapters[0].id,
+      label: "第一卷 · 第一章 埋线"
+    });
+    const multipleCharacterTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      modelId,
+      scope: { type: "book", characterIds: [character.body.data.id, secondCharacter.body.data.id] }
+    }).expect(201);
+    expect(multipleCharacterTask.body.data.scopeTarget).toBeNull();
+
+    const taskPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
+    expect(taskPage.body.data.items.find((item: { id: string }) => item.id === characterTask.body.data.id)?.scopeTarget).toEqual({
+      type: "character",
+      id: character.body.data.id,
+      label: "林舟"
+    });
+    expect(taskPage.body.data.items.find((item: { id: string }) => item.id === chapterTask.body.data.id)?.scopeTarget).toEqual({
+      type: "chapter",
+      id: chapters[0].id,
+      label: "第一卷 · 第一章 埋线"
+    });
+    expect(taskPage.body.data.items.find((item: { id: string }) => item.id === multipleCharacterTask.body.data.id)?.scopeTarget).toBeNull();
+  });
+});
+
 describe("续写守卫和全书关系 Map-Reduce", () => {
   let runtime: Runtime;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
