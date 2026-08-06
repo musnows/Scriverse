@@ -6443,7 +6443,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
           <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
         </div>
         <div class="task-auto-run-actions">
-          ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+          ${autoRunEditing ? "" : `<button id="task-auto-run-edit" class="record-card-edit" type="button" aria-label="编辑自动执行设置" title="编辑自动执行设置">${pencilIconMarkup()}</button>`}
         </div>
       </div>
       <div class="task-auto-run-controls">
