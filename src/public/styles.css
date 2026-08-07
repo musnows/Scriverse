@@ -1627,7 +1627,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   background: color-mix(in srgb, var(--accent) 32%, transparent);
   animation: task-progress-waiting 1.9s ease-in-out infinite;
 }
-.task-scope-link {
+.task-scope-link, .task-reference-link {
   display: inline;
   margin: 0;
   padding: 0;
@@ -1639,7 +1639,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   text-align: left;
   cursor: pointer;
 }
-.task-scope-link:hover, .task-scope-link:focus-visible {
+.task-scope-link:hover, .task-scope-link:focus-visible, .task-reference-link:hover, .task-reference-link:focus-visible {
   border-bottom-style: solid;
   color: var(--accent);
   outline: none;
@@ -1708,8 +1708,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-result-item summary, .task-result-technical > summary { width: fit-content; cursor: pointer; color: var(--accent-dark); font-size: 10px; }
 .task-result-evidence { display: grid; gap: 7px; margin-top: 8px !important; padding-left: 17px !important; }
 .task-result-evidence li { padding-left: 2px; }
-.task-result-evidence li strong, .task-result-evidence li q, .task-result-evidence li small { display: block; }
-.task-result-evidence li strong { font-size: 10px; }
+.task-result-evidence li strong, .task-result-evidence li button, .task-result-evidence li q, .task-result-evidence li small { display: block; }
+.task-result-evidence li strong, .task-result-evidence li button { font-size: 10px; }
 .task-result-evidence li q { margin-top: 2px; color: var(--ink); }
 .task-result-evidence li small, .task-result-muted { color: var(--muted); }
 .task-result-empty, .task-result-warning { padding: 9px; border-radius: 5px; background: var(--surface-soft); color: var(--muted); }

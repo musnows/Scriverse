@@ -6893,9 +6893,54 @@ function renderTaskResultEvidence(item) {
   const evidence = Array.isArray(item.evidence) ? item.evidence : [];
   if (!evidence.length) return '<p class="task-result-muted">没有保存可展示的证据摘录。</p>';
   return `<ul class="task-result-evidence">${evidence.map((item) => {
-    const source = item.chapterTitle || item.chapterId || "未标明章节";
-    return `<li><strong>${esc(source)}</strong>${item.quote ? `<q>${esc(item.quote)}</q>` : ""}${item.supports ? `<small>${esc(item.supports)}</small>` : ""}</li>`;
+    const sourceType = item.sourceType === "chapter" || item.sourceType === "setting"
+      ? item.sourceType
+      : item.chapterId || item.chapterTitle
+        ? "chapter"
+        : item.settingId || item.settingTitle
+          ? "setting"
+          : "";
+    const sourceId = String(item.sourceId || (sourceType === "chapter" ? item.chapterId : sourceType === "setting" ? item.settingId : ""));
+    const sourceTitle = String(item.sourceTitle || (sourceType === "chapter" ? item.chapterTitle : sourceType === "setting" ? item.settingTitle : ""));
+    const sourceLabel = sourceType === "chapter"
+      ? `正文：${sourceTitle || sourceId || "未标明章节"}`
+      : sourceType === "setting"
+        ? `设定集：${sourceTitle || sourceId || "未标明条目"}`
+        : `引用：${sourceTitle || sourceId || "未标明来源"}`;
+    const sourceMarkup = sourceId && (sourceType === "chapter" || sourceType === "setting")
+      ? `<button class="task-reference-link" type="button" data-task-result-reference data-task-reference-type="${esc(sourceType)}" data-task-reference-id="${esc(sourceId)}" aria-label="打开${esc(sourceLabel)}">${esc(sourceLabel)}</button>`
+      : `<strong>${esc(sourceLabel)}</strong>`;
+    return `<li>${sourceMarkup}${item.quote ? `<q>${esc(item.quote)}</q>` : ""}${item.supports ? `<small>${esc(item.supports)}</small>` : ""}</li>`;
   }).join("")}</ul>`;
+}
+
+function bindTaskResultReferenceActions(container) {
+  container.querySelectorAll("[data-task-result-reference]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const referenceType = button.dataset.taskReferenceType;
+    const referenceId = button.dataset.taskReferenceId;
+    if (!referenceId || !["chapter", "setting"].includes(referenceType)) return;
+    button.disabled = true;
+    try {
+      $("#form-dialog").close();
+      if (referenceType === "chapter") {
+        await selectChapter(referenceId);
+        if (isMobileViewport()) {
+          panelLayout.leftCollapsed = true;
+          applyPanelLayout(true);
+        }
+      } else {
+        await showModule("settings");
+        if (state.module !== "settings") return;
+        const setting = await api(`/api/settings/${encodeURIComponent(referenceId)}`);
+        openSettingEditor(setting, { readOnly: true });
+      }
+    } catch (error) {
+      toast(`打开分析引用失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }));
 }
 
 function renderTaskResultItem(item) {
@@ -7155,6 +7200,7 @@ function openTaskDetailDialog(task, trace) {
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
   bindTaskResultActions($("#dialog-fields"));
+  bindTaskResultReferenceActions($("#dialog-fields"));
   $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
     await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
   });
