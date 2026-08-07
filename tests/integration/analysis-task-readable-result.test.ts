@@ -77,7 +77,10 @@ describe("AI 分析任务可读结果", () => {
       keywords: ["长期敌对", "神代冲突"],
       currentStatus: "active",
       confidence: 0.94,
-      evidence: [{ chapterId, chapterTitle: seeded.chapter.title, quote: "此后长期敌对", supports: "明确说明关系持续" }]
+      evidence: [
+        { chapterId, chapterTitle: seeded.chapter.title, quote: "此后长期敌对", supports: "明确说明关系持续" },
+        { settingId: String(setting.id), settingTitle: String(setting.title), quote: "神代诸神不得私自干预人间。", supports: "设定集补充关系背景" }
+      ]
     }, "analysis", "readable-result-test");
 
     const createCompletedTask = (taskType: string, result: Record<string, unknown>, scope: Record<string, unknown> = { type: "book" }): string => {
@@ -233,6 +236,11 @@ describe("AI 分析任务可读结果", () => {
         if (item.location === "当前作品 · 人物关系库") {
           expect(JSON.stringify(section.items)).toContain("持续中");
           expect(JSON.stringify(section.items)).toContain("待确认");
+          const relationshipItem = section.items.find((candidate: { title: string }) => candidate.title.includes("八岐大蛇"));
+          expect(relationshipItem.evidence).toEqual(expect.arrayContaining([
+            expect.objectContaining({ sourceType: "chapter", sourceId: chapterId, sourceTitle: seeded.chapter.title }),
+            expect.objectContaining({ sourceType: "setting", sourceId: String(setting.id), sourceTitle: String(setting.title), settingId: String(setting.id) })
+          ]));
         }
       }
       if ("skippedItemText" in item && item.skippedItemText) {

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { logger, sanitizeError } from "./logger.js";
@@ -7,19 +7,66 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
 export const DATABASE_SCHEMA_VERSION = 76;
+export const SQLITE_IOERR_SHMSIZE = 4874;
+
+export type AvailableDiskSpace = {
+  availableBytes: number;
+  availableMiB: number;
+};
+
+export function isSqliteDiskIoError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const candidate = error as Error & { code?: unknown; errcode?: unknown; errstr?: unknown };
+  return Number(candidate.errcode) === SQLITE_IOERR_SHMSIZE
+    || (candidate.code === "ERR_SQLITE_ERROR" && candidate.errstr === "disk I/O error")
+    || (candidate.code === "ERR_SQLITE_ERROR" && error.message === "disk I/O error");
+}
+
+export function readAvailableDiskSpace(path: string): AvailableDiskSpace | null {
+  try {
+    const stats = statfsSync(path);
+    const availableBytes = Number(stats.bavail) * Number(stats.bsize);
+    if (!Number.isFinite(availableBytes) || availableBytes < 0) return null;
+    return {
+      availableBytes,
+      availableMiB: Math.round(availableBytes / (1024 * 1024) * 100) / 100
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function logSqliteDiskIoError(filename: string, error: unknown): void {
+  if (!isSqliteDiskIoError(error)) return;
+  const diskSpace = readAvailableDiskSpace(filename === ":memory:" ? "." : dirname(filename));
+  logger.error("database.disk_io_error.space_check", {
+    databasePath: filename,
+    availableBytes: diskSpace?.availableBytes ?? null,
+    availableMiB: diskSpace?.availableMiB ?? null,
+    spaceCheck: diskSpace ? "completed" : "failed"
+  });
+  logger.error("database.disk_io_error.guidance", {
+    databasePath: filename,
+    message: "SQLite reported a disk I/O error. Check the host disk's available space and ensure the database directory is writable before restarting Scriverse."
+  });
+}
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
-  const database = new DatabaseSync(filename, { readOnly: true });
+  let database: DatabaseSync | null = null;
   try {
+    database = new DatabaseSync(filename, { readOnly: true });
     const migrationTable = database.prepare(
       "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
     ).get();
     if (!migrationTable) return 0;
     const row = database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version?: unknown } | undefined;
     return Number(row?.version ?? 0);
+  } catch (error) {
+    logSqliteDiskIoError(filename, error);
+    throw error;
   } finally {
-    database.close();
+    database?.close();
   }
 }
 
@@ -44,6 +91,7 @@ export class Database {
       const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
       logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
     } catch (error) {
+      logSqliteDiskIoError(filename, error);
       logger.error("database.open_failed", { databasePath: filename, error: sanitizeError(error) });
       throw error;
     }

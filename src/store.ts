@@ -4970,13 +4970,35 @@ export class Store {
       `SELECT attachment.*
        FROM attachments attachment
        JOIN attachment_references reference ON reference.attachment_id = attachment.id
-       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ? AND reference.entity_type = 'setting'
+       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ?
+         AND (
+           (reference.entity_type = 'setting' AND EXISTS (
+             SELECT 1 FROM settings current_setting
+             WHERE current_setting.id = reference.entity_id AND current_setting.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'character-section' AND EXISTS (
+             SELECT 1
+             FROM character_profile_sections current_section
+             JOIN characters current_character ON current_character.id = current_section.character_id
+             WHERE current_section.id = reference.entity_id
+               AND current_section.work_id = reference.work_id
+               AND current_character.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'race' AND EXISTS (
+             SELECT 1 FROM races current_race
+             WHERE current_race.id = reference.entity_id AND current_race.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'organization' AND EXISTS (
+             SELECT 1 FROM organizations current_organization
+             WHERE current_organization.id = reference.entity_id AND current_organization.work_id = reference.work_id
+           ))
+         )
        LIMIT 1`,
       attachmentId,
       workId,
       workId
     );
-    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被设定正文引用");
+    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被生效设定库当前文档引用");
     return this.mapAttachment(row);
   }
 
@@ -7085,7 +7107,7 @@ export class Store {
       json<Record<string, unknown>>(requiredString(row, "scope_json"), {})
     ));
     return {
-      ...paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles, characterNames)), pagination, total),
+      ...paginated(rows.map((row) => this.mapTaskSummary(workId, row, chapterSummaries, volumeTitles, characterNames)), pagination, total),
       stats: {
         total,
         pendingCount: numberValue(statsRow, "pending_count"),
@@ -7301,12 +7323,30 @@ export class Store {
   }
 
   private taskResultEvidence(value: unknown): Record<string, unknown>[] {
-    return this.taskResultObjects(value).map((item) => ({
-      chapterId: String(item.chapterId ?? ""),
-      chapterTitle: String(item.chapterTitle ?? ""),
-      quote: String(item.quote ?? ""),
-      supports: String(item.supports ?? item.conclusion ?? "")
-    })).filter((item) => item.chapterId || item.chapterTitle || item.quote || item.supports).slice(0, 5);
+    return this.taskResultObjects(value).map((item) => {
+      const chapterId = String(item.chapterId ?? "");
+      const chapterTitle = String(item.chapterTitle ?? "");
+      const settingId = String(item.settingId ?? "");
+      const settingTitle = String(item.settingTitle ?? "");
+      const sourceType = item.contextType === "setting" || settingId || settingTitle
+        ? "setting"
+        : chapterId || chapterTitle
+          ? "chapter"
+          : "";
+      const sourceId = sourceType === "chapter" ? chapterId : sourceType === "setting" ? settingId : "";
+      const sourceTitle = sourceType === "chapter" ? chapterTitle : sourceType === "setting" ? settingTitle : "";
+      return {
+        ...(chapterId ? { chapterId } : {}),
+        ...(chapterTitle ? { chapterTitle } : {}),
+        ...(settingId ? { settingId } : {}),
+        ...(settingTitle ? { settingTitle } : {}),
+        ...(sourceType ? { sourceType } : {}),
+        ...(sourceId ? { sourceId } : {}),
+        ...(sourceTitle ? { sourceTitle } : {}),
+        quote: String(item.quote ?? ""),
+        supports: String(item.supports ?? item.conclusion ?? "")
+      };
+    }).filter((item) => item.sourceId || item.sourceTitle || item.quote || item.supports).slice(0, 5);
   }
 
   private taskResultItem(value: unknown, fallbackTitle: string): Record<string, unknown> {
@@ -8014,12 +8054,7 @@ export class Store {
           confidence: numberValue(row, "confidence"),
           confirmationStatus: requiredString(row, "confirmation_status"),
           evidenceCount: evidence.length,
-          evidence: evidence.slice(0, 3).map((item) => ({
-            chapterId: String(item.chapterId ?? ""),
-            chapterTitle: String(item.chapterTitle ?? ""),
-            quote: String(item.quote ?? ""),
-            supports: String(item.supports ?? "")
-          })),
+          evidence: this.taskResultEvidence(evidence).slice(0, 3),
           evidenceTruncated: evidence.length > 3
         };
       });
@@ -8063,6 +8098,7 @@ export class Store {
       scope,
       scopeSummary: this.taskScopeSummary(workId, scope, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummary(workId, scope, new Map(), false),
+      scopeTarget: this.taskScopeTarget(workId, scope),
       scopeDetails: this.taskScopeDetails(workId, scope),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
@@ -8078,6 +8114,7 @@ export class Store {
   }
 
   private mapTaskSummary(
+    workId: string,
     row: Row,
     chapterSummaries: Map<string, string>,
     volumeTitles: Map<string, string>,
@@ -8090,6 +8127,7 @@ export class Store {
       taskType: requiredString(row, "task_type"),
       scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, new Map(), false),
+      scopeTarget: this.taskScopeTargetFromMaps(workId, scope, chapterSummaries),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
       attemptCount: numberValue(row, "attempt_count"),
@@ -8213,6 +8251,57 @@ export class Store {
     const snapshotNames = this.taskCharacterSnapshotNames(scope);
     const names = characterIds.map((characterId) => snapshotNames.get(characterId) ?? characterNames.get(characterId) ?? "已删除角色");
     return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${sourcePreviewSuffix}${overwriteSuffix}`;
+  }
+
+  private taskScopeTargetFromMaps(
+    workId: string,
+    scope: Record<string, unknown>,
+    chapterSummaries: Map<string, string>
+  ): Record<string, string> | null {
+    const characterIds = Array.isArray(scope.characterIds)
+      ? scope.characterIds.filter((characterId): characterId is string => typeof characterId === "string")
+      : [];
+    if (characterIds.length === 1 && typeof scope.chapterId !== "string") {
+      const characterId = characterIds[0];
+      if (!characterId) return null;
+      const character = this.db.get("SELECT name FROM characters WHERE id = ? AND work_id = ?", characterId, workId);
+      return character ? { type: "character", id: characterId, label: requiredString(character, "name") } : null;
+    }
+    if (characterIds.length === 0 && typeof scope.chapterId === "string") {
+      const label = chapterSummaries.get(scope.chapterId);
+      return label ? { type: "chapter", id: scope.chapterId, label } : null;
+    }
+    return null;
+  }
+
+  private taskScopeTarget(
+    workId: string,
+    scope: Record<string, unknown>
+  ): Record<string, string> | null {
+    const characterIds = Array.isArray(scope.characterIds)
+      ? scope.characterIds.filter((characterId): characterId is string => typeof characterId === "string")
+      : [];
+    if (characterIds.length === 1 && typeof scope.chapterId !== "string") {
+      const characterId = characterIds[0];
+      if (!characterId) return null;
+      const character = this.db.get("SELECT name FROM characters WHERE id = ? AND work_id = ?", characterId, workId);
+      return character ? { type: "character", id: characterId, label: requiredString(character, "name") } : null;
+    }
+    if (characterIds.length !== 0 || typeof scope.chapterId !== "string") return null;
+    const chapter = this.db.get(
+      `SELECT chapter.title AS title, volume.title AS volume_title
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
+      scope.chapterId,
+      workId
+    );
+    if (!chapter) return null;
+    return {
+      type: "chapter",
+      id: scope.chapterId,
+      label: `${requiredString(chapter, "volume_title")} · ${requiredString(chapter, "title")}`
+    };
   }
 
   private taskCharacterSnapshotNames(scope: Record<string, unknown>): Map<string, string> {

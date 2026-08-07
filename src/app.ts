@@ -764,6 +764,8 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
       const { targetCharacters: _targetCharacters, ...redactedScope } = scope;
       result.scope = redactedScope;
     }
+    const scopeTarget = recordValue(result.scopeTarget);
+    if (scopeTarget?.type === "character") delete result.scopeTarget;
     const taskResult = recordValue(result.result);
     if (taskResult) {
       const redactedTaskResult = { ...taskResult };
@@ -791,6 +793,10 @@ function redactTaskCharacterNames(record: Record<string, unknown>, permissions: 
       }
       result.result = redactedTaskResult;
     }
+  }
+  if (proseRestricted) {
+    const scopeTarget = recordValue(result.scopeTarget);
+    if (scopeTarget?.type === "chapter") delete result.scopeTarget;
   }
   if (permissions.relationships === "none") {
     const taskResult = recordValue(result.result);

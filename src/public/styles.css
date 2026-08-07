@@ -1479,7 +1479,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .platform-image-tool-panel .config-save-button { flex: 0 0 auto; min-height: 36px; padding: 8px 14px; }
 .task-auto-run-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 148px;
+  grid-template-columns: minmax(0, 1fr) 268px;
   gap: 12px;
   column-gap: 24px;
   margin-bottom: 22px;
@@ -1488,12 +1488,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   border-radius: 5px;
   background: var(--surface-soft);
 }
-.task-auto-run-header { display: grid; grid-column: 1; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
+.task-auto-run-header { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; }
 .task-auto-run-copy { display: grid; gap: 4px; }
 .task-auto-run-copy strong { font-size: 13px; }
 .task-auto-run-copy small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .task-auto-run-actions { display: flex; align-items: start; justify-content: flex-end; min-height: 32px; }
 .task-auto-run-actions:empty { display: none; }
+.task-auto-run-actions .record-card-edit { position: static; flex: 0 0 32px; width: 32px; height: 32px; }
 .task-auto-run-controls {
   display: flex;
   grid-column: 1;
@@ -1525,12 +1526,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-progress {
   display: grid;
   grid-column: 2;
-  grid-row: 1 / 4;
+  grid-row: 2 / 5;
   align-self: center;
-  justify-self: center;
-  width: 132px;
+  justify-self: start;
+  width: 192px;
 }
-.task-auto-run-progress-ring { position: relative; display: grid; width: 132px; height: 132px; place-items: center; }
+.task-auto-run-progress-ring { position: relative; display: grid; width: 192px; height: 192px; place-items: center; }
 .task-auto-run-progress-ring svg { display: block; width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
 .task-auto-run-progress-ring-track, .task-auto-run-progress-ring-value { fill: none; stroke-width: 8; }
 .task-auto-run-progress-ring-track { stroke: color-mix(in srgb, var(--line) 72%, transparent); }
@@ -1538,9 +1539,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-progress-ring.is-running svg { animation: task-auto-run-active 1.8s ease-in-out infinite; }
 .task-auto-run-progress-ring.is-running .task-auto-run-progress-ring-value { stroke: var(--task-running); }
 .task-auto-run-progress-ring.is-paused .task-auto-run-progress-ring-value { stroke: var(--accent); }
-.task-auto-run-progress-ring-label { position: absolute; inset: 22px; display: grid; align-content: center; justify-items: center; gap: 3px; text-align: center; }
-.task-auto-run-progress-ring-label strong { color: var(--ink); font-family: var(--font-latin), monospace; font-size: 22px; font-weight: 600; line-height: 1; }
-.task-auto-run-progress-ring-label span { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.task-auto-run-progress-ring-label { position: absolute; inset: 32px; display: grid; align-content: center; justify-items: center; gap: 4px; text-align: center; }
+.task-auto-run-progress-ring-label strong { color: var(--ink); font-family: var(--font-latin), monospace; font-size: 28px; font-weight: 600; line-height: 1; }
+.task-auto-run-progress-ring-label span { color: var(--muted); font-size: 10px; line-height: 1.35; }
 .task-auto-run-progress-bar-layout { display: none; }
 .task-auto-run-progress-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 10px; }
 .task-auto-run-progress-label strong { color: var(--ink); font-family: var(--font-latin), monospace; font-size: 10px; font-weight: 600; }
@@ -1626,6 +1627,23 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   background: color-mix(in srgb, var(--accent) 32%, transparent);
   animation: task-progress-waiting 1.9s ease-in-out infinite;
 }
+.task-scope-link, .task-reference-link {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: transparent;
+  color: var(--accent-dark);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.task-scope-link:hover, .task-scope-link:focus-visible, .task-reference-link:hover, .task-reference-link:focus-visible {
+  border-bottom-style: solid;
+  color: var(--accent);
+  outline: none;
+}
 @keyframes task-auto-run-active { 0%, 100% { filter: drop-shadow(0 0 0 transparent); opacity: .72; } 50% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--green) 42%, transparent)); opacity: 1; } }
 @keyframes task-status-waiting { 0%, 100% { opacity: .45; transform: scale(.74); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes task-status-running-breathe { 0%, 100% { background: color-mix(in srgb, var(--green) 5%, transparent); box-shadow: 0 0 0 0 transparent; opacity: .72; } 50% { background: color-mix(in srgb, var(--green) 16%, transparent); box-shadow: 0 0 12px color-mix(in srgb, var(--green) 20%, transparent); opacity: 1; } }
@@ -1690,8 +1708,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-result-item summary, .task-result-technical > summary { width: fit-content; cursor: pointer; color: var(--accent-dark); font-size: 10px; }
 .task-result-evidence { display: grid; gap: 7px; margin-top: 8px !important; padding-left: 17px !important; }
 .task-result-evidence li { padding-left: 2px; }
-.task-result-evidence li strong, .task-result-evidence li q, .task-result-evidence li small { display: block; }
-.task-result-evidence li strong { font-size: 10px; }
+.task-result-evidence li strong, .task-result-evidence li button, .task-result-evidence li q, .task-result-evidence li small { display: block; }
+.task-result-evidence li strong, .task-result-evidence li button { font-size: 10px; }
 .task-result-evidence li q { margin-top: 2px; color: var(--ink); }
 .task-result-evidence li small, .task-result-muted { color: var(--muted); }
 .task-result-empty, .task-result-warning { padding: 9px; border-radius: 5px; background: var(--surface-soft); color: var(--muted); }
