@@ -7949,6 +7949,30 @@ export class AiManager {
       ? relationship.evidence.filter((item): item is Record<string, unknown> =>
         Boolean(item) && typeof item === "object" && !Array.isArray(item))
       : [];
+    const evidenceForClient = (item: Record<string, unknown>): Record<string, unknown> => {
+      const chapterId = String(item.chapterId ?? "");
+      const chapterTitle = String(item.chapterTitle ?? "");
+      const settingId = String(item.settingId ?? "");
+      const settingTitle = String(item.settingTitle ?? "");
+      const sourceType = item.contextType === "setting" || settingId || settingTitle
+        ? "setting"
+        : chapterId || chapterTitle
+          ? "chapter"
+          : "";
+      const sourceId = sourceType === "chapter" ? chapterId : sourceType === "setting" ? settingId : "";
+      const sourceTitle = sourceType === "chapter" ? chapterTitle : sourceType === "setting" ? settingTitle : "";
+      return {
+        ...(chapterId ? { chapterId } : {}),
+        ...(chapterTitle ? { chapterTitle } : {}),
+        ...(settingId ? { settingId } : {}),
+        ...(settingTitle ? { settingTitle } : {}),
+        ...(sourceType ? { sourceType } : {}),
+        ...(sourceId ? { sourceId } : {}),
+        ...(sourceTitle ? { sourceTitle } : {}),
+        quote: String(item.quote ?? ""),
+        supports: String(item.supports ?? "")
+      };
+    };
     const characterName = (characterId: unknown): string => {
       try {
         const character = this.store.getCharacter(String(characterId));
@@ -7975,12 +7999,7 @@ export class AiManager {
       confidence: Number(relationship.confidence ?? 0),
       confirmationStatus: String(relationship.confirmationStatus ?? "pending"),
       evidenceCount: evidence.length,
-      evidence: evidence.slice(0, 3).map((item) => ({
-        chapterId: String(item.chapterId ?? ""),
-        chapterTitle: String(item.chapterTitle ?? item.settingTitle ?? ""),
-        quote: String(item.quote ?? ""),
-        supports: String(item.supports ?? "")
-      })),
+      evidence: evidence.slice(0, 3).map(evidenceForClient),
       evidenceTruncated: evidence.length > 3
     };
   }

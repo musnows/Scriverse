@@ -7323,12 +7323,30 @@ export class Store {
   }
 
   private taskResultEvidence(value: unknown): Record<string, unknown>[] {
-    return this.taskResultObjects(value).map((item) => ({
-      chapterId: String(item.chapterId ?? ""),
-      chapterTitle: String(item.chapterTitle ?? ""),
-      quote: String(item.quote ?? ""),
-      supports: String(item.supports ?? item.conclusion ?? "")
-    })).filter((item) => item.chapterId || item.chapterTitle || item.quote || item.supports).slice(0, 5);
+    return this.taskResultObjects(value).map((item) => {
+      const chapterId = String(item.chapterId ?? "");
+      const chapterTitle = String(item.chapterTitle ?? "");
+      const settingId = String(item.settingId ?? "");
+      const settingTitle = String(item.settingTitle ?? "");
+      const sourceType = item.contextType === "setting" || settingId || settingTitle
+        ? "setting"
+        : chapterId || chapterTitle
+          ? "chapter"
+          : "";
+      const sourceId = sourceType === "chapter" ? chapterId : sourceType === "setting" ? settingId : "";
+      const sourceTitle = sourceType === "chapter" ? chapterTitle : sourceType === "setting" ? settingTitle : "";
+      return {
+        ...(chapterId ? { chapterId } : {}),
+        ...(chapterTitle ? { chapterTitle } : {}),
+        ...(settingId ? { settingId } : {}),
+        ...(settingTitle ? { settingTitle } : {}),
+        ...(sourceType ? { sourceType } : {}),
+        ...(sourceId ? { sourceId } : {}),
+        ...(sourceTitle ? { sourceTitle } : {}),
+        quote: String(item.quote ?? ""),
+        supports: String(item.supports ?? item.conclusion ?? "")
+      };
+    }).filter((item) => item.sourceId || item.sourceTitle || item.quote || item.supports).slice(0, 5);
   }
 
   private taskResultItem(value: unknown, fallbackTitle: string): Record<string, unknown> {
@@ -8036,12 +8054,7 @@ export class Store {
           confidence: numberValue(row, "confidence"),
           confirmationStatus: requiredString(row, "confirmation_status"),
           evidenceCount: evidence.length,
-          evidence: evidence.slice(0, 3).map((item) => ({
-            chapterId: String(item.chapterId ?? ""),
-            chapterTitle: String(item.chapterTitle ?? ""),
-            quote: String(item.quote ?? ""),
-            supports: String(item.supports ?? "")
-          })),
+          evidence: this.taskResultEvidence(evidence).slice(0, 3),
           evidenceTruncated: evidence.length > 3
         };
       });

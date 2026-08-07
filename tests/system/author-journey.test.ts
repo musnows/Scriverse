@@ -321,8 +321,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260807-task-scope-links-v1');
-    expect(page.text).toContain('/styles.css?v=20260807-task-scope-links-v1');
+    expect(page.text).toContain('/app.js?v=20260807-task-reference-links-v1');
+    expect(page.text).toContain('/styles.css?v=20260807-task-reference-links-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -621,6 +621,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('data-task-scope-target');
     expect(application.text).toContain('await selectChapter(targetId);');
     expect(application.text).toContain('await openCharacterEditor(character, { readOnly: true });');
+    expect(application.text).toContain('function bindTaskResultReferenceActions(container)');
+    expect(application.text).toContain('data-task-result-reference');
+    expect(application.text).toContain('await api(`/api/settings/${encodeURIComponent(referenceId)}`);');
     expect(application.text).toContain('class="task-auto-run-header"');
     expect(application.text).toContain('class="task-auto-run-actions"');
     expect(application.text).toContain('id="task-auto-run-pause"');
@@ -658,7 +661,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".task-auto-run-progress-ring { display: none; }");
     expect(styles.text).toContain(".task-auto-run-progress-bar-layout { display: grid;");
     expect(styles.text).toContain(".task-auto-run-progress-bar::-webkit-progress-value");
-    expect(styles.text).toContain(".task-scope-link {");
+    expect(styles.text).toContain(".task-scope-link, .task-reference-link {");
     expect(application.text).toContain('class="task-status-badge is-${status}${statusChanged ? " is-state-change" : ""}"');
     expect(application.text).toContain('class="task-progress-track" role="progressbar"');
     expect(styles.text).toContain(".task-status-badge.is-running");
