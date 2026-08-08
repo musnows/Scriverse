@@ -944,6 +944,26 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
   font-size: 13px;
 }
 .search-form .primary-button { min-height: 38px; white-space: nowrap; }
+.replace-dialog { display: flex; width: min(620px, calc(100vw - 32px)); height: min(680px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); overflow: hidden; }
+.replace-dialog > form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-height: 0; }
+.replace-dialog-body { display: grid; min-height: 0; gap: 16px; padding: 20px 24px 6px; overflow-y: auto; }
+.replace-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.replace-field input, .replace-field textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.replace-field textarea { min-height: 96px; resize: vertical; }
+.replace-scope-fieldset { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.replace-scope-fieldset legend { padding: 0 6px; color: var(--ink); font-size: 12px; font-weight: 650; }
+.replace-scope-fieldset legend, .replace-scope-fieldset > p { grid-column: 1 / -1; }
+.replace-scope-fieldset > p { margin: -1px 0 1px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.replace-scope-option { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 7px; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); cursor: pointer; }
+.replace-scope-option > span { display: grid; gap: 3px; min-width: 0; }
+.replace-scope-option strong { color: var(--ink); font-size: 12px; }
+.replace-scope-option small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.replace-scope-option:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); box-shadow: inset 0 0 0 1px var(--accent); }
+.replace-scope-option.is-disabled, .replace-scope-option:has(input:disabled) { cursor: not-allowed; opacity: .5; }
+.replace-scope-option input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.replace-permission-note { margin: 0; color: var(--accent-dark); font-size: 10px; line-height: 1.5; }
+.replace-permission-note:empty { display: none; }
+.replace-dialog .primary-button:disabled { cursor: not-allowed; opacity: .42; }
 .search-results { display: grid; gap: 8px; max-height: min(52vh, 480px); overflow: auto; }
 .search-results-summary { margin: 0; padding: 2px 2px 5px; color: var(--muted); font-size: 10px; }
 .search-results-empty, .search-results-status {
@@ -3343,6 +3363,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-header h2 { font-size: 20px; }
   .settings-dialog-header-actions { gap: 6px; }
   .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list, .chapter-annotations-list { padding-inline: 16px; }
+  .replace-dialog-body { padding-inline: 16px; }
+  .replace-dialog { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
+  .replace-scope-fieldset { grid-template-columns: minmax(0, 1fr); }
+  .replace-scope-fieldset legend, .replace-scope-fieldset > p { grid-column: auto; }
   .task-detail-overview { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .task-detail-overview > * { grid-column: 1 !important; }
   .task-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -3397,7 +3421,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 
 @media (max-width: 480px) {
-  .top-actions .settings-button { display: none; }
+  .app-shell:not(.shelf-mode) .topbar .brand-block > div { display: none; }
+  .top-actions .settings-button { display: grid; flex: 0 0 32px; }
   .topbar-icon-button, .theme-toggle, .account-button { flex: 0 0 32px; width: 32px; min-width: 32px; height: 32px; }
   button.account-button { width: 32px; height: 32px; }
   .top-actions { gap: 3px; }

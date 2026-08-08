@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260807-task-reference-links-v1">
+<link rel="stylesheet" href="/styles.css?v=20260809-global-replace-v4">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -214,6 +214,7 @@
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
+            <button id="global-replace-button" class="settings-hub-card" type="button"><span class="settings-card-mark">替</span><strong>全局替换</strong><small>替换已保存正文、设定库或两者内容</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
             <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small></button>
           </div>
@@ -610,7 +611,7 @@
     <dialog id="search-dialog" class="dialog wide-dialog" aria-labelledby="search-dialog-title">
       <div class="dialog-header">
         <div><span class="eyebrow">当前作品</span><h2 id="search-dialog-title">全文检索</h2></div>
-        <button id="search-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button>
+        <div class="settings-dialog-header-actions"><button id="search-to-replace" class="ghost-button" type="button">全局替换</button><button id="search-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       </div>
       <div class="access-dialog-body">
         <form id="search-form" class="search-form">
@@ -636,6 +637,31 @@
           <p class="search-results-empty">输入关键词后开始检索。</p>
         </div>
       </div>
+    </dialog>
+
+    <dialog id="replace-dialog" class="dialog replace-dialog" aria-labelledby="replace-dialog-title" aria-describedby="replace-dialog-description">
+      <form id="replace-form">
+        <div class="dialog-header">
+          <div><span class="eyebrow">内容工具</span><h2 id="replace-dialog-title">全局替换</h2><p id="replace-dialog-description" class="dialog-header-meta">只处理已保存内容；每个被修改的章节或设定都会保留一个可恢复版本。</p></div>
+          <button id="replace-dialog-close" class="dialog-close" aria-label="关闭全局替换" type="button">×</button>
+        </div>
+        <div class="replace-dialog-body">
+          <label class="replace-field">查找内容<input id="replace-find" name="find" type="text" maxlength="500" autocomplete="off" required placeholder="输入要查找的文字"></label>
+          <label class="replace-field">替换为<textarea id="replace-with" name="replacement" maxlength="200000" rows="4" placeholder="输入替换后的文字；留空表示删除"></textarea></label>
+          <fieldset class="replace-scope-fieldset" aria-describedby="replace-scope-description">
+            <legend>替换范围</legend>
+            <p id="replace-scope-description">默认只替换章节正文内容。</p>
+            <label class="replace-scope-option"><input type="radio" name="replaceScope" value="prose" checked><span><strong>正文</strong><small>仅替换章节正文内容</small></span></label>
+            <label class="replace-scope-option"><input type="radio" name="replaceScope" value="settings"><span><strong>设定库</strong><small>仅替换世界观设定内容</small></span></label>
+            <label class="replace-scope-option"><input type="radio" name="replaceScope" value="prose-and-settings"><span><strong>正文+设定库</strong><small>同时替换章节正文和世界观设定内容</small></span></label>
+          </fieldset>
+          <p id="replace-permission-note" class="replace-permission-note" role="status"></p>
+        </div>
+        <div class="dialog-actions">
+          <button id="replace-cancel" class="ghost-button" type="button">取消</button>
+          <button id="replace-submit" class="primary-button" type="submit">开始替换</button>
+        </div>
+      </form>
     </dialog>
 
     <dialog id="appearance-dialog" class="dialog">
@@ -998,6 +1024,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260808-roleplay-placeholder-v1"></script>
+    <script type="module" src="/app.js?v=20260809-global-replace-v2"></script>
   </body>
 </html>
