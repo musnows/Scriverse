@@ -1,7 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "../../src/public/global-search.js";
+import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "../../src/public/global-search.js";
 
 describe("全局搜索结果导航", () => {
+  it("将非正文结果排在正文条目前并保留无分数结果的稳定顺序", () => {
+    const results = [
+      { type: "chapter", id: "chapter-1" },
+      { type: "setting", id: "setting-1" },
+      { type: "character", id: "character-1" },
+      { type: "agent-history", id: "message-1" },
+      { type: "chapter", id: "chapter-2" }
+    ];
+
+    expect(prioritizeGlobalSearchResults(results)).toEqual([
+      { type: "setting", id: "setting-1" },
+      { type: "character", id: "character-1" },
+      { type: "agent-history", id: "message-1" },
+      { type: "chapter", id: "chapter-1" },
+      { type: "chapter", id: "chapter-2" }
+    ]);
+    expect(results.map((item) => item.id)).toEqual(["chapter-1", "setting-1", "character-1", "message-1", "chapter-2"]);
+  });
+
+  it("将每组结果按相关性分数降序排列", () => {
+    const results = [
+      { type: "chapter", id: "chapter-low", score: 0.1 },
+      { type: "setting", id: "setting-low", score: 0.2 },
+      { type: "character", id: "character-high", score: 0.9 },
+      { type: "agent-history", id: "message-mid", score: 0.5 },
+      { type: "chapter", id: "chapter-high", score: 0.8 }
+    ];
+
+    expect(prioritizeGlobalSearchResults(results).map((item) => item.id)).toEqual([
+      "character-high",
+      "message-mid",
+      "setting-low",
+      "chapter-high",
+      "chapter-low"
+    ]);
+  });
+
   it("将章节结果直接定位到正文阅读页", () => {
     expect(resolveGlobalSearchTarget({ type: "chapter", id: "chapter / 1" })).toEqual({
       kind: "chapter",
@@ -15,6 +52,23 @@ describe("全局搜索结果导航", () => {
       startLine: 8,
       endLine: 10
     });
+  });
+
+  it("将 Agent 历史结果定位到对应对话和消息", () => {
+    expect(resolveGlobalSearchTarget({
+      type: "agent-history",
+      id: "message / 1",
+      conversationId: "conversation / 1",
+      messageId: "message / 1"
+    })).toEqual({
+      kind: "agent-history",
+      type: "agent-history",
+      id: "message / 1",
+      module: "editor",
+      conversationId: "conversation / 1",
+      messageId: "message / 1"
+    });
+    expect(resolveGlobalSearchTarget({ type: "agent-history", id: "conversation-1" })).toBeNull();
   });
 
   it.each([

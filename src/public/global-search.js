@@ -11,6 +11,24 @@ const entityTargets = Object.freeze({
   review: Object.freeze({ module: "reviews", entity: "review", resource: "reviews" })
 });
 
+export function prioritizeGlobalSearchResults(results = []) {
+  const nonProseResults = [];
+  const proseResults = [];
+  for (const result of Array.isArray(results) ? results : []) {
+    (String(result?.type ?? "") === "chapter" ? proseResults : nonProseResults).push(result);
+  }
+  const sortByRelevance = (group) => group
+    .map((result, index) => ({ result, index, score: Number(result?.score) }))
+    .sort((left, right) => {
+      if (Number.isFinite(left.score) && Number.isFinite(right.score) && left.score !== right.score) {
+        return right.score - left.score;
+      }
+      return left.index - right.index;
+    })
+    .map(({ result }) => result);
+  return [...sortByRelevance(nonProseResults), ...sortByRelevance(proseResults)];
+}
+
 function positiveLine(value) {
   const line = Number(value);
   return Number.isInteger(line) && line > 0 ? line : null;
@@ -39,6 +57,19 @@ export function resolveGlobalSearchTarget(result = {}) {
   const type = String(result.type ?? "").trim();
   const id = String(result.id ?? "").trim();
   if (!id) return null;
+  if (type === "agent-history") {
+    const conversationId = String(result.conversationId ?? "").trim();
+    if (!conversationId) return null;
+    const messageId = String(result.messageId ?? "").trim();
+    return {
+      kind: "agent-history",
+      type,
+      id,
+      module: "editor",
+      conversationId,
+      ...(messageId ? { messageId } : {})
+    };
+  }
   if (type === "chapter") {
     const startLine = positiveLine(result.startLine);
     const endLine = positiveLine(result.endLine);

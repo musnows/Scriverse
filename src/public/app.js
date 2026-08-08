@@ -5,7 +5,7 @@ import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload } from "/model-config.js?v=20260731-model-context-guidance-v1";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
@@ -17,7 +17,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260731-drafts-to-ideas-v1";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260809-global-replace-v1";
 import {
   chapterVersionSourceLabel,
   foreshadowStatusLabel,
@@ -36,7 +36,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260801-google-vertex";
+} from "/display-labels.js?v=20260809-global-replace-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -45,7 +45,7 @@ import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20
 import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
-import { resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260728-hybrid-search-v1";
+import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import {
@@ -57,6 +57,7 @@ import {
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
+import { collectS3BackupRunTransitions, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260804-s3-backup-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -195,6 +196,18 @@ let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
+let s3BackupTargets = [];
+let s3BackupRuns = [];
+let editingS3BackupTargetId = null;
+let s3BackupPollTimer = null;
+let s3BackupPollRequest = 0;
+let s3BackupRunsInitialized = false;
+let s3BackupRunSnapshots = new Map();
+const s3BackupPollInterval = 8_000;
+let productUpdateStatus = null;
+let productUpdateChecking = false;
+let productUpdateTimer = null;
+const fallbackProductUpdatePollInterval = 60 * 60 * 1000;
 const systemHealthPollInterval = 30_000;
 let systemHealthTimer = null;
 let systemHealthSnapshot = { status: "checking", version: "" };
@@ -316,6 +329,16 @@ function canReadModule(module, work = state.work) {
 function canReadAggregateContent(work = state.work) {
   return ["editor", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"]
     .every((module) => canReadModule(module, work));
+}
+
+function canGlobalReplaceScope(scope, work = state.work) {
+  if (scope === "settings") return canEditModule("settings", work);
+  if (scope === "prose-and-settings") return canEditProse(work) && canEditModule("settings", work);
+  return canEditProse(work);
+}
+
+function canGlobalReplaceAny(work = state.work) {
+  return Boolean(work) && (canGlobalReplaceScope("prose", work) || canGlobalReplaceScope("settings", work));
 }
 
 function applyWorkAccessMode() {
@@ -965,6 +988,7 @@ let knowledgeSectionEditorDirty = false;
 let characterEditorVersions = [];
 let characterEditorRelationships = [];
 let characterEditorRelationshipsLoading = false;
+let characterEditorRelationshipsLoaded = false;
 let characterEditorSections = [];
 let characterSectionPendingAttachments = [];
 let markdownEditorPendingAttachments = [];
@@ -1483,7 +1507,9 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_story_entities: "搜索作品实体",
   read_character_sections: "读取人物 Markdown 章节",
   search_drafts: "搜索想法",
-  recall_self: "回忆自身"
+  recall_self: "回忆自身",
+  image: "读取设定图片",
+  recall_relationship: "回忆人物关系"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1493,7 +1519,9 @@ const AI_TOOL_DESCRIPTIONS = {
   search_story_entities: "按实体名、拼音或短关键词混合检索设定、人物、组织等结构化记录；非语义问答。",
   read_character_sections: "读取指定人物 Markdown 档案章节的摘要或原文。",
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
-  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。"
+  recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
+  image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
 };
 
 let aiFeedScrollFrame = null;
@@ -1630,7 +1658,7 @@ function resolveAiProcessDuration(metadata, steps, completedAt) {
   return Math.max(0, completedTime - Math.min(...startedTimes));
 }
 
-function renderAiProcessSteps(message, steps, completed, durationMs = null) {
+function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
   message.querySelector(".ai-process-details")?.remove();
   if (!Array.isArray(steps) || !steps.length) return;
   const details = document.createElement("details");
@@ -1670,7 +1698,8 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null) {
     label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
     const body = document.createElement("div");
     body.className = "message-body ai-process-step-body";
-    body.innerHTML = renderMarkdown(step.content);
+    const content = visibleContents?.has(step) ? visibleContents.get(step) : step.content;
+    body.innerHTML = renderMarkdown(content);
     section.append(label, body);
     list.append(section);
   }
@@ -1803,8 +1832,10 @@ async function ensureAiConversationsLoaded() {
   }
 }
 
-async function openAiConversation(conversationId, hideHistory = true) {
-  const conversation = await api(`/api/ai-conversations/${conversationId}?page=1&limit=100`);
+async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
+  const parameters = new URLSearchParams({ page: "1", limit: "100" });
+  if (focusMessageId) parameters.set("messageId", String(focusMessageId));
+  const conversation = await api(`/api/ai-conversations/${conversationId}?${parameters}`);
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
@@ -1828,6 +1859,15 @@ async function openAiConversation(conversationId, hideHistory = true) {
   if (conversation.contextWarningPending) showAiContextWarning();
   else hideAiContextWarning();
   if (hideHistory) setAiHistoryVisible(false);
+}
+
+function focusAiConversationMessage(messageId) {
+  const message = [...$("#ai-feed").querySelectorAll("[data-message-id]")]
+    .find((candidate) => candidate.dataset.messageId === String(messageId));
+  if (!message) return;
+  message.scrollIntoView({ behavior: "smooth", block: "center" });
+  message.classList.add("is-search-target");
+  window.setTimeout(() => message.classList.remove("is-search-target"), 1800);
 }
 
 async function createNewAiConversation(taskType = "chat") {
@@ -1913,7 +1953,7 @@ function applyAiRoleplayCharacter(character) {
   if (active) $("#ai-scope").value = "none";
   $(".ai-panel").classList.toggle("is-roleplaying", active);
   $("#ai-prompt").dataset.placeholder = active
-    ? `以 ${String(state.aiRoleplayCharacter.name)} 的身份开始对话……`
+    ? `与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
@@ -2507,10 +2547,7 @@ async function api(path, options = {}) {
     if (response.status === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
       const restarted = await checkSystemBoot(true);
       if (!restarted) {
-        state.user = null;
-        state.csrfToken = null;
-        moduleRequestCache.clear();
-        showAuth(false);
+        invalidateAuthentication();
       }
     }
     throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
@@ -2563,6 +2600,28 @@ function formatAiFailureMessage(error) {
   if (callId) lines.push(`调用 ID：${callId}`);
   if (failure && failure !== message) lines.push(`详细原因：${failure}`);
   return lines.join("\n");
+}
+
+function isAgentToolCallLimitFailure(text) {
+  return /more than \d+ tool calls in one response cycle\./u.test(String(text ?? ""));
+}
+
+function aiToolCallSettingsLinkMarkup(text) {
+  if (!isAgentToolCallLimitFailure(text) || !state.work || !canReadModule("ai-settings")) return "";
+  const href = serializePageRoute({ view: "module", workId: state.work.id, module: "ai-settings" });
+  return `<p class="ai-error-settings-link-wrap"><a class="ai-error-settings-link" data-ai-tool-call-settings-link href="${esc(href)}">前往本书 AI 设置调整工具调用上限</a></p>`;
+}
+
+async function openAiToolCallSettings() {
+  if (!state.work || !canReadModule("ai-settings")) return;
+  await showModule("ai-settings");
+  const target = document.getElementById("agent-tool-call-limit-settings");
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+  target.classList.add("is-targeted");
+  window.setTimeout(() => target.classList.remove("is-targeted"), 1_800);
+  const input = target.querySelector("#agent-tool-call-limit");
+  if (input instanceof HTMLInputElement) input.focus({ preventScroll: true });
 }
 
 async function apiPage(path, page = 1, limit = 30) {
@@ -2625,6 +2684,10 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   if (path.includes("/relationships")) affected.add("relationships");
   if (path.includes("/chapter-annotations/") || /\/chapters\/[^/]+\/annotations(?:$|\?)/u.test(path)) affected.add("comments");
   if (path.includes("/reviews")) affected.add("reviews");
+  if (/\/api\/works\/[^/]+\/replace(?:$|\?)/u.test(path)) {
+    affected.add("settings");
+    if (state.work?.id) moduleRequestCache.invalidate(state.work.id, "settings");
+  }
   if (path.includes("/entity-versions/")) {
     if (path.includes("/draft/")) affected.add("drafts");
     if (path.includes("/setting/")) affected.add("settings");
@@ -2650,6 +2713,35 @@ function applyProductHealthMetadata(health) {
   });
 }
 
+function applyProductUpdateMetadata(update) {
+  if (update && typeof update === "object") productUpdateStatus = update;
+  if (update?.checked !== true) {
+    renderBackgroundTaskCenter();
+    return;
+  }
+  const latestVersion = String(update.latestVersion ?? "").trim();
+  const releaseUrl = String(update.releaseUrl ?? "").trim();
+  const updateAvailable = update.updateAvailable === true && Boolean(latestVersion) && Boolean(releaseUrl);
+  const updateDot = document.querySelector("[data-settings-update-dot]");
+  updateDot?.classList.toggle("hidden", !updateAvailable);
+  const settingsButton = $("#settings-button");
+  settingsButton.setAttribute("aria-label", updateAvailable ? `设置，有新版本 v${latestVersion}` : "设置");
+  settingsButton.title = updateAvailable ? `设置，有新版本 v${latestVersion}` : "设置";
+  document.querySelectorAll("[data-product-footer-update]").forEach((element) => {
+    element.classList.toggle("hidden", !updateAvailable);
+    if (updateAvailable) {
+      element.textContent = `发现新版本 v${latestVersion}，查看更新说明`;
+      element.href = releaseUrl;
+      element.setAttribute("aria-label", `查看叙界 v${latestVersion} 更新说明`);
+    } else {
+      element.textContent = "";
+      element.removeAttribute("href");
+      element.removeAttribute("aria-label");
+    }
+  });
+  renderBackgroundTaskCenter();
+}
+
 function scheduleSystemHealthCheck() {
   if (systemHealthTimer !== null) window.clearTimeout(systemHealthTimer);
   systemHealthTimer = window.setTimeout(() => {
@@ -2669,11 +2761,44 @@ async function refreshSystemHealth() {
   }
 }
 
+function scheduleProductUpdateCheck() {
+  if (productUpdateTimer !== null) window.clearTimeout(productUpdateTimer);
+  if (productUpdateStatus?.enabled === false) {
+    productUpdateTimer = null;
+    return;
+  }
+  const nextCheckAt = Date.parse(String(productUpdateStatus?.nextCheckAt ?? ""));
+  const delay = Number.isFinite(nextCheckAt)
+    ? Math.max(1000, nextCheckAt - Date.now())
+    : fallbackProductUpdatePollInterval;
+  productUpdateTimer = window.setTimeout(() => {
+    productUpdateTimer = null;
+    void refreshProductUpdate();
+  }, Math.min(delay, 2_147_483_647));
+}
+
+async function refreshProductUpdate() {
+  if (productUpdateChecking || productUpdateStatus?.enabled === false) return;
+  productUpdateChecking = true;
+  renderBackgroundTaskCenter();
+  try {
+    applyProductUpdateMetadata(await api("/api/update-check"));
+  } catch {
+    // 更新探测失败时静默保留当前展示状态
+  } finally {
+    productUpdateChecking = false;
+    renderBackgroundTaskCenter();
+    scheduleProductUpdateCheck();
+  }
+}
+
 async function initializeProductFooters() {
   const year = String(new Date().getFullYear());
   document.querySelectorAll("[data-product-footer-year]").forEach((element) => { element.textContent = year; });
   applyProductHealthMetadata(null);
+  applyProductUpdateMetadata(null);
   await refreshSystemHealth();
+  void refreshProductUpdate();
 }
 
 function observeSystemBootId(value) {
@@ -2768,8 +2893,29 @@ async function refreshAuthCaptcha(target = "login") {
   if (answerInput) answerInput.value = "";
 }
 
+function clearAuthenticationOverlays() {
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
+  document.querySelectorAll("[popover]").forEach((popover) => {
+    if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
+  });
+  document.querySelectorAll("dialog[open]").forEach((dialog) => dialog.close());
+}
+
+function invalidateAuthentication() {
+  stopS3BackupEventPolling();
+  state.user = null;
+  state.csrfToken = null;
+  moduleRequestCache.clear();
+  showAuth(false);
+}
+
 function showAuth(setupRequired, registrationOpen = false, setupTokenRequired = false) {
   if (state.user) return;
+  document.documentElement.classList.remove("dev-auth-bypass");
+  document.documentElement.classList.add("login-route");
+  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
+  clearAuthenticationOverlays();
   document.body.classList.add("auth-pending");
   $("#auth-view").classList.remove("hidden");
   const canRegister = registrationOpen === true;
@@ -2876,6 +3022,7 @@ async function initializeAuthentication() {
   applyAuthenticatedUser(session);
   scheduleSystemBootCheck();
   await loadPlatformUiSettings();
+  startS3BackupEventPolling();
   return true;
 }
 
@@ -2897,6 +3044,7 @@ function dismissChapterInsightToast() {
 }
 
 function toast(message, type = "info") {
+  if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
@@ -3373,9 +3521,11 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
+  $("#global-replace-button").classList.toggle("hidden", !canGlobalReplaceAny());
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canExportManuscript;
   $("#export-button").setAttribute("aria-expanded", "false");
@@ -3750,6 +3900,258 @@ async function openPlatformUiSettingsDialog() {
   }
 }
 
+function s3BackupTargetFailed(target) {
+  const failedAt = Date.parse(target.lastFailureAt || "");
+  const succeededAt = Date.parse(target.lastSuccessAt || "");
+  return Number.isFinite(failedAt) && (!Number.isFinite(succeededAt) || failedAt > succeededAt);
+}
+
+function renderS3BackupTargets() {
+  const enabledCount = s3BackupTargets.filter((target) => target.enabled).length;
+  $("#s3-backup-summary").textContent = s3BackupTargets.length
+    ? `共 ${s3BackupTargets.length} 个目标，其中 ${enabledCount} 个已启用；定时任务使用服务器本地时间。`
+    : "尚未配置备份目标。新增目标后可选择定时启用，也可随时手动执行。";
+  $("#s3-backup-run-all").disabled = enabledCount === 0;
+  const host = $("#s3-backup-targets");
+  host.innerHTML = s3BackupTargets.length ? s3BackupTargets.map((target) => {
+    const failed = s3BackupTargetFailed(target);
+    const path = `${target.endpoint} / ${target.bucket} / ${target.rootPrefix}`;
+    return `<article class="s3-backup-target-card${failed ? " is-failed" : ""}" data-s3-backup-target="${esc(target.id)}">
+      <div class="s3-backup-target-heading"><span class="s3-backup-status ${target.enabled ? "is-enabled" : ""}">${target.enabled ? "已启用" : "已停用"}</span><div><strong>${esc(target.name)}</strong><code>${esc(path)}</code></div></div>
+      <div class="s3-backup-target-actions"><button type="button" data-s3-backup-run="${esc(target.id)}" aria-label="立即运行 ${esc(target.name)}">立即备份</button><button type="button" data-s3-backup-edit="${esc(target.id)}" aria-label="编辑 ${esc(target.name)}">编辑</button><button class="danger-button" type="button" data-s3-backup-delete="${esc(target.id)}" aria-label="删除 ${esc(target.name)}">删除</button></div>
+      <dl class="s3-backup-target-meta">
+        <div><dt>定时计划</dt><dd>${target.enabled ? `每天 ${esc(target.scheduleTime)}` : "不自动执行"}</dd></div>
+        <div><dt>同步内容</dt><dd>${target.backupImages ? "数据库与图片" : "仅数据库"}</dd></div>
+        <div><dt>数据库留存</dt><dd>${Number(target.retentionCount)} 个快照</dd></div>
+        <div><dt>最近成功</dt><dd>${target.lastSuccessAt ? esc(formatDateTime(target.lastSuccessAt)) : "尚未成功"}</dd></div>
+      </dl>
+      ${failed ? `<p class="s3-backup-target-error">最近失败：${esc(target.lastError || "S3 服务请求失败")} · ${esc(formatDateTime(target.lastFailureAt))}</p>` : ""}
+    </article>`;
+  }).join("") : '<p class="s3-backup-empty">还没有 S3 备份目标。点击“新增目标”配置第一个全系统备份位置。</p>';
+
+  host.querySelectorAll("[data-s3-backup-run]").forEach((button) => button.addEventListener("click", () => {
+    void queueS3BackupRuns([button.dataset.s3BackupRun], button);
+  }));
+  host.querySelectorAll("[data-s3-backup-edit]").forEach((button) => button.addEventListener("click", () => {
+    const target = s3BackupTargets.find((item) => item.id === button.dataset.s3BackupEdit);
+    if (target) openS3BackupTargetDialog(target);
+  }));
+  host.querySelectorAll("[data-s3-backup-delete]").forEach((button) => button.addEventListener("click", async () => {
+    const target = s3BackupTargets.find((item) => item.id === button.dataset.s3BackupDelete);
+    if (!target) return;
+    const confirmed = await confirmToast(`删除 S3 备份目标“${target.name}”吗？远端已有对象不会被删除。`, {
+      title: "删除备份目标",
+      confirmLabel: "确认删除"
+    });
+    if (!confirmed) return;
+    button.disabled = true;
+    try {
+      await api(`/api/platform/backups/targets/${encodeURIComponent(target.id)}`, { method: "DELETE" });
+      await loadS3BackupData();
+      toast(`备份目标“${target.name}”已删除`);
+    } catch (error) {
+      button.disabled = false;
+      toast(error.message, "error");
+    }
+  }));
+}
+
+function renderS3BackupRuns() {
+  const host = $("#s3-backup-runs");
+  host.innerHTML = s3BackupRuns.length ? s3BackupRuns.map((run) => {
+    const status = s3BackupStatusLabel(run.status);
+    const details = run.serverResponse ? JSON.stringify(run.serverResponse, null, 2) : "";
+    const metrics = run.status === "running"
+      ? "正在同步"
+      : `图片上传 ${Number(run.imagesUploaded)} · 跳过 ${Number(run.imagesSkipped)} · 清理快照 ${Number(run.databasesDeleted)}`;
+    return `<article class="s3-backup-run-card">
+      <span class="s3-backup-status is-${esc(run.status)}">${esc(status)}</span>
+      <div class="s3-backup-run-copy"><strong>${esc(run.targetName)}</strong><small>${run.trigger === "scheduled" ? "定时任务" : "手动触发"} · ${esc(formatDateTime(run.finishedAt || run.startedAt))}${run.errorMessage ? ` · ${esc(run.errorMessage)}` : ""}</small></div>
+      <span class="s3-backup-run-metrics">${esc(metrics)}</span>
+      ${details ? `<details><summary>查看 S3 服务端返回结果</summary><pre>${esc(details)}</pre></details>` : ""}
+    </article>`;
+  }).join("") : '<p class="s3-backup-empty">还没有备份运行记录。</p>';
+}
+
+async function loadS3BackupData({ loading = false } = {}) {
+  if (loading) {
+    $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">正在读取备份目标……</p>';
+    $("#s3-backup-runs").innerHTML = '<p class="s3-backup-empty">正在读取运行记录……</p>';
+  }
+  const [targets, runs] = await Promise.all([
+    api("/api/platform/backups/targets"),
+    api("/api/platform/backups/runs?limit=30")
+  ]);
+  s3BackupTargets = targets;
+  s3BackupRuns = runs.items;
+  renderS3BackupTargets();
+  renderS3BackupRuns();
+}
+
+async function openS3BackupDialog() {
+  if (state.user?.role !== "admin") return toast("需要系统管理员权限", "error");
+  const dialog = $("#s3-backup-dialog");
+  if (!dialog.open) dialog.showModal();
+  try {
+    await loadS3BackupData({ loading: true });
+  } catch (error) {
+    $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">备份配置加载失败，请稍后刷新。</p>';
+    toast(error.message, "error");
+  }
+}
+
+function updateS3BackupRootPreview() {
+  $("#s3-backup-root-preview").textContent = s3BackupRootPrefix($("#s3-backup-base-path").value);
+}
+
+function openS3BackupTargetDialog(target = null) {
+  editingS3BackupTargetId = target?.id ?? null;
+  const form = $("#s3-backup-target-form");
+  form.reset();
+  $("#s3-backup-target-title").textContent = target ? "编辑 S3 目标" : "新增 S3 目标";
+  $("#s3-backup-name").value = target?.name ?? "";
+  $("#s3-backup-endpoint").value = target?.endpoint ?? "";
+  $("#s3-backup-region").value = target?.region ?? "us-east-1";
+  $("#s3-backup-bucket").value = target?.bucket ?? "";
+  $("#s3-backup-base-path").value = target?.basePath ?? "";
+  $("#s3-backup-schedule-time").value = target?.scheduleTime ?? "03:00";
+  $("#s3-backup-retention-count").value = String(target?.retentionCount ?? 7);
+  $("#s3-backup-enabled").checked = target?.enabled ?? false;
+  $("#s3-backup-images").checked = target?.backupImages ?? true;
+  $("#s3-backup-force-path-style").checked = target?.forcePathStyle ?? true;
+  $("#s3-backup-access-key").required = !target;
+  $("#s3-backup-secret-key").required = !target;
+  $("#s3-backup-access-key").placeholder = target ? "留空则保持现有 Access Key" : "请输入 Access Key";
+  $("#s3-backup-secret-key").placeholder = target ? "留空则保持现有 Secret Key" : "请输入 Secret Key";
+  $("#s3-backup-credentials-note").textContent = target
+    ? "AK 与 SK 均留空时保持现有凭据；只填写其中一项时仅轮换对应凭据。"
+    : "新增目标时必须填写 AK 和 SK。";
+  $("#s3-backup-target-save").textContent = target ? "保存修改" : "保存目标";
+  updateS3BackupRootPreview();
+  const dialog = $("#s3-backup-target-dialog");
+  if (!dialog.open) dialog.showModal();
+  queueMicrotask(() => $("#s3-backup-name").focus());
+}
+
+async function saveS3BackupTarget(event) {
+  event.preventDefault();
+  const button = $("#s3-backup-target-save");
+  const accessKeyId = $("#s3-backup-access-key").value;
+  const secretAccessKey = $("#s3-backup-secret-key").value;
+  const body = {
+    name: $("#s3-backup-name").value.trim(),
+    endpoint: $("#s3-backup-endpoint").value.trim(),
+    region: $("#s3-backup-region").value.trim(),
+    bucket: $("#s3-backup-bucket").value.trim(),
+    basePath: $("#s3-backup-base-path").value.trim(),
+    forcePathStyle: $("#s3-backup-force-path-style").checked,
+    enabled: $("#s3-backup-enabled").checked,
+    backupImages: $("#s3-backup-images").checked,
+    scheduleTime: $("#s3-backup-schedule-time").value,
+    retentionCount: Number($("#s3-backup-retention-count").value),
+    ...(!editingS3BackupTargetId || accessKeyId ? { accessKeyId } : {}),
+    ...(!editingS3BackupTargetId || secretAccessKey ? { secretAccessKey } : {})
+  };
+  button.disabled = true;
+  try {
+    await api(editingS3BackupTargetId
+      ? `/api/platform/backups/targets/${encodeURIComponent(editingS3BackupTargetId)}`
+      : "/api/platform/backups/targets", {
+      method: editingS3BackupTargetId ? "PATCH" : "POST",
+      body
+    });
+    const message = editingS3BackupTargetId ? "S3 备份目标已更新" : "S3 备份目标已创建";
+    $("#s3-backup-target-dialog").close();
+    await loadS3BackupData();
+    toast(message);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function queueS3BackupRuns(targetIds, button = null) {
+  if (button) button.disabled = true;
+  try {
+    const result = await api("/api/platform/backups/run", {
+      method: "POST",
+      body: targetIds ? { targetIds } : {}
+    });
+    if (result.acceptedTargetIds.length) {
+      toast(`已将 ${result.acceptedTargetIds.length} 个 S3 备份目标加入串行队列`);
+    } else if (result.skippedTargetIds.length) {
+      toast("所选 S3 备份目标已在队列中");
+    } else {
+      toast("当前没有已启用的 S3 备份目标", "error");
+    }
+    window.setTimeout(() => {
+      void refreshS3BackupEvents();
+      if ($("#s3-backup-dialog").open) void loadS3BackupData().catch((error) => toast(error.message, "error"));
+    }, 500);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function scheduleS3BackupEventPoll(delay = s3BackupPollInterval) {
+  if (s3BackupPollTimer !== null) window.clearTimeout(s3BackupPollTimer);
+  s3BackupPollTimer = null;
+  if (state.user?.role !== "admin" || systemRestartDetected) return;
+  s3BackupPollTimer = window.setTimeout(() => {
+    s3BackupPollTimer = null;
+    void refreshS3BackupEvents();
+  }, delay);
+}
+
+async function refreshS3BackupEvents({ announce = true } = {}) {
+  if (state.user?.role !== "admin" || systemRestartDetected) return;
+  if (s3BackupPollTimer !== null) window.clearTimeout(s3BackupPollTimer);
+  s3BackupPollTimer = null;
+  const requestId = ++s3BackupPollRequest;
+  try {
+    const result = await api("/api/platform/backups/runs?limit=100");
+    if (requestId !== s3BackupPollRequest || state.user?.role !== "admin") return;
+    const transitions = collectS3BackupRunTransitions(
+      s3BackupRunSnapshots,
+      result.items,
+      s3BackupRunsInitialized
+    );
+    s3BackupRunSnapshots = transitions.snapshots;
+    if (s3BackupRunsInitialized && announce) {
+      for (const run of transitions.failures) toast(s3BackupFailureToast(run), "error");
+    }
+    s3BackupRunsInitialized = true;
+    if ($("#s3-backup-dialog").open) {
+      s3BackupRuns = result.items.slice(0, 30);
+      renderS3BackupRuns();
+      s3BackupTargets = await api("/api/platform/backups/targets");
+      renderS3BackupTargets();
+    }
+  } catch (error) {
+    console.error("Failed to refresh S3 backup events", error);
+  } finally {
+    scheduleS3BackupEventPoll();
+  }
+}
+
+function startS3BackupEventPolling() {
+  if (state.user?.role !== "admin") return;
+  s3BackupRunSnapshots = new Map();
+  s3BackupRunsInitialized = false;
+  void refreshS3BackupEvents({ announce: false });
+}
+
+function stopS3BackupEventPolling() {
+  if (s3BackupPollTimer !== null) window.clearTimeout(s3BackupPollTimer);
+  s3BackupPollTimer = null;
+  s3BackupPollRequest += 1;
+  s3BackupRunsInitialized = false;
+  s3BackupRunSnapshots = new Map();
+}
+
 function renderMemberPermissionGrid(value) {
   const permissions = normalizeModulePermissions(value, "custom");
   $("#member-permission-grid").innerHTML = WORK_PERMISSION_MODULES.map((item) => `<label class="member-permission-row">
@@ -3860,9 +4262,154 @@ async function openSearchDialog() {
   $("#search-dialog .eyebrow").textContent = `当前作品 · 《${state.work.title}》`;
   $("#search-query").value = "";
   $("#search-type").value = "";
+  $("#search-to-replace").disabled = !canGlobalReplaceAny();
   $("#search-results").innerHTML = '<p class="search-results-empty">输入关键词后开始检索。</p>';
   $("#search-dialog").showModal();
   queueMicrotask(() => $("#search-query").focus());
+}
+
+const globalReplaceScopeLabels = Object.freeze({
+  prose: "正文",
+  settings: "设定库",
+  "prose-and-settings": "正文+设定库"
+});
+
+function syncGlobalReplaceScopeOptions() {
+  const dialog = $("#replace-dialog");
+  const options = [...dialog.querySelectorAll('input[name="replaceScope"]')];
+  for (const option of options) {
+    const allowed = canGlobalReplaceScope(option.value);
+    option.disabled = !allowed;
+    option.closest(".replace-scope-option")?.classList.toggle("is-disabled", !allowed);
+  }
+  const selected = options.find((option) => option.checked && !option.disabled) ?? options.find((option) => !option.disabled);
+  options.forEach((option) => { option.checked = option === selected; });
+  const scope = selected?.value ?? "";
+  $("#replace-submit").disabled = !scope || !canGlobalReplaceScope(scope);
+  $("#replace-permission-note").textContent = scope
+    ? "替换完成后，命中的章节和设定会分别生成新的版本历史。"
+    : "当前账户没有可写入的正文或设定库权限。";
+}
+
+function openGlobalReplaceDialog() {
+  if (!state.work) {
+    toast("请先打开一部作品", "error");
+    return;
+  }
+  if (!canGlobalReplaceAny()) {
+    toast("当前账户没有正文或设定库的编辑权限", "error");
+    return;
+  }
+  if ($("#search-dialog").open) $("#search-dialog").close();
+  $("#replace-form").reset();
+  syncGlobalReplaceScopeOptions();
+  $("#replace-dialog").showModal();
+  queueMicrotask(() => $("#replace-find").focus());
+}
+
+async function refreshWorkAfterGlobalReplace(route, result) {
+  const workId = state.work?.id;
+  if (!workId) return;
+  const nextWork = result?.work ?? await api(`/api/works/${encodeURIComponent(workId)}?directory=volumes`);
+  if (!nextWork || nextWork.id !== workId) return;
+  state.work = nextWork;
+  state.work.volumes = state.work.volumes.map((volume) => ({ ...volume, chapters: Array.isArray(volume.chapters) ? volume.chapters : [] }));
+  state.works = state.works.map((work) => work.id === workId ? { ...work, ...nextWork } : work);
+  state.settings = [];
+  loadedVolumeChapterIds.clear();
+  volumeChapterLoadingIds.clear();
+  volumeChapterRequests.clear();
+  for (const volume of state.work.volumes) loadedVolumeChapterIds.add(volume.id);
+  state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));
+  if (String(result?.scope) === "prose" || String(result?.scope) === "prose-and-settings") {
+    state.chapter = null;
+    lastSavedChapterSnapshot = null;
+  }
+  applyWorkAccessMode();
+  showSystemStatus();
+  updateDocumentTitle(state.work);
+  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
+  $("#top-search-button").disabled = !canReadAggregateContent();
+  renderTree();
+  if (route.view === "editor" && route.chapterId && canReadModule("editor")) {
+    await selectChapter(route.chapterId);
+  } else if (route.view === "module") {
+    await showModule(route.module);
+  } else if (route.view === "settings") {
+    renderSettingsHub();
+    replacePageRoute({ view: "settings", workId: state.work.id, ...settingsRouteContext() });
+  } else if (route.view === "welcome") {
+    showWelcome(true);
+  }
+}
+
+async function submitGlobalReplace(event) {
+  event.preventDefault();
+  if (!state.work) return;
+  const find = $("#replace-find").value;
+  const replacement = $("#replace-with").value;
+  const scope = $("#replace-form").querySelector('input[name="replaceScope"]:checked')?.value ?? "prose";
+  if (!find.trim()) {
+    toast("请输入要查找的内容", "error");
+    $("#replace-find").focus();
+    return;
+  }
+  if (!canGlobalReplaceScope(scope)) {
+    toast("当前账户没有所选范围的编辑权限", "error");
+    syncGlobalReplaceScopeOptions();
+    return;
+  }
+  const dialog = $("#replace-dialog");
+  const reopenDialog = () => {
+    dialog.showModal();
+    syncGlobalReplaceScopeOptions();
+    queueMicrotask(() => $("#replace-find").focus());
+  };
+  dialog.close();
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，执行全局替换会放弃这些修改。是否继续？"))) {
+    reopenDialog();
+    return;
+  }
+  const scopeLabel = globalReplaceScopeLabels[scope] ?? "正文";
+  const replacementLabel = replacement ? `“${replacement}”` : "空内容";
+  const confirmed = await confirmToast(`将把《${state.work.title}》的${scopeLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
+    title: "确认全局替换",
+    confirmLabel: "确认替换"
+  });
+  if (!confirmed) {
+    reopenDialog();
+    return;
+  }
+  const button = $("#replace-submit");
+  const route = currentPageRoute();
+  const workId = state.work.id;
+  button.disabled = true;
+  button.textContent = "替换中…";
+  cancelChapterAutoSave();
+  state.dirty = false;
+  try {
+    const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
+      method: "POST",
+      body: { find, replacement, scope },
+      skipOptimisticVersion: true
+    });
+    $("#replace-dialog").close();
+    if (Number(result.totalMatches) > 0) await refreshWorkAfterGlobalReplace(route, result);
+    if (Number(result.totalMatches) > 0) {
+      const changedTargets = [];
+      if (Number(result.chapterCount) > 0) changedTargets.push(`${result.chapterCount} 章`);
+      if (Number(result.settingCount) > 0) changedTargets.push(`${result.settingCount} 条设定`);
+      toast(`全局替换完成：${result.totalMatches} 处，已更新 ${changedTargets.join("、")}`);
+    } else {
+      toast("没有找到需要替换的内容");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "开始替换";
+    syncGlobalReplaceScopeOptions();
+  }
 }
 
 function highlightedSearchText(value, query) {
@@ -3876,8 +4423,9 @@ function renderSearchResults(results, query) {
     $("#search-results").innerHTML = '<p class="search-results-status">未找到相关内容。</p>';
     return;
   }
+  const orderedResults = prioritizeGlobalSearchResults(results);
   const matchKindLabel = { metadata: "资料命中", exact: "精确命中", phonetic: "拼音命中" };
-  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${results.length} 条结果，按综合相关度排序。</p>${results.map((item) => {
+  $("#search-results").innerHTML = `<p class="search-results-summary">找到 ${orderedResults.length} 条结果，非正文结果优先，正文条目随后展示。</p>${orderedResults.map((item) => {
     const matchKinds = Array.isArray(item.matchKinds) ? item.matchKinds : [];
     const lineRange = Number.isInteger(item.startLine)
       ? `<span class="search-result-chip">${item.startLine === item.endLine ? `第 ${item.startLine} 行` : `第 ${item.startLine}-${item.endLine} 行`}</span>`
@@ -3892,7 +4440,7 @@ function renderSearchResults(results, query) {
   }).join("")}`;
   $("#search-results").querySelectorAll(".search-result").forEach((button, index) => {
     button.addEventListener("click", () => {
-      openSearchResult(results[index])
+      openSearchResult(orderedResults[index])
         .catch((error) => toast(error.message, "error"));
     });
   });
@@ -3961,6 +4509,12 @@ async function openSearchResult(result) {
     || !$("#platform-usage-view").classList.contains("hidden")
     || !$("#work-audit-view").classList.contains("hidden");
   if (inSettings) await returnFromSettings();
+  if (target.kind === "agent-history") {
+    ensureAiPanelExpanded();
+    await openAiConversation(target.conversationId, true, target.messageId);
+    if (target.messageId) focusAiConversationMessage(target.messageId);
+    return;
+  }
   if (target.kind === "chapter") {
     await selectChapter(target.id);
     if (state.chapter?.id === target.id && target.startLine) {
@@ -5067,15 +5621,14 @@ function bindModuleContentInteractions() {
   moduleContentInteractionsBound = true;
   const host = $("#module-content");
   const open = async (card) => {
-    const id = card.dataset.openSetting ?? card.dataset.openCharacter ?? card.dataset.openRace ?? card.dataset.openOrganization;
+    const id = card.dataset.openSetting ?? card.dataset.openRace ?? card.dataset.openOrganization;
     if (!id) return;
     if (card.dataset.openSetting) return openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly: true });
-    if (card.dataset.openCharacter) return openCharacterEditor(await api(`/api/characters/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openRace) return openRaceDialog(await api(`/api/races/${encodeURIComponent(id)}`), { readOnly: true });
     if (card.dataset.openOrganization) return openOrganizationDialog(await api(`/api/organizations/${encodeURIComponent(id)}`), { readOnly: true });
   };
   const findCard = (target) => target instanceof Element
-    ? target.closest("[data-open-setting], [data-open-character], [data-open-race], [data-open-organization]")
+    ? target.closest("[data-open-setting], [data-open-race], [data-open-organization]")
     : null;
   host.addEventListener("click", (event) => {
     if (event.target instanceof Element && event.target.closest("button, a, summary")) return;
@@ -5608,10 +6161,7 @@ async function renderRaces() {
 }
 
 async function renderOrganizations(page = moduleListPages.organizations) {
-  [state.organizations, state.characters] = await Promise.all([
-    moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`),
-    canReadModule("characters") ? moduleApiAllPages("organizations", `/api/works/${state.work.id}/characters`) : Promise.resolve([])
-  ]);
+  state.organizations = await moduleApiAllPages("organizations", `/api/works/${state.work.id}/organizations`);
   mountModuleCount(state.organizations.length);
   const pageResult = paginateModuleItems(state.organizations, page, "organizations");
   moduleListPages.organizations = pageResult.page;
@@ -5916,10 +6466,11 @@ async function renderReviews(page = moduleListPages.reviews) {
   const canResolveReview = canEditModule("reviews");
   const canMergeCharacters = canResolveReview
     && ["characters", "races", "organizations", "timeline", "relationships"].every((module) => canEditModule(module));
-  const [reviews, characters] = await Promise.all([
-    moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`),
-    canReadCharacters ? moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`) : Promise.resolve([])
-  ]);
+  const reviews = await moduleApiAllPages("reviews", `/api/works/${state.work.id}/reviews`);
+  const hasCharacterDuplicateReviews = reviews.some((item) => item.itemType === "character-duplicate");
+  const characters = canReadCharacters && hasCharacterDuplicateReviews
+    ? await moduleApiAllPages("reviews", `/api/works/${state.work.id}/characters?includeMerged=1`)
+    : [];
   mountModuleCount(reviews.length);
   const pageResult = paginateModuleItems(reviews, page, "reviews");
   moduleListPages.reviews = pageResult.page;
@@ -6053,7 +6604,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
           <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
         </div>
         <div class="task-auto-run-actions">
-          ${autoRunEditing ? "" : '<button id="task-auto-run-edit" class="ghost-button" type="button">编辑</button>'}
+          ${autoRunEditing ? "" : `<button id="task-auto-run-edit" class="record-card-edit" type="button" aria-label="编辑自动执行设置" title="编辑自动执行设置">${pencilIconMarkup()}</button>`}
         </div>
       </div>
       <div class="task-auto-run-controls">
@@ -6086,7 +6637,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
     <tr>
       <td>${esc(analysisTaskTypeLabel(item.taskType))}</td>
       <td>${esc(item.model?.displayName || "运行时使用默认模型")}</td>
-      <td>${esc(item.scopeSummary || taskScopeLabel(item.scope?.type || "book"))}</td>
+      <td>${renderTaskScopeSummary(item)}</td>
       <td class="task-status-cell">${renderAnalysisTaskStatus(item)}</td>
       <td class="task-progress-cell">${renderAnalysisTaskProgress(item)}</td>
       <td class="task-row-actions">
@@ -6101,6 +6652,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
     $("#module-content").querySelectorAll("[data-task-page]").forEach((control) => { control.disabled = true; });
     await renderTasks(Number(button.dataset.taskPage));
   }));
+  bindTaskScopeTargets($("#module-content"));
 
   $("#task-auto-run-edit")?.addEventListener("click", () => {
     taskAutoRunEditing = true;
@@ -6204,6 +6756,47 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
     }
   }));
   scheduleTaskProgressRefresh(state.work.id, runningCount > 0 || (pendingCount > 0 && autoRunActive) ? 1 : 0);
+}
+
+function renderTaskScopeSummary(task) {
+  const summary = String(task.scopeSummary || taskScopeLabel(task.scope?.type || "book"));
+  const target = task.scopeTarget && typeof task.scopeTarget === "object" ? task.scopeTarget : null;
+  if (!target || !target.id || !["character", "chapter"].includes(target.type)) return esc(summary);
+  const targetLabel = String(target.label || "").trim();
+  if (!targetLabel) return esc(summary);
+  const targetButton = `<button class="task-scope-link" type="button" data-task-scope-target data-task-scope-type="${esc(target.type)}" data-task-scope-id="${esc(target.id)}" aria-label="打开${target.type === "character" ? "人物档案" : "章节"}：${esc(targetLabel)}">${esc(targetLabel)}</button>`;
+  if (target.type === "chapter") return targetButton;
+  const targetIndex = summary.lastIndexOf(targetLabel);
+  if (targetIndex < 0) return esc(summary);
+  return `${esc(summary.slice(0, targetIndex))}${targetButton}${esc(summary.slice(targetIndex + targetLabel.length))}`;
+}
+
+function bindTaskScopeTargets(container) {
+  container.querySelectorAll("[data-task-scope-target]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const targetType = button.dataset.taskScopeType;
+    const targetId = button.dataset.taskScopeId;
+    if (!targetId || !["character", "chapter"].includes(targetType)) return;
+    button.disabled = true;
+    try {
+      if (targetType === "chapter") {
+        await selectChapter(targetId);
+        if (isMobileViewport()) {
+          panelLayout.leftCollapsed = true;
+          applyPanelLayout(true);
+        }
+      } else {
+        await showModule("characters");
+        if (state.module !== "characters") return;
+        const character = await api(`/api/characters/${encodeURIComponent(targetId)}`);
+        await openCharacterEditor(character, { readOnly: true });
+      }
+    } catch (error) {
+      toast(`打开分析目标失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }));
 }
 
 async function rerunAnalysisTask(taskId, button, { closeDetail = false } = {}) {
@@ -6461,9 +7054,54 @@ function renderTaskResultEvidence(item) {
   const evidence = Array.isArray(item.evidence) ? item.evidence : [];
   if (!evidence.length) return '<p class="task-result-muted">没有保存可展示的证据摘录。</p>';
   return `<ul class="task-result-evidence">${evidence.map((item) => {
-    const source = item.chapterTitle || item.chapterId || "未标明章节";
-    return `<li><strong>${esc(source)}</strong>${item.quote ? `<q>${esc(item.quote)}</q>` : ""}${item.supports ? `<small>${esc(item.supports)}</small>` : ""}</li>`;
+    const sourceType = item.sourceType === "chapter" || item.sourceType === "setting"
+      ? item.sourceType
+      : item.chapterId || item.chapterTitle
+        ? "chapter"
+        : item.settingId || item.settingTitle
+          ? "setting"
+          : "";
+    const sourceId = String(item.sourceId || (sourceType === "chapter" ? item.chapterId : sourceType === "setting" ? item.settingId : ""));
+    const sourceTitle = String(item.sourceTitle || (sourceType === "chapter" ? item.chapterTitle : sourceType === "setting" ? item.settingTitle : ""));
+    const sourceLabel = sourceType === "chapter"
+      ? `正文：${sourceTitle || sourceId || "未标明章节"}`
+      : sourceType === "setting"
+        ? `设定集：${sourceTitle || sourceId || "未标明条目"}`
+        : `引用：${sourceTitle || sourceId || "未标明来源"}`;
+    const sourceMarkup = sourceId && (sourceType === "chapter" || sourceType === "setting")
+      ? `<button class="task-reference-link" type="button" data-task-result-reference data-task-reference-type="${esc(sourceType)}" data-task-reference-id="${esc(sourceId)}" aria-label="打开${esc(sourceLabel)}">${esc(sourceLabel)}</button>`
+      : `<strong>${esc(sourceLabel)}</strong>`;
+    return `<li>${sourceMarkup}${item.quote ? `<q>${esc(item.quote)}</q>` : ""}${item.supports ? `<small>${esc(item.supports)}</small>` : ""}</li>`;
   }).join("")}</ul>`;
+}
+
+function bindTaskResultReferenceActions(container) {
+  container.querySelectorAll("[data-task-result-reference]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const referenceType = button.dataset.taskReferenceType;
+    const referenceId = button.dataset.taskReferenceId;
+    if (!referenceId || !["chapter", "setting"].includes(referenceType)) return;
+    button.disabled = true;
+    try {
+      $("#form-dialog").close();
+      if (referenceType === "chapter") {
+        await selectChapter(referenceId);
+        if (isMobileViewport()) {
+          panelLayout.leftCollapsed = true;
+          applyPanelLayout(true);
+        }
+      } else {
+        await showModule("settings");
+        if (state.module !== "settings") return;
+        const setting = await api(`/api/settings/${encodeURIComponent(referenceId)}`);
+        openSettingEditor(setting, { readOnly: true });
+      }
+    } catch (error) {
+      toast(`打开分析引用失败：${error.message}`, "error");
+    } finally {
+      button.disabled = false;
+    }
+  }));
 }
 
 function renderTaskResultItem(item) {
@@ -6723,6 +7361,7 @@ function openTaskDetailDialog(task, trace) {
     { submitLabel: "关闭", wide: true, trace: true });
   bindTaskTraceCallActions($("#dialog-fields"));
   bindTaskResultActions($("#dialog-fields"));
+  bindTaskResultReferenceActions($("#dialog-fields"));
   $("#dialog-fields").querySelector("[data-rerun-task-detail]")?.addEventListener("click", async (event) => {
     await rerunAnalysisTask(event.currentTarget.dataset.rerunTaskDetail, event.currentTarget, { closeDetail: true });
   });
@@ -6755,12 +7394,12 @@ function renderProviderCards(providers, models) {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
         ? `<span class="model-status-badge is-disabled">模型已停用</span>`
-        : provider.status !== "enabled"
-          ? `<span class="model-status-badge is-disabled">供应商已停用</span>`
-          : provider.connectionStatus !== "success"
-            ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
-            : "";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
+        : provider.connectionStatus !== "success"
+          ? `<span class="model-status-badge is-unavailable">连接不可用</span>`
+          : "";
+      const capability = model.multimodalEnabled ? " · 多模态" : "";
+      const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
@@ -6776,8 +7415,11 @@ function bindPlatformProviderActions(host, providers, models) {
     await renderPlatformAiConfig();
     await loadModels();
   }));
-  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel)));
-  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(undefined, models.find((model) => model.id === button.dataset.editModel))));
+  host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel))));
+  host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => {
+    const model = models.find((item) => item.id === button.dataset.editModel);
+    openModelDialog(undefined, model, providers.find((provider) => provider.id === model?.providerId));
+  }));
   host.querySelectorAll("[data-edit-provider]").forEach((button) => button.addEventListener("click", () => openProviderDialog(providers.find((provider) => provider.id === button.dataset.editProvider))));
 }
 
@@ -6785,14 +7427,21 @@ function renderTaskDefaults(models, providers, taskDefaults, settings) {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const availableModels = models.filter((model) => isSelectableModel(model));
+  const imageModels = availableModels.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
   const availableModelIds = new Set(availableModels.map((model) => model.id));
   const currentDefaultModels = taskDefaults
     .map((item) => item.model)
     .filter((model) => model && !availableModelIds.has(model.id));
   const optionModels = [...availableModels, ...currentDefaultModels];
-  return optionModels.length ? `<section class="config-section">
+  return optionModels.length || imageModels.length ? `<section class="config-section">
     <div class="config-section-header"><div><h2>本书任务默认模型</h2><p>选择平台模型作为当前作品的默认模型；所有请求都会携带最大输出令牌数，默认值为 32000。</p></div></div>
-    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
+    <table class="table-list"><thead><tr><th>任务能力</th><th>默认模型</th></tr></thead><tbody><tr><td>多模态读图工具</td><td><select class="default-model-select" data-image-tool-default aria-label="多模态读图工具默认模型">
+      <option value="" ${settings.imageToolModelId ? "" : "selected"}>跟随平台默认</option>
+      ${imageModels.map((model) => {
+        const provider = providerById.get(model.providerId);
+        return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""}>${esc(modelOptionLabel({ ...model, providerName: model.providerName || provider?.name }))}</option>`;
+      }).join("")}
+    </select></td></tr><tr><td>创作助手对话标题生成</td><td><select class="default-model-select" data-title-generation-default aria-label="创作助手对话标题生成">
       <option value="" ${settings.titleGenerationModelId ? "" : "selected"}>使用提示词前 15 个字</option>
       ${models.map((model) => {
         const provider = providerById.get(model.providerId);
@@ -6857,8 +7506,7 @@ function relationshipIndexStatusMarkup(status) {
 function updateBackgroundTaskCenterVisibility() {
   const button = $("#background-task-button");
   if (!button) return;
-  const visible = Boolean(state.work)
-    && (canReadModule("tasks") || canReadModule("ai-settings"));
+  const visible = Boolean(state.user);
   button.classList.toggle("hidden", !visible);
   if (!visible) {
     $("#background-task-count")?.classList.add("hidden");
@@ -6867,13 +7515,44 @@ function updateBackgroundTaskCenterVisibility() {
   const activityCount = backgroundTaskActivityCount(
     backgroundTaskCenterSnapshot.taskPage,
     backgroundTaskCenterSnapshot.relationshipIndex
-  );
+  ) + (productUpdateChecking ? 1 : 0);
   const badge = $("#background-task-count");
   badge.textContent = activityCount > 99 ? "99+" : String(activityCount);
   badge.classList.toggle("hidden", activityCount === 0);
   button.classList.toggle("is-active", activityCount > 0);
   button.setAttribute("aria-label", activityCount > 0 ? `后台任务中心，${activityCount} 项进行中` : "后台任务中心");
   button.setAttribute("title", activityCount > 0 ? `后台任务中心 · ${activityCount} 项进行中` : "后台任务中心");
+}
+
+function backgroundProductUpdateMarkup() {
+  const status = productUpdateStatus;
+  const updateCheckDisabled = status?.enabled === false;
+  const currentVersion = String(status?.currentVersion ?? "").trim();
+  const latestVersion = String(status?.latestVersion ?? "").trim();
+  const nextCheckAt = formatDateTime(status?.nextCheckAt) || "等待首次探测";
+  const updateAvailable = status?.updateAvailable === true && Boolean(status?.releaseUrl);
+  const badgeClass = productUpdateChecking ? "running" : updateCheckDisabled ? "unknown" : updateAvailable ? "partial" : status?.checked === true ? "completed" : status ? "unknown" : "pending";
+  const badgeLabel = productUpdateChecking ? "探测中" : updateCheckDisabled ? "已关闭" : updateAvailable ? "有新版本" : status?.checked === true ? "已是最新" : status ? "本次未探测" : "等待探测";
+  const detail = productUpdateChecking
+    ? "正在请求 GitHub 最新 Release"
+    : updateCheckDisabled
+      ? "已通过服务端配置关闭版本更新探测"
+      : updateAvailable
+        ? `当前 v${currentVersion || "—"} · 最新 v${latestVersion} · 下次探测 ${nextCheckAt}`
+        : status?.checked === true
+          ? `当前 v${currentVersion || "—"} · 下次探测 ${nextCheckAt}`
+          : status
+            ? `GitHub 暂不可用 · 下次探测 ${nextCheckAt}`
+            : "应用启动后将在后台探测 GitHub Release";
+  return `<section class="background-task-section">
+    <div class="background-task-section-heading"><div><strong>版本更新探测</strong><small>按服务端配置定期检查 GitHub Release</small></div></div>
+    <div class="background-task-list"><article class="background-task-row">
+      <span class="task-status-badge is-${badgeClass}"><span class="task-status-indicator" aria-hidden="true"></span><span>${badgeLabel}</span></span>
+      <div><strong>叙界版本更新</strong><small>${esc(detail)}</small></div>
+      <span class="background-task-progress">${updateAvailable ? `v${esc(latestVersion)}` : "系统"}</span>
+      ${updateAvailable ? `<a class="ghost-button background-update-link" href="${esc(status.releaseUrl)}" target="_blank" rel="noopener noreferrer" aria-label="查看叙界 v${esc(latestVersion)} 更新说明">说明</a>` : '<span class="background-task-action-placeholder" aria-hidden="true"></span>'}
+    </article></div>
+  </section>`;
 }
 
 function backgroundTaskTransitionMessage(transition) {
@@ -6934,17 +7613,17 @@ function renderBackgroundTaskCenter() {
   updateBackgroundTaskCenterVisibility();
   const content = $("#background-task-content");
   if (!content) return;
-  content.innerHTML = `${backgroundTaskListMarkup(
+  content.innerHTML = `${backgroundProductUpdateMarkup()}${state.work ? `${backgroundTaskListMarkup(
     backgroundTaskCenterSnapshot.taskPage,
     backgroundTaskCenterSnapshot.errors.tasks
   )}${backgroundIndexMarkup(
     backgroundTaskCenterSnapshot.relationshipIndex,
     backgroundTaskCenterSnapshot.errors.index
-  )}`;
+  )}` : ""}`;
   $("#background-task-dialog-meta").textContent = state.work
-    ? `《${state.work.title}》的分析任务与索引队列`
-    : "当前作品的分析任务与索引队列";
-  $("#background-task-open-analysis").classList.toggle("hidden", !canReadModule("tasks"));
+    ? `系统更新与《${state.work.title}》的分析任务、索引队列`
+    : "系统更新探测状态";
+  $("#background-task-open-analysis").classList.toggle("hidden", !state.work || !canReadModule("tasks"));
   content.querySelectorAll("[data-background-task-detail]").forEach((button) => button.addEventListener("click", async () => {
     button.disabled = true;
     try {
@@ -7063,8 +7742,7 @@ function stopBackgroundTaskCenter() {
   backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
   const dialog = $("#background-task-dialog");
   if (dialog?.open) dialog.close();
-  $("#background-task-button")?.classList.add("hidden");
-  $("#background-task-count")?.classList.add("hidden");
+  updateBackgroundTaskCenterVisibility();
 }
 
 function startBackgroundTaskCenter(workId) {
@@ -7081,13 +7759,33 @@ async function renderPlatformAiConfig() {
     api("/api/platform/ai/settings")
   ]);
   const host = $("#platform-ai-content");
-  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section>${renderProviderCards(providers, models)}`;
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+  const imageModels = models.filter((model) => model.multimodalEnabled && providerById.get(model.providerId)?.protocol === "openai-chat-completions");
+  const imageModelOptions = imageModels.map((model) => {
+    const provider = providerById.get(model.providerId);
+    const available = isSelectableModel({ ...model, providerStatus: provider?.status, providerConnectionStatus: provider?.connectionStatus });
+    return `<option value="${esc(model.id)}" ${model.id === settings.imageToolModelId ? "selected" : ""} ${available || model.id === settings.imageToolModelId ? "" : "disabled"}>${esc(`${available ? "" : "不可用 · "}${modelOptionLabel({ ...model, providerName: model.providerName || provider?.name })}`)}</option>`;
+  }).join("");
+  host.innerHTML = `<section class="config-section platform-system-prompt-section"><div class="config-section-header"><div><h2>平台全局系统提示词</h2><p>会追加在内置系统提示词之后，并在所有作品的专属提示词之前发送给模型。</p></div></div><div class="field-label"><textarea id="platform-system-prompt" rows="7" aria-label="全局系统提示词" placeholder="例如：默认使用简体中文，避免代替作者做最终决定。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-platform-system-prompt" class="primary-button">保存全局提示词</button></div></section><section class="config-section platform-image-tool-section"><div class="config-section-header"><div><h2>多模态读图默认模型</h2><p>Agent 的 image 工具使用这里配置的模型读取设定库图片；作品可以在自己的 AI 设置中覆盖此选择。</p></div></div><div class="platform-image-tool-panel"><label class="platform-image-tool-field"><span>当前平台默认模型</span><select id="platform-image-tool-model" aria-label="平台多模态读图默认模型"><option value="">未配置</option>${imageModelOptions}</select></label><button id="save-platform-image-tool-model" class="ghost-button config-save-button" type="button">保存默认模型</button></div></section><section class="config-section platform-providers-section"><div class="config-section-header"><div><h2>模型供应商配置</h2><p>管理供应商连接、模型列表和连接状态；模型的多模态能力在对应模型配置中设置。</p></div></div>${renderProviderCards(providers, models)}</section>`;
   $("#save-platform-system-prompt").addEventListener("click", async () => {
     const button = $("#save-platform-system-prompt");
     button.disabled = true;
     try {
       await api("/api/platform/ai/settings", { method: "PATCH", body: { systemPrompt: $("#platform-system-prompt").value } });
       toast("平台全局系统提示词已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-platform-image-tool-model").addEventListener("click", async () => {
+    const button = $("#save-platform-image-tool-model");
+    button.disabled = true;
+    try {
+      await api("/api/platform/ai/settings", { method: "PATCH", body: { imageToolModelId: $("#platform-image-tool-model").value || null } });
+      toast("平台多模态读图默认模型已更新");
+      await renderPlatformAiConfig();
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -7253,7 +7951,8 @@ async function renderBookAiSettings() {
   ]);
   const host = $("#module-content");
   const workId = String(state.work.id);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]);
+  const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
@@ -7266,8 +7965,14 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
-  $("#daily-token-quota-status").closest(".config-section").insertAdjacentHTML("afterend", `<section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section>`);
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  const agentToolCallLimitInput = host.querySelector("#agent-tool-call-limit");
+  agentToolCallLimitInput?.setAttribute("max", String(maximumAgentToolCallLimit));
+  const agentToolCallDescription = agentToolCallLimitInput?.closest(".config-section")?.querySelector(".config-section-header p");
+  if (agentToolCallDescription?.firstChild) agentToolCallDescription.firstChild.nodeValue = agentToolCallDescription.firstChild.nodeValue.replace("5–48", `5–${maximumAgentToolCallLimit}`);
+  host.querySelectorAll(".config-section").forEach((section) => {
+    if (section.querySelector("h2")?.textContent === "Agent 工具调用上限") section.id = "agent-tool-call-limit-settings";
+  });
   bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
   host.querySelector('input[name="agent-tool"][value="search_story_entities"]').closest("label").insertAdjacentHTML(
@@ -7280,7 +7985,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -7434,12 +8139,25 @@ async function renderBookAiSettings() {
   });
   $("#save-agent-tool-call-limit").addEventListener("click", async () => {
     const button = $("#save-agent-tool-call-limit");
+    const input = $("#agent-tool-call-limit");
+    const value = Number(input.value);
+    const maximum = Number(input.max) || 80;
+    if (!Number.isInteger(value) || value < 5) {
+      toast(`Agent 工具调用上限必须是 5 到 ${maximum} 之间的整数`, "error");
+      input.focus();
+      return;
+    }
+    if (value > maximum) {
+      toast(`Agent 工具调用上限不能超过 ${maximum} 次`, "error");
+      input.focus();
+      return;
+    }
     button.disabled = true;
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, {
         method: "PATCH",
         body: {
-          agentToolCallLimit: Number($("#agent-tool-call-limit").value),
+          agentToolCallLimit: value,
           agentToolCallGlobalMultiplier: Number($("#agent-tool-call-global-multiplier").value)
         }
       });
@@ -7479,6 +8197,18 @@ async function renderBookAiSettings() {
     try {
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { titleGenerationModelId: select.value } });
       toast("创作助手对话标题生成模型已更新");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    await renderBookAiSettings();
+    await loadModels();
+  });
+  host.querySelector("[data-image-tool-default]")?.addEventListener("change", async (event) => {
+    const select = event.currentTarget;
+    select.disabled = true;
+    try {
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { imageToolModelId: select.value || null } });
+      toast("本书多模态读图模型已更新");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -7692,7 +8422,7 @@ async function ensureAiReferencesLoaded() {
 
 function field(name, label, type = "text", value = "", options = []) {
   if (type === "textarea") return `<label>${esc(label)}<textarea name="${esc(name)}">${esc(value)}</textarea></label>`;
-  if (type === "markdown") return `<div class="form-field markdown-editor-field" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-attachment-module="${esc(options.attachmentModule ?? "settings")}" data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
+  if (type === "markdown") return `<div class="form-field markdown-editor-field${options.readOnly ? " is-read-only" : ""}" data-vditor-editor-field><span>${esc(label)}</span><div class="vditor-editor-host" data-vditor-editor data-attachment-module="${esc(options.attachmentModule ?? "settings")}" data-placeholder="${esc(options.placeholder ?? `在这里编辑${label}`)}" aria-label="${esc(label)} Markdown 编辑器"${options.readOnly ? ' aria-readonly="true"' : ""}></div><textarea class="hidden" name="${esc(name)}" data-vditor-value maxlength="200000" aria-label="${esc(label)} Markdown 原文" ${options.readOnly ? "readonly" : ""}>${esc(value)}</textarea></div>`;
   if (type === "item-list") {
     const values = Array.isArray(value) && value.length ? value : [""];
     return `<div class="form-field item-list-field"><span>${esc(label)}</span><div class="item-list-rows" data-item-list-rows data-name="${esc(name)}" data-label="${esc(label)}">${values.map((item) => `<div class="item-list-row"><input name="${esc(name)}" value="${esc(item)}" aria-label="${esc(label)}"><button type="button" data-item-list-remove aria-label="删除此条">删除</button></div>`).join("")}</div><button class="item-list-add" type="button" data-item-list-add>添加一条</button></div>`;
@@ -8295,6 +9025,15 @@ function activateCharacterEditorTab(key) {
     button.tabIndex = active ? 0 : -1;
   });
   document.querySelectorAll("[data-character-editor-panel]").forEach((panel) => panel.classList.toggle("hidden", panel.dataset.characterEditorPanel !== key));
+  if (
+    key === "relationships"
+    && characterEditorItem?.id
+    && canReadModule("relationships")
+    && !characterEditorRelationshipsLoaded
+    && !characterEditorRelationshipsLoading
+  ) {
+    void loadCharacterEditorRelationships(characterEditorItem.id);
+  }
 }
 
 function setCharacterHistoryVisible(visible) {
@@ -8314,6 +9053,10 @@ function renderCharacterEditorRelationships() {
   }
   if (characterEditorRelationshipsLoading) {
     host.innerHTML = '<p class="character-relationship-status">正在读取人物关系……</p>';
+    return;
+  }
+  if (!characterEditorRelationshipsLoaded) {
+    host.innerHTML = '<p class="character-relationship-status">打开人物关系分区后载入关系。</p>';
     return;
   }
   const characterId = String(characterEditorItem.id);
@@ -8338,20 +9081,23 @@ function renderCharacterEditorRelationships() {
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
 
-async function loadCharacterEditorRelationships(characterId) {
+async function loadCharacterEditorRelationships(characterId, { refresh = false } = {}) {
   const workId = state.work?.id;
   if (!workId || characterEditorItem?.id !== characterId) return;
+  if (!refresh && (characterEditorRelationshipsLoaded || characterEditorRelationshipsLoading)) return;
   characterEditorRelationshipsLoading = true;
+  characterEditorRelationshipsLoaded = false;
   renderCharacterEditorRelationships();
   let loaded = false;
   try {
     const [characters, relationships] = await Promise.all([
-      apiAllPages(`/api/works/${workId}/characters`),
-      apiAllPages(`/api/works/${workId}/relationships`)
+      moduleApiAllPages("characters", `/api/works/${workId}/characters`),
+      moduleApiAllPages("relationships", `/api/works/${workId}/relationships`)
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
     characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
     if (state.work?.id === workId && characterEditorItem?.id === characterId) {
@@ -8369,7 +9115,7 @@ async function refreshRelationshipSurfaces(characterId = null) {
   const tasks = [];
   if (state.module === "relationships") tasks.push(renderRelationships());
   if (characterId && entityEditorType === "character" && !$("#entity-editor-view").classList.contains("hidden") && characterEditorItem?.id === characterId) {
-    tasks.push(loadCharacterEditorRelationships(characterId));
+    tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
 }
@@ -9140,15 +9886,15 @@ async function showCharacterHistory() {
 
 async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
-  [state.races, state.organizations, state.characters] = await Promise.all([
+  [state.races, state.organizations] = await Promise.all([
     canReadModule("races") ? api(`/api/works/${state.work.id}/races`) : Promise.resolve([]),
-    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([]),
-    canReadModule("characters") ? apiAllPages(`/api/works/${state.work.id}/characters`) : Promise.resolve([])
+    canReadModule("organizations") ? apiAllPages(`/api/works/${state.work.id}/organizations`) : Promise.resolve([])
   ]);
   characterEditorItem = item ?? null;
   characterEditorVersions = [];
   characterEditorRelationships = [];
-  characterEditorRelationshipsLoading = Boolean(item);
+  characterEditorRelationshipsLoading = false;
+  characterEditorRelationshipsLoaded = false;
   characterEditorSections = [];
   $("#character-editor-eyebrow").textContent = item ? "人物主档案" : "建立人物档案";
   $("#character-editor-title").textContent = item?.name || "新建角色";
@@ -9160,20 +9906,30 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   const characterMergeButton = $("#character-merge-button");
   const characterDeleteButton = $("#character-delete-button");
   const canManageCharacter = Boolean(item && !readOnly && canEditModule("characters"));
-  characterMergeButton.classList.toggle("hidden", !canManageCharacter || state.characters.length < 2);
+  characterMergeButton.classList.toggle("hidden", !canManageCharacter);
   characterDeleteButton.classList.toggle("hidden", !canManageCharacter);
   characterMergeButton.onclick = async () => {
     if (!item) return;
-    await closeEntityEditor({ force: true });
-    openEntityMergeDialog({
-      typeLabel: "角色",
-      source: item,
-      candidates: state.characters,
-      endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
-      body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
-      refresh: renderCharacters,
-      impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
-    });
+    const workId = state.work?.id;
+    if (!workId) return;
+    try {
+      const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`);
+      if (state.work?.id !== workId || characterEditorItem?.id !== item.id) return;
+      state.characters = candidates;
+      if (candidates.length < 2) return toast("至少需要两个角色才能合并", "error");
+      await closeEntityEditor({ force: true });
+      openEntityMergeDialog({
+        typeLabel: "角色",
+        source: item,
+        candidates,
+        endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
+        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
+        refresh: renderCharacters,
+        impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
+      });
+    } catch (error) {
+      toast(error.message, "error");
+    }
   };
   characterDeleteButton.onclick = () => {
     if (!item) return;
@@ -9231,7 +9987,6 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
-    if (canReadModule("relationships")) void loadCharacterEditorRelationships(item.id);
     void loadCharacterMarkdownSections(item.id);
   }
 }
@@ -9263,7 +10018,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
-    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>当前还没有可绑定的角色。</span></div>`;
+    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${readOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
     + knowledgeEditorSection("settings", title, "", '<div id="knowledge-markdown-sections" class="knowledge-markdown-sections"></div>')
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
@@ -9278,8 +10033,13 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   await discardPendingMarkdownAttachments();
   if (kind === "race" && !(await ensureCompleteRaceList())) return;
-  state.characters = canReadModule("characters") ? await apiAllPages(`/api/works/${state.work.id}/characters`) : [];
-  const memberOptions = state.characters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
+  const memberCharacters = readOnly
+    ? (Array.isArray(item?.members) ? item.members : []).map((member) => ({ id: member.characterId, name: member.name, aliases: [] }))
+    : canReadModule("characters")
+      ? await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)
+      : [];
+  if (!readOnly) state.characters = memberCharacters;
+  const memberOptions = memberCharacters.map((character) => [character.id, `${character.name}${character.aliases.length ? `（${character.aliases.join("、")}）` : ""}`]);
   const isRace = kind === "race";
   const module = isRace ? "races" : "organizations";
   const label = isRace ? "种族" : "组织";
@@ -9588,7 +10348,7 @@ function openTimelineSplitDialog(item) {
 
 async function openRelationshipDialog(item, options = {}) {
   if (!canReadModule("characters")) return toast("配置人物关系前需要角色模块读取权限", "error");
-  state.characters = await apiAllPages(`/api/works/${state.work.id}/characters`);
+  state.characters = await moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`);
   if (state.characters.length < 2) return toast("至少需要两个角色才能创建关系", "error");
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
@@ -10016,18 +10776,23 @@ function openProviderDialog(item) {
   protocolSelect.addEventListener("change", syncProviderCredentialField);
 }
 
-function openModelDialog(providerId, item = null) {
+function openModelDialog(providerId, item = null, provider = null) {
   const values = modelFormValues(item);
+  const imageDefaultSupported = supportsMultimodalModelProtocol(provider?.protocol);
+  const multimodalFields = imageDefaultSupported ? `<div class="form-field model-multimodal-fields" role="group" aria-labelledby="model-multimodal-heading"><span id="model-multimodal-heading" class="model-multimodal-heading">模型能力</span><label class="checkbox-field model-capability-option"><input id="model-multimodal-enabled" name="multimodalEnabled" type="checkbox" ${values.multimodalEnabled ? "checked" : ""}><span><strong>支持多模态图片理解</strong><small>启用后可用于读取设定库中的图片附件。</small></span></label><label id="model-image-tool-default-field" class="checkbox-field model-capability-option ${values.multimodalEnabled ? "" : "hidden"}"><input id="model-image-tool-default" name="imageToolDefault" type="checkbox" ${values.imageToolDefault ? "checked" : ""}><span><strong>设为多模态读图工具默认模型</strong><small>平台默认模型只能由 Chat Completions 协议提供。</small></span></label><small class="model-multimodal-note">当前供应商支持多模态读图工具默认模型。</small></div>` : "";
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
+  const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
+    ? "使用当前已保存的模型标识符和供应商凭据，并发送一张测试图片验证图片请求。"
+    : "使用当前已保存的模型标识符和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
     ? `<section class="model-connection-test">
-        <div><strong>模型连接测试</strong><p>使用当前已保存的模型标识符和供应商凭据发起最小请求。</p></div>
+        <div><strong>模型连接测试</strong><p>${connectionTestDescription}</p></div>
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -10037,6 +10802,16 @@ function openModelDialog(providerId, item = null) {
   const contextWindowHint = $("#model-context-window-hint");
   const temperatureInput = $("#dialog-fields input[name='temperature']");
   const temperatureHint = $("#model-temperature-hint");
+  const multimodalInput = $("#model-multimodal-enabled");
+  const imageDefaultField = $("#model-image-tool-default-field");
+  const imageDefaultInput = $("#model-image-tool-default");
+  const syncMultimodalFields = () => {
+    if (!multimodalInput || !imageDefaultField || !imageDefaultInput) return;
+    const hideImageDefault = !multimodalInput.checked || !imageDefaultSupported;
+    imageDefaultField.hidden = hideImageDefault;
+    imageDefaultField.classList.toggle("hidden", hideImageDefault);
+    if (!multimodalInput.checked) imageDefaultInput.checked = false;
+  };
   const syncModelContextWindowGuidance = () => {
     const guidance = modelContextWindowGuidance(contextWindowInput.value);
     contextWindowInput.setCustomValidity(guidance.belowMinimum ? "模型上下文不能低于 32K（32768 Token）。" : "");
@@ -10051,13 +10826,14 @@ function openModelDialog(providerId, item = null) {
     syncKimiTemperature();
   });
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
+  multimodalInput?.addEventListener("change", syncMultimodalFields);
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     button.textContent = "测试中";
     try {
       const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-      toast(result.ok ? "模型连接测试成功" : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      toast(result.ok ? (result.multimodalTested ? "模型连接测试成功，图片请求已验证" : "模型连接测试成功") : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
       await renderPlatformAiConfig();
       await loadModels();
     } catch (error) {
@@ -10069,6 +10845,7 @@ function openModelDialog(providerId, item = null) {
   });
   syncModelContextWindowGuidance();
   syncKimiTemperature();
+  syncMultimodalFields();
 }
 
 async function sendAi() {
@@ -10211,6 +10988,29 @@ async function streamChat(body) {
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
+  const processStepTypewriters = new Map();
+  const processStepVisibleContents = new Map();
+  const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
+    renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
+  };
+  const processStepTypewriter = (step) => {
+    const existing = processStepTypewriters.get(step);
+    if (existing) return existing;
+    processStepVisibleContents.set(step, "");
+    const typewriter = createStreamTypewriter({
+      onRender: (text) => {
+        processStepVisibleContents.set(step, text);
+        renderStreamingProcessSteps(finalAnswerStarted);
+        scrollAiFeedToBottom();
+      }
+    });
+    processStepTypewriters.set(step, typewriter);
+    return typewriter;
+  };
+  const finishProcessStepTypewriters = () => Promise.all([...processStepTypewriters.values()].map((typewriter) => typewriter.finish()));
+  const revealProcessStepTypewriters = () => {
+    for (const typewriter of processStepTypewriters.values()) typewriter.reveal();
+  };
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -10270,7 +11070,7 @@ async function streamChat(body) {
         streamedText += delta;
         if (streamedText.length > 0) finalAnswerStarted = true;
         typewriter.append(delta);
-        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
+        if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         mountAssistantMessage();
@@ -10280,7 +11080,11 @@ async function streamChat(body) {
         const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        const targetStep = existing ?? step;
+        if (typeof step.content === "string" && step.content.length > 0 && step.type === "thinking") {
+          processStepTypewriter(targetStep).append(step.content);
+        }
+        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = step.type === "thinking"
           ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
           : step.type === "context_compaction"
@@ -10295,7 +11099,7 @@ async function streamChat(body) {
         if (toolCall.status === "failed") setAiAssistantStatus("error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "context_compacted") {
@@ -10307,7 +11111,7 @@ async function streamChat(body) {
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
         setAiContextMeter(payload.contextUsage);
-        await typewriter.finish();
+        await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
         message.querySelector(".message-heading > span").textContent = "助手";
@@ -10333,16 +11137,17 @@ async function streamChat(body) {
       if (chunk.done) break;
     }
     if (buffer.trim()) await consume(buffer);
-    await typewriter.finish();
+    await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
     if (streamError) throw streamError;
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
     mountAssistantMessage();
     typewriter.reveal();
+    revealProcessStepTypewriters();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");
     message.querySelector(".message-heading > span").textContent = aiAssistantLabel("生成中断");
-    renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
+    renderStreamingProcessSteps(true, elapsedProcessTime());
     meta.textContent = "生成中断";
     scrollAiFeedToBottom();
     throw error;
@@ -10354,9 +11159,13 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   const isFailure = role === "assistant" && text.startsWith("调用失败：");
   message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;
   const messageBody = isFailure
-    ? `<p class="ai-error-text">${esc(text)}</p>`
+    ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
     : renderMarkdown(text);
   message.innerHTML = `<div class="message-body">${messageBody}</div>`;
+  message.querySelector("[data-ai-tool-call-settings-link]")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    openAiToolCallSettings().catch((error) => toast(`打开 AI 设置失败：${error.message}`, "error"));
+  });
   const heading = attachMessageHeading(message, role === "user" ? "作者" : aiAssistantLabel(), createdAt ?? undefined);
   if (isFailure) {
     message.dataset.status = "failed";
@@ -10745,6 +11554,7 @@ $("#home-button").addEventListener("click", async () => {
 $("#settings-button").addEventListener("click", () => {
   void showSettingsHub();
 });
+$("#global-replace-button").addEventListener("click", openGlobalReplaceDialog);
 $("#account-button").addEventListener("click", () => {
   const expanded = $("#account-menu").classList.toggle("hidden") === false;
   $("#account-button").setAttribute("aria-expanded", String(expanded));
@@ -10773,17 +11583,7 @@ function hasUnsavedEditorChanges() {
 }
 
 function redirectToLoginAfterSystemRestart() {
-  state.user = null;
-  state.csrfToken = null;
-  moduleRequestCache.clear();
-  document.documentElement.classList.remove("dev-auth-bypass");
-  document.documentElement.classList.add("login-route");
-  window.history.replaceState(null, "", serializePageRoute({ view: "login" }));
-  const toastRegion = $("#toast-region");
-  toastRegion.replaceChildren();
-  if (typeof toastRegion.hidePopover === "function" && toastRegion.matches(":popover-open")) toastRegion.hidePopover();
-  $("#system-restart-dialog").close();
-  showAuth(false);
+  invalidateAuthentication();
 }
 
 $("#system-restart-confirm").addEventListener("click", redirectToLoginAfterSystemRestart);
@@ -11213,6 +12013,7 @@ $("#api-key-copy-button").addEventListener("click", async () => {
 });
 $("#logout-button").addEventListener("click", async () => {
   try {
+    stopS3BackupEventPolling();
     await api("/api/auth/session", { method: "DELETE" });
     state.user = null;
     state.csrfToken = null;
@@ -11343,6 +12144,7 @@ $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
+$("#s3-backup-button").addEventListener("click", () => openS3BackupDialog().catch((error) => toast(error.message, "error")));
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
   const panel = $("#presence-panel");
@@ -11354,6 +12156,30 @@ $("#users-settings-return").addEventListener("click", () => returnToSettingsHub(
 $("#platform-ui-settings-close").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#platform-ui-settings-return").addEventListener("click", () => returnToSettingsHub("#platform-ui-settings-button", "#platform-ui-settings-dialog").catch((error) => toast(error.message, "error")));
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
+$("#s3-backup-close").addEventListener("click", () => $("#s3-backup-dialog").close());
+$("#s3-backup-settings-return").addEventListener("click", () => returnToSettingsHub("#s3-backup-button", "#s3-backup-dialog").catch((error) => toast(error.message, "error")));
+$("#s3-backup-add").addEventListener("click", () => openS3BackupTargetDialog());
+$("#s3-backup-run-all").addEventListener("click", (event) => void queueS3BackupRuns(null, event.currentTarget));
+$("#s3-backup-refresh").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await loadS3BackupData();
+    toast("S3 备份状态已刷新");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+$("#s3-backup-target-close").addEventListener("click", () => $("#s3-backup-target-dialog").close());
+$("#s3-backup-target-cancel").addEventListener("click", () => $("#s3-backup-target-dialog").close());
+$("#s3-backup-target-form").addEventListener("submit", saveS3BackupTarget);
+$("#s3-backup-base-path").addEventListener("input", updateS3BackupRootPreview);
+$("#s3-backup-target-dialog").addEventListener("close", () => {
+  editingS3BackupTargetId = null;
+  $("#s3-backup-target-form").reset();
+});
 $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = $("#platform-ui-settings-save");
@@ -11967,13 +12793,14 @@ $("#background-task-button").addEventListener("click", () => {
   const dialog = $("#background-task-dialog");
   if (!dialog.open) dialog.showModal();
   void refreshBackgroundTaskCenter();
+  void refreshProductUpdate();
 });
 $("#background-task-dialog").addEventListener("close", scheduleBackgroundTaskCenterRefresh);
 $("#background-task-refresh").addEventListener("click", async () => {
   const button = $("#background-task-refresh");
   button.disabled = true;
   try {
-    await refreshBackgroundTaskCenter();
+    await Promise.all([refreshBackgroundTaskCenter(), refreshProductUpdate()]);
   } finally {
     button.disabled = false;
   }
@@ -11983,12 +12810,17 @@ $("#background-task-open-analysis").addEventListener("click", () => {
   showModule("tasks").catch((error) => toast(error.message, "error"));
 });
 $("#search-dialog-close").addEventListener("click", () => $("#search-dialog").close());
+$("#search-to-replace").addEventListener("click", openGlobalReplaceDialog);
 $("#search-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   await runWorkSearch().catch((error) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
+$("#replace-dialog-close").addEventListener("click", () => $("#replace-dialog").close());
+$("#replace-cancel").addEventListener("click", () => $("#replace-dialog").close());
+$("#replace-form").querySelectorAll('input[name="replaceScope"]').forEach((input) => input.addEventListener("change", syncGlobalReplaceScopeOptions));
+$("#replace-form").addEventListener("submit", submitGlobalReplace);
 $("#export-button").addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
@@ -12012,6 +12844,7 @@ $("#manuscript-export-menu").addEventListener("click", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
+  if (state.user?.role === "admin" && !systemRestartDetected) void refreshS3BackupEvents();
   void refreshSystemHealth();
 });
 window.addEventListener("beforeunload", (event) => {

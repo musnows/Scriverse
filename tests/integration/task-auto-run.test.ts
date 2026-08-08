@@ -115,9 +115,10 @@ describe("分析任务自动运行", () => {
       bookSummaryContextPercent: 50,
       contextCompactThreshold: 85,
       agentToolCallLimit: 12,
+      agentToolCallLimitMaximum: 80,
       agentToolCallGlobalMultiplier: 3,
       alwaysIncludeSettingInfo: false,
-      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]
+      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]
     });
 
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
@@ -141,9 +142,13 @@ describe("分析任务自动运行", () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       contextCompactThreshold: 91
     }).expect(400);
-    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
-      agentToolCallLimit: 49
+    const tooManyToolCalls = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentToolCallLimit: 81
     }).expect(400);
+    expect(tooManyToolCalls.body.error).toMatchObject({
+      code: "AGENT_TOOL_CALL_LIMIT_TOO_HIGH",
+      message: "Agent 工具调用上限不能超过 80 次"
+    });
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       agentToolCallLimit: 4
     }).expect(400);
@@ -163,14 +168,14 @@ describe("分析任务自动运行", () => {
       dailyTokenQuota: 10_000,
       bookSummaryContextPercent: 35,
       contextCompactThreshold: 90,
-      agentToolCallLimit: 48,
+      agentToolCallLimit: 80,
       agentToolCallGlobalMultiplier: 4,
       alwaysIncludeSettingInfo: true
     }).expect(200);
     expect(updated.body.data.dailyTokenQuota).toBe(10_000);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
     expect(updated.body.data.contextCompactThreshold).toBe(90);
-    expect(updated.body.data.agentToolCallLimit).toBe(48);
+    expect(updated.body.data.agentToolCallLimit).toBe(80);
     expect(updated.body.data.agentToolCallGlobalMultiplier).toBe(4);
     expect(updated.body.data.alwaysIncludeSettingInfo).toBe(true);
 

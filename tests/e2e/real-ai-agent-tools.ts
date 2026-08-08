@@ -323,8 +323,8 @@ try {
 
   const maximumThreshold = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { contextCompactThreshold: 90 });
   assert.equal(maximumThreshold.contextCompactThreshold, 90);
-  const maximumToolCalls = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 48 });
-  assert.equal(maximumToolCalls.agentToolCallLimit, 48);
+  const maximumToolCalls = await api<JsonObject>("PATCH", `/works/${workId}/ai-settings`, { agentToolCallLimit: 80 });
+  assert.equal(maximumToolCalls.agentToolCallLimit, 80);
   const rejectedThreshold = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -334,9 +334,11 @@ try {
   const rejectedToolCalls = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ agentToolCallLimit: 49 })
+    body: JSON.stringify({ agentToolCallLimit: 81 })
   });
   assert.equal(rejectedToolCalls.status, 400);
+  const rejectedToolCallsPayload = object(await rejectedToolCalls.json());
+  assert.equal(object(rejectedToolCallsPayload.error).message, "Agent 工具调用上限不能超过 80 次");
   const rejectedLowToolCalls = await fetch(`${baseUrl}/api/works/${workId}/ai-settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },

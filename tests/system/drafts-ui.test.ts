@@ -19,7 +19,7 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260801-timeline-lifecycle-v1');
+    expect(page.text).toContain('/app.js?v=20260809-global-replace-v2');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');
@@ -43,6 +43,8 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('没有符合筛选条件的想法');
     expect(application.text).toContain('formDialogVditors = bindVditorEditors($("#dialog-fields"))');
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
+    expect(application.text).toContain('markdown-editor-field${options.readOnly ? " is-read-only" : ""}');
+    expect(application.text).toContain('aria-readonly="true"');
     expect(application.text).toContain('data-dialog-draft-delete');
     expect(application.text).not.toContain('data-delete-draft');
     expect(application.text).toContain('title: "删除操作需要再次确认"');
@@ -55,6 +57,8 @@ describe("想法模块界面", () => {
     expect(styles.text).toContain('font-size: 11px; }');
     expect(styles.text).toContain('.card-actions .record-card-edit { position: static; padding: 0; }');
     expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');
+    expect(styles.text).toContain('.markdown-editor-field.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"]');
+    expect(styles.text).toContain('.editor-dialog .dialog-fields input[readonly]');
     expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 76dvh;');
     expect(styles.text).toContain('.editor-dialog .markdown-editor-field .vditor-editor-host.vditor { min-height: clamp(420px, 56dvh, 640px) !important; }');
   });

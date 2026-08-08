@@ -1,0 +1,108 @@
+name: Main PR checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TZ: Asia/Shanghai
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run required checks
+        run: npm run check
+
+      - name: Check database upgrade fixture
+        run: npm run test:database-upgrade
+
+      - name: Run CLI end-to-end tests
+        run: npm run test:e2e:cli
+
+      - name: Detect Docker build changes
+        id: docker-changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          required=false
+          while IFS= read -r file; do
+            case "$file" in
+              Dockerfile|.dockerignore|package.json|package-lock.json|tsconfig*.json|scripts/*)
+                required=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only --diff-filter=ACMRT "$BASE_SHA" "$HEAD_SHA")
+          echo "required=$required" >> "$GITHUB_OUTPUT"
+          echo "Docker build required: $required"
+
+      - name: Set up Docker Buildx
+        if: steps.docker-changes.outputs.required == 'true'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker image
+        if: steps.docker-changes.outputs.required == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: scriverse:pr-check
+          cache-from: type=gha,scope=main-pr-docker
+          cache-to: type=gha,mode=max,scope=main-pr-docker
+
+      - name: Check Docker container health
+        if: steps.docker-changes.outputs.required == 'true'
+        run: |
+          container_id="$(docker run --detach --publish 127.0.0.1:13212:13210 scriverse:pr-check)"
+          stop_container() {
+            docker stop "$container_id" >/dev/null
+          }
+          trap stop_container EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:13212/api/health >/dev/null; then
+              echo "Container health check passed"
+              exit 0
+            fi
+
+            if [ "$(docker inspect --format='{{.State.Running}}' "$container_id")" != "true" ]; then
+              echo "Container exited before health check passed"
+              docker logs "$container_id"
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          echo "Container health check timed out"
+          docker logs "$container_id"
+          exit 1

@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { chmodSync, cpSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { basename, join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
@@ -7,6 +7,7 @@ import { DATABASE_SCHEMA_VERSION, readDatabaseSchemaVersion } from "./database.j
 import { loadMasterSecret } from "./credential-vault.js";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
 import { logger, sanitizeError } from "./logger.js";
+import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -29,6 +30,12 @@ export type RunningLocalServer = {
 };
 
 const publicPath = fileURLToPath(new URL("./public/", import.meta.url));
+export const PRE_MIGRATION_BACKUP_RETENTION_ENV = "SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION";
+export const DEFAULT_PRE_MIGRATION_BACKUP_RETENTION = 5;
+export const MIN_PRE_MIGRATION_BACKUP_RETENTION = 2;
+export const STARTUP_RETRY_LIMIT_ENV = "SCRIVERSE_STARTUP_RETRY_LIMIT";
+export const DEFAULT_STARTUP_RETRY_LIMIT = 2;
+export const STARTUP_RETRY_STATE_FILENAME = ".startup-retry.json";
 
 export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
@@ -39,11 +46,124 @@ export function isLoopbackHost(host: string): boolean {
   return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/u.test(normalized);
 }
 
-export function createPreMigrationBackup(options: Pick<LocalServerOptions, "dataDirectory" | "databasePath">): string | null {
+export function resolvePreMigrationBackupRetention(environment: NodeJS.ProcessEnv): number {
+  const raw = environment[PRE_MIGRATION_BACKUP_RETENTION_ENV]?.trim() ?? "";
+  if (raw === "") return DEFAULT_PRE_MIGRATION_BACKUP_RETENTION;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured)) return DEFAULT_PRE_MIGRATION_BACKUP_RETENTION;
+  return Math.max(MIN_PRE_MIGRATION_BACKUP_RETENTION, Math.floor(configured));
+}
+
+export function resolveStartupRetryLimit(environment: NodeJS.ProcessEnv): number {
+  const raw = environment[STARTUP_RETRY_LIMIT_ENV]?.trim() ?? "";
+  if (raw === "") return DEFAULT_STARTUP_RETRY_LIMIT;
+  const configured = Number(raw);
+  if (!Number.isFinite(configured) || configured < 1) return DEFAULT_STARTUP_RETRY_LIMIT;
+  return Math.floor(configured);
+}
+
+function startupRetryStatePath(dataDirectory: string): string {
+  return join(dataDirectory, STARTUP_RETRY_STATE_FILENAME);
+}
+
+function readStartupRetryCount(dataDirectory: string): number {
+  const statePath = startupRetryStatePath(dataDirectory);
+  if (!existsSync(statePath)) return 0;
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, "utf8")) as { attempts?: unknown };
+    const attempts = Number(parsed.attempts);
+    return Number.isInteger(attempts) && attempts >= 0 ? attempts : 0;
+  } catch (error) {
+    logger.warn("server.startup_retry_state.invalid", { retryStatePath: statePath, error: sanitizeError(error) });
+    return 0;
+  }
+}
+
+function writeStartupRetryCount(dataDirectory: string, attempts: number): void {
+  const statePath = startupRetryStatePath(dataDirectory);
+  const temporaryPath = `${statePath}.tmp`;
+  writeFileSync(temporaryPath, JSON.stringify({ attempts, updatedAt: new Date().toISOString() }, null, 2), { encoding: "utf8", mode: 0o600 });
+  chmodSync(temporaryPath, 0o600);
+  renameSync(temporaryPath, statePath);
+  chmodSync(statePath, 0o600);
+}
+
+function recordStartupAttempt(dataDirectory: string, environment: NodeJS.ProcessEnv): void {
+  const retryLimit = resolveStartupRetryLimit(environment);
+  const previousAttempts = readStartupRetryCount(dataDirectory);
+  const retryStatePath = startupRetryStatePath(dataDirectory);
+  if (previousAttempts >= retryLimit) {
+    logger.error("server.startup_retry_limit_reached", {
+      retryStatePath,
+      attempts: previousAttempts,
+      retryLimit,
+      message: "Startup retry limit reached. Fix the previous initialization error, remove the startup retry state file, and restart Scriverse."
+    });
+    throw new Error(`Startup retry limit reached (${retryLimit}); fix the previous initialization error and remove ${retryStatePath} before restarting`);
+  }
+  const attempts = previousAttempts + 1;
+  writeStartupRetryCount(dataDirectory, attempts);
+  logger.warn("server.startup_attempt.recorded", { retryStatePath, attempts, retryLimit });
+}
+
+function clearStartupRetryState(dataDirectory: string): void {
+  const statePath = startupRetryStatePath(dataDirectory);
+  if (!existsSync(statePath)) return;
+  try {
+    rmSync(statePath, { force: true });
+    logger.info("server.startup_retry_state.cleared", { retryStatePath: statePath });
+  } catch (error) {
+    logger.error("server.startup_retry_state.clear_failed", { retryStatePath: statePath, error: sanitizeError(error) });
+  }
+}
+
+type PreMigrationBackup = {
+  directory: string;
+  modifiedAt: number;
+};
+
+function listPreMigrationBackups(backupsDirectory: string): PreMigrationBackup[] {
+  if (!existsSync(backupsDirectory)) return [];
+  return readdirSync(backupsDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("pre-migration-v") && !entry.name.endsWith(".incomplete"))
+    .map((entry) => {
+      const directory = join(backupsDirectory, entry.name);
+      return { directory, modifiedAt: statSync(directory).mtimeMs };
+    })
+    .filter(({ directory }) => existsSync(join(directory, "backup.json")))
+    .sort((left, right) => left.modifiedAt - right.modifiedAt || left.directory.localeCompare(right.directory));
+}
+
+function prunePreMigrationBackups(backupsDirectory: string, maximumCount: number): void {
+  const backups = listPreMigrationBackups(backupsDirectory);
+  const excessCount = Math.max(0, backups.length - maximumCount);
+  for (const backup of backups.slice(0, excessCount)) {
+    try {
+      rmSync(backup.directory, { recursive: true, force: true });
+      logger.info("database.pre_migration_backup.pruned", {
+        backupDirectory: backup.directory,
+        retentionCount: maximumCount
+      });
+    } catch (error) {
+      logger.warn("database.pre_migration_backup.prune_failed", {
+        backupDirectory: backup.directory,
+        error: sanitizeError(error)
+      });
+    }
+  }
+}
+
+export function createPreMigrationBackup(
+  options: Pick<LocalServerOptions, "dataDirectory" | "databasePath">,
+  environment: NodeJS.ProcessEnv = process.env
+): string | null {
+  const backupsDirectory = join(options.dataDirectory, "backups");
+  const retentionCount = resolvePreMigrationBackupRetention(environment);
+  prunePreMigrationBackups(backupsDirectory, retentionCount);
   const schemaVersion = readDatabaseSchemaVersion(options.databasePath);
   if (schemaVersion === null || schemaVersion >= DATABASE_SCHEMA_VERSION) return null;
+  prunePreMigrationBackups(backupsDirectory, retentionCount - 1);
   const timestamp = new Date().toISOString().replace(/[:.]/gu, "-");
-  const backupsDirectory = join(options.dataDirectory, "backups");
   const backupName = `pre-migration-v${schemaVersion}-to-v${DATABASE_SCHEMA_VERSION}-${timestamp}`;
   const incompleteDirectory = join(backupsDirectory, `${backupName}.incomplete`);
   const backupDirectory = join(backupsDirectory, backupName);
@@ -87,8 +207,9 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
   try {
     mkdirSync(options.dataDirectory, { recursive: true, mode: 0o700 });
     chmodSync(options.dataDirectory, 0o700);
+    recordStartupAttempt(options.dataDirectory, options.env);
     security = resolveRuntimeSecurity(options.env);
-    createPreMigrationBackup(options);
+    createPreMigrationBackup(options, options.env);
     const devAuthBypass = isDevelopmentAuthBypassEnabled(options.env);
     if (devAuthBypass && !isLoopbackHost(options.host)) {
       throw new Error("APP_DEV_SKIP_AUTH 仅允许绑定本机回环地址");
@@ -101,7 +222,10 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       security,
       disableUserAuth: devAuthBypass,
       devAuthBypass,
-      developmentServer: isDevelopmentServer(options.env)
+      developmentServer: isDevelopmentServer(options.env),
+      releaseCheckIntervalMs: resolveReleaseCheckIntervalMs(options.env.APP_UPDATE_CHECK_INTERVAL_MINUTES),
+      releaseCheckTimeoutMs: resolveReleaseCheckTimeoutMs(options.env.APP_UPDATE_CHECK_TIMEOUT_SECONDS),
+      releaseCheckRetries: resolveReleaseCheckRetries(options.env.APP_UPDATE_CHECK_RETRIES)
     });
     await runtime.cleanupAttachments();
   } catch (error) {
@@ -128,6 +252,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       }
       const port = address.port;
       const displayHost = options.host.includes(":") ? `[${options.host}]` : options.host;
+      clearStartupRetryState(options.dataDirectory);
       let closed = false;
       const close = async (): Promise<void> => {
         if (closed) return;

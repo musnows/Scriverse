@@ -14,6 +14,7 @@ describe("AI 角色扮演界面", () => {
     expect(page).toContain('<option value="roleplay">角色扮演</option>');
     expect(page).toContain('id="ai-roleplay-character" class="ai-roleplay-character hidden"');
     expect(page).toContain("选择角色卡");
+    expect(application).toContain("与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……");
     expect(application).toContain("/roleplay`");
     expect(application).toContain("对话开始后不能切换任务类型");
     expect(application).toContain('$("#ai-task").disabled = state.aiPromptSent;');
@@ -29,6 +30,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");
+    expect(application).toContain("recall_relationship: \"回忆人物关系\"");
     expect(application).toContain("function syncAiTaskOptions()");
     expect(application).toContain('const taskType = roleplaySelected ? "chat" : selectedTaskType;');
     expect(styles).toContain(".prompt-options .ai-roleplay-character { min-width: 0; }");

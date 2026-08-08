@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT,
+  MAX_AGENT_TOOL_CALL_LIMIT_ENV,
   agentToolCallGlobalLimit,
   agentToolCallQuotaNoticeBudgetChars,
   agentToolCallQuotaUsedAfterCompact,
@@ -8,10 +10,19 @@ import {
   clampAgentToolCallGlobalMultiplier,
   shouldRejectAgentToolCalls,
   shouldRejectGlobalToolCalls,
+  resolveMaxAgentToolCallLimit,
   withAgentToolCallQuotaNotice
 } from "../../src/ai-tool-results.js";
 
 describe("AI 工具调用配额提醒", () => {
+  it("默认上限为 80 且支持通过环境变量调整", () => {
+    expect(DEFAULT_MAX_AGENT_TOOL_CALL_LIMIT).toBe(80);
+    expect(resolveMaxAgentToolCallLimit({})).toBe(80);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "120" })).toBe(120);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "not-a-number" })).toBe(80);
+    expect(resolveMaxAgentToolCallLimit({ [MAX_AGENT_TOOL_CALL_LIMIT_ENV]: "2" })).toBe(5);
+  });
+
   it("按上限的 20% + 1 计算软提醒阈值，并保证下限为 3", () => {
     expect(agentToolCallSoftWarningThreshold(12)).toBe(3);
     expect(agentToolCallSoftWarningThreshold(5)).toBe(3);

@@ -78,6 +78,31 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at", "is_dead"]));
     expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).toContain("is_extinct");
     expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toContain("is_dissolved");
+    expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "endpoint",
+      "bucket",
+      "base_path",
+      "access_key_encrypted",
+      "secret_key_encrypted",
+      "backup_images",
+      "schedule_time",
+      "retention_count",
+      "sort_order"
+    ]));
+    expect(first.all("PRAGMA index_list(s3_backup_targets)").some((index) => index.name === "idx_s3_backup_targets_schedule")).toBe(true);
+    expect(first.all("PRAGMA table_info(s3_backup_runs)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "target_id",
+      "trigger",
+      "status",
+      "database_key",
+      "images_uploaded",
+      "images_skipped",
+      "databases_deleted",
+      "server_response_json"
+    ]));
+    expect(first.all("PRAGMA index_list(s3_backup_runs)").some((index) => index.name === "idx_s3_backup_runs_started")).toBe(true);
     expect(first.get("SELECT is_dead FROM characters WHERE id = 'character-a'")).toEqual({ is_dead: 0 });
     expect(first.get("SELECT is_extinct FROM races WHERE id = 'race_migration_1'")).toEqual({ is_extinct: 0 });
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
@@ -150,6 +175,19 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "metadata_json")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "request_id")).toBe(true);
     expect(first.all("PRAGMA index_list(ai_conversation_messages)").some((index) => index.name === "idx_ai_conversation_messages_request")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_history_search)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "conversation_id",
+      "message_id",
+      "source_type",
+      "source_id",
+      "search_content"
+    ]));
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_history_search_fts'")?.name).toBe("ai_history_search_fts");
+    expect(first.all("PRAGMA index_list(ai_history_search)").some((index) => index.name === "idx_ai_history_search_work")).toBe(true);
+    expect(first.all("PRAGMA index_list(ai_history_search_short_terms)").some(
+      (index) => index.name === "idx_ai_history_search_short_terms_search"
+    )).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
     expect(first.get("SELECT toast_position, page_sizes_json FROM platform_ui_settings WHERE id = 1")).toEqual({
@@ -186,6 +224,15 @@ describe("数据库版本化迁移", () => {
         "title_generation_model_id"
       ])
     );
+    const workAiSettingsSql = String(first.get("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_ai_settings'")?.sql ?? "");
+    expect(workAiSettingsSql).toContain("agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000)");
+    first.run(
+      "INSERT INTO work_ai_settings (work_id, agent_tool_call_limit, updated_at) VALUES (?, ?, ?)",
+      "work-old",
+      80,
+      "2025-01-01"
+    );
+    expect(first.get("SELECT agent_tool_call_limit FROM work_ai_settings WHERE work_id = 'work-old'")).toEqual({ agent_tool_call_limit: 80 });
     expect(first.all("PRAGMA table_info(analysis_tasks)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["attempt_count", "next_attempt_at", "last_attempt_at"])
     );
@@ -249,6 +296,51 @@ describe("数据库版本化迁移", () => {
       { id: "conversation-roleplay-old", task_type: "roleplay", context_scope_json: '{"type":"none"}' }
     ]);
     second.close();
+  });
+
+  it("从已有迁移 74 平滑升级到 76 并重建 AI 历史短词索引", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-74-upgrade-"));
+    roots.push(root);
+    const filename = join(root, "migration-74.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("PRAGMA foreign_keys = OFF");
+    legacy.exec(`
+      DELETE FROM ai_history_search_short_terms;
+      DELETE FROM ai_history_search;
+      INSERT INTO works (id, title, created_at, updated_at)
+      VALUES ('work-migration-74', '迁移作品', '2025-01-01', '2025-01-01');
+      INSERT INTO ai_conversations (id, work_id, title, compacted_summary, created_at, updated_at)
+      VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
+      DROP TABLE s3_backup_runs;
+      DROP TABLE s3_backup_targets;
+      DELETE FROM schema_migrations WHERE version IN (75, 76);
+    `);
+    const searchRow = legacy.prepare(
+      "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"
+    ).get() as { id?: unknown } | undefined;
+    const searchId = Number(searchRow?.id);
+    legacy.prepare(
+      "INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?), (?, ?)"
+    ).run(searchId, "重", searchId, "复");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT MAX(version) AS version FROM schema_migrations")?.version).toBe(DATABASE_SCHEMA_VERSION);
+    expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_runs'")?.name).toBe("s3_backup_runs");
+    expect(migrated.all(
+      "SELECT term, COUNT(*) AS count FROM ai_history_search_short_terms WHERE search_id = ? GROUP BY term HAVING COUNT(*) > 1",
+      searchId
+    )).toEqual([]);
+    expect(migrated.all<{ term: string }>(
+      "SELECT term FROM ai_history_search_short_terms WHERE search_id = ?",
+      searchId
+    )).toEqual(expect.arrayContaining([{ term: "重" }, { term: "复" }]));
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 
   it("迁移 53 只重排可重建索引并保留领域数据", () => {

@@ -116,6 +116,28 @@ test("Demo 适配 0.6.1 评论、模型测试和对话流契约", async () => {
   assert.match(adapter, /volumeTitle: volume\?\.title/);
 });
 
+test("Demo 适配当前正文、资料和协作接口契约", async () => {
+  const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
+  const browserAi = await readFile(new URL("../browser-ai.js", import.meta.url), "utf8");
+  const sources = `${adapter}\n${browserAi}`;
+  for (const capability of [
+    "works/import",
+    "firstImportedChapterId",
+    "attachments",
+    "entity-versions",
+    "agent-history",
+    "timeline",
+    "split",
+    "character-resolution",
+    "imageToolModelId",
+    "autoRunFailureThreshold",
+    "settings-catalog"
+  ]) assert.match(sources, new RegExp(capability), `Demo 缺少当前能力：${capability}`);
+  assert.match(adapter, /members: \[\{ userId: demoUser\.userId/);
+  assert.match(adapter, /suggestion\.status = "accepted"/);
+  assert.match(adapter, /restoreEntityVersion/);
+});
+
 test("AI 配置仅保存在浏览器并说明前端直连方式", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   const values = new Map();
@@ -173,6 +195,23 @@ test("供应商和模型连接测试都会发起最小模型请求并接受纯�
   assert.equal(JSON.parse(requests[3].init.body).model, "thinking-model");
 });
 
+test("浏览器直连模式支持 Anthropic Messages 响应", async () => {
+  let request;
+  const result = await requestBrowserAi({
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ content: [{ type: "text", text: "Anthropic 回复" }], usage: { output_tokens: 9 } }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    provider: { protocol: "anthropic-messages", baseUrl: "https://example.test", apiKey: "sk-ant" },
+    model: { modelId: "claude-demo", preset: { max_tokens: 100 } },
+    messages: [{ role: "system", content: "系统约束" }, { role: "user", content: "测试" }]
+  });
+  assert.equal(request.url, "https://example.test/v1/messages");
+  assert.equal(request.init.headers["x-api-key"], "sk-ant");
+  assert.equal(JSON.parse(request.init.body).system, "系统约束");
+  assert.deepEqual(result, { content: "Anthropic 回复", outputTokens: 9 });
+});
+
 test("两本预制作品都设置了项目内封面", async () => {
   const adapter = await readFile(new URL("../mock-api.js", import.meta.url), "utf8");
   const server = await readFile(new URL("../scripts/serve.mjs", import.meta.url), "utf8");
@@ -209,6 +248,8 @@ test("Demo 使用公开凭据登录且关闭注册", async () => {
   assert.match(adapter, /registrationOpen: false/);
   assert.match(adapter, /sessionStorage\.getItem\(demoAuthStorageKey\)/);
   assert.match(adapter, /Demo 不开放注册/);
+  assert.match(adapter, /hint\.textContent = `演示账号：\$\{demoCredentials\.username\}　密码：\$\{demoCredentials\.password\}`/);
+  assert.doesNotMatch(adapter, /hint\.textContent = `[^`]*验证码/);
 });
 
 test("Demo 版本直接继承主项目版本", async () => {

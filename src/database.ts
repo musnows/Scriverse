@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { logger, sanitizeError } from "./logger.js";
@@ -6,27 +6,74 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 76;
+export const SQLITE_IOERR_SHMSIZE = 4874;
+
+export type AvailableDiskSpace = {
+  availableBytes: number;
+  availableMiB: number;
+};
+
+export function isSqliteDiskIoError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const candidate = error as Error & { code?: unknown; errcode?: unknown; errstr?: unknown };
+  return Number(candidate.errcode) === SQLITE_IOERR_SHMSIZE
+    || (candidate.code === "ERR_SQLITE_ERROR" && candidate.errstr === "disk I/O error")
+    || (candidate.code === "ERR_SQLITE_ERROR" && error.message === "disk I/O error");
+}
+
+export function readAvailableDiskSpace(path: string): AvailableDiskSpace | null {
+  try {
+    const stats = statfsSync(path);
+    const availableBytes = Number(stats.bavail) * Number(stats.bsize);
+    if (!Number.isFinite(availableBytes) || availableBytes < 0) return null;
+    return {
+      availableBytes,
+      availableMiB: Math.round(availableBytes / (1024 * 1024) * 100) / 100
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function logSqliteDiskIoError(filename: string, error: unknown): void {
+  if (!isSqliteDiskIoError(error)) return;
+  const diskSpace = readAvailableDiskSpace(filename === ":memory:" ? "." : dirname(filename));
+  logger.error("database.disk_io_error.space_check", {
+    databasePath: filename,
+    availableBytes: diskSpace?.availableBytes ?? null,
+    availableMiB: diskSpace?.availableMiB ?? null,
+    spaceCheck: diskSpace ? "completed" : "failed"
+  });
+  logger.error("database.disk_io_error.guidance", {
+    databasePath: filename,
+    message: "SQLite reported a disk I/O error. Check the host disk's available space and ensure the database directory is writable before restarting Scriverse."
+  });
+}
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
-  const database = new DatabaseSync(filename, { readOnly: true });
+  let database: DatabaseSync | null = null;
   try {
+    database = new DatabaseSync(filename, { readOnly: true });
     const migrationTable = database.prepare(
       "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
     ).get();
     if (!migrationTable) return 0;
     const row = database.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version?: unknown } | undefined;
     return Number(row?.version ?? 0);
+  } catch (error) {
+    logSqliteDiskIoError(filename, error);
+    throw error;
   } finally {
-    database.close();
+    database?.close();
   }
 }
 
 export class Database {
   readonly raw: DatabaseSync;
 
-  constructor(filename: string) {
+  constructor(readonly filename: string) {
     logger.info("database.opening", { databasePath: filename, inMemory: filename === ":memory:" });
     try {
       if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
@@ -44,6 +91,7 @@ export class Database {
       const migration = this.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations");
       logger.info("database.ready", { inMemory: filename === ":memory:", schemaVersion: Number(migration?.version ?? 0) });
     } catch (error) {
+      logSqliteDiskIoError(filename, error);
       logger.error("database.open_failed", { databasePath: filename, error: sanitizeError(error) });
       throw error;
     }
@@ -53,6 +101,17 @@ export class Database {
     logger.info("database.closing");
     this.raw.close();
     logger.info("database.closed");
+  }
+
+  createSnapshotBuffer(): Buffer {
+    if (this.filename === ":memory:") throw new Error("内存数据库不能创建文件快照");
+    if (this.raw.isTransaction) throw new Error("事务执行期间不能创建数据库快照");
+    // 项目只使用当前这一条同步连接；截断 WAL 后立即同步读取主库，期间不会穿插其他写入。
+    const checkpoint = this.get<{ busy: number; log: number; checkpointed: number }>("PRAGMA wal_checkpoint(TRUNCATE)");
+    if (Number(checkpoint?.busy ?? 0) !== 0 || Number(checkpoint?.log ?? 0) !== Number(checkpoint?.checkpointed ?? 0)) {
+      throw new Error("数据库 WAL 尚未完整合并，无法创建一致性快照");
+    }
+    return readFileSync(this.filename);
   }
 
   run(sql: string, ...params: SQLInputValue[]): { changes: number; lastInsertRowid: number | bigint } {
@@ -413,6 +472,7 @@ export class Database {
         output_note TEXT NOT NULL DEFAULT '',
         preset_json TEXT NOT NULL DEFAULT '{}',
         thinking_enabled INTEGER NOT NULL DEFAULT 1,
+        multimodal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(multimodal_enabled IN (0, 1)),
         enabled INTEGER NOT NULL DEFAULT 1,
         note TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
@@ -430,6 +490,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS platform_ai_settings (
         id INTEGER PRIMARY KEY CHECK(id = 1),
         system_prompt TEXT NOT NULL DEFAULT '',
+        image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         updated_at TEXT NOT NULL
       );
 
@@ -455,10 +516,11 @@ export class Database {
         auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
         book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
         context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
-        agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 48),
+        agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000),
         agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
-        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts"]',
+        agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts","image"]',
         title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+        image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
         updated_at TEXT NOT NULL
       );
@@ -2774,6 +2836,315 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    const s3TargetsPresent = this.all("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_targets'").length > 0;
+    const modelColumnsAt73 = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+    const platformAiColumnsAt73 = new Set(this.all("PRAGMA table_info(platform_ai_settings)").map((row) => String(row.name)));
+    const workAiColumnsAt73 = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+    const multimodalMigrationPresent = modelColumnsAt73.has("multimodal_enabled")
+      && platformAiColumnsAt73.has("image_tool_model_id")
+      && workAiColumnsAt73.has("image_tool_model_id");
+    if (!applied.has(73) || !s3TargetsPresent || !multimodalMigrationPresent) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_targets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          endpoint TEXT NOT NULL,
+          region TEXT NOT NULL DEFAULT 'us-east-1',
+          bucket TEXT NOT NULL,
+          base_path TEXT NOT NULL DEFAULT '',
+          access_key_encrypted TEXT NOT NULL,
+          access_key_iv TEXT NOT NULL,
+          access_key_tag TEXT NOT NULL,
+          secret_key_encrypted TEXT NOT NULL,
+          secret_key_iv TEXT NOT NULL,
+          secret_key_tag TEXT NOT NULL,
+          force_path_style INTEGER NOT NULL DEFAULT 1 CHECK(force_path_style IN (0, 1)),
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          backup_images INTEGER NOT NULL DEFAULT 1 CHECK(backup_images IN (0, 1)),
+          schedule_time TEXT NOT NULL DEFAULT '03:00' CHECK(
+            schedule_time GLOB '[0-2][0-9]:[0-5][0-9]'
+            AND substr(schedule_time, 1, 2) <= '23'
+          ),
+          retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 365),
+          last_started_at TEXT,
+          last_success_at TEXT,
+          last_failure_at TEXT,
+          last_error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_targets_schedule ON s3_backup_targets(enabled, schedule_time, created_at)");
+        const modelColumns = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+        if (!modelColumns.has("multimodal_enabled")) {
+          this.run("ALTER TABLE models ADD COLUMN multimodal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(multimodal_enabled IN (0, 1))");
+        }
+        const platformColumns = new Set(this.all("PRAGMA table_info(platform_ai_settings)").map((row) => String(row.name)));
+        if (!platformColumns.has("image_tool_model_id")) {
+          this.run("ALTER TABLE platform_ai_settings ADD COLUMN image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL");
+        }
+        const workColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!workColumns.has("image_tool_model_id")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL");
+        }
+        for (const row of this.all("SELECT work_id, agent_tools_json FROM work_ai_settings")) {
+          let tools: unknown[] = [];
+          try {
+            const parsed = JSON.parse(String(row.agent_tools_json ?? "[]")) as unknown;
+            tools = Array.isArray(parsed) ? parsed : [];
+          } catch {
+            tools = [];
+          }
+          if (tools.includes("image")) continue;
+          tools.push("image");
+          this.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(tools), String(row.work_id));
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const s3RunsPresent = this.all("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_runs'").length > 0;
+    const aiHistorySearchPresent = this.all("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ai_history_search'").length > 0;
+    if (!applied.has(74) || !s3RunsPresent || !aiHistorySearchPresent) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_runs (
+          id TEXT PRIMARY KEY,
+          target_id TEXT REFERENCES s3_backup_targets(id) ON DELETE SET NULL,
+          target_name TEXT NOT NULL,
+          trigger TEXT NOT NULL CHECK(trigger IN ('manual', 'scheduled')),
+          status TEXT NOT NULL CHECK(status IN ('running', 'succeeded', 'failed')),
+          database_key TEXT,
+          images_uploaded INTEGER NOT NULL DEFAULT 0,
+          images_skipped INTEGER NOT NULL DEFAULT 0,
+          databases_deleted INTEGER NOT NULL DEFAULT 0,
+          error_message TEXT,
+          server_response_json TEXT,
+          started_at TEXT NOT NULL,
+          finished_at TEXT
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_started ON s3_backup_runs(started_at DESC, id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_target ON s3_backup_runs(target_id, started_at DESC)");
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS ai_history_search (
+            id INTEGER PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE CASCADE,
+            source_type TEXT NOT NULL CHECK(source_type IN ('conversation', 'message')),
+            source_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT '' CHECK(role IN ('', 'user', 'assistant')),
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            search_content TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(source_type, source_id)
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_history_search_work
+            ON ai_history_search(work_id, created_at DESC, id DESC);
+          CREATE INDEX IF NOT EXISTS idx_ai_history_search_conversation
+            ON ai_history_search(work_id, conversation_id, source_type, created_at DESC, id DESC);
+          CREATE VIRTUAL TABLE IF NOT EXISTS ai_history_search_fts USING fts5(
+            search_content,
+            content='ai_history_search',
+            content_rowid='id',
+            tokenize='trigram'
+          );
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_ai AFTER INSERT ON ai_history_search BEGIN
+            INSERT INTO ai_history_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_ad AFTER DELETE ON ai_history_search BEGIN
+            INSERT INTO ai_history_search_fts(ai_history_search_fts, rowid, search_content)
+            VALUES ('delete', old.id, old.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_au AFTER UPDATE ON ai_history_search BEGIN
+            INSERT INTO ai_history_search_fts(ai_history_search_fts, rowid, search_content)
+            VALUES ('delete', old.id, old.search_content);
+            INSERT INTO ai_history_search_fts(rowid, search_content) VALUES (new.id, new.search_content);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_conversation_ai AFTER INSERT ON ai_conversations BEGIN
+            INSERT INTO ai_history_search
+              (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+            VALUES
+              (new.work_id, new.id, NULL, 'conversation', new.id, '', new.title, COALESCE(new.compacted_summary, ''),
+               lower(new.title || char(10) || COALESCE(new.compacted_summary, '')), new.created_at);
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_conversation_au AFTER UPDATE OF title, compacted_summary ON ai_conversations BEGIN
+            UPDATE ai_history_search
+            SET title = new.title,
+                content = COALESCE(new.compacted_summary, ''),
+                search_content = lower(new.title || char(10) || COALESCE(new.compacted_summary, ''))
+            WHERE source_type = 'conversation' AND source_id = new.id;
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_message_ai AFTER INSERT ON ai_conversation_messages BEGIN
+            INSERT INTO ai_history_search
+              (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+            SELECT conversation.work_id, new.conversation_id, new.id, 'message', new.id, new.role, conversation.title,
+                   new.content, lower(new.content), new.created_at
+            FROM ai_conversations conversation
+            WHERE conversation.id = new.conversation_id;
+          END;
+          CREATE TRIGGER IF NOT EXISTS ai_history_search_message_au AFTER UPDATE OF role, content ON ai_conversation_messages BEGIN
+            UPDATE ai_history_search
+            SET role = new.role, content = new.content, search_content = lower(new.content)
+            WHERE source_type = 'message' AND source_id = new.id;
+          END;
+          CREATE TABLE IF NOT EXISTS ai_history_search_short_terms (
+            search_id INTEGER NOT NULL REFERENCES ai_history_search(id) ON DELETE CASCADE,
+            term TEXT NOT NULL,
+            PRIMARY KEY(term, search_id)
+          ) WITHOUT ROWID;
+          CREATE INDEX IF NOT EXISTS idx_ai_history_search_short_terms_search
+            ON ai_history_search_short_terms(search_id);
+        `);
+        this.run(`
+          INSERT INTO ai_history_search
+            (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+          SELECT conversation.work_id, conversation.id, NULL, 'conversation', conversation.id, '', conversation.title,
+                 COALESCE(conversation.compacted_summary, ''),
+                 lower(conversation.title || char(10) || COALESCE(conversation.compacted_summary, '')),
+                 conversation.created_at
+          FROM ai_conversations conversation
+          WHERE 1
+          ON CONFLICT(source_type, source_id) DO UPDATE SET
+            work_id = excluded.work_id,
+            conversation_id = excluded.conversation_id,
+            title = excluded.title,
+            content = excluded.content,
+            search_content = excluded.search_content,
+            created_at = excluded.created_at
+        `);
+        this.run(`
+          INSERT INTO ai_history_search
+            (work_id, conversation_id, message_id, source_type, source_id, role, title, content, search_content, created_at)
+          SELECT conversation.work_id, message.conversation_id, message.id, 'message', message.id, message.role, conversation.title,
+                 message.content, lower(message.content), message.created_at
+          FROM ai_conversation_messages message
+          JOIN ai_conversations conversation ON conversation.id = message.conversation_id
+          WHERE 1
+          ON CONFLICT(source_type, source_id) DO UPDATE SET
+            work_id = excluded.work_id,
+            conversation_id = excluded.conversation_id,
+            message_id = excluded.message_id,
+            role = excluded.role,
+            title = excluded.title,
+            content = excluded.content,
+            search_content = excluded.search_content,
+            created_at = excluded.created_at
+        `);
+        for (const row of this.all<{ id: number; source_type: string; title: string; content: string }>(
+          "SELECT id, source_type, title, content FROM ai_history_search"
+        )) {
+          const searchContent = row.source_type === "message"
+            ? normalizeDocumentSearchText(row.content)
+            : normalizeDocumentSearchText(`${row.title}\n${row.content}`);
+          this.run("UPDATE ai_history_search SET search_content = ? WHERE id = ?", searchContent, row.id);
+        }
+        this.run("INSERT INTO ai_history_search_fts(ai_history_search_fts) VALUES ('rebuild')");
+        this.run("DELETE FROM ai_history_search_short_terms");
+        const insertTerm = this.raw.prepare(
+          "INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?)"
+        );
+        for (const row of this.all<{ id: number; search_content: string }>("SELECT id, search_content FROM ai_history_search")) {
+          for (const term of documentShortSearchTerms(String(row.search_content))) insertTerm.run(row.id, term);
+        }
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (74, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    const s3TargetsTablePresentForOrder = this.all("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_targets'").length > 0;
+    const s3SortOrderPresent = s3TargetsTablePresentForOrder
+      && new Set(this.all("PRAGMA table_info(s3_backup_targets)").map((row) => String(row.name))).has("sort_order");
+    if (!applied.has(75) || !s3SortOrderPresent) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(s3_backup_targets)").map((row) => String(row.name)));
+        if (!columns.has("sort_order")) {
+          this.run("ALTER TABLE s3_backup_targets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0");
+        }
+        this.run(`UPDATE s3_backup_targets AS target SET sort_order = (
+          SELECT COUNT(*) FROM s3_backup_targets AS previous
+          WHERE previous.created_at < target.created_at
+             OR (previous.created_at = target.created_at AND previous.id < target.id)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_s3_backup_targets_order ON s3_backup_targets(sort_order, created_at, id)");
+        this.run("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(76)) {
+      this.raw.exec("PRAGMA foreign_keys = OFF");
+      try {
+        this.transaction(() => {
+          this.run(`CREATE TABLE work_ai_settings_v76 (
+            work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+            system_prompt TEXT NOT NULL DEFAULT '',
+            daily_token_quota INTEGER CHECK(daily_token_quota IS NULL OR daily_token_quota >= 10000),
+            auto_run_enabled INTEGER NOT NULL DEFAULT 0,
+            auto_run_concurrency INTEGER NOT NULL DEFAULT 2,
+            auto_run_batch_limit INTEGER NOT NULL DEFAULT 20,
+            auto_run_daily_task_limit INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_daily_task_limit BETWEEN 0 AND 10000),
+            auto_run_failure_threshold INTEGER NOT NULL DEFAULT 3 CHECK(auto_run_failure_threshold BETWEEN 1 AND 10),
+            auto_run_paused INTEGER NOT NULL DEFAULT 0 CHECK(auto_run_paused IN (0, 1)),
+            auto_run_pause_reason TEXT NOT NULL DEFAULT '',
+            auto_run_resume_at TEXT,
+            auto_run_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            book_summary_context_percent INTEGER NOT NULL DEFAULT 50 CHECK(book_summary_context_percent BETWEEN 1 AND 90),
+            context_compact_threshold INTEGER NOT NULL DEFAULT 85 CHECK(context_compact_threshold BETWEEN 50 AND 90),
+            agent_tool_call_limit INTEGER NOT NULL DEFAULT 12 CHECK(agent_tool_call_limit BETWEEN 5 AND 1000),
+            agent_tool_call_global_multiplier INTEGER NOT NULL DEFAULT 3 CHECK(agent_tool_call_global_multiplier BETWEEN 1 AND 6),
+            agent_tools_json TEXT NOT NULL DEFAULT '["story_index","read_chapters","search_story_entities","grep","read_character_sections","search_drafts","image"]',
+            title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
+            always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
+            updated_at TEXT NOT NULL
+          )`);
+          this.run(`INSERT INTO work_ai_settings_v76 (
+            work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+            auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+            auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+            context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
+            agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+          )
+          SELECT
+            work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
+            auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+            auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
+            context_compact_threshold,
+            CASE
+              WHEN agent_tool_call_limit < 5 THEN 5
+              WHEN agent_tool_call_limit > 1000 THEN 1000
+              ELSE agent_tool_call_limit
+            END,
+            agent_tool_call_global_multiplier,
+            agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+          FROM work_ai_settings`);
+          this.run("DROP TABLE work_ai_settings");
+          this.run("ALTER TABLE work_ai_settings_v76 RENAME TO work_ai_settings");
+          this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (76, ?)", new Date().toISOString());
+        });
+      } finally {
+        this.raw.exec("PRAGMA foreign_keys = ON");
+      }
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
@@ -2800,6 +3171,11 @@ export class Database {
       `UPDATE analysis_tasks SET status = 'partial', failure_json = ?, updated_at = ?
        WHERE status = 'running'`,
       JSON.stringify([{ message: "服务重启导致任务中断" }]),
+      timestamp
+    );
+    this.run(
+      `UPDATE s3_backup_runs SET status = 'failed', error_message = COALESCE(error_message, '服务重启导致备份中断'), finished_at = ?
+       WHERE status = 'running'`,
       timestamp
     );
   }

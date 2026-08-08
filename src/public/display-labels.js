@@ -74,7 +74,7 @@ export function providerProtocolLabel(value) {
 }
 
 export function chapterVersionSourceLabel(value) {
-  return enumLabel({ manual: "人工保存", auto: "自动保存", "ai-suggestion": "AI 建议", restore: "历史恢复", import: "文件导入", create: "初始版本" }, value, "其他来源");
+  return enumLabel({ manual: "人工保存", auto: "自动保存", "ai-suggestion": "AI 建议", restore: "历史恢复", import: "文件导入", create: "初始版本", "global-replace": "全局替换" }, value, "其他来源");
 }
 
 export function occurrenceRoleLabel(value) {
@@ -93,7 +93,8 @@ export function searchResultTypeLabel(value) {
     relationship: "人物关系",
     "chapter-outline": "章节大纲",
     foreshadow: "伏笔",
-    review: "审核项"
+    review: "审核项",
+    "agent-history": "Agent 历史"
   }, value, "其他资料");
 }
 

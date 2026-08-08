@@ -5,11 +5,12 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { createRuntime } from "../../src/app.js";
 import { runWithRequestActor } from "../../src/request-context.js";
+import { parseBooleanEnvironmentValue } from "../../src/utils.js";
 
 type Json = Record<string, unknown>;
 
 const port = Number(process.env.E2E_COLLAB_PORT ?? 13213);
-const keepAlive = process.env.E2E_COLLAB_KEEP_ALIVE === "1";
+const keepAlive = parseBooleanEnvironmentValue(process.env.E2E_COLLAB_KEEP_ALIVE) ?? false;
 const dataRoot = join(process.cwd(), ".data");
 await mkdir(dataRoot, { recursive: true });
 const isolatedDirectory = await mkdtemp(join(dataRoot, "e2e-collab-refresh-"));

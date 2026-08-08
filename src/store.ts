@@ -25,6 +25,7 @@ import {
   splitDocumentParagraphs
 } from "./utils.js";
 import { buildWritingCalendar, writingDateKey } from "./writing-progress-time.js";
+import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 
 type WorkInput = {
   title: string;
@@ -45,7 +46,8 @@ export const WORK_AGENT_TOOL_IDS = [
   "grep",
   "search_story_entities",
   "read_character_sections",
-  "search_drafts"
+  "search_drafts",
+  "image"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
 const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
@@ -1092,16 +1094,24 @@ export class Store {
     const row = this.db.get("SELECT * FROM platform_ai_settings WHERE id = 1");
     return {
       systemPrompt: String(row?.system_prompt ?? ""),
+      imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
+        ? null
+        : String(row.image_tool_model_id),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
 
-  updatePlatformAiSettings(input: { systemPrompt?: string }): Record<string, unknown> {
+  updatePlatformAiSettings(input: { systemPrompt?: string; imageToolModelId?: string | null }): Record<string, unknown> {
     const timestamp = now();
+    const current = this.getPlatformAiSettings();
     this.db.run(
-      `INSERT INTO platform_ai_settings (id, system_prompt, updated_at) VALUES (1, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt, updated_at = excluded.updated_at`,
-      input.systemPrompt ?? String(this.getPlatformAiSettings().systemPrompt),
+      `INSERT INTO platform_ai_settings (id, system_prompt, image_tool_model_id, updated_at) VALUES (1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET system_prompt = excluded.system_prompt,
+         image_tool_model_id = excluded.image_tool_model_id, updated_at = excluded.updated_at`,
+      input.systemPrompt ?? String(current.systemPrompt),
+      input.imageToolModelId === undefined
+        ? (current.imageToolModelId === null ? null : String(current.imageToolModelId))
+        : input.imageToolModelId,
       timestamp
     );
     return this.getPlatformAiSettings();
@@ -1164,6 +1174,7 @@ export class Store {
   getWorkAiSettings(workId: string): Record<string, unknown> {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_ai_settings WHERE work_id = ?", workId);
+    const maximumAgentToolCallLimit = resolveMaxAgentToolCallLimit();
     return {
       workId,
       systemPrompt: String(row?.system_prompt ?? ""),
@@ -1181,9 +1192,13 @@ export class Store {
       autoRunConsecutiveFailures: Math.max(0, Number(row?.auto_run_consecutive_failures ?? 0) || 0),
       bookSummaryContextPercent: Math.min(90, Math.max(1, Number(row?.book_summary_context_percent ?? 50) || 50)),
       contextCompactThreshold: Math.min(90, Math.max(50, Number(row?.context_compact_threshold ?? 85) || 85)),
-      agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
+      agentToolCallLimitMaximum: maximumAgentToolCallLimit,
+      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
+      imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
+        ? null
+        : String(row.image_tool_model_id),
       alwaysIncludeSettingInfo: Number(row?.always_include_setting_info ?? 0) === 1,
       titleGenerationModelId: row?.title_generation_model_id === null || row?.title_generation_model_id === undefined
         ? null
@@ -1205,11 +1220,13 @@ export class Store {
     agentToolCallLimit?: number;
     agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
+    imageToolModelId?: string | null;
     alwaysIncludeSettingInfo?: boolean;
     titleGenerationModelId?: string | null;
   }): Record<string, unknown> {
     this.getWork(workId);
     const current = this.getWorkAiSettings(workId);
+    const maximumAgentToolCallLimit = resolveMaxAgentToolCallLimit();
     const timestamp = now();
     const nextPrompt = input.systemPrompt ?? String(current.systemPrompt);
     const nextDailyTokenQuota = input.dailyTokenQuota === undefined
@@ -1225,6 +1242,9 @@ export class Store {
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
+    const nextImageToolModelId = input.imageToolModelId === undefined
+      ? (current.imageToolModelId ? String(current.imageToolModelId) : null)
+      : input.imageToolModelId?.trim() || null;
     const nextAlwaysIncludeSettingInfo = input.alwaysIncludeSettingInfo ?? Boolean(current.alwaysIncludeSettingInfo);
     const nextTitleGenerationModelId = input.titleGenerationModelId === undefined
       ? (current.titleGenerationModelId ? String(current.titleGenerationModelId) : null)
@@ -1235,8 +1255,8 @@ export class Store {
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
-         agent_tools_json, title_generation_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1255,6 +1275,7 @@ export class Store {
          agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
+         image_tool_model_id = excluded.image_tool_model_id,
          always_include_setting_info = excluded.always_include_setting_info,
          updated_at = excluded.updated_at`,
       workId,
@@ -1271,10 +1292,11 @@ export class Store {
       Math.max(0, Number(current.autoRunConsecutiveFailures) || 0),
       Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
       nextTitleGenerationModelId,
+      nextImageToolModelId,
       nextAlwaysIncludeSettingInfo ? 1 : 0,
       timestamp
     );
@@ -1288,9 +1310,10 @@ export class Store {
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
-      agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
+      agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
+      imageToolModelId: nextImageToolModelId,
       alwaysIncludeSettingInfo: nextAlwaysIncludeSettingInfo,
       titleGenerationModelId: nextTitleGenerationModelId
     });
@@ -2161,6 +2184,87 @@ export class Store {
       this.audit(String(current.workId), "chapter.saved", "chapter", chapterId, { versionNo, source, chapterType: nextChapterType, changeNote });
     });
     return this.getChapter(chapterId);
+  }
+
+  replaceWorkText(
+    workId: string,
+    input: { find: string; replacement: string; scope: "prose" | "settings" | "prose-and-settings" }
+  ): Record<string, unknown> {
+    const find = input.find;
+    if (!find) throw new AppError(400, "REPLACE_TEXT_REQUIRED", "查找内容不能为空");
+    if (!["prose", "settings", "prose-and-settings"].includes(input.scope)) {
+      throw new AppError(400, "REPLACE_SCOPE_INVALID", "替换范围无效");
+    }
+    const operationId = id("globalReplace");
+    let chapterCount = 0;
+    let settingCount = 0;
+    let totalMatches = 0;
+    const includeProse = input.scope === "prose" || input.scope === "prose-and-settings";
+    const includeSettings = input.scope === "settings" || input.scope === "prose-and-settings";
+
+    const replaceLiteral = (value: string): { content: string; matches: number } => {
+      let matches = 0;
+      let offset = 0;
+      while (true) {
+        const index = value.indexOf(find, offset);
+        if (index < 0) break;
+        matches += 1;
+        offset = index + find.length;
+      }
+      return {
+        content: value.replaceAll(find, () => input.replacement),
+        matches
+      };
+    };
+
+    this.getWork(workId);
+    this.db.transaction(() => {
+      if (includeProse) {
+        const chapters = this.db.all(
+          "SELECT id, content FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+          workId
+        );
+        for (const row of chapters) {
+          const chapterId = requiredString(row, "id");
+          const result = replaceLiteral(requiredString(row, "content"));
+          if (!result.matches || result.content === requiredString(row, "content")) continue;
+          this.saveChapter(chapterId, { content: result.content }, "global-replace", operationId, "全局替换正文");
+          chapterCount += 1;
+          totalMatches += result.matches;
+        }
+      }
+      if (includeSettings) {
+        const settings = this.db.all("SELECT id, content FROM settings WHERE work_id = ? ORDER BY id", workId);
+        for (const row of settings) {
+          const settingId = requiredString(row, "id");
+          const currentContent = requiredString(row, "content");
+          const result = replaceLiteral(currentContent);
+          if (!result.matches || result.content === currentContent) continue;
+          this.updateSetting(settingId, { content: result.content }, "global-replace", operationId, "全局替换设定库");
+          settingCount += 1;
+          totalMatches += result.matches;
+        }
+      }
+      if (totalMatches > 0) {
+        this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", now(), workId);
+        this.audit(workId, "work.global-replace", "work", workId, {
+          operationId,
+          scope: input.scope,
+          chapterCount,
+          settingCount,
+          totalMatches
+        });
+      }
+    });
+
+    return {
+      operationId,
+      scope: input.scope,
+      chapterCount,
+      settingCount,
+      totalMatches,
+      work: this.getWorkDirectory(workId)
+    };
   }
 
   restoreChapter(chapterId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
@@ -4826,14 +4930,16 @@ export class Store {
     const rows = [...normalized].length <= 2
       ? this.db.all(
         `${columns} JOIN character_profile_section_short_terms term ON term.search_id = search.id
-         WHERE search.work_id = ? AND term.term = ? ORDER BY character.name, section.sort_order LIMIT ?`,
+         WHERE search.work_id = ? AND character.merged_into_character_id IS NULL AND term.term = ?
+         ORDER BY character.name, section.sort_order LIMIT ?`,
         workId,
         normalized,
         limit
       )
       : this.db.all(
         `${columns} JOIN character_profile_section_search_fts fts ON fts.rowid = search.id
-         WHERE search.work_id = ? AND character_profile_section_search_fts MATCH ?
+         WHERE search.work_id = ? AND character.merged_into_character_id IS NULL
+           AND character_profile_section_search_fts MATCH ?
          ORDER BY bm25(character_profile_section_search_fts), character.name, section.sort_order LIMIT ?`,
         workId,
         `"${normalized.replaceAll('"', '""')}"`,
@@ -4937,6 +5043,43 @@ export class Store {
   getAttachment(attachmentId: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM attachments WHERE id = ?", attachmentId);
     if (!row) throw notFound("附件");
+    return this.mapAttachment(row);
+  }
+
+  getSettingAttachment(workId: string, attachmentId: string): Record<string, unknown> {
+    const row = this.db.get(
+      `SELECT attachment.*
+       FROM attachments attachment
+       JOIN attachment_references reference ON reference.attachment_id = attachment.id
+       WHERE attachment.id = ? AND attachment.work_id = ? AND reference.work_id = ?
+         AND (
+           (reference.entity_type = 'setting' AND EXISTS (
+             SELECT 1 FROM settings current_setting
+             WHERE current_setting.id = reference.entity_id AND current_setting.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'character-section' AND EXISTS (
+             SELECT 1
+             FROM character_profile_sections current_section
+             JOIN characters current_character ON current_character.id = current_section.character_id
+             WHERE current_section.id = reference.entity_id
+               AND current_section.work_id = reference.work_id
+               AND current_character.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'race' AND EXISTS (
+             SELECT 1 FROM races current_race
+             WHERE current_race.id = reference.entity_id AND current_race.work_id = reference.work_id
+           ))
+           OR (reference.entity_type = 'organization' AND EXISTS (
+             SELECT 1 FROM organizations current_organization
+             WHERE current_organization.id = reference.entity_id AND current_organization.work_id = reference.work_id
+           ))
+         )
+       LIMIT 1`,
+      attachmentId,
+      workId,
+      workId
+    );
+    if (!row) throw new AppError(404, "SETTING_IMAGE_ATTACHMENT_NOT_FOUND", "图片附件不存在或未被生效设定库当前文档引用");
     return this.mapAttachment(row);
   }
 
@@ -6319,17 +6462,20 @@ export class Store {
     const conversationId = id("conversation");
     const timestamp = now();
     const agentTools = normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools);
-    this.db.run(
-      "INSERT INTO ai_conversations (id, work_id, task_type, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      conversationId,
-      workId,
-      taskType,
-      title.trim() || "新对话",
-      JSON.stringify(agentTools),
-      timestamp,
-      timestamp,
-      currentRequestActor()?.userId ?? null
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        "INSERT INTO ai_conversations (id, work_id, task_type, title, agent_tools_json, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        conversationId,
+        workId,
+        taskType,
+        title.trim() || "新对话",
+        JSON.stringify(agentTools),
+        timestamp,
+        timestamp,
+        currentRequestActor()?.userId ?? null
+      );
+      this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+    });
     return this.getAiConversation(conversationId);
   }
 
@@ -6386,17 +6532,42 @@ export class Store {
     return { ...this.mapAiConversation(row), messageCount: messages.length, messages };
   }
 
-  getAiConversationPage(conversationId: string, pagination: Pagination): Record<string, unknown> {
+  getAiConversationPage(conversationId: string, pagination: Pagination, focusMessageId?: string): Record<string, unknown> {
     const row = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!row) throw notFound("AI 对话");
     const countRow = this.db.get("SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?", conversationId);
-    const page = paginationSql(pagination);
+    let effectivePagination = pagination;
+    if (focusMessageId) {
+      const focused = this.db.get(
+        "SELECT rowid, created_at FROM ai_conversation_messages WHERE conversation_id = ? AND id = ?",
+        conversationId,
+        focusMessageId
+      );
+      if (focused) {
+        const newerCount = this.db.get(
+          `SELECT COUNT(*) AS count FROM ai_conversation_messages
+           WHERE conversation_id = ?
+             AND (created_at > ? OR (created_at = ? AND rowid > ?))`,
+          conversationId,
+          String(focused.created_at ?? ""),
+          String(focused.created_at ?? ""),
+          Number(focused.rowid ?? 0)
+        );
+        const focusPage = Math.floor(Number(newerCount?.count ?? 0) / pagination.limit) + 1;
+        effectivePagination = {
+          ...pagination,
+          page: focusPage,
+          offset: (focusPage - 1) * pagination.limit
+        };
+      }
+    }
+    const page = paginationSql(effectivePagination);
     const rows = this.db.all(
       `SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC${page.sql}`,
       conversationId,
       ...page.params
     );
-    const messagesPage = paginated(rows.map((message) => this.mapAiConversationMessage(message)), pagination);
+    const messagesPage = paginated(rows.map((message) => this.mapAiConversationMessage(message)), effectivePagination);
     messagesPage.items.reverse();
     return {
       ...this.mapAiConversation(row),
@@ -6516,13 +6687,16 @@ export class Store {
   saveAiConversationCompaction(conversationId: string, summary: string, compactedMessageCount: number): Record<string, unknown> {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
-    this.db.run(
-      "UPDATE ai_conversations SET compacted_summary = ?, compacted_message_count = ?, context_warning_at = NULL, updated_at = ? WHERE id = ?",
-      summary,
-      Math.max(0, compactedMessageCount),
-      now(),
-      conversationId
-    );
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversations SET compacted_summary = ?, compacted_message_count = ?, context_warning_at = NULL, updated_at = ? WHERE id = ?",
+        summary,
+        Math.max(0, compactedMessageCount),
+        now(),
+        conversationId
+      );
+      this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+    });
     return this.getAiConversation(conversationId);
   }
 
@@ -6530,7 +6704,10 @@ export class Store {
     const conversation = this.db.get("SELECT id FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const normalizedTitle = title.replace(/\s+/gu, " ").trim().slice(0, 200) || "新对话";
-    this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", normalizedTitle, now(), conversationId);
+      this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+    });
     return this.getAiConversation(conversationId);
   }
 
@@ -6657,9 +6834,10 @@ export class Store {
     }
     const messageId = id("message");
     const timestamp = now();
-    const title = requiredString(conversation, "title") === "新对话" && input.role === "user"
+    const previousTitle = requiredString(conversation, "title");
+    const title = previousTitle === "新对话" && input.role === "user"
       ? defaultAiConversationTitle(input.content)
-      : requiredString(conversation, "title");
+      : previousTitle;
     this.db.transaction(() => {
       this.db.run(
         "INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id, request_id) WHERE request_id IS NOT NULL DO NOTHING",
@@ -6674,7 +6852,11 @@ export class Store {
         currentRequestActor()?.userId ?? null
       );
       const inserted = this.db.get("SELECT id FROM ai_conversation_messages WHERE id = ?", messageId);
-      if (inserted) this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+      if (inserted) {
+        this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, conversationId);
+        if (title !== previousTitle) this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
+        this.syncAiHistorySearchShortTermsForSource("message", messageId);
+      }
     });
     const message = requestId
       ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
@@ -6736,8 +6918,40 @@ export class Store {
           currentRequestActor()?.userId ?? null
         );
       }
+      this.syncAiHistorySearchShortTermsForConversation(forkId);
     });
     return this.getAiConversation(forkId);
+  }
+
+  private syncAiHistorySearchShortTermsForSource(sourceType: "conversation" | "message", sourceId: string): void {
+    const row = this.db.get(
+      "SELECT id, title, content, search_content FROM ai_history_search WHERE source_type = ? AND source_id = ?",
+      sourceType,
+      sourceId
+    );
+    if (!row) return;
+    const searchId = numberValue(row, "id");
+    const searchContent = sourceType === "message"
+      ? normalizeDocumentSearchText(String(row.content ?? ""))
+      : normalizeDocumentSearchText(`${String(row.title ?? "")}\n${String(row.content ?? "")}`);
+    if (String(row.search_content ?? "") !== searchContent) {
+      this.db.run("UPDATE ai_history_search SET search_content = ? WHERE id = ?", searchContent, searchId);
+    }
+    this.db.run("DELETE FROM ai_history_search_short_terms WHERE search_id = ?", searchId);
+    for (const term of documentShortSearchTerms(searchContent)) {
+      this.db.run("INSERT INTO ai_history_search_short_terms (search_id, term) VALUES (?, ?)", searchId, term);
+    }
+  }
+
+  private syncAiHistorySearchShortTermsForConversation(conversationId: string): void {
+    const rows = this.db.all<{ source_type: string; source_id: string }>(
+      "SELECT source_type, source_id FROM ai_history_search WHERE conversation_id = ?",
+      conversationId
+    );
+    for (const row of rows) {
+      const sourceType = row.source_type === "message" ? "message" : "conversation";
+      this.syncAiHistorySearchShortTermsForSource(sourceType, String(row.source_id));
+    }
   }
 
   private mapAiConversation(row: Row): Record<string, unknown> {
@@ -6974,7 +7188,7 @@ export class Store {
       json<Record<string, unknown>>(requiredString(row, "scope_json"), {})
     ));
     return {
-      ...paginated(rows.map((row) => this.mapTaskSummary(row, chapterSummaries, volumeTitles, characterNames)), pagination, total),
+      ...paginated(rows.map((row) => this.mapTaskSummary(workId, row, chapterSummaries, volumeTitles, characterNames)), pagination, total),
       stats: {
         total,
         pendingCount: numberValue(statsRow, "pending_count"),
@@ -7190,12 +7404,30 @@ export class Store {
   }
 
   private taskResultEvidence(value: unknown): Record<string, unknown>[] {
-    return this.taskResultObjects(value).map((item) => ({
-      chapterId: String(item.chapterId ?? ""),
-      chapterTitle: String(item.chapterTitle ?? ""),
-      quote: String(item.quote ?? ""),
-      supports: String(item.supports ?? item.conclusion ?? "")
-    })).filter((item) => item.chapterId || item.chapterTitle || item.quote || item.supports).slice(0, 5);
+    return this.taskResultObjects(value).map((item) => {
+      const chapterId = String(item.chapterId ?? "");
+      const chapterTitle = String(item.chapterTitle ?? "");
+      const settingId = String(item.settingId ?? "");
+      const settingTitle = String(item.settingTitle ?? "");
+      const sourceType = item.contextType === "setting" || settingId || settingTitle
+        ? "setting"
+        : chapterId || chapterTitle
+          ? "chapter"
+          : "";
+      const sourceId = sourceType === "chapter" ? chapterId : sourceType === "setting" ? settingId : "";
+      const sourceTitle = sourceType === "chapter" ? chapterTitle : sourceType === "setting" ? settingTitle : "";
+      return {
+        ...(chapterId ? { chapterId } : {}),
+        ...(chapterTitle ? { chapterTitle } : {}),
+        ...(settingId ? { settingId } : {}),
+        ...(settingTitle ? { settingTitle } : {}),
+        ...(sourceType ? { sourceType } : {}),
+        ...(sourceId ? { sourceId } : {}),
+        ...(sourceTitle ? { sourceTitle } : {}),
+        quote: String(item.quote ?? ""),
+        supports: String(item.supports ?? item.conclusion ?? "")
+      };
+    }).filter((item) => item.sourceId || item.sourceTitle || item.quote || item.supports).slice(0, 5);
   }
 
   private taskResultItem(value: unknown, fallbackTitle: string): Record<string, unknown> {
@@ -7903,12 +8135,7 @@ export class Store {
           confidence: numberValue(row, "confidence"),
           confirmationStatus: requiredString(row, "confirmation_status"),
           evidenceCount: evidence.length,
-          evidence: evidence.slice(0, 3).map((item) => ({
-            chapterId: String(item.chapterId ?? ""),
-            chapterTitle: String(item.chapterTitle ?? ""),
-            quote: String(item.quote ?? ""),
-            supports: String(item.supports ?? "")
-          })),
+          evidence: this.taskResultEvidence(evidence).slice(0, 3),
           evidenceTruncated: evidence.length > 3
         };
       });
@@ -7952,6 +8179,7 @@ export class Store {
       scope,
       scopeSummary: this.taskScopeSummary(workId, scope, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummary(workId, scope, new Map(), false),
+      scopeTarget: this.taskScopeTarget(workId, scope),
       scopeDetails: this.taskScopeDetails(workId, scope),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
@@ -7967,6 +8195,7 @@ export class Store {
   }
 
   private mapTaskSummary(
+    workId: string,
     row: Row,
     chapterSummaries: Map<string, string>,
     volumeTitles: Map<string, string>,
@@ -7979,6 +8208,7 @@ export class Store {
       taskType: requiredString(row, "task_type"),
       scopeSummary: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, characterNames),
       scopeSummaryWithoutCharacterNames: this.taskScopeSummaryFromMaps(scope, chapterSummaries, volumeTitles, new Map(), false),
+      scopeTarget: this.taskScopeTargetFromMaps(workId, scope, chapterSummaries),
       status: requiredString(row, "status"),
       progress: numberValue(row, "progress"),
       attemptCount: numberValue(row, "attempt_count"),
@@ -8104,6 +8334,57 @@ export class Store {
     return ` · 定向 ${characterIds.length} 人：${names.join("、")}${preFilterSuffix}${sourcePreviewSuffix}${overwriteSuffix}`;
   }
 
+  private taskScopeTargetFromMaps(
+    workId: string,
+    scope: Record<string, unknown>,
+    chapterSummaries: Map<string, string>
+  ): Record<string, string> | null {
+    const characterIds = Array.isArray(scope.characterIds)
+      ? scope.characterIds.filter((characterId): characterId is string => typeof characterId === "string")
+      : [];
+    if (characterIds.length === 1 && typeof scope.chapterId !== "string") {
+      const characterId = characterIds[0];
+      if (!characterId) return null;
+      const character = this.db.get("SELECT name FROM characters WHERE id = ? AND work_id = ?", characterId, workId);
+      return character ? { type: "character", id: characterId, label: requiredString(character, "name") } : null;
+    }
+    if (characterIds.length === 0 && typeof scope.chapterId === "string") {
+      const label = chapterSummaries.get(scope.chapterId);
+      return label ? { type: "chapter", id: scope.chapterId, label } : null;
+    }
+    return null;
+  }
+
+  private taskScopeTarget(
+    workId: string,
+    scope: Record<string, unknown>
+  ): Record<string, string> | null {
+    const characterIds = Array.isArray(scope.characterIds)
+      ? scope.characterIds.filter((characterId): characterId is string => typeof characterId === "string")
+      : [];
+    if (characterIds.length === 1 && typeof scope.chapterId !== "string") {
+      const characterId = characterIds[0];
+      if (!characterId) return null;
+      const character = this.db.get("SELECT name FROM characters WHERE id = ? AND work_id = ?", characterId, workId);
+      return character ? { type: "character", id: characterId, label: requiredString(character, "name") } : null;
+    }
+    if (characterIds.length !== 0 || typeof scope.chapterId !== "string") return null;
+    const chapter = this.db.get(
+      `SELECT chapter.title AS title, volume.title AS volume_title
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
+      scope.chapterId,
+      workId
+    );
+    if (!chapter) return null;
+    return {
+      type: "chapter",
+      id: scope.chapterId,
+      label: `${requiredString(chapter, "volume_title")} · ${requiredString(chapter, "title")}`
+    };
+  }
+
   private taskCharacterSnapshotNames(scope: Record<string, unknown>): Map<string, string> {
     const snapshotNames = new Map<string, string>();
     if (Array.isArray(scope.targetCharacters)) {
@@ -8214,7 +8495,7 @@ export class Store {
        SELECT character.id, character.name, character.aliases_json, character.species, character.is_dead,
               COALESCE(path.path, character.species) AS race_path
        FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
-       WHERE character.work_id = ? AND (
+       WHERE character.work_id = ? AND character.merged_into_character_id IS NULL AND (
          character.name LIKE ? ESCAPE '\\' OR character.aliases_json LIKE ? ESCAPE '\\' OR character.species LIKE ? ESCAPE '\\'
          OR EXISTS (SELECT 1 FROM character_race_lineage lineage WHERE lineage.character_id = character.id AND lineage.name LIKE ? ESCAPE '\\')
        ) LIMIT 50`,

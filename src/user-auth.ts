@@ -923,6 +923,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/file-versions\/[^/]+\/restore$/u.test(pathname)) {
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
+  if (write && /^\/api\/works\/[^/]+\/replace$/u.test(pathname)) {
+    const scope = requestBodyRecord(request).scope;
+    if (scope === "settings") return { write: ["settings"] };
+    if (scope === "prose-and-settings") return { write: ["prose", "settings"] };
+    return { write: ["prose"] };
+  }
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
   if (/^\/api\/(?:chapters\/[^/]+\/annotations|chapter-annotations\/[^/]+)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/entity-versions\/[^/]+\/[^/]+(?:\/restore)?$/u.test(pathname)) {
@@ -1043,7 +1049,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       ? { read: contextRead, anyWrite: [...aiInteractionModules] }
       : { anyRead: [...aiInteractionModules] };
   }
-  if (/^\/api\/works\/[^/]+\/search$/u.test(pathname)) return { read: [...contentPermissionModules] };
+  if (/^\/api\/works\/[^/]+\/search$/u.test(pathname)) {
+    const searchType = typeof request.query.type === "string" ? request.query.type : "";
+    return searchType === "agent-history"
+      ? { read: ["ai-chat"] }
+      : { read: [...contentPermissionModules] };
+  }
   if (/^\/api\/works\/[^/]+\/export$/u.test(pathname)) {
     return { read: request.query.format === "json" || request.query.format === undefined ? ["drafts", ...contentPermissionModules] : ["prose"] };
   }

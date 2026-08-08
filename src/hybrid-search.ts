@@ -9,7 +9,8 @@ export const HYBRID_SEARCH_TYPES = [
   "relationship",
   "chapter-outline",
   "foreshadow",
-  "review"
+  "review",
+  "agent-history"
 ] as const;
 
 export type HybridSearchType = typeof HYBRID_SEARCH_TYPES[number];
@@ -26,6 +27,8 @@ export type HybridSearchCandidate = {
   sectionId?: string;
   startLine?: number;
   endLine?: number;
+  conversationId?: string;
+  messageId?: string;
 };
 
 export type HybridSearchChannel = {
