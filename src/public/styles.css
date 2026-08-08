@@ -945,6 +945,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 }
 .search-form .primary-button { min-height: 38px; white-space: nowrap; }
 .replace-dialog { display: flex; width: min(620px, calc(100vw - 32px)); height: min(680px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); overflow: hidden; }
+.replace-dialog:not([open]) { display: none; }
 .replace-dialog > form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-height: 0; }
 .replace-dialog-body { display: grid; min-height: 0; gap: 16px; padding: 20px 24px 6px; overflow-y: auto; }
 .replace-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
