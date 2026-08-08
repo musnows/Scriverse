@@ -20,7 +20,8 @@ export function entityVersionSourceLabel(source) {
     restore: "历史回滚",
     analysis: "AI 分析",
     merge: "事件合并",
-    split: "事件拆分"
+    split: "事件拆分",
+    "global-replace": "全局替换"
   })[source] ?? "其他来源";
 }
 

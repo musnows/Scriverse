@@ -683,6 +683,21 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ title: "可编辑设定", category: "世界规则", content: "允许写入。" })
       .expect(201);
+    const settingsReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "允许", replacement: "已经", scope: "settings" })
+      .expect(200);
+    expect(settingsReplace.body.data).toMatchObject({ scope: "settings", settingCount: 1, totalMatches: 1 });
+    const proseReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "模块权限正文", replacement: "不应替换", scope: "prose" })
+      .expect(403);
+    expect(proseReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const combinedReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "模块权限正文", replacement: "不应替换", scope: "prose-and-settings" })
+      .expect(403);
+    expect(combinedReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/drafts`).expect(200);
     await collaborator.agent.post(`/api/works/${workId}/drafts`)
       .set("X-CSRF-Token", collaborator.csrfToken)
@@ -708,6 +723,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ content: "已授权正文编辑。" })
       .expect(200);
+    const proseReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "已授权正文", replacement: "已批量替换正文", scope: "prose" })
+      .expect(200);
+    expect(proseReplace.body.data).toMatchObject({ scope: "prose", chapterCount: 1, totalMatches: 1 });
+    const settingsReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "已经", replacement: "不应替换", scope: "settings" })
+      .expect(403);
+    expect(settingsReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     await collaborator.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ title: "只读后越权", category: "世界规则", content: "不应写入。" })
@@ -730,7 +755,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(403);
     expect(limitedOverwrite.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     const unchangedChapter = await collaborator.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
-    expect(unchangedChapter.body.data.content).toBe("已授权正文编辑。");
+    expect(unchangedChapter.body.data.content).toBe("已批量替换正文编辑。");
     expect(Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
       workId
