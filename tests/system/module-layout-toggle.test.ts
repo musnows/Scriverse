@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-expect(page.text).toContain('/styles.css?v=20260807-task-reference-links-v1');
-expect(page.text).toContain('/app.js?v=20260808-roleplay-placeholder-v1');
-expect(page.text).toContain('<script type="module" src="/app.js?v=20260808-roleplay-placeholder-v1"></script>');
+expect(page.text).toContain('/styles.css?v=20260809-global-replace-v6');
+expect(page.text).toContain('/app.js?v=20260809-global-replace-v2');
+expect(page.text).toContain('<script type="module" src="/app.js?v=20260809-global-replace-v2"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -63,7 +63,7 @@ expect(page.text).toContain('<script type="module" src="/app.js?v=20260808-rolep
     expect(application.text).toContain('置信度 ${Math.round(entry.confidence * 100)}%');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-expect(application.text).toContain('/display-labels.js?v=20260804-agent-history-search-v1');
+expect(application.text).toContain('/display-labels.js?v=20260809-global-replace-v1');
     expect(application.text).toContain('settingStatusLabel(item.status)');
     expect(application.text).not.toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');

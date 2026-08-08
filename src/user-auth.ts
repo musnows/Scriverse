@@ -923,6 +923,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/file-versions\/[^/]+\/restore$/u.test(pathname)) {
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
+  if (write && /^\/api\/works\/[^/]+\/replace$/u.test(pathname)) {
+    const scope = requestBodyRecord(request).scope;
+    if (scope === "settings") return { write: ["settings"] };
+    if (scope === "prose-and-settings") return { write: ["prose", "settings"] };
+    return { write: ["prose"] };
+  }
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
   if (/^\/api\/(?:chapters\/[^/]+\/annotations|chapter-annotations\/[^/]+)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/entity-versions\/[^/]+\/[^/]+(?:\/restore)?$/u.test(pathname)) {
