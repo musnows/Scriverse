@@ -10921,7 +10921,7 @@ async function streamChat(body) {
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
         const targetStep = existing ?? step;
-        if (typeof step.content === "string" && step.content.length > 0 && ["thinking", "intermediate"].includes(step.type)) {
+        if (typeof step.content === "string" && step.content.length > 0 && step.type === "thinking") {
           processStepTypewriter(targetStep).append(step.content);
         }
         renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());

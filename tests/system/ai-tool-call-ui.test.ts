@@ -24,6 +24,7 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null)");
     expect(application).toContain("const processStepTypewriters = new Map();");
     expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
+    expect(application).toContain('step.type === "thinking") {');
     expect(application).toContain("const content = visibleContents?.has(step) ? visibleContents.get(step) : step.content;");
     expect(application).toContain('step?.type === "context_compaction"');
     expect(application).toContain('createAiContextCompactionDivider({');
