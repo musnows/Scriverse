@@ -21,7 +21,10 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('eventName === "tool_call"');
     expect(application).toContain('eventName === "process_step"');
     expect(application).toContain('`调用了 ${name} 工具`');
-    expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null)");
+    expect(application).toContain("function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null)");
+    expect(application).toContain("const processStepTypewriters = new Map();");
+    expect(application).toContain("processStepTypewriter(targetStep).append(step.content)");
+    expect(application).toContain("const content = visibleContents?.has(step) ? visibleContents.get(step) : step.content;");
     expect(application).toContain('step?.type === "context_compaction"');
     expect(application).toContain('createAiContextCompactionDivider({');
     expect(application).toContain('kind: "tool"');
@@ -31,7 +34,7 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('` · 耗时 ${duration}`');
     expect(application).toContain("toolCalls, processSteps, processDurationMs");
     expect(application).toContain("details.open = !completed");
-    expect(application).toContain("if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime())");
+    expect(application).toContain("if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime())");
     expect(application).toContain('title.textContent = completed ? "思考与执行过程" : "正在思考与执行"');
     expect(application).toContain("function scrollAiFeedToBottom()");
     expect(application).toContain("window.requestAnimationFrame(() =>");

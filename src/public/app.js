@@ -1648,7 +1648,7 @@ function resolveAiProcessDuration(metadata, steps, completedAt) {
   return Math.max(0, completedTime - Math.min(...startedTimes));
 }
 
-function renderAiProcessSteps(message, steps, completed, durationMs = null) {
+function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
   message.querySelector(".ai-process-details")?.remove();
   if (!Array.isArray(steps) || !steps.length) return;
   const details = document.createElement("details");
@@ -1688,7 +1688,8 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null) {
     label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
     const body = document.createElement("div");
     body.className = "message-body ai-process-step-body";
-    body.innerHTML = renderMarkdown(step.content);
+    const content = visibleContents?.has(step) ? visibleContents.get(step) : step.content;
+    body.innerHTML = renderMarkdown(content);
     section.append(label, body);
     list.append(section);
   }
@@ -10827,6 +10828,29 @@ async function streamChat(body) {
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
+  const processStepTypewriters = new Map();
+  const processStepVisibleContents = new Map();
+  const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
+    renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
+  };
+  const processStepTypewriter = (step) => {
+    const existing = processStepTypewriters.get(step);
+    if (existing) return existing;
+    processStepVisibleContents.set(step, "");
+    const typewriter = createStreamTypewriter({
+      onRender: (text) => {
+        processStepVisibleContents.set(step, text);
+        renderStreamingProcessSteps(finalAnswerStarted);
+        scrollAiFeedToBottom();
+      }
+    });
+    processStepTypewriters.set(step, typewriter);
+    return typewriter;
+  };
+  const finishProcessStepTypewriters = () => Promise.all([...processStepTypewriters.values()].map((typewriter) => typewriter.finish()));
+  const revealProcessStepTypewriters = () => {
+    for (const typewriter of processStepTypewriters.values()) typewriter.reveal();
+  };
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -10886,7 +10910,7 @@ async function streamChat(body) {
         streamedText += delta;
         if (streamedText.length > 0) finalAnswerStarted = true;
         typewriter.append(delta);
-        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
+        if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         mountAssistantMessage();
@@ -10896,7 +10920,11 @@ async function streamChat(body) {
         const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        const targetStep = existing ?? step;
+        if (typeof step.content === "string" && step.content.length > 0 && ["thinking", "intermediate"].includes(step.type)) {
+          processStepTypewriter(targetStep).append(step.content);
+        }
+        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = step.type === "thinking"
           ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
           : step.type === "context_compaction"
@@ -10911,7 +10939,7 @@ async function streamChat(body) {
         if (toolCall.status === "failed") setAiAssistantStatus("error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "context_compacted") {
@@ -10923,7 +10951,7 @@ async function streamChat(body) {
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
         setAiContextMeter(payload.contextUsage);
-        await typewriter.finish();
+        await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
         message.querySelector(".message-heading > span").textContent = "助手";
@@ -10949,16 +10977,17 @@ async function streamChat(body) {
       if (chunk.done) break;
     }
     if (buffer.trim()) await consume(buffer);
-    await typewriter.finish();
+    await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
     if (streamError) throw streamError;
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
     mountAssistantMessage();
     typewriter.reveal();
+    revealProcessStepTypewriters();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");
     message.querySelector(".message-heading > span").textContent = aiAssistantLabel("生成中断");
-    renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
+    renderStreamingProcessSteps(true, elapsedProcessTime());
     meta.textContent = "生成中断";
     scrollAiFeedToBottom();
     throw error;
