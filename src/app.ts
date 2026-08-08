@@ -171,6 +171,12 @@ const settingSchema = z.object({
   authorNote: z.string().max(20_000).optional()
 });
 
+const globalReplaceSchema = z.object({
+  find: z.string().min(1).max(500),
+  replacement: z.string().max(200_000),
+  scope: z.enum(["prose", "settings", "prose-and-settings"]).default("prose")
+}).strict();
+
 const draftSchema = z.object({
   draftType: z.enum(["prose", "setting"]),
   volumeId: identifier.nullable().optional(),
@@ -1429,6 +1435,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const parsed = applyImportFileHints(parseNovelText(text), originalFileName);
     const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
     data(response, store.importNovel(String(request.params.workId), originalFileName, extension.slice(1), parsed, mode, expectedVersionNo), 201);
+  });
+  app.post("/api/works/:workId/replace", (request, response) => {
+    data(response, store.replaceWorkText(request.params.workId, parse(globalReplaceSchema, request.body)));
   });
 
   app.post("/api/works/:workId/volumes", (request, response) => {
