@@ -1942,7 +1942,7 @@ function applyAiRoleplayCharacter(character) {
   if (active) $("#ai-scope").value = "none";
   $(".ai-panel").classList.toggle("is-roleplaying", active);
   $("#ai-prompt").dataset.placeholder = active
-    ? `以 ${String(state.aiRoleplayCharacter.name)} 的身份开始对话……`
+    ? `与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();

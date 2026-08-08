@@ -32,7 +32,7 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain('id="s3-backup-run-all"');
     expect(page.text).toContain('id="s3-backup-runs"');
     expect(page.text).toContain('/styles.css?v=20260807-task-reference-links-v1');
-    expect(page.text).toContain('/app.js?v=20260807-task-reference-links-v1');
+    expect(page.text).toContain('/app.js?v=20260808-roleplay-placeholder-v1');
 
     expect(application.text).toContain('/s3-backup-ui.js?v=20260804-s3-backup-v1');
     expect(application.text).toContain('api("/api/platform/backups/targets")');
