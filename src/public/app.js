@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-memory-v1";
+import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-memory-v2";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
@@ -6387,6 +6387,7 @@ async function renderRelationships(page = moduleListPages.relationships) {
   </section>`;
   mountRelationshipFilterToggle();
   state.galaxy?.destroy();
+  state.galaxy = null;
   state.relationshipExpandedMap?.destroy?.();
   if ($("#relationship-map-dialog").open) $("#relationship-map-dialog").close();
   const graph = buildRelationshipGraph(state.characters, relationships);
@@ -6398,8 +6399,14 @@ async function renderRelationships(page = moduleListPages.relationships) {
   bindModulePagination("relationships", renderRelationships);
   const openGalaxy = () => {
     state.galaxy?.destroy();
-    state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
-    state.galaxy.open();
+    const galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, {
+      workId: state.work.id,
+      onClose: () => {
+        if (state.galaxy === galaxy) state.galaxy = null;
+      }
+    });
+    state.galaxy = galaxy;
+    galaxy.open();
   };
   const openExpanded = () => {
     state.relationshipExpandedMap?.destroy?.();

@@ -1931,6 +1931,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let starsVisible = true;
   let gridVisible = false;
   let destroyed = false;
+  let resourcesReleased = false;
   let backdrop = null;
 
   shell.classList.add("is-three-dimensional");
@@ -2437,6 +2438,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const open = () => {
+    if (destroyed) return;
     if (!dialog.open) dialog.showModal();
     paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     starsVisible = true;
@@ -2448,6 +2450,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     dialog.querySelector("#galaxy-grid").setAttribute("aria-pressed", "false");
     dialog.querySelector("#galaxy-grid").textContent = "显示空间网格";
     updateRotationControl();
+    shell.dataset.resourceState = "active";
     stats.value = `${graph.stats.nodeCount} 个节点 / ${graph.stats.edgeCount} 条关系`;
     renderNodes();
     drawScene();
@@ -2456,6 +2459,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const close = () => {
+    if (destroyed) return;
     if (dialog.open) dialog.close();
   };
 
@@ -2534,8 +2538,45 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       if (shouldAnimate()) startAnimation();
     }
   });
-  listen(dialog, "close", () => {
+
+  const releaseResources = () => {
+    if (resourcesReleased) return;
+    resourcesReleased = true;
+    destroyed = true;
     stopAnimation();
+    cleanups.splice(0).forEach((cleanup) => cleanup());
+    nodeElements.clear();
+    nodeLayer.replaceChildren();
+    detail.classList.add("hidden");
+    detail.replaceChildren();
+    for (const target of [background, canvas]) {
+      target.width = 1;
+      target.height = 1;
+      target.style.removeProperty("width");
+      target.style.removeProperty("height");
+    }
+    stars.length = 0;
+    layout.nodes.length = 0;
+    layout.byId.clear();
+    initialNodePositions.clear();
+    nodeProjections.clear();
+    orderedEdges.length = 0;
+    edgeById.clear();
+    relatedIds.clear();
+    highlightedKeywords.length = 0;
+    highlightedKeywordSet.clear();
+    projectedEdges.length = 0;
+    cameraFocus = null;
+    cameraDrag = null;
+    draggedNode = null;
+    backdrop = null;
+    shell.dataset.resourceState = "released";
+    shell.dataset.starCount = "0";
+    shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused", "is-focusing-node");
+  };
+
+  listen(dialog, "close", () => {
+    releaseResources();
     options.onClose?.();
   });
 
@@ -2544,14 +2585,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     close,
     reset,
     destroy() {
-      destroyed = true;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
-      cleanups.splice(0).forEach((cleanup) => cleanup());
       if (dialog.open) dialog.close();
-      nodeElements.clear();
-      nodeLayer.replaceChildren();
-      shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused");
+      releaseResources();
     }
   };
 }
