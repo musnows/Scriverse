@@ -335,8 +335,8 @@ describe("人物关系图数据与布局", () => {
     expect(projected).toBe(target);
     expect(projected).toMatchObject(projectGalaxyPoint({ x: 100, y: 20, z: -80 }, camera, viewport));
     expect(GALAXY_TARGET_FRAME_RATE).toBe(30);
-    expect(GALAXY_FRAME_RATE_OPTIONS).toEqual([24, 30, 60]);
-    expect([24, 30, 60].map(normalizeGalaxyFrameRate)).toEqual([24, 30, 60]);
+    expect(GALAXY_FRAME_RATE_OPTIONS).toEqual([24, 30, 60, 90, 120]);
+    expect([24, 30, 60, 90, 120].map(normalizeGalaxyFrameRate)).toEqual([24, 30, 60, 90, 120]);
     expect(normalizeGalaxyFrameRate(25)).toBe(30);
     expect(getGalaxyCanvasPixelRatio(2, 2048, 720, 215)).toBe(1.5);
     expect(getGalaxyCanvasPixelRatio(3, 390, 844, 215)).toBe(1.5);

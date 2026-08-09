@@ -1978,7 +1978,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", admin.csrfToken)
       .send({
         toastPosition: "top-right",
-        galaxyFrameRate: 60,
+        galaxyFrameRate: 120,
         pageSizes: {
           settings: 18,
           characters: 20,
@@ -1996,7 +1996,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     expect(updated.body.data).toMatchObject({
       toastPosition: "top-right",
-      galaxyFrameRate: 60,
+      galaxyFrameRate: 120,
       pageSizes: {
         settings: 18,
         characters: 20,
@@ -2011,19 +2011,24 @@ describe("用户、作品权限与操作者追踪 API", () => {
         fileVersions: 15
       }
     });
+    const highRefreshUpdate = await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ galaxyFrameRate: 90 })
+      .expect(200);
+    expect(highRefreshUpdate.body.data.galaxyFrameRate).toBe(90);
     const partialUpdate = await admin.agent.patch("/api/platform/ui-settings")
       .set("X-CSRF-Token", admin.csrfToken)
       .send({ pageSizes: { characters: 25 } })
       .expect(200);
     expect(partialUpdate.body.data).toMatchObject({
       toastPosition: "top-right",
-      galaxyFrameRate: 60,
+      galaxyFrameRate: 90,
       pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     const visibleToWriter = await writer.agent.get("/api/ui-settings").expect(200);
     expect(visibleToWriter.body.data).toMatchObject({
       toastPosition: "top-right",
-      galaxyFrameRate: 60,
+      galaxyFrameRate: 90,
       pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     expect(runtime.database.get(
