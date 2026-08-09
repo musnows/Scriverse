@@ -29,7 +29,7 @@ describe("全局替换界面", () => {
     expect(page.text).toContain('name="replaceScope" value="prose" checked');
     expect(page.text).toContain('name="replaceScope" value="settings"');
     expect(page.text).toContain('name="replaceScope" value="prose-and-settings"');
-    expect(page.text).toContain('/app.js?v=20260809-global-replace-v2');
+    expect(page.text).toContain('/app.js?v=20260809-relationship-node-search-v1');
     expect(application.text).toContain("function submitGlobalReplace(");
     expect(application.text).toContain("function syncGlobalReplaceScopeOptions(");
     expect(application.text).toContain('/replace`');
