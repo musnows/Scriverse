@@ -7,6 +7,7 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
+  canWriteWorkModule,
   classifyWorkModulePermissions,
   emptyWorkModulePermissions,
   fullWorkModulePermissions,
@@ -2195,12 +2196,23 @@ export class Store {
     if (!["prose", "settings", "prose-and-settings"].includes(input.scope)) {
       throw new AppError(400, "REPLACE_SCOPE_INVALID", "替换范围无效");
     }
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    const requestedProse = input.scope === "prose" || input.scope === "prose-and-settings";
+    const requestedSettings = input.scope === "settings" || input.scope === "prose-and-settings";
+    const includeProse = requestedProse && canWriteWorkModule(permissions, "prose");
+    const includeSettings = requestedSettings && canWriteWorkModule(permissions, "settings");
+    const processedModules: Array<"prose" | "settings"> = [];
+    const skippedModules: Array<"prose" | "settings"> = [];
+    if (includeProse) processedModules.push("prose");
+    if (includeSettings) processedModules.push("settings");
+    if (requestedProse && !includeProse) skippedModules.push("prose");
+    if (requestedSettings && !includeSettings) skippedModules.push("settings");
+
     const operationId = id("globalReplace");
     let chapterCount = 0;
     let settingCount = 0;
     let totalMatches = 0;
-    const includeProse = input.scope === "prose" || input.scope === "prose-and-settings";
-    const includeSettings = input.scope === "settings" || input.scope === "prose-and-settings";
 
     const replaceLiteral = (value: string): { content: string; matches: number } => {
       let matches = 0;
@@ -2217,7 +2229,6 @@ export class Store {
       };
     };
 
-    this.getWork(workId);
     this.db.transaction(() => {
       if (includeProse) {
         const chapters = this.db.all(
@@ -2252,7 +2263,9 @@ export class Store {
           scope: input.scope,
           chapterCount,
           settingCount,
-          totalMatches
+          totalMatches,
+          processedModules,
+          skippedModules
         });
       }
     });
@@ -2263,6 +2276,8 @@ export class Store {
       chapterCount,
       settingCount,
       totalMatches,
+      processedModules,
+      skippedModules,
       work: this.getWorkDirectory(workId)
     };
   }
