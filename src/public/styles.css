@@ -1963,7 +1963,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .mind-edge-detail { position: absolute; z-index: 5; left: 16px; right: 16px; bottom: 14px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-strong); box-shadow: var(--shadow); font-size: 11px; }
 .mind-edge-detail b { white-space: nowrap; }.mind-edge-detail span { color: var(--muted); line-height: 1.55; }
 .relationship-empty-note { margin-top: -12px; padding: 12px 14px; border: 1px dashed var(--line); color: var(--muted); font-size: 11px; }
-.relationship-map-dialog { position: relative; width: min(1400px, 96vw); max-width: none; height: min(900px, 92vh); max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: var(--shadow); }
+.relationship-map-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; overflow: hidden; border: 0; border-radius: 0; background: var(--panel); box-shadow: none; }
 .relationship-map-dialog::backdrop { background: rgba(34,30,25,.52); backdrop-filter: blur(3px); }
 .relationship-map-floating-close { position: absolute; z-index: 12; top: 25px; right: 25px; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-strong); color: var(--ink); font-size: 20px; }
 .relationship-map-expanded-host { height: 100%; padding: 18px; }
