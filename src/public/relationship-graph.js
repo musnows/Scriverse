@@ -1815,9 +1815,21 @@ export function getGalaxyNodeFocusCamera(node, camera) {
   };
 }
 
-export function getGalaxyNodeAppearance(node, maxDegree) {
+export function getGalaxyNodeDegreeScale(maxDegree, nodeCount = 0) {
+  const count = Math.max(0, Number(nodeCount) || 0);
+  const scaleFloor = count > 180 ? 12 : count > 120 ? 10 : count > 80 ? 8 : 1;
+  return Math.max(1, Number(maxDegree) || 1, scaleFloor);
+}
+
+export function getGalaxyNodeSize(node, maxDegree, nodeCount = 0, appearanceScale = 1) {
   const degree = Math.max(0, Number(node?.degree) || 0);
-  const normalizedDegree = clamp(degree / Math.max(1, Number(maxDegree) || 1), 0, 1);
+  const normalizedDegree = clamp(degree / getGalaxyNodeDegreeScale(maxDegree, nodeCount), 0, 1);
+  return clamp((10 + Math.sqrt(normalizedDegree) * 28) * Math.max(0.1, Number(appearanceScale) || 1), 8, 48);
+}
+
+export function getGalaxyNodeAppearance(node, maxDegree, nodeCount = 0) {
+  const degree = Math.max(0, Number(node?.degree) || 0);
+  const normalizedDegree = clamp(degree / getGalaxyNodeDegreeScale(maxDegree, nodeCount), 0, 1);
   const weightedDegree = Math.max(0, Number(node?.weightedDegree) || 0);
   const confidenceBoost = clamp(weightedDegree / Math.max(1, degree) / 1.35, 0, 1);
   const intensity = clamp(normalizedDegree * 0.8 + confidenceBoost * 0.2, 0, 1);
@@ -2297,7 +2309,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     nodeElements.clear();
     const maxDegree = Math.max(...layout.nodes.map((node) => node.degree), 1);
     for (const node of layout.nodes) {
-      const appearance = getGalaxyNodeAppearance(node, maxDegree);
+      const appearance = getGalaxyNodeAppearance(node, maxDegree, layout.nodes.length);
       const button = document.createElement("button");
       button.type = "button";
       button.className = "galaxy-node";
@@ -2305,7 +2317,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       button.dataset.relationshipTier = appearance.tier;
       button.dataset.celestialType = appearance.celestialType;
       button.dataset.celestialPalette = appearance.palette;
-      const nodeSize = clamp((10 + Math.sqrt(node.degree / maxDegree) * 28) * appearance.sizeScale, 8, 48);
+      const nodeSize = getGalaxyNodeSize(node, maxDegree, layout.nodes.length, appearance.sizeScale);
       button.style.setProperty("--node-size", `${nodeSize}px`);
       button.dataset.nodeSize = nodeSize.toFixed(3);
       button.dataset.worldX = node.x.toFixed(2);

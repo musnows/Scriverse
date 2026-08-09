@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -372,6 +372,17 @@ describe("人物关系图数据与布局", () => {
     expect(new Set(appearances.map((appearance: { celestialType: string }) => appearance.celestialType)).size).toBeGreaterThanOrEqual(5);
     expect(GALAXY_LAYOUT_CONFIG.minimumRadius).toBeGreaterThanOrEqual(220);
     expect(GALAXY_LAYOUT_CONFIG.desiredEdgeLength).toBeGreaterThanOrEqual(280);
+  });
+
+  it("大规模稀疏关系图不会把所有低度数节点放到最大档", () => {
+    const sparseNode = { id: "sparse", name: "稀疏节点", degree: 2, weightedDegree: 1.6 };
+    const appearance = getGalaxyNodeAppearance(sparseNode, 2, 215);
+
+    expect(getGalaxyNodeDegreeScale(2, 215)).toBe(12);
+    expect(getGalaxyNodeDegreeScale(2, 20)).toBe(2);
+    expect(getGalaxyNodeSize(sparseNode, 2, 215, 1)).toBeLessThan(22);
+    expect(appearance.tier).toBe("outer");
+    expect(getGalaxyNodeSize({ degree: 20 }, 20, 215, 1)).toBe(38);
   });
 
   it("松手惯性滑行只靠速度衰减，不会被弹簧持续拉动", () => {
