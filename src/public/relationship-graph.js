@@ -77,6 +77,194 @@ export function getRelationshipNodeLabelFontSize(viewScale, nodeCount) {
   return screenFontSize / scale;
 }
 
+function normalizeRelationshipNodeSearchText(value) {
+  return String(value ?? "").normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
+}
+
+export function searchRelationshipNodes(nodes, query, limit = 8) {
+  const normalizedQuery = normalizeRelationshipNodeSearchText(query);
+  const maximumResults = Math.max(0, Math.floor(Number(limit) || 0));
+  if (!normalizedQuery || maximumResults === 0) return [];
+  return (Array.isArray(nodes) ? nodes : [])
+    .map((node) => {
+      const normalizedName = normalizeRelationshipNodeSearchText(node?.name);
+      const normalizedAliases = (Array.isArray(node?.aliases) ? node.aliases : [])
+        .map(normalizeRelationshipNodeSearchText)
+        .filter(Boolean);
+      let score = Number.POSITIVE_INFINITY;
+      if (normalizedName === normalizedQuery) score = 0;
+      else if (normalizedAliases.some((alias) => alias === normalizedQuery)) score = 1;
+      else if (normalizedName.startsWith(normalizedQuery)) score = 2;
+      else if (normalizedAliases.some((alias) => alias.startsWith(normalizedQuery))) score = 3;
+      else if (normalizedName.includes(normalizedQuery)) score = 4;
+      else if (normalizedAliases.some((alias) => alias.includes(normalizedQuery))) score = 5;
+      return { node, score };
+    })
+    .filter((item) => Number.isFinite(item.score))
+    .sort((left, right) => (
+      left.score - right.score
+      || String(left.node?.name ?? "").localeCompare(String(right.node?.name ?? ""), "zh-CN")
+      || String(left.node?.id ?? "").localeCompare(String(right.node?.id ?? ""))
+    ))
+    .slice(0, maximumResults)
+    .map((item) => item.node);
+}
+
+export function getRelationshipSearchActiveIndex(activeIndex, itemCount, direction) {
+  const count = Math.max(0, Math.floor(Number(itemCount) || 0));
+  if (!count) return -1;
+  const step = Number(direction) < 0 ? -1 : 1;
+  if (Number(activeIndex) < 0) return step > 0 ? 0 : count - 1;
+  return (Math.floor(Number(activeIndex) || 0) + step + count) % count;
+}
+
+function createRelationshipNodeSearch(nodes, options = {}) {
+  const search = document.createElement("div");
+  search.className = `relationship-node-search${options.variant ? ` is-${options.variant}` : ""}`;
+  search.setAttribute("role", "search");
+  search.setAttribute("aria-label", options.ariaLabel ?? "搜索关系图人物");
+  const searchLabel = document.createElement("label");
+  searchLabel.className = "sr-only";
+  searchLabel.htmlFor = options.id;
+  searchLabel.textContent = "搜索人物姓名或别名";
+  const searchIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  searchIcon.classList.add("relationship-node-search-icon");
+  searchIcon.setAttribute("viewBox", "0 0 24 24");
+  searchIcon.setAttribute("aria-hidden", "true");
+  searchIcon.innerHTML = '<circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path>';
+  const searchInput = document.createElement("input");
+  searchInput.id = options.id;
+  searchInput.type = "search";
+  searchInput.maxLength = 120;
+  searchInput.placeholder = "搜索人物";
+  searchInput.autocomplete = "off";
+  searchInput.spellcheck = false;
+  searchInput.dataset.testid = options.testId ?? "relationship-node-search";
+  searchInput.setAttribute("role", "combobox");
+  searchInput.setAttribute("aria-autocomplete", "list");
+  searchInput.setAttribute("aria-expanded", "false");
+  const searchResults = document.createElement("div");
+  searchResults.id = `${options.id}-results`;
+  searchResults.className = "relationship-node-search-results hidden";
+  searchResults.setAttribute("role", "listbox");
+  searchResults.dataset.testid = `${options.testId ?? "relationship-node-search"}-results`;
+  searchInput.setAttribute("aria-controls", searchResults.id);
+  const searchStatus = document.createElement("output");
+  searchStatus.className = "sr-only";
+  searchStatus.setAttribute("aria-live", "polite");
+  search.append(searchLabel, searchIcon, searchInput, searchResults, searchStatus);
+
+  let matches = [];
+  let activeIndex = -1;
+  const closeResults = () => {
+    activeIndex = -1;
+    searchResults.classList.add("hidden");
+    searchInput.setAttribute("aria-expanded", "false");
+    searchInput.removeAttribute("aria-activedescendant");
+  };
+  const updateActiveResult = (nextIndex) => {
+    if (!matches.length) return;
+    activeIndex = (nextIndex + matches.length) % matches.length;
+    const buttons = [...searchResults.querySelectorAll("[role=option]")];
+    buttons.forEach((button, index) => {
+      const active = index === activeIndex;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", String(active));
+      if (active) {
+        searchInput.setAttribute("aria-activedescendant", button.id);
+        button.scrollIntoView({ block: "nearest" });
+      }
+    });
+  };
+  const selectMatch = (node) => {
+    searchInput.value = String(node?.name ?? "");
+    closeResults();
+    searchStatus.value = `已定位到人物 ${String(node?.name ?? "未知角色")}`;
+    options.onSelect?.(node);
+  };
+  const renderResults = () => {
+    const query = searchInput.value;
+    searchResults.replaceChildren();
+    matches = searchRelationshipNodes(nodes, query, options.limit ?? 8);
+    activeIndex = -1;
+    searchInput.removeAttribute("aria-activedescendant");
+    if (!normalizeRelationshipNodeSearchText(query)) {
+      closeResults();
+      searchStatus.value = "输入人物姓名或别名后开始搜索";
+      return;
+    }
+    searchResults.classList.remove("hidden");
+    searchInput.setAttribute("aria-expanded", "true");
+    if (!matches.length) {
+      const empty = document.createElement("p");
+      empty.className = "relationship-node-search-empty";
+      empty.textContent = "没有找到匹配人物";
+      searchResults.append(empty);
+      searchStatus.value = "没有找到匹配人物";
+      return;
+    }
+    matches.forEach((node, index) => {
+      const result = document.createElement("button");
+      result.id = `${options.id}-option-${index}`;
+      result.type = "button";
+      result.setAttribute("role", "option");
+      result.setAttribute("aria-selected", "false");
+      result.dataset.nodeId = node.id;
+      result.dataset.testid = `${options.testId ?? "relationship-node-search"}-option`;
+      result.setAttribute("aria-label", `定位到人物 ${node.name}`);
+      const name = document.createElement("strong");
+      name.textContent = node.name;
+      const meta = document.createElement("small");
+      const aliases = (Array.isArray(node.aliases) ? node.aliases : []).slice(0, 2);
+      meta.textContent = [aliases.length ? `别名：${aliases.join("、")}` : "", `${Math.max(0, Number(node.degree) || 0)} 条关系`].filter(Boolean).join(" · ");
+      result.append(name, meta);
+      result.addEventListener("pointerdown", (event) => event.preventDefault());
+      result.addEventListener("click", () => selectMatch(node));
+      searchResults.append(result);
+    });
+    searchStatus.value = `找到 ${matches.length} 个匹配人物`;
+  };
+  searchInput.addEventListener("input", renderResults);
+  searchInput.addEventListener("focus", renderResults);
+  searchInput.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (searchResults.classList.contains("hidden")) renderResults();
+      if (matches.length) {
+        const nextIndex = getRelationshipSearchActiveIndex(activeIndex, matches.length, event.key === "ArrowDown" ? 1 : -1);
+        updateActiveResult(nextIndex);
+      }
+      return;
+    }
+    if (event.key === "Enter" && matches.length) {
+      event.preventDefault();
+      selectMatch(matches[activeIndex >= 0 ? activeIndex : 0]);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeResults();
+    }
+  });
+  search.addEventListener("focusout", (event) => {
+    if (!(event.relatedTarget instanceof Node) || !search.contains(event.relatedTarget)) closeResults();
+  });
+
+  return {
+    element: search,
+    input: searchInput,
+    reset() {
+      searchInput.value = "";
+      matches = [];
+      searchStatus.value = "";
+      closeResults();
+    },
+    destroy() {
+      search.remove();
+    }
+  };
+}
+
 const GALAXY_CELESTIAL_PALETTES = Object.freeze([
   Object.freeze({ key: "solar", hue: 42, saturation: 96, lightness: 68, color: "#ffc95f", core: "#fff8d4", rim: "#9f3c18", atmosphere: "rgba(255,184,72,.58)", ring: "rgba(255,222,151,.72)" }),
   Object.freeze({ key: "azure", hue: 211, saturation: 94, lightness: 68, color: "#61b8ff", core: "#effaff", rim: "#173b85", atmosphere: "rgba(79,156,255,.56)", ring: "rgba(164,214,255,.68)" }),
@@ -832,6 +1020,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     return { destroy() { container.replaceChildren(); } };
   }
 
+  const rendererId = ++relationshipRendererSequence;
   const layout = options.expanded ? NETWORK_LAYOUTS.expanded : NETWORK_LAYOUTS.standard;
   const laidOut = layoutRelationshipNetwork(graph, options.seed ?? "relationship-network-v3", { expanded: options.expanded });
   const positions = new Map(laidOut.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
@@ -867,6 +1056,13 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   const toolbar = document.createElement("header");
   toolbar.className = "relationship-map-toolbar";
   toolbar.innerHTML = `<div><strong>人物关系图谱</strong><small>${graph.stats.nodeCount} 个角色 · ${graph.stats.edgeCount} 条关系</small></div>`;
+  let selectRelationshipNodeFromSearch = () => {};
+  const nodeSearch = createRelationshipNodeSearch(graph.nodes, {
+    id: `relationship-node-search-${rendererId}`,
+    testId: "relationship-node-search",
+    ariaLabel: "在关系图中搜索人物",
+    onSelect: (node) => selectRelationshipNodeFromSearch(node)
+  });
   const actions = document.createElement("div");
   actions.className = "relationship-map-actions";
   if (!options.expanded) {
@@ -897,7 +1093,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   fullscreen.dataset.testid = "relationship-galaxy-open";
   fullscreen.addEventListener("click", () => options.onOpenGalaxy?.());
   actions.append(fit, reset, fullscreen);
-  toolbar.append(actions);
+  toolbar.append(nodeSearch.element, actions);
 
   const viewport = document.createElement("div");
   viewport.className = "relationship-mindmap relationship-network relationship-obsidian";
@@ -947,7 +1143,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   svg.setAttribute("viewBox", `0 0 ${layout.width} ${layout.height}`);
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-label", "人物关系连线");
-  const arrowMarkerId = `relationship-edge-arrow-${++relationshipRendererSequence}`;
+  const arrowMarkerId = `relationship-edge-arrow-${rendererId}`;
   const definitions = document.createElementNS("http://www.w3.org/2000/svg", "defs");
   const arrowMarker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
   arrowMarker.id = arrowMarkerId;
@@ -1497,6 +1693,17 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     viewport.dataset.focusedNodeId = nodeId;
     updateViewTransform(true);
   };
+  selectRelationshipNodeFromSearch = (node) => {
+    if (!nodeElements.has(node.id)) return;
+    freezePhysics();
+    selectedEdgeId = null;
+    selectedId = node.id;
+    hoveredId = null;
+    options.onSelect?.(node.id);
+    applyNodeFocus(node.id);
+    focusViewOnNode(node.id);
+    nodeElements.get(node.id)?.focus({ preventScroll: true });
+  };
   const animatePositions = (targets, duration = 650) => {
     freezePhysics();
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
@@ -1598,6 +1805,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       if (geometryFrame) window.cancelAnimationFrame(geometryFrame);
       pendingDragUpdate = null;
       pinnedDrag = null;
+      nodeSearch.destroy();
       container.replaceChildren();
     },
     getState() {
@@ -1953,6 +2161,14 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let destroyed = false;
   let resourcesReleased = false;
   let backdrop = null;
+  let selectGalaxyNodeFromSearch = () => {};
+  const nodeSearch = createRelationshipNodeSearch(graph.nodes, {
+    id: `galaxy-node-search-${++relationshipRendererSequence}`,
+    testId: "galaxy-node-search",
+    variant: "galaxy",
+    ariaLabel: "在银河图中搜索人物",
+    onSelect: (node) => selectGalaxyNodeFromSearch(node)
+  });
 
   shell.classList.add("is-three-dimensional");
   shell.dataset.sceneDimension = "3";
@@ -1964,6 +2180,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
   shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
   shell.dataset.layoutDesiredEdgeLength = String(GALAXY_LAYOUT_CONFIG.desiredEdgeLength);
+  shell.append(nodeSearch.element);
 
   const listen = (target, type, handler, settings) => {
     target.addEventListener(type, handler, settings);
@@ -2301,6 +2518,18 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     detail.append(list);
   };
 
+  const selectGalaxyNode = (node, { moveFocus = false } = {}) => {
+    selectedEdgeId = null;
+    delete shell.dataset.selectedEdgeSource;
+    delete shell.dataset.selectedEdgeTarget;
+    selectedId = node.id;
+    renderDetail(node);
+    focusCameraOnNode(node);
+    drawScene();
+    if (moveFocus) nodeElements.get(node.id)?.focus({ preventScroll: true });
+  };
+  selectGalaxyNodeFromSearch = (node) => selectGalaxyNode(node, { moveFocus: true });
+
   const renderEdgeDetail = (edge) => {
     const selection = getRelationshipEdgeSelection(graph, edge.id);
     if (!selection) return;
@@ -2412,13 +2641,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           suppressClick = false;
           return;
         }
-        selectedEdgeId = null;
-        delete shell.dataset.selectedEdgeSource;
-        delete shell.dataset.selectedEdgeTarget;
-        selectedId = node.id;
-        renderDetail(node);
-        focusCameraOnNode(node);
-        drawScene();
+        selectGalaxyNode(node);
       });
       nodeElements.set(node.id, button);
       nodeLayer.append(button);
@@ -2446,6 +2669,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     delete shell.dataset.selectedEdgeTarget;
     detail.classList.add("hidden");
     detail.replaceChildren();
+    nodeSearch.reset();
     drawScene();
   };
 
@@ -2514,11 +2738,12 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     else stopAnimation();
   });
   listen(shell, "wheel", (event) => {
+    if (event.target.closest('[role="search"]')) return;
     event.preventDefault();
     zoom(event.deltaY > 0 ? 0.9 : 1.1);
   }, { passive: false });
   listen(shell, "pointerdown", (event) => {
-    if (event.button !== 0 || event.target.closest("button, aside")) return;
+    if (event.button !== 0 || event.target.closest('button, input, aside, [role="search"]')) return;
     cancelCameraFocus();
     cameraDrag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch, dragged: false };
     shell.classList.add("is-rotating-camera");
@@ -2570,6 +2795,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     destroyed = true;
     stopAnimation();
     cleanups.splice(0).forEach((cleanup) => cleanup());
+    nodeSearch.destroy();
     nodeElements.clear();
     nodeLayer.replaceChildren();
     detail.classList.add("hidden");

@@ -1915,12 +1915,24 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .timeline-track-tab[data-track-color-index="7"],
 .timeline-track-panel[data-track-color-index="7"] { --timeline-track-color: var(--timeline-track-palette-7); }
 .relationship-map-card { margin-bottom: 28px; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
-.relationship-map-toolbar { display: flex; align-items: center; gap: 18px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
-.relationship-map-toolbar > div:first-child { display: grid; gap: 3px; }
+.relationship-map-toolbar { position: relative; z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 13px 16px; overflow: visible; border-bottom: 1px solid var(--line); }
+.relationship-map-toolbar > div:first-child { display: grid; flex: 0 0 auto; gap: 3px; }
 .relationship-map-toolbar strong { font-size: 13px; }
 .relationship-map-toolbar small { color: var(--muted); font-size: 9px; }
-.relationship-map-toolbar .relationship-map-actions { display: flex; gap: 7px; margin-left: auto; }
+.relationship-map-toolbar .relationship-map-actions { display: flex; gap: 7px; margin-left: 0; }
 .relationship-map-actions button { white-space: nowrap; }
+.relationship-node-search { position: relative; display: flex; flex: 0 1 240px; align-items: center; width: min(240px, 28vw); min-width: 180px; margin-left: auto; color: var(--relationship-toolbar-muted); }
+.relationship-node-search input { width: 100%; min-width: 0; min-height: 34px; padding: 7px 30px 7px 31px; border: 1px solid var(--relationship-control-border); border-radius: 4px; background: var(--relationship-card-surface); color: var(--relationship-toolbar-ink); font-family: inherit; font-size: 11px; line-height: 1.35; }
+.relationship-node-search input::placeholder { color: var(--relationship-toolbar-muted); }
+.relationship-node-search input:focus { border-color: var(--relationship-control-hover-border); outline: 2px solid color-mix(in srgb, var(--relationship-focus-strong) 22%, transparent); outline-offset: 0; }
+.relationship-node-search-icon { position: absolute; z-index: 1; left: 10px; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-width: 1.8; pointer-events: none; }
+.relationship-node-search:focus-within .relationship-node-search-icon { color: var(--relationship-focus-strong); }
+.relationship-node-search-results { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; left: 0; display: grid; max-height: min(280px, 44vh); padding: 5px; overflow-y: auto; border: 1px solid var(--relationship-control-border); border-radius: 5px; background: var(--relationship-detail-surface); box-shadow: 0 12px 28px rgba(0,0,0,.2); }
+.relationship-node-search-results button { display: grid; width: 100%; min-height: 0; gap: 3px; padding: 8px 9px; border: 0; border-radius: 3px; background: transparent; color: var(--relationship-detail-ink); text-align: left; }
+.relationship-node-search-results button:hover, .relationship-node-search-results button:focus-visible, .relationship-node-search-results button.is-active { background: var(--relationship-control-hover-surface); color: var(--relationship-control-hover-ink); outline: none; }
+.relationship-node-search-results button strong { overflow: hidden; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.relationship-node-search-results button small { overflow: hidden; color: var(--relationship-detail-muted); font-size: 9px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.relationship-node-search-empty { margin: 0; padding: 10px 9px; color: var(--relationship-detail-muted); font-size: 10px; text-align: center; }
 .relationship-galaxy-button { display: inline-flex; align-items: center; gap: 6px; }
 .relationship-galaxy-icon { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.55; stroke-linecap: round; stroke-linejoin: round; }
 .relationship-map-legend { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -1953,11 +1965,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-empty-note { margin-top: -12px; padding: 12px 14px; border: 1px dashed var(--line); color: var(--muted); font-size: 11px; }
 .relationship-map-dialog { position: relative; width: min(1400px, 96vw); max-width: none; height: min(900px, 92vh); max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); box-shadow: var(--shadow); }
 .relationship-map-dialog::backdrop { background: rgba(34,30,25,.52); backdrop-filter: blur(3px); }
-.relationship-map-floating-close { position: absolute; z-index: 6; top: 25px; right: 25px; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-strong); color: var(--ink); font-size: 20px; }
+.relationship-map-floating-close { position: absolute; z-index: 12; top: 25px; right: 25px; width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 50%; background: var(--surface-strong); color: var(--ink); font-size: 20px; }
 .relationship-map-expanded-host { height: 100%; padding: 18px; }
-.relationship-map-expanded-host .relationship-map-card { height: 100%; margin: 0; }
+.relationship-map-expanded-host .relationship-map-card { display: flex; height: 100%; margin: 0; flex-direction: column; }
 .relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }
-.relationship-map-expanded-host .relationship-mindmap { height: calc(100% - 67px); min-height: 0; }
+.relationship-map-expanded-host .relationship-mindmap { flex: 1 1 auto; height: auto; min-height: 0; }
 .relationship-network-card { border-color: var(--relationship-card-border); background: var(--relationship-card-surface); box-shadow: none; }
 .relationship-network-card .relationship-map-toolbar { min-height: 58px; border-color: var(--relationship-card-border); background: var(--relationship-toolbar-surface); color: var(--relationship-toolbar-ink); }
 .relationship-network-card .relationship-map-toolbar small { color: var(--relationship-toolbar-muted); }
@@ -2116,11 +2128,22 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-network-help { left: 16px; bottom: 13px; font-size: 9px; }
 .relationship-network .mind-edge-detail { left: 50%; right: auto; bottom: 38px; width: min(680px, calc(100% - 40px)); transform: translateX(-50%); border-color: var(--relationship-detail-border); background: var(--relationship-detail-surface); color: var(--relationship-detail-ink); box-shadow: none; }
 .relationship-network .mind-edge-detail span { color: var(--relationship-detail-muted); }
-.relationship-map-expanded-host .relationship-network { height: calc(100% - 63px); min-height: 0; }
+.relationship-map-expanded-host .relationship-network { height: auto; min-height: 0; }
 .relationship-map-dialog { background: var(--relationship-card-surface); border-color: var(--relationship-card-border); }
 .relationship-map-expanded-host { background: var(--relationship-card-surface); }
 @keyframes relationship-node-settle { from { transform: translate(-50%, -50%) scale(1.36); } to { transform: translate(-50%, -50%) scale(1.32); } }
 @media (prefers-reduced-motion: reduce) { .relationship-network .mind-node, .relationship-network-stage { transition-duration: .01ms; animation-duration: .01ms; } }
+@media (max-width: 700px) {
+  .relationship-map-toolbar { align-items: stretch; gap: 10px; padding: 12px; }
+  .relationship-map-toolbar > div:first-child { flex: 1 1 auto; justify-content: center; }
+  .relationship-node-search:not(.is-galaxy) { order: 2; flex: 1 0 100%; width: 100%; max-width: none; min-width: 0; margin-left: 0; }
+  .relationship-map-toolbar .relationship-map-actions { order: 3; width: 100%; overflow-x: auto; }
+  .relationship-map-actions button { flex: 1 0 auto; }
+  .relationship-network { min-height: 460px; }
+  .relationship-map-expanded-host { padding: 8px; }
+  .relationship-map-expanded-host .relationship-map-toolbar { padding-right: 58px; }
+  .relationship-map-floating-close { top: 16px; right: 16px; width: 36px; height: 36px; }
+}
 
 .outline-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 32px; }
 .outline-summary article { display: grid; padding: 17px; border: 1px solid var(--line); background: var(--surface-soft); }
@@ -2188,10 +2211,25 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .galaxy-node.is-dragging { cursor: grabbing; z-index: 6; }
 .galaxy-close { position: fixed; z-index: 8; top: 22px; right: 25px; width: 42px; height: 42px; border: 1px solid rgba(255,255,255,.22); border-radius: 50%; background: rgba(5,7,13,.62); color: #fff; font-size: 25px; }
 .galaxy-stats { position: fixed; z-index: 7; left: 22px; bottom: 20px; color: rgba(235,245,255,.82); font-size: 11px; }
+.relationship-node-search.is-galaxy { position: fixed; z-index: 9; top: 22px; left: 50%; width: min(320px, calc(100vw - 180px)); max-width: none; min-width: 0; margin: 0; color: rgba(220,235,250,.72); transform: translateX(-50%); }
+.relationship-node-search.is-galaxy input { min-height: 42px; border-color: rgba(255,255,255,.18); border-radius: 7px; background: rgba(5,7,13,.74); color: #eef6ff; box-shadow: 0 8px 24px rgba(0,0,0,.26); backdrop-filter: blur(14px); font-size: 12px; }
+.relationship-node-search.is-galaxy input::placeholder { color: rgba(220,235,250,.58); }
+.relationship-node-search.is-galaxy input:focus { border-color: rgba(132,197,255,.66); outline-color: rgba(97,184,255,.24); }
+.relationship-node-search.is-galaxy .relationship-node-search-results { border-color: rgba(255,255,255,.16); background: rgba(5,7,13,.9); box-shadow: 0 14px 34px rgba(0,0,0,.42); backdrop-filter: blur(16px); }
+.relationship-node-search.is-galaxy .relationship-node-search-results button { color: #e8f3ff; }
+.relationship-node-search.is-galaxy .relationship-node-search-results button:hover, .relationship-node-search.is-galaxy .relationship-node-search-results button:focus-visible, .relationship-node-search.is-galaxy .relationship-node-search-results button.is-active { background: rgba(97,184,255,.14); color: #fff; }
+.relationship-node-search.is-galaxy .relationship-node-search-results button small, .relationship-node-search.is-galaxy .relationship-node-search-empty { color: rgba(220,235,250,.64); }
 .galaxy-controls { position: fixed; z-index: 7; right: 23px; top: 50%; display: grid; width: 104px; gap: 7px; transform: translateY(-50%); padding: 10px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: rgba(5,7,13,.66); backdrop-filter: blur(12px); }
 .galaxy-controls button { border: 1px solid rgba(255,255,255,.14); border-radius: 5px; padding: 7px; background: rgba(255,255,255,.05); color: #dcecff; font-size: 9px; }
 .galaxy-legend { position: fixed; z-index: 7; right: 22px; bottom: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 7px 12px; margin: 0; padding: 11px; list-style: none; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; background: rgba(5,7,13,.66); color: rgba(235,245,255,.8); font-size: 9px; }.galaxy-legend li { display: flex; align-items: center; gap: 5px; }
 .galaxy-detail { position: fixed; z-index: 7; left: 22px; top: 22px; width: min(300px, 30vw); max-height: 55vh; overflow: auto; padding: 15px; border: 1px solid rgba(255,255,255,.14); border-radius: 8px; background: rgba(5,7,13,.74); backdrop-filter: blur(14px); }.galaxy-detail strong, .galaxy-detail small { display: block; }.galaxy-detail strong { font-size: 18px; }.galaxy-detail small, .galaxy-detail p { color: rgba(220,235,250,.65); font-size: 9px; }.galaxy-detail ul { display: grid; gap: 7px; padding: 0; list-style: none; font-size: 9px; }.galaxy-detail li { display: flex; align-items: center; gap: 6px; }
+.galaxy-shell .relationship-node-search, .galaxy-shell .relationship-node-search * { cursor: auto; }
+.galaxy-shell .relationship-node-search input { cursor: text; }
+@media (max-width: 700px) {
+  .relationship-node-search.is-galaxy { top: 14px; right: 68px; left: 14px; width: auto; transform: none; }
+  .galaxy-close { top: 14px; right: 14px; }
+  .galaxy-detail { top: 72px; right: 14px; left: 14px; width: auto; max-height: 42vh; }
+}
 .sr-only { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 .ai-heading { display: flex; align-items: center; gap: 8px; min-width: 0; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
