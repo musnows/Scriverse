@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 76;
+export const DATABASE_SCHEMA_VERSION = 77;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -498,6 +498,7 @@ export class Database {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
         page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
+        galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60)),
         updated_at TEXT NOT NULL
       );
 
@@ -3138,6 +3139,22 @@ export class Database {
       } finally {
         this.raw.exec("PRAGMA foreign_keys = ON");
       }
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(77)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(platform_ui_settings)").map((row) => String(row.name)));
+        if (!columns.has("galaxy_frame_rate")) {
+          this.run(`ALTER TABLE platform_ui_settings ADD COLUMN galaxy_frame_rate INTEGER NOT NULL DEFAULT 30
+            CHECK(galaxy_frame_rate IN (24, 30, 60))`);
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (77, ?)", new Date().toISOString());
+      });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
         throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);

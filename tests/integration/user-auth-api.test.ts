@@ -599,6 +599,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("管理员可按成员配置模块读写权限，并在 API 层拒绝跨模块访问", async () => {
     const owner = await register(runtime, "module_owner");
     const collaborator = await register(runtime, "module_collaborator");
+    const outsider = await register(runtime, "module_outsider");
     const work = await owner.agent.post("/api/works")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "模块权限测试" })
@@ -610,8 +611,15 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(201);
     const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
       .set("X-CSRF-Token", owner.csrfToken)
-      .send({ volumeId: volume.body.data.id, title: "第一章", content: "模块权限正文。" })
+      .send({ volumeId: volume.body.data.id, title: "第一章", content: "模块权限正文，双向词。" })
       .expect(201);
+    const outsiderReplace = await outsider.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", outsider.csrfToken)
+      .send({ find: "模块权限", replacement: "越权替换", scope: "prose-and-settings" })
+      .expect(403);
+    expect(outsiderReplace.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("模块权限正文，双向词。");
     const fileVersionId = "file_module_permission_history";
     runtime.database.run(
       `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, warnings_json, snapshot_json, created_at, created_by_user_id)
@@ -679,25 +687,62 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(403);
     expect(restoreDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
 
-    await collaborator.agent.post(`/api/works/${workId}/settings`)
+    const editableSetting = await collaborator.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", collaborator.csrfToken)
-      .send({ title: "可编辑设定", category: "世界规则", content: "允许写入。" })
+      .send({ title: "可编辑设定", category: "世界规则", content: "模块权限设定，双向词，允许写入。" })
       .expect(201);
+    const editableSettingId = String(editableSetting.body.data.id);
     const settingsReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "允许", replacement: "已经", scope: "settings" })
       .expect(200);
     expect(settingsReplace.body.data).toMatchObject({ scope: "settings", settingCount: 1, totalMatches: 1 });
-    const proseReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
+    const chapterVersionsBeforeSkippedProseReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count);
+    const proseReplaceSkipped = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "模块权限正文", replacement: "不应替换", scope: "prose" })
-      .expect(403);
-    expect(proseReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
-    const combinedReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .expect(200);
+    expect(proseReplaceSkipped.body.data).toMatchObject({
+      scope: "prose",
+      processedModules: [],
+      skippedModules: ["prose"],
+      chapterCount: 0,
+      settingCount: 0,
+      totalMatches: 0
+    });
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("模块权限正文，双向词。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeSkippedProseReplace);
+    const chapterVersionsBeforeSettingsOnlyReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count);
+    const combinedSettingsOnlyReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
-      .send({ find: "模块权限正文", replacement: "不应替换", scope: "prose-and-settings" })
-      .expect(403);
-    expect(combinedReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+      .send({ find: "模块权限", replacement: "设定侧替换", scope: "prose-and-settings" })
+      .expect(200);
+    expect(combinedSettingsOnlyReplace.body.data).toMatchObject({
+      scope: "prose-and-settings",
+      processedModules: ["settings"],
+      skippedModules: ["prose"],
+      chapterCount: 0,
+      settingCount: 1,
+      totalMatches: 1
+    });
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("模块权限正文，双向词。");
+    expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", editableSettingId)?.content)
+      .toBe("设定侧替换设定，双向词，已经写入。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeSettingsOnlyReplace);
     await collaborator.agent.get(`/api/works/${workId}/drafts`).expect(200);
     await collaborator.agent.post(`/api/works/${workId}/drafts`)
       .set("X-CSRF-Token", collaborator.csrfToken)
@@ -721,18 +766,59 @@ describe("用户、作品权限与操作者追踪 API", () => {
     ]));
     await collaborator.agent.patch(`/api/chapters/${chapter.body.data.id}`)
       .set("X-CSRF-Token", collaborator.csrfToken)
-      .send({ content: "已授权正文编辑。" })
+      .send({ content: "已授权正文编辑，双向词。" })
       .expect(200);
     const proseReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "已授权正文", replacement: "已批量替换正文", scope: "prose" })
       .expect(200);
     expect(proseReplace.body.data).toMatchObject({ scope: "prose", chapterCount: 1, totalMatches: 1 });
-    const settingsReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
+    const settingVersionsBeforeProseOnlyReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
+      editableSettingId
+    )?.count);
+    const combinedProseOnlyReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "双向词", replacement: "正文侧替换", scope: "prose-and-settings" })
+      .expect(200);
+    expect(combinedProseOnlyReplace.body.data).toMatchObject({
+      scope: "prose-and-settings",
+      processedModules: ["prose"],
+      skippedModules: ["settings"],
+      chapterCount: 1,
+      settingCount: 0,
+      totalMatches: 1
+    });
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("已批量替换正文编辑，正文侧替换。");
+    expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", editableSettingId)?.content)
+      .toBe("设定侧替换设定，双向词，已经写入。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
+      editableSettingId
+    )?.count)).toBe(settingVersionsBeforeProseOnlyReplace);
+    const settingVersionsBeforeSkippedSettingsReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
+      editableSettingId
+    )?.count);
+    const settingsReplaceSkipped = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "已经", replacement: "不应替换", scope: "settings" })
-      .expect(403);
-    expect(settingsReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+      .expect(200);
+    expect(settingsReplaceSkipped.body.data).toMatchObject({
+      scope: "settings",
+      processedModules: [],
+      skippedModules: ["settings"],
+      chapterCount: 0,
+      settingCount: 0,
+      totalMatches: 0
+    });
+    expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", editableSettingId)?.content)
+      .toBe("设定侧替换设定，双向词，已经写入。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
+      editableSettingId
+    )?.count)).toBe(settingVersionsBeforeSkippedSettingsReplace);
     await collaborator.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ title: "只读后越权", category: "世界规则", content: "不应写入。" })
@@ -755,7 +841,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(403);
     expect(limitedOverwrite.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     const unchangedChapter = await collaborator.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(200);
-    expect(unchangedChapter.body.data.content).toBe("已批量替换正文编辑。");
+    expect(unchangedChapter.body.data.content).toBe("已批量替换正文编辑，正文侧替换。");
     expect(Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM file_versions WHERE work_id = ?",
       workId
@@ -765,6 +851,44 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .field("mode", "append")
       .attach("file", Buffer.from("第二章\n\n允许追加。"), "limited-append.txt")
       .expect(201);
+
+    const readOnlyReplacementPermissions = { ...updatedPermissions, prose: "read", settings: "read" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: readOnlyReplacementPermissions })
+      .expect(200);
+    const chapterVersionsBeforeReadOnlyReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count);
+    const settingVersionsBeforeReadOnlyReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
+      editableSettingId
+    )?.count);
+    const combinedReplaceSkipped = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "正文侧替换", replacement: "不应替换", scope: "prose-and-settings" })
+      .expect(200);
+    expect(combinedReplaceSkipped.body.data).toMatchObject({
+      scope: "prose-and-settings",
+      processedModules: [],
+      skippedModules: ["prose", "settings"],
+      chapterCount: 0,
+      settingCount: 0,
+      totalMatches: 0
+    });
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("已批量替换正文编辑，正文侧替换。");
+    expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", editableSettingId)?.content)
+      .toBe("设定侧替换设定，双向词，已经写入。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeReadOnlyReplace);
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
+      editableSettingId
+    )?.count)).toBe(settingVersionsBeforeReadOnlyReplace);
 
     await collaborator.agent
       .post(`/api/works/${workId}/file-versions/${fileVersionId}/restore`)
@@ -1808,6 +1932,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const defaults = await writer.agent.get("/api/ui-settings").expect(200);
     expect(defaults.body.data).toMatchObject({
       toastPosition: "bottom-right",
+      galaxyFrameRate: 30,
       pageSizes: {
         settings: 30,
         characters: 30,
@@ -1844,11 +1969,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", admin.csrfToken)
       .send({ pageSizes: { chapters: 20 } })
       .expect(400);
+    await admin.agent.patch("/api/platform/ui-settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ galaxyFrameRate: 25 })
+      .expect(400);
 
     const updated = await admin.agent.patch("/api/platform/ui-settings")
       .set("X-CSRF-Token", admin.csrfToken)
       .send({
         toastPosition: "top-right",
+        galaxyFrameRate: 60,
         pageSizes: {
           settings: 18,
           characters: 20,
@@ -1866,6 +1996,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     expect(updated.body.data).toMatchObject({
       toastPosition: "top-right",
+      galaxyFrameRate: 60,
       pageSizes: {
         settings: 18,
         characters: 20,
@@ -1886,11 +2017,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     expect(partialUpdate.body.data).toMatchObject({
       toastPosition: "top-right",
+      galaxyFrameRate: 60,
       pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     const visibleToWriter = await writer.agent.get("/api/ui-settings").expect(200);
     expect(visibleToWriter.body.data).toMatchObject({
       toastPosition: "top-right",
+      galaxyFrameRate: 60,
       pageSizes: { settings: 18, characters: 25, races: 21, organizations: 22, timeline: 23, outlines: 24, relationships: 25, comments: 27, reviews: 26, analysisTasks: 40, fileVersions: 15 }
     });
     expect(runtime.database.get(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -141,6 +141,29 @@ describe("人物关系图数据与布局", () => {
     ], []);
     expect(graph.nodeById.get("a")?.groupKey).toBe("species:泰坦");
     expect(graph.nodeById.get("b")?.groupKey).toBe("species:泰坦");
+  });
+
+  it("按姓名和别名搜索关系图人物，并优先返回精确匹配", () => {
+    const nodes = buildRelationshipGraph([
+      { id: "tide", name: "顾潮", aliases: ["潮哥", "领航员"] },
+      { id: "star", name: "顾星河", aliases: ["星河"] },
+      { id: "clear", name: "程澈", aliases: ["阿潮"] },
+      { id: "alice", name: "Ａｌｉｃｅ", aliases: [] }
+    ], []).nodes;
+
+    expect(searchRelationshipNodes(nodes, "潮").map((node: { id: string }) => node.id)).toEqual(["tide", "clear"]);
+    expect(searchRelationshipNodes(nodes, "潮哥").map((node: { id: string }) => node.id)).toEqual(["tide"]);
+    expect(searchRelationshipNodes(nodes, "alice").map((node: { id: string }) => node.id)).toEqual(["alice"]);
+    expect(searchRelationshipNodes(nodes, "顾", 1).map((node: { id: string }) => node.id)).toHaveLength(1);
+    expect(searchRelationshipNodes(nodes, "   ")).toEqual([]);
+  });
+
+  it("用方向键循环选择关系图搜索结果", () => {
+    expect(getRelationshipSearchActiveIndex(-1, 3, 1)).toBe(0);
+    expect(getRelationshipSearchActiveIndex(-1, 3, -1)).toBe(2);
+    expect(getRelationshipSearchActiveIndex(2, 3, 1)).toBe(0);
+    expect(getRelationshipSearchActiveIndex(0, 3, -1)).toBe(2);
+    expect(getRelationshipSearchActiveIndex(0, 0, 1)).toBe(-1);
   });
 
   it("普通关系网络使用稳定的力导向布局并容纳全部角色", () => {
@@ -303,6 +326,23 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
   });
 
+  it("复用银河投影结果并限制大图画布像素密度", () => {
+    const camera = { yaw: 0.2, pitch: 0.4, distance: 1500, focalRatio: 1.6, zoom: 1 };
+    const viewport = { width: 2048, height: 720 };
+    const target = { marker: "reuse" };
+    const projected = projectGalaxyPointInto({ x: 100, y: 20, z: -80 }, camera, viewport, target);
+
+    expect(projected).toBe(target);
+    expect(projected).toMatchObject(projectGalaxyPoint({ x: 100, y: 20, z: -80 }, camera, viewport));
+    expect(GALAXY_TARGET_FRAME_RATE).toBe(30);
+    expect(GALAXY_FRAME_RATE_OPTIONS).toEqual([24, 30, 60]);
+    expect([24, 30, 60].map(normalizeGalaxyFrameRate)).toEqual([24, 30, 60]);
+    expect(normalizeGalaxyFrameRate(25)).toBe(30);
+    expect(getGalaxyCanvasPixelRatio(2, 2048, 720, 215)).toBe(1.5);
+    expect(getGalaxyCanvasPixelRatio(3, 390, 844, 215)).toBe(1.5);
+    expect(getGalaxyCanvasPixelRatio(1, 1280, 720, 215)).toBe(1);
+  });
+
   it("默认按两轮百分之十的复合比例增加边缘旋臂星点", () => {
     const stars = createGalaxyStarfield("dense-background");
     const edgeStars = stars.filter((star: { region: string }) => star.region === "edge-arm");
@@ -358,6 +398,17 @@ describe("人物关系图数据与布局", () => {
     expect(new Set(appearances.map((appearance: { celestialType: string }) => appearance.celestialType)).size).toBeGreaterThanOrEqual(5);
     expect(GALAXY_LAYOUT_CONFIG.minimumRadius).toBeGreaterThanOrEqual(220);
     expect(GALAXY_LAYOUT_CONFIG.desiredEdgeLength).toBeGreaterThanOrEqual(280);
+  });
+
+  it("大规模稀疏关系图不会把所有低度数节点放到最大档", () => {
+    const sparseNode = { id: "sparse", name: "稀疏节点", degree: 2, weightedDegree: 1.6 };
+    const appearance = getGalaxyNodeAppearance(sparseNode, 2, 215);
+
+    expect(getGalaxyNodeDegreeScale(2, 215)).toBe(12);
+    expect(getGalaxyNodeDegreeScale(2, 20)).toBe(2);
+    expect(getGalaxyNodeSize(sparseNode, 2, 215, 1)).toBeLessThan(22);
+    expect(appearance.tier).toBe("outer");
+    expect(getGalaxyNodeSize({ degree: 20 }, 20, 215, 1)).toBe(38);
   });
 
   it("松手惯性滑行只靠速度衰减，不会被弹簧持续拉动", () => {

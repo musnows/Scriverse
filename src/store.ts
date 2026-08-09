@@ -7,6 +7,7 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
+  canWriteWorkModule,
   classifyWorkModulePermissions,
   emptyWorkModulePermissions,
   fullWorkModulePermissions,
@@ -83,6 +84,8 @@ type PlatformPageSizes = {
   fileVersions: number;
 };
 
+type GalaxyFrameRate = 24 | 30 | 60;
+
 const defaultPlatformPageSizes: PlatformPageSizes = {
   drafts: 30,
   settings: 30,
@@ -122,6 +125,11 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
     analysisTasks: pageSize("analysisTasks"),
     fileVersions: pageSize("fileVersions")
   };
+}
+
+function galaxyFrameRate(value: unknown): GalaxyFrameRate {
+  const candidate = Number(value);
+  return candidate === 24 || candidate === 60 ? candidate : 30;
 }
 
 type SettingInput = {
@@ -1122,6 +1130,7 @@ export class Store {
     return {
       toastPosition: String(row?.toast_position) === "top-right" ? "top-right" : "bottom-right",
       pageSizes: platformPageSizes(row?.page_sizes_json),
+      galaxyFrameRate: galaxyFrameRate(row?.galaxy_frame_rate),
       updatedAt: String(row?.updated_at ?? "")
     };
   }
@@ -1129,24 +1138,29 @@ export class Store {
   updatePlatformUiSettings(input: {
     toastPosition?: "bottom-right" | "top-right";
     pageSizes?: Partial<PlatformPageSizes>;
+    galaxyFrameRate?: GalaxyFrameRate;
   }): Record<string, unknown> {
     const timestamp = now();
     const current = this.getPlatformUiSettings();
     const currentPageSizes = platformPageSizes(current.pageSizes);
     const pageSizes = platformPageSizes(JSON.stringify({ ...currentPageSizes, ...input.pageSizes }));
     const toastPosition = input.toastPosition ?? (current.toastPosition === "top-right" ? "top-right" : "bottom-right");
+    const frameRate = input.galaxyFrameRate ?? galaxyFrameRate(current.galaxyFrameRate);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, updated_at) VALUES (1, ?, ?, ?)
+        `INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at) VALUES (1, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET toast_position = excluded.toast_position,
-           page_sizes_json = excluded.page_sizes_json, updated_at = excluded.updated_at`,
+           page_sizes_json = excluded.page_sizes_json, galaxy_frame_rate = excluded.galaxy_frame_rate,
+           updated_at = excluded.updated_at`,
         toastPosition,
         JSON.stringify(pageSizes),
+        frameRate,
         timestamp
       );
       this.audit(PLATFORM_AI_WORK_ID, "platform.ui-settings.updated", "platform-ui-settings", "platform-ui-settings", {
         toastPosition,
-        pageSizes
+        pageSizes,
+        galaxyFrameRate: frameRate
       });
     });
     return this.getPlatformUiSettings();
@@ -2195,12 +2209,23 @@ export class Store {
     if (!["prose", "settings", "prose-and-settings"].includes(input.scope)) {
       throw new AppError(400, "REPLACE_SCOPE_INVALID", "替换范围无效");
     }
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    const requestedProse = input.scope === "prose" || input.scope === "prose-and-settings";
+    const requestedSettings = input.scope === "settings" || input.scope === "prose-and-settings";
+    const includeProse = requestedProse && canWriteWorkModule(permissions, "prose");
+    const includeSettings = requestedSettings && canWriteWorkModule(permissions, "settings");
+    const processedModules: Array<"prose" | "settings"> = [];
+    const skippedModules: Array<"prose" | "settings"> = [];
+    if (includeProse) processedModules.push("prose");
+    if (includeSettings) processedModules.push("settings");
+    if (requestedProse && !includeProse) skippedModules.push("prose");
+    if (requestedSettings && !includeSettings) skippedModules.push("settings");
+
     const operationId = id("globalReplace");
     let chapterCount = 0;
     let settingCount = 0;
     let totalMatches = 0;
-    const includeProse = input.scope === "prose" || input.scope === "prose-and-settings";
-    const includeSettings = input.scope === "settings" || input.scope === "prose-and-settings";
 
     const replaceLiteral = (value: string): { content: string; matches: number } => {
       let matches = 0;
@@ -2217,7 +2242,6 @@ export class Store {
       };
     };
 
-    this.getWork(workId);
     this.db.transaction(() => {
       if (includeProse) {
         const chapters = this.db.all(
@@ -2252,7 +2276,9 @@ export class Store {
           scope: input.scope,
           chapterCount,
           settingCount,
-          totalMatches
+          totalMatches,
+          processedModules,
+          skippedModules
         });
       }
     });
@@ -2263,6 +2289,8 @@ export class Store {
       chapterCount,
       settingCount,
       totalMatches,
+      processedModules,
+      skippedModules,
       work: this.getWorkDirectory(workId)
     };
   }

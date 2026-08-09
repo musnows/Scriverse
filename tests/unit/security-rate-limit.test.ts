@@ -18,21 +18,23 @@ describe("安全限速器", () => {
     app.set("trust proxy", 1);
     app.use(createApiRateLimitMiddleware(1, 60_000, 2));
     app.get("/api/test", (_request, response) => response.json({ ok: true }));
+    const agent = request.agent(app);
 
-    await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(200);
-    await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(429);
-    await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.2").expect(200);
-    await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.3").expect(200);
-    await request(app).get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(200);
+    await agent.get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(200);
+    await agent.get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(429);
+    await agent.get("/api/test").set("X-Forwarded-For", "192.0.2.2").expect(200);
+    await agent.get("/api/test").set("X-Forwarded-For", "192.0.2.3").expect(200);
+    await agent.get("/api/test").set("X-Forwarded-For", "192.0.2.1").expect(200);
   });
 
   it("未启用 trust proxy 时忽略可伪造的 X-Forwarded-For", async () => {
     const app = express();
     app.use(createApiRateLimitMiddleware(1, 60_000));
     app.get("/api/test", (_request, response) => response.json({ ok: true }));
+    const agent = request.agent(app);
 
-    await request(app).get("/api/test").set("X-Forwarded-For", "198.51.100.1").expect(200);
-    const blocked = await request(app).get("/api/test").set("X-Forwarded-For", "198.51.100.2").expect(429);
+    await agent.get("/api/test").set("X-Forwarded-For", "198.51.100.1").expect(200);
+    const blocked = await agent.get("/api/test").set("X-Forwarded-For", "198.51.100.2").expect(429);
     expect(blocked.body.error.code).toBe("API_RATE_LIMITED");
   });
 
@@ -40,20 +42,22 @@ describe("安全限速器", () => {
     const app = express();
     app.use(createUploadRateLimitMiddleware(1, 60_000, 10));
     app.all("/{*path}", (_request, response) => response.json({ ok: true }));
+    const agent = request.agent(app);
 
-    await request(app).post("/api/works/import").expect(200);
-    const blocked = await request(app).put("/api/auth/avatar").expect(429);
+    await agent.post("/api/works/import").expect(200);
+    const blocked = await agent.put("/api/auth/avatar").expect(429);
     expect(blocked.body.error.code).toBe("UPLOAD_RATE_LIMITED");
     expect(blocked.headers["retry-after"]).toBe("60");
-    await request(app).post("/api/works").expect(200);
+    await agent.post("/api/works").expect(200);
   });
 
   it("对验证码与昂贵接口应用独立限额", async () => {
     const captchaApp = express();
     captchaApp.use(createCaptchaRateLimitMiddleware(1, 60_000));
     captchaApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
-    await request(captchaApp).get("/api/auth/captcha").expect(200);
-    const blockedCaptcha = await request(captchaApp).get("/API/AUTH/CAPTCHA").expect(429);
+    const captchaAgent = request.agent(captchaApp);
+    await captchaAgent.get("/api/auth/captcha").expect(200);
+    const blockedCaptcha = await captchaAgent.get("/API/AUTH/CAPTCHA").expect(429);
     expect(blockedCaptcha.body.error.code).toBe("CAPTCHA_RATE_LIMITED");
 
     const expensiveApp = express();
@@ -63,19 +67,20 @@ describe("安全限速器", () => {
     });
     expensiveApp.use(createExpensiveApiRateLimitMiddleware(60_000));
     expensiveApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
+    const expensiveAgent = request.agent(expensiveApp);
 
-    await request(expensiveApp).post("/api/works/work_1/chat/stream").expect(200);
+    await expensiveAgent.post("/api/works/work_1/chat/stream").expect(200);
     for (let index = 0; index < 29; index += 1) {
-      await request(expensiveApp).post("/api/works/work_1/suggestions").expect(200);
+      await expensiveAgent.post("/api/works/work_1/suggestions").expect(200);
     }
-    const blockedAi = await request(expensiveApp).post("/API/WORKS/work_1/TASKS").expect(429);
+    const blockedAi = await expensiveAgent.post("/API/WORKS/work_1/TASKS").expect(429);
     expect(blockedAi.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
 
-    await request(expensiveApp).get("/api/works/work_1/export").expect(200);
+    await expensiveAgent.get("/api/works/work_1/export").expect(200);
     for (let index = 0; index < 9; index += 1) {
-      await request(expensiveApp).get("/api/works/work_1/export").expect(200);
+      await expensiveAgent.get("/api/works/work_1/export").expect(200);
     }
-    const blockedExport = await request(expensiveApp).get("/api/works/work_1/export").expect(429);
+    const blockedExport = await expensiveAgent.get("/api/works/work_1/export").expect(429);
     expect(blockedExport.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
   });
 
@@ -84,17 +89,19 @@ describe("安全限速器", () => {
     enforceCaseInsensitiveRouting(apiApp);
     apiApp.use(createApiRateLimitMiddleware(1, 60_000));
     apiApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
+    const apiAgent = request.agent(apiApp);
 
-    await request(apiApp).get("/api/works/demo").expect(200);
-    await request(apiApp).get("/API/WORKS/demo").expect(429);
+    await apiAgent.get("/api/works/demo").expect(200);
+    await apiAgent.get("/API/WORKS/demo").expect(429);
 
     const authApp = express();
     enforceCaseInsensitiveRouting(authApp);
     authApp.use(createAuthenticationRateLimitMiddleware(1, 60_000));
     authApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
+    const authAgent = request.agent(authApp);
 
-    await request(authApp).post("/api/auth/login").expect(200);
-    const blockedLogin = await request(authApp).post("/API/AUTH/LOGIN").expect(429);
+    await authAgent.post("/api/auth/login").expect(200);
+    const blockedLogin = await authAgent.post("/API/AUTH/LOGIN").expect(429);
     expect(blockedLogin.body.error.code).toBe("AUTH_RATE_LIMITED");
   });
 });
