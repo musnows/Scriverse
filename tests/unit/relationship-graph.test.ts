@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -341,6 +341,13 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyCanvasPixelRatio(2, 2048, 720, 215)).toBe(1.5);
     expect(getGalaxyCanvasPixelRatio(3, 390, 844, 215)).toBe(1.5);
     expect(getGalaxyCanvasPixelRatio(1, 1280, 720, 215)).toBe(1);
+  });
+
+  it("只为星球缩放并将标签间距对齐到设备像素", () => {
+    expect(getGalaxyNodeLabelOffset(24, 1, 2)).toBe(0);
+    expect(getGalaxyNodeLabelOffset(24, 1.25, 2)).toBe(3);
+    expect(getGalaxyNodeLabelOffset(24, 0.75, 2)).toBe(-3);
+    expect(getGalaxyNodeLabelOffset(25, 1.13, 2)).toBe(1.5);
   });
 
   it("默认按两轮百分之十的复合比例增加边缘旋臂星点", () => {

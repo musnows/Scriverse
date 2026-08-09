@@ -2085,6 +2085,13 @@ export function getGalaxyNodeMarkerCenterOffset(nodeSize) {
   return 8 + Math.max(0, Number(nodeSize) || 0) / 2;
 }
 
+export function getGalaxyNodeLabelOffset(nodeSize, visualScale, devicePixelRatio = 1) {
+  const size = Math.max(0, Number(nodeSize) || 0);
+  const scale = Math.max(0.1, Number(visualScale) || 1);
+  const pixelRatio = clamp(Number(devicePixelRatio) || 1, 1, 4);
+  return Math.round(size * (scale - 1) / 2 * pixelRatio) / pixelRatio;
+}
+
 export function getGalaxyNodeDepthOpacity(depth) {
   return clamp(1.28 - Math.max(0, Number(depth) || 0) / 4800, 0.72, 1);
 }
@@ -2380,7 +2387,13 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       element.hidden = !point.visible;
       const nodeSize = Number(element.dataset.nodeSize) || 12;
       const markerCenterOffset = getGalaxyNodeMarkerCenterOffset(nodeSize);
-      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -${markerCenterOffset}px) scale(${perspective * selectedScale})`;
+      const visualScale = perspective * selectedScale;
+      element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -${markerCenterOffset}px)`;
+      element.style.setProperty("--node-marker-scale", visualScale.toFixed(5));
+      const labelOffset = `${getGalaxyNodeLabelOffset(nodeSize, visualScale, window.devicePixelRatio)}px`;
+      if (element.style.getPropertyValue("--node-label-offset") !== labelOffset) {
+        element.style.setProperty("--node-label-offset", labelOffset);
+      }
       element.style.zIndex = String(10000 - Math.round(point.depth));
       element.style.setProperty("--depth-opacity", String(getGalaxyNodeDepthOpacity(point.depth)));
       const edgeEndpoint = Boolean(selectedEdge) && (selectedEdge.source === node.id || selectedEdge.target === node.id);
@@ -2565,7 +2578,6 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       button.dataset.worldX = node.x.toFixed(2);
       button.dataset.worldY = node.y.toFixed(2);
       button.dataset.worldZ = node.z.toFixed(2);
-      button.style.transformOrigin = `50% ${getGalaxyNodeMarkerCenterOffset(nodeSize)}px`;
       button.style.setProperty("--node-color", appearance.color);
       button.style.setProperty("--node-core", appearance.coreColor);
       button.style.setProperty("--node-rim", appearance.rimColor);
