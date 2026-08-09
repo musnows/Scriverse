@@ -93,14 +93,22 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
   outer: Object.freeze(["rocky", "ocean", "ice", "volcanic", "dwarf", "ringed"])
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
+export const GALAXY_TARGET_FRAME_RATE = 30;
+export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60]);
 export const GALAXY_BASE_STAR_COUNT = 7200;
 export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
+export const GALAXY_MAX_CANVAS_PIXELS = 4_000_000;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   minimumRadius: 220,
   radialSpan: 830,
   repulsionStrength: 9200,
   desiredEdgeLength: 285
 });
+
+export function normalizeGalaxyFrameRate(value) {
+  const candidate = Number(value);
+  return GALAXY_FRAME_RATE_OPTIONS.includes(candidate) ? candidate : GALAXY_TARGET_FRAME_RATE;
+}
 
 export function formatRelationshipLabel(edge, separator = " · ") {
   const subtype = String(edge?.subtype ?? "").trim();
@@ -1768,7 +1776,7 @@ export function stepGalaxyStarfieldPhysics(stars, attractor = null, options = {}
   return energy;
 }
 
-export function projectGalaxyPoint(point, camera, viewport) {
+export function projectGalaxyPointInto(point, camera, viewport, target) {
   const relativeX = point.x - Number(camera.targetX ?? 0);
   const relativeY = point.y - Number(camera.targetY ?? 0);
   const relativeZ = point.z - Number(camera.targetZ ?? 0);
@@ -1783,13 +1791,24 @@ export function projectGalaxyPoint(point, camera, viewport) {
   const depth = camera.distance + cameraZ;
   const focalLength = Math.min(viewport.width, viewport.height) * camera.focalRatio;
   const scale = depth > 1 ? focalLength / depth * camera.zoom : 0;
-  return {
-    x: viewport.width / 2 + cameraX * scale,
-    y: viewport.height / 2 + cameraY * scale,
-    depth,
-    scale,
-    visible: depth > 80
-  };
+  target.x = viewport.width / 2 + cameraX * scale;
+  target.y = viewport.height / 2 + cameraY * scale;
+  target.depth = depth;
+  target.scale = scale;
+  target.visible = depth > 80;
+  return target;
+}
+
+export function projectGalaxyPoint(point, camera, viewport) {
+  return projectGalaxyPointInto(point, camera, viewport, {});
+}
+
+export function getGalaxyCanvasPixelRatio(devicePixelRatio, width, height, nodeCount = 0) {
+  const requestedRatio = clamp(Number(devicePixelRatio) || 1, 1, 4);
+  const viewportPixels = Math.max(1, Number(width) || 1) * Math.max(1, Number(height) || 1);
+  const pixelBudgetRatio = Math.sqrt(GALAXY_MAX_CANVAS_PIXELS / viewportPixels);
+  const largeGraphRatio = Number(nodeCount) > 180 ? 1.5 : 2;
+  return clamp(Math.min(requestedRatio, pixelBudgetRatio, largeGraphRatio), 1, requestedRatio);
 }
 
 export function getGalaxyNodeFocusCamera(node, camera) {
@@ -1802,9 +1821,21 @@ export function getGalaxyNodeFocusCamera(node, camera) {
   };
 }
 
-export function getGalaxyNodeAppearance(node, maxDegree) {
+export function getGalaxyNodeDegreeScale(maxDegree, nodeCount = 0) {
+  const count = Math.max(0, Number(nodeCount) || 0);
+  const scaleFloor = count > 180 ? 12 : count > 120 ? 10 : count > 80 ? 8 : 1;
+  return Math.max(1, Number(maxDegree) || 1, scaleFloor);
+}
+
+export function getGalaxyNodeSize(node, maxDegree, nodeCount = 0, appearanceScale = 1) {
   const degree = Math.max(0, Number(node?.degree) || 0);
-  const normalizedDegree = clamp(degree / Math.max(1, Number(maxDegree) || 1), 0, 1);
+  const normalizedDegree = clamp(degree / getGalaxyNodeDegreeScale(maxDegree, nodeCount), 0, 1);
+  return clamp((10 + Math.sqrt(normalizedDegree) * 28) * Math.max(0.1, Number(appearanceScale) || 1), 8, 48);
+}
+
+export function getGalaxyNodeAppearance(node, maxDegree, nodeCount = 0) {
+  const degree = Math.max(0, Number(node?.degree) || 0);
+  const normalizedDegree = clamp(degree / getGalaxyNodeDegreeScale(maxDegree, nodeCount), 0, 1);
   const weightedDegree = Math.max(0, Number(node?.weightedDegree) || 0);
   const confidenceBoost = clamp(weightedDegree / Math.max(1, degree) / 1.35, 0, 1);
   const intensity = clamp(normalizedDegree * 0.8 + confidenceBoost * 0.2, 0, 1);
@@ -1876,20 +1907,43 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const stats = dialog.querySelector("#galaxy-stats");
   const detail = dialog.querySelector("#galaxy-detail");
   const shell = dialog.querySelector(".galaxy-shell");
+  const targetFrameRate = normalizeGalaxyFrameRate(options.frameRate);
   const seed = `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`;
   const layout = layoutGalaxy(graph, seed);
   const stars = createGalaxyStarfield(`${seed}|stars`);
+  stars.sort((left, right) => left.color.localeCompare(right.color));
   const initialNodePositions = new Map(layout.nodes.map((node) => [node.id, { x: node.x, y: node.y, z: node.z }]));
   const initialCamera = Object.freeze({ yaw: -0.38, pitch: 0.72, distance: 1560, focalRatio: 1.72, zoom: 1, targetX: 0, targetY: 0, targetZ: 0 });
   const camera = { ...initialCamera };
+  const viewport = { width: 1, height: 1 };
+  const backgroundContext = background.getContext("2d");
+  const graphContext = canvas.getContext("2d");
+  const starProjection = {};
+  const centerProjection = {};
+  const gridProjections = [{}, {}, {}, {}];
+  const nodeProjections = new Map(layout.nodes.map((node) => [node.id, {}]));
+  const orderedEdges = graph.edges.map((edge) => ({
+    edge,
+    from: nodeProjections.get(edge.source),
+    to: nodeProjections.get(edge.target),
+    depth: 0
+  }));
+  const edgeById = new Map(graph.edges.map((edge) => [edge.id, edge]));
+  const relatedIds = new Set();
+  const highlightedKeywords = [];
+  const highlightedKeywordSet = new Set();
+  const solidLineDash = [];
+  const pendingLineDash = [5, 6];
   const nodeElements = new Map();
   const cleanups = [];
   let selectedId = null;
   let selectedEdgeId = null;
-  let projectedEdges = [];
+  const projectedEdges = [];
   let cameraDrag = null;
   let animationFrame = 0;
   let previousFrameTime = 0;
+  let nextFrameTime = 0;
+  let renderedFrameCount = 0;
   let cameraFocus = null;
   let draggedNode = null;
   let starPhysicsEnergy = 0;
@@ -1897,6 +1951,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let starsVisible = true;
   let gridVisible = false;
   let destroyed = false;
+  let resourcesReleased = false;
+  let backdrop = null;
 
   shell.classList.add("is-three-dimensional");
   shell.dataset.sceneDimension = "3";
@@ -1904,6 +1960,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.dataset.gridVisible = "false";
   shell.dataset.starPhysicsEnergy = "0";
   shell.dataset.rotationSpeed = String(GALAXY_ROTATION_RADIANS_PER_MS);
+  shell.dataset.targetFrameRate = String(targetFrameRate);
   shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
   shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
   shell.dataset.layoutDesiredEdgeLength = String(GALAXY_LAYOUT_CONFIG.desiredEdgeLength);
@@ -1913,32 +1970,40 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     cleanups.push(() => target.removeEventListener(type, handler, settings));
   };
 
-  const resizeCanvas = (target) => {
-    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const resizeCanvases = () => {
     const rect = shell.getBoundingClientRect();
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
+    const ratio = getGalaxyCanvasPixelRatio(window.devicePixelRatio, width, height, layout.nodes.length);
     const pixelWidth = Math.max(1, Math.round(width * ratio));
     const pixelHeight = Math.max(1, Math.round(height * ratio));
-    if (target.width !== pixelWidth) target.width = pixelWidth;
-    if (target.height !== pixelHeight) target.height = pixelHeight;
-    if (target.style.width !== `${width}px`) target.style.width = `${width}px`;
-    if (target.style.height !== `${height}px`) target.style.height = `${height}px`;
-    const context = target.getContext("2d");
-    context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    return { context, width, height };
+    let resized = viewport.width !== width || viewport.height !== height;
+    for (const [target, context] of [[background, backgroundContext], [canvas, graphContext]]) {
+      if (target.width !== pixelWidth || target.height !== pixelHeight) {
+        target.width = pixelWidth;
+        target.height = pixelHeight;
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+        resized = true;
+      }
+      if (target.style.width !== `${width}px`) target.style.width = `${width}px`;
+      if (target.style.height !== `${height}px`) target.style.height = `${height}px`;
+    }
+    viewport.width = width;
+    viewport.height = height;
+    shell.dataset.canvasPixelRatio = ratio.toFixed(3);
+    if (resized || !backdrop) {
+      backdrop = backgroundContext.createRadialGradient(width * 0.53, height * 0.48, 0, width * 0.53, height * 0.48, Math.max(width, height) * 0.78);
+      backdrop.addColorStop(0, "#0b1830");
+      backdrop.addColorStop(0.36, "#07101f");
+      backdrop.addColorStop(0.72, "#03070e");
+      backdrop.addColorStop(1, "#010205");
+    }
   };
 
-  const project = (point, width, height) => projectGalaxyPoint(point, camera, { width, height });
-
   const drawBackground = () => {
-    const { context, width, height } = resizeCanvas(background);
+    const context = backgroundContext;
+    const { width, height } = viewport;
     context.clearRect(0, 0, width, height);
-    const backdrop = context.createRadialGradient(width * 0.53, height * 0.48, 0, width * 0.53, height * 0.48, Math.max(width, height) * 0.78);
-    backdrop.addColorStop(0, "#0b1830");
-    backdrop.addColorStop(0.36, "#07101f");
-    backdrop.addColorStop(0.72, "#03070e");
-    backdrop.addColorStop(1, "#010205");
     context.fillStyle = backdrop;
     context.fillRect(0, 0, width, height);
 
@@ -1946,10 +2011,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       context.lineWidth = 1;
       context.strokeStyle = "rgba(105,142,182,.06)";
       for (let offset = -1200; offset <= 1200; offset += 160) {
-        const horizontalStart = project({ x: -1200, y: 0, z: offset }, width, height);
-        const horizontalEnd = project({ x: 1200, y: 0, z: offset }, width, height);
-        const verticalStart = project({ x: offset, y: 0, z: -1200 }, width, height);
-        const verticalEnd = project({ x: offset, y: 0, z: 1200 }, width, height);
+        const horizontalStart = projectGalaxyPointInto({ x: -1200, y: 0, z: offset }, camera, viewport, gridProjections[0]);
+        const horizontalEnd = projectGalaxyPointInto({ x: 1200, y: 0, z: offset }, camera, viewport, gridProjections[1]);
+        const verticalStart = projectGalaxyPointInto({ x: offset, y: 0, z: -1200 }, camera, viewport, gridProjections[2]);
+        const verticalEnd = projectGalaxyPointInto({ x: offset, y: 0, z: 1200 }, camera, viewport, gridProjections[3]);
         if (horizontalStart.visible && horizontalEnd.visible) {
           context.beginPath();
           context.moveTo(horizontalStart.x, horizontalStart.y);
@@ -1965,7 +2030,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       }
     }
 
-    const center = project({ x: 0, y: 0, z: 0 }, width, height);
+    const center = projectGalaxyPointInto({ x: 0, y: 0, z: 0 }, camera, viewport, centerProjection);
     const coreRadius = Math.min(width, height) * 0.28 * camera.zoom;
     const core = context.createRadialGradient(center.x, center.y, 0, center.x, center.y, coreRadius);
     core.addColorStop(0, "rgba(235,247,255,.22)");
@@ -1978,15 +2043,20 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     if (!starsVisible) return;
     context.save();
     context.globalCompositeOperation = "lighter";
+    let starColor = "";
     for (let index = 0; index < stars.length; index += 1) {
       const star = stars[index];
-      const point = project(star, width, height);
+      const point = projectGalaxyPointInto(star, camera, viewport, starProjection);
       if (!point.visible || point.x < -8 || point.x > width + 8 || point.y < -8 || point.y > height + 8) continue;
       const perspective = clamp(point.scale / 0.95, 0.32, 2.4);
       const radius = star.size * perspective;
       const twinkle = 0.82 + Math.sin(index * 12.9898 + camera.yaw * 5) * 0.18;
       const alpha = clamp(star.brightness * twinkle * perspective, 0.08, 0.92);
-      context.fillStyle = `rgba(${star.color},${alpha})`;
+      if (star.color !== starColor) {
+        starColor = star.color;
+        context.fillStyle = `rgb(${starColor})`;
+      }
+      context.globalAlpha = alpha;
       context.beginPath();
       context.arc(point.x, point.y, Math.max(0.28, radius), 0, Math.PI * 2);
       context.fill();
@@ -1996,10 +2066,12 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
 
   const drawGraph = () => {
     if (destroyed || !dialog.open) return;
-    const { context, width, height } = resizeCanvas(canvas);
+    const context = graphContext;
+    const { width, height } = viewport;
     context.clearRect(0, 0, width, height);
-    const projections = new Map(layout.nodes.map((node) => [node.id, project(node, width, height)]));
-    const relatedIds = new Set(selectedId ? [selectedId] : []);
+    for (const node of layout.nodes) projectGalaxyPointInto(node, camera, viewport, nodeProjections.get(node.id));
+    relatedIds.clear();
+    if (selectedId) relatedIds.add(selectedId);
     if (selectedId) {
       for (const edge of graph.edges) {
         if (edge.source === selectedId || edge.target === selectedId) {
@@ -2009,19 +2081,17 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       }
     }
 
-    const highlightedKeywords = [];
-    const orderedEdges = graph.edges.map((edge) => ({
-      edge,
-      depth: ((projections.get(edge.source)?.depth ?? 0) + (projections.get(edge.target)?.depth ?? 0)) / 2
-    })).sort((left, right) => right.depth - left.depth);
-    projectedEdges = orderedEdges.flatMap(({ edge, depth }) => {
-      const from = projections.get(edge.source);
-      const to = projections.get(edge.target);
-      return from?.visible && to?.visible ? [{ edge, from, to, depth }] : [];
-    });
-    for (const { edge } of orderedEdges) {
-      const from = projections.get(edge.source);
-      const to = projections.get(edge.target);
+    highlightedKeywords.length = 0;
+    highlightedKeywordSet.clear();
+    projectedEdges.length = 0;
+    for (const projected of orderedEdges) {
+      projected.depth = ((projected.from?.depth ?? 0) + (projected.to?.depth ?? 0)) / 2;
+    }
+    orderedEdges.sort((left, right) => right.depth - left.depth);
+    for (const projected of orderedEdges) {
+      if (projected.from?.visible && projected.to?.visible) projectedEdges.push(projected);
+    }
+    for (const { edge, from, to } of orderedEdges) {
       if (!from?.visible || !to?.visible) continue;
       const edgeSelected = edge.id === selectedEdgeId;
       const highlighted = edgeSelected || (Boolean(selectedId) && (edge.source === selectedId || edge.target === selectedId));
@@ -2036,7 +2106,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         context.lineWidth = 9 * clamp(depthFactor, 0.75, 1.4);
         context.shadowColor = RELATION_STYLE[edge.category].color;
         context.shadowBlur = 15;
-        context.setLineDash([]);
+        context.setLineDash(solidLineDash);
         context.beginPath();
         context.moveTo(from.x, from.y);
         context.lineTo(to.x, to.y);
@@ -2045,7 +2115,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       }
       context.strokeStyle = edgeColor;
       context.lineWidth = (edgeSelected ? 4 : highlighted ? 2.1 : 0.55 + edge.confidence) * clamp(depthFactor, 0.55, 1.45);
-      context.setLineDash(edge.confirmationStatus === "pending" || edge.category === "uncertain" ? [5, 6] : []);
+      context.setLineDash(edge.confirmationStatus === "pending" || edge.category === "uncertain" ? pendingLineDash : solidLineDash);
       context.beginPath();
       context.moveTo(from.x, from.y);
       context.lineTo(to.x, to.y);
@@ -2062,11 +2132,14 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       }
       if (highlighted) {
         const fullLabel = formatRelationshipLabel(edge);
-        highlightedKeywords.push(fullLabel);
+        if (!highlightedKeywordSet.has(fullLabel)) {
+          highlightedKeywordSet.add(fullLabel);
+          highlightedKeywords.push(fullLabel);
+        }
         const label = fullLabel.length > 42 ? `${fullLabel.slice(0, 41)}…` : fullLabel;
         const x = (from.x + to.x) / 2;
         const y = (from.y + to.y) / 2 - 9;
-        context.setLineDash([]);
+        context.setLineDash(solidLineDash);
         context.font = '10px "SFMono-Regular", "SF Mono", Menlo, Monaco, monospace';
         context.textAlign = "center";
         context.textBaseline = "middle";
@@ -2077,11 +2150,12 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         context.fillText(label, x, y, labelWidth - 8);
       }
     }
-    context.setLineDash([]);
+    context.setLineDash(solidLineDash);
 
     const baseScale = Math.min(width, height) * camera.focalRatio / camera.distance * camera.zoom;
+    const selectedEdge = selectedEdgeId ? edgeById.get(selectedEdgeId) : null;
     for (const node of layout.nodes) {
-      const point = projections.get(node.id);
+      const point = nodeProjections.get(node.id);
       const element = nodeElements.get(node.id);
       if (!element || !point) continue;
       const perspective = clamp(point.scale / Math.max(baseScale, 0.01), 0.5, 1.8);
@@ -2089,18 +2163,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       element.hidden = !point.visible;
       const nodeSize = Number(element.dataset.nodeSize) || 12;
       const markerCenterOffset = getGalaxyNodeMarkerCenterOffset(nodeSize);
-      element.style.transformOrigin = `50% ${markerCenterOffset}px`;
       element.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -${markerCenterOffset}px) scale(${perspective * selectedScale})`;
       element.style.zIndex = String(10000 - Math.round(point.depth));
       element.style.setProperty("--depth-opacity", String(getGalaxyNodeDepthOpacity(point.depth)));
-      element.dataset.worldX = node.x.toFixed(2);
-      element.dataset.worldY = node.y.toFixed(2);
-      element.dataset.worldZ = node.z.toFixed(2);
-      element.dataset.projectedDepth = point.depth.toFixed(2);
-      element.dataset.projectedScale = point.scale.toFixed(4);
-      element.dataset.projectedX = point.x.toFixed(3);
-      element.dataset.projectedY = point.y.toFixed(3);
-      const edgeEndpoint = Boolean(selectedEdgeId) && graph.edges.some((edge) => edge.id === selectedEdgeId && (edge.source === node.id || edge.target === node.id));
+      const edgeEndpoint = Boolean(selectedEdge) && (selectedEdge.source === node.id || selectedEdge.target === node.id);
       element.classList.toggle("is-selected", node.id === selectedId);
       element.classList.toggle("is-related", Boolean(selectedId) && node.id !== selectedId && relatedIds.has(node.id));
       element.classList.toggle("is-edge-endpoint", edgeEndpoint);
@@ -2109,7 +2175,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     }
     shell.dataset.selectedNodeId = selectedId ?? "";
     shell.dataset.selectedEdgeId = selectedEdgeId ?? "";
-    shell.dataset.highlightedKeywords = [...new Set(highlightedKeywords)].join("|");
+    shell.dataset.highlightedKeywords = highlightedKeywords.join("|");
     shell.dataset.cameraYaw = camera.yaw.toFixed(5);
     shell.dataset.cameraPitch = camera.pitch.toFixed(5);
     shell.dataset.cameraDistance = camera.distance.toFixed(1);
@@ -2118,15 +2184,28 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const drawScene = () => {
+    resizeCanvases();
     drawBackground();
     drawGraph();
+    renderedFrameCount += 1;
+    shell.dataset.renderedFrameCount = String(renderedFrameCount);
   };
+
+  const shouldAnimate = () => !paused || Boolean(cameraFocus) || Boolean(draggedNode) || starPhysicsEnergy > 0.01;
 
   const renderFrame = (time) => {
     animationFrame = 0;
-    if (destroyed || !dialog.open) return;
+    if (destroyed || !dialog.open || document.hidden) return;
+    const frameInterval = 1000 / targetFrameRate;
+    if (nextFrameTime && time + 1 < nextFrameTime) {
+      if (shouldAnimate()) animationFrame = window.requestAnimationFrame(renderFrame);
+      return;
+    }
     const elapsed = previousFrameTime ? Math.min(50, time - previousFrameTime) : 0;
     previousFrameTime = time;
+    if (!nextFrameTime) nextFrameTime = time;
+    do nextFrameTime += frameInterval;
+    while (nextFrameTime <= time);
     if (cameraFocus) {
       const progress = clamp((time - cameraFocus.startedAt) / cameraFocus.duration, 0, 1);
       const eased = 1 - Math.pow(1 - progress, 3);
@@ -2144,13 +2223,21 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       shell.dataset.starPhysicsEnergy = starPhysicsEnergy.toFixed(3);
     }
     drawScene();
-    animationFrame = window.requestAnimationFrame(renderFrame);
+    if (shouldAnimate()) animationFrame = window.requestAnimationFrame(renderFrame);
   };
 
   const startAnimation = () => {
     if (animationFrame || destroyed) return;
     previousFrameTime = 0;
+    nextFrameTime = 0;
     animationFrame = window.requestAnimationFrame(renderFrame);
+  };
+
+  const stopAnimation = () => {
+    if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    previousFrameTime = 0;
+    nextFrameTime = 0;
   };
 
   const cancelCameraFocus = () => {
@@ -2235,7 +2322,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     nodeElements.clear();
     const maxDegree = Math.max(...layout.nodes.map((node) => node.degree), 1);
     for (const node of layout.nodes) {
-      const appearance = getGalaxyNodeAppearance(node, maxDegree);
+      const appearance = getGalaxyNodeAppearance(node, maxDegree, layout.nodes.length);
       const button = document.createElement("button");
       button.type = "button";
       button.className = "galaxy-node";
@@ -2243,9 +2330,13 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       button.dataset.relationshipTier = appearance.tier;
       button.dataset.celestialType = appearance.celestialType;
       button.dataset.celestialPalette = appearance.palette;
-      const nodeSize = clamp((10 + Math.sqrt(node.degree / maxDegree) * 28) * appearance.sizeScale, 8, 48);
+      const nodeSize = getGalaxyNodeSize(node, maxDegree, layout.nodes.length, appearance.sizeScale);
       button.style.setProperty("--node-size", `${nodeSize}px`);
       button.dataset.nodeSize = nodeSize.toFixed(3);
+      button.dataset.worldX = node.x.toFixed(2);
+      button.dataset.worldY = node.y.toFixed(2);
+      button.dataset.worldZ = node.z.toFixed(2);
+      button.style.transformOrigin = `50% ${getGalaxyNodeMarkerCenterOffset(nodeSize)}px`;
       button.style.setProperty("--node-color", appearance.color);
       button.style.setProperty("--node-core", appearance.coreColor);
       button.style.setProperty("--node-rim", appearance.rimColor);
@@ -2274,10 +2365,11 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           originZ: node.z,
           yaw: camera.yaw,
           pitch: camera.pitch,
-          scale: Number(button.dataset.projectedScale) || 1,
+          scale: Number(nodeProjections.get(node.id)?.scale) || 1,
           dragged: false
         };
         draggedNode = node;
+        startAnimation();
         button.setPointerCapture(event.pointerId);
         button.classList.add("is-dragging");
         button.setAttribute("aria-grabbed", "true");
@@ -2298,6 +2390,9 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         node.x = nodeDrag.originX + worldX * cosYaw - worldY * sinYaw * sinPitch;
         node.y = nodeDrag.originY + worldY * cosPitch;
         node.z = nodeDrag.originZ - worldX * sinYaw - worldY * cosYaw * sinPitch;
+        button.dataset.worldX = node.x.toFixed(2);
+        button.dataset.worldY = node.y.toFixed(2);
+        button.dataset.worldZ = node.z.toFixed(2);
         shell.dataset.draggedNodeId = node.id;
         drawScene();
       });
@@ -2333,10 +2428,18 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const reset = () => {
     cancelCameraFocus();
     Object.assign(camera, initialCamera);
-    for (const node of layout.nodes) Object.assign(node, initialNodePositions.get(node.id));
+    for (const node of layout.nodes) {
+      Object.assign(node, initialNodePositions.get(node.id));
+      const element = nodeElements.get(node.id);
+      if (element) {
+        element.dataset.worldX = node.x.toFixed(2);
+        element.dataset.worldY = node.y.toFixed(2);
+        element.dataset.worldZ = node.z.toFixed(2);
+      }
+    }
     selectedId = null;
     selectedEdgeId = null;
-    projectedEdges = [];
+    projectedEdges.length = 0;
     delete shell.dataset.focusedNodeId;
     delete shell.dataset.draggedNodeId;
     delete shell.dataset.selectedEdgeSource;
@@ -2360,6 +2463,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const open = () => {
+    if (destroyed) return;
     if (!dialog.open) dialog.showModal();
     paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     starsVisible = true;
@@ -2371,14 +2475,16 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     dialog.querySelector("#galaxy-grid").setAttribute("aria-pressed", "false");
     dialog.querySelector("#galaxy-grid").textContent = "显示空间网格";
     updateRotationControl();
+    shell.dataset.resourceState = "active";
     stats.value = `${graph.stats.nodeCount} 个节点 / ${graph.stats.edgeCount} 条关系`;
     renderNodes();
     drawScene();
-    startAnimation();
+    if (shouldAnimate()) startAnimation();
     dialog.querySelector("#galaxy-close").focus();
   };
 
   const close = () => {
+    if (destroyed) return;
     if (dialog.open) dialog.close();
   };
 
@@ -2403,6 +2509,9 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   listen(dialog.querySelector("#galaxy-rotation"), "click", () => {
     paused = !paused;
     updateRotationControl();
+    drawScene();
+    if (shouldAnimate()) startAnimation();
+    else stopAnimation();
   });
   listen(shell, "wheel", (event) => {
     event.preventDefault();
@@ -2444,10 +2553,55 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   listen(window, "resize", () => {
     if (dialog.open) drawScene();
   });
+  listen(document, "visibilitychange", () => {
+    if (document.hidden) {
+      stopAnimation();
+      return;
+    }
+    if (dialog.open) {
+      drawScene();
+      if (shouldAnimate()) startAnimation();
+    }
+  });
+
+  const releaseResources = () => {
+    if (resourcesReleased) return;
+    resourcesReleased = true;
+    destroyed = true;
+    stopAnimation();
+    cleanups.splice(0).forEach((cleanup) => cleanup());
+    nodeElements.clear();
+    nodeLayer.replaceChildren();
+    detail.classList.add("hidden");
+    detail.replaceChildren();
+    for (const target of [background, canvas]) {
+      target.width = 1;
+      target.height = 1;
+      target.style.removeProperty("width");
+      target.style.removeProperty("height");
+    }
+    stars.length = 0;
+    layout.nodes.length = 0;
+    layout.byId.clear();
+    initialNodePositions.clear();
+    nodeProjections.clear();
+    orderedEdges.length = 0;
+    edgeById.clear();
+    relatedIds.clear();
+    highlightedKeywords.length = 0;
+    highlightedKeywordSet.clear();
+    projectedEdges.length = 0;
+    cameraFocus = null;
+    cameraDrag = null;
+    draggedNode = null;
+    backdrop = null;
+    shell.dataset.resourceState = "released";
+    shell.dataset.starCount = "0";
+    shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused", "is-focusing-node");
+  };
+
   listen(dialog, "close", () => {
-    if (animationFrame) window.cancelAnimationFrame(animationFrame);
-    animationFrame = 0;
-    previousFrameTime = 0;
+    releaseResources();
     options.onClose?.();
   });
 
@@ -2456,14 +2610,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     close,
     reset,
     destroy() {
-      destroyed = true;
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = 0;
-      cleanups.splice(0).forEach((cleanup) => cleanup());
       if (dialog.open) dialog.close();
-      nodeElements.clear();
-      nodeLayer.replaceChildren();
-      shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused");
+      releaseResources();
     }
   };
 }

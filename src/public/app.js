@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, renderRelationshipMindMap } from "/relationship-graph.js?v=20260728-galaxy-edge-stars-v3";
+import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-frame-rate-v1";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
@@ -127,7 +127,7 @@ const state = {
   dirty: false,
   pendingImportMeta: null,
   pendingCoverWorkId: null,
-  uiSettings: { toastPosition: "bottom-right", pageSizes: { ...defaultPageSizes } },
+  uiSettings: { toastPosition: "bottom-right", pageSizes: { ...defaultPageSizes }, galaxyFrameRate: 30 },
   relationshipGraph: null,
   galaxy: null,
   relationshipMindMap: null,
@@ -2955,7 +2955,11 @@ function applyAuthenticatedUser(session) {
 
 function applyPlatformUiSettings(settings) {
   const position = settings?.toastPosition === "top-right" ? "top-right" : "bottom-right";
-  state.uiSettings = { toastPosition: position, pageSizes: normalizePageSizes(settings?.pageSizes) };
+  state.uiSettings = {
+    toastPosition: position,
+    pageSizes: normalizePageSizes(settings?.pageSizes),
+    galaxyFrameRate: normalizeGalaxyFrameRate(settings?.galaxyFrameRate)
+  };
   $("#toast-region").dataset.position = position;
 }
 
@@ -3882,6 +3886,7 @@ async function openPlatformUiSettingsDialog() {
   try {
     const settings = await api("/api/platform/ui-settings");
     $("#toast-position").value = settings.toastPosition === "top-right" ? "top-right" : "bottom-right";
+    $("#galaxy-frame-rate").value = String(normalizeGalaxyFrameRate(settings.galaxyFrameRate));
     const pageSizes = normalizePageSizes(settings.pageSizes);
     $("#page-size-drafts").value = String(pageSizes.drafts);
     $("#page-size-settings").value = String(pageSizes.settings);
@@ -6387,6 +6392,7 @@ async function renderRelationships(page = moduleListPages.relationships) {
   </section>`;
   mountRelationshipFilterToggle();
   state.galaxy?.destroy();
+  state.galaxy = null;
   state.relationshipExpandedMap?.destroy?.();
   if ($("#relationship-map-dialog").open) $("#relationship-map-dialog").close();
   const graph = buildRelationshipGraph(state.characters, relationships);
@@ -6398,8 +6404,15 @@ async function renderRelationships(page = moduleListPages.relationships) {
   bindModulePagination("relationships", renderRelationships);
   const openGalaxy = () => {
     state.galaxy?.destroy();
-    state.galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, { workId: state.work.id });
-    state.galaxy.open();
+    const galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, {
+      workId: state.work.id,
+      frameRate: state.uiSettings.galaxyFrameRate,
+      onClose: () => {
+        if (state.galaxy === galaxy) state.galaxy = null;
+      }
+    });
+    state.galaxy = galaxy;
+    galaxy.open();
   };
   const openExpanded = () => {
     state.relationshipExpandedMap?.destroy?.();
@@ -12189,6 +12202,7 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
       method: "PATCH",
       body: {
         toastPosition: $("#toast-position").value,
+        galaxyFrameRate: Number($("#galaxy-frame-rate").value),
         pageSizes: {
           drafts: Number($("#page-size-drafts").value),
           settings: Number($("#page-size-settings").value),
