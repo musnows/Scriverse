@@ -302,7 +302,7 @@ describe("数据库版本化迁移", () => {
     second.close();
   });
 
-  it("从已有迁移 74 平滑升级到 77 并重建 AI 历史短词索引", () => {
+  it("从已有迁移 74 平滑升级到 79 并重建 AI 历史短词索引", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-74-upgrade-"));
     roots.push(root);
     const filename = join(root, "migration-74.db");
@@ -320,7 +320,7 @@ describe("数据库版本化迁移", () => {
       VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
       DROP TABLE s3_backup_runs;
       DROP TABLE s3_backup_targets;
-      DELETE FROM schema_migrations WHERE version IN (75, 76, 77);
+      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79);
     `);
     const searchRow = legacy.prepare(
       "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"
@@ -342,6 +342,80 @@ describe("数据库版本化迁移", () => {
       "SELECT term FROM ai_history_search_short_terms WHERE search_id = ?",
       searchId
     )).toEqual(expect.arrayContaining([{ term: "重" }, { term: "复" }]));
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("从迁移 77 保留银河图帧率并扩展到高刷新率档位", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-77-upgrade-"));
+    roots.push(root);
+    const filename = join(root, "migration-77.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DROP TABLE platform_ui_settings;
+      CREATE TABLE platform_ui_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+        page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
+        galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60)),
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
+      VALUES (1, 'top-right', '{"characters":25}', 60, '2026-08-09T00:00:00.000Z');
+      DELETE FROM schema_migrations WHERE version IN (78, 79);
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT toast_position, page_sizes_json, galaxy_frame_rate, updated_at FROM platform_ui_settings WHERE id = 1")).toEqual({
+      toast_position: "top-right",
+      page_sizes_json: '{"characters":25}',
+      galaxy_frame_rate: 60,
+      updated_at: "2026-08-09T00:00:00.000Z"
+    });
+    expect(() => migrated.run("UPDATE platform_ui_settings SET galaxy_frame_rate = 120 WHERE id = 1")).not.toThrow();
+    expect(migrated.get("SELECT galaxy_frame_rate FROM platform_ui_settings WHERE id = 1")).toEqual({ galaxy_frame_rate: 120 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("从迁移 78 保留现有银河图帧率并扩展到最终高刷新率档位", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-78-upgrade-"));
+    roots.push(root);
+    const filename = join(root, "migration-78.db");
+    const current = new Database(filename);
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      DROP TABLE platform_ui_settings;
+      CREATE TABLE platform_ui_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+        page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
+        galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60, 90, 120)),
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
+      VALUES (1, 'top-right', '{"characters":25}', 120, '2026-08-09T00:00:00.000Z');
+      DELETE FROM schema_migrations WHERE version = 79;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT toast_position, page_sizes_json, galaxy_frame_rate, updated_at FROM platform_ui_settings WHERE id = 1")).toEqual({
+      toast_position: "top-right",
+      page_sizes_json: '{"characters":25}',
+      galaxy_frame_rate: 120,
+      updated_at: "2026-08-09T00:00:00.000Z"
+    });
+    expect(() => migrated.run("UPDATE platform_ui_settings SET galaxy_frame_rate = 240 WHERE id = 1")).not.toThrow();
+    expect(migrated.get("SELECT galaxy_frame_rate FROM platform_ui_settings WHERE id = 1")).toEqual({ galaxy_frame_rate: 240 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

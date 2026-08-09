@@ -321,8 +321,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260809-relationship-search-galaxy-perf-v1');
-    expect(page.text).toContain('/styles.css?v=20260809-relationship-search-galaxy-perf-v1');
+    expect(page.text).toContain('/app.js?v=20260809-galaxy-size-threshold-v1');
+    expect(page.text).toContain('/styles.css?v=20260809-galaxy-label-stability-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -384,7 +384,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260809-relationship-search-galaxy-perf-v1');
+    expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-size-threshold-v1');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
@@ -445,6 +445,11 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
     expect(page.text).toContain('id="galaxy-frame-rate"');
+    expect(page.text).toContain('<option value="90">90 FPS（高刷新率）</option>');
+    expect(page.text).toContain('<option value="120">120 FPS（超高刷新率）</option>');
+    expect(page.text).toContain('<option value="144">144 FPS（电竞显示器）</option>');
+    expect(page.text).toContain('<option value="165">165 FPS（高刷显示器）</option>');
+    expect(page.text).toContain('<option value="240">240 FPS（最高档）</option>');
     expect(page.text).toContain('id="page-size-settings"');
     expect(page.text).toContain('id="page-size-characters"');
     expect(page.text).not.toContain('id="page-size-races"');
@@ -893,6 +898,8 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("export function createGalaxyStarfield");
     expect(graph.text).toContain("export function projectGalaxyPoint");
     expect(graph.text).toContain("export function getGalaxyNodeFocusCamera");
+    expect(graph.text).toContain("export function getGalaxyNodeLabelOffset");
+    expect(graph.text).toContain('element.style.setProperty("--node-marker-scale"');
     expect(graph.text).toContain("focusCameraOnNode(node)");
     expect(graph.text).toContain('shell.dataset.resourceState = "released"');
     expect(graph.text).toContain("target.width = 1");

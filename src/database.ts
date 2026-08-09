@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 77;
+export const DATABASE_SCHEMA_VERSION = 79;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -498,7 +498,7 @@ export class Database {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
         page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
-        galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60)),
+        galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60, 90, 120, 144, 165, 240)),
         updated_at TEXT NOT NULL
       );
 
@@ -3154,6 +3154,56 @@ export class Database {
             CHECK(galaxy_frame_rate IN (24, 30, 60))`);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (77, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(78)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE platform_ui_settings_v78 (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+          page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
+          galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60, 90, 120)),
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`INSERT INTO platform_ui_settings_v78 (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
+          SELECT id, toast_position, page_sizes_json,
+            CASE WHEN galaxy_frame_rate IN (24, 30, 60, 90, 120) THEN galaxy_frame_rate ELSE 30 END,
+            updated_at
+          FROM platform_ui_settings`);
+        this.run("DROP TABLE platform_ui_settings");
+        this.run("ALTER TABLE platform_ui_settings_v78 RENAME TO platform_ui_settings");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (78, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(79)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE platform_ui_settings_v79 (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
+          page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
+          galaxy_frame_rate INTEGER NOT NULL DEFAULT 30 CHECK(galaxy_frame_rate IN (24, 30, 60, 90, 120, 144, 165, 240)),
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`INSERT INTO platform_ui_settings_v79 (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
+          SELECT id, toast_position, page_sizes_json,
+            CASE WHEN galaxy_frame_rate IN (24, 30, 60, 90, 120, 144, 165, 240) THEN galaxy_frame_rate ELSE 30 END,
+            updated_at
+          FROM platform_ui_settings`);
+        this.run("DROP TABLE platform_ui_settings");
+        this.run("ALTER TABLE platform_ui_settings_v79 RENAME TO platform_ui_settings");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (79, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

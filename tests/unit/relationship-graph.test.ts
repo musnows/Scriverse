@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -335,12 +335,19 @@ describe("人物关系图数据与布局", () => {
     expect(projected).toBe(target);
     expect(projected).toMatchObject(projectGalaxyPoint({ x: 100, y: 20, z: -80 }, camera, viewport));
     expect(GALAXY_TARGET_FRAME_RATE).toBe(30);
-    expect(GALAXY_FRAME_RATE_OPTIONS).toEqual([24, 30, 60]);
-    expect([24, 30, 60].map(normalizeGalaxyFrameRate)).toEqual([24, 30, 60]);
+    expect(GALAXY_FRAME_RATE_OPTIONS).toEqual([24, 30, 60, 90, 120, 144, 165, 240]);
+    expect([24, 30, 60, 90, 120, 144, 165, 240].map(normalizeGalaxyFrameRate)).toEqual([24, 30, 60, 90, 120, 144, 165, 240]);
     expect(normalizeGalaxyFrameRate(25)).toBe(30);
     expect(getGalaxyCanvasPixelRatio(2, 2048, 720, 215)).toBe(1.5);
     expect(getGalaxyCanvasPixelRatio(3, 390, 844, 215)).toBe(1.5);
     expect(getGalaxyCanvasPixelRatio(1, 1280, 720, 215)).toBe(1);
+  });
+
+  it("只为星球缩放并将标签间距对齐到设备像素", () => {
+    expect(getGalaxyNodeLabelOffset(24, 1, 2)).toBe(0);
+    expect(getGalaxyNodeLabelOffset(24, 1.25, 2)).toBe(3);
+    expect(getGalaxyNodeLabelOffset(24, 0.75, 2)).toBe(-3);
+    expect(getGalaxyNodeLabelOffset(25, 1.13, 2)).toBe(1.5);
   });
 
   it("默认按两轮百分之十的复合比例增加边缘旋臂星点", () => {
@@ -409,6 +416,20 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyNodeSize(sparseNode, 2, 215, 1)).toBeLessThan(22);
     expect(appearance.tier).toBe("outer");
     expect(getGalaxyNodeSize({ degree: 20 }, 20, 215, 1)).toBe(38);
+  });
+
+  it("超过绝对关系数阈值后才逐步放大星球", () => {
+    const baseSizes = [0, 1, 2, 3].map((degree) => getGalaxyNodeSize({ degree }, 3, 20, 1));
+    const firstGrowthSize = getGalaxyNodeSize({ degree: 4 }, 4, 20, 1);
+    const higherDegreeSize = getGalaxyNodeSize({ degree: 6 }, 6, 20, 1);
+
+    expect(GALAXY_NODE_SIZE_GROWTH_THRESHOLD).toBe(3);
+    expect(GALAXY_NODE_SIZE_FULL_SCALE_DEGREE).toBe(12);
+    expect(baseSizes).toEqual([10, 10, 10, 10]);
+    expect(firstGrowthSize).toBeGreaterThan(10);
+    expect(firstGrowthSize).toBeLessThan(24);
+    expect(higherDegreeSize).toBeGreaterThan(firstGrowthSize);
+    expect(getGalaxyNodeSize({ degree: 12 }, 12, 20, 1)).toBe(38);
   });
 
   it("松手惯性滑行只靠速度衰减，不会被弹簧持续拉动", () => {

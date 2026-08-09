@@ -84,7 +84,8 @@ type PlatformPageSizes = {
   fileVersions: number;
 };
 
-type GalaxyFrameRate = 24 | 30 | 60;
+const galaxyFrameRates = [24, 30, 60, 90, 120, 144, 165, 240] as const;
+type GalaxyFrameRate = typeof galaxyFrameRates[number];
 
 const defaultPlatformPageSizes: PlatformPageSizes = {
   drafts: 30,
@@ -129,7 +130,7 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
 
 function galaxyFrameRate(value: unknown): GalaxyFrameRate {
   const candidate = Number(value);
-  return candidate === 24 || candidate === 60 ? candidate : 30;
+  return galaxyFrameRates.includes(candidate as GalaxyFrameRate) ? candidate as GalaxyFrameRate : 30;
 }
 
 type SettingInput = {
