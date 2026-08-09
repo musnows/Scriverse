@@ -84,7 +84,7 @@ type PlatformPageSizes = {
   fileVersions: number;
 };
 
-const galaxyFrameRates = [24, 30, 60, 90, 120] as const;
+const galaxyFrameRates = [24, 30, 60, 90, 120, 144, 165, 240] as const;
 type GalaxyFrameRate = typeof galaxyFrameRates[number];
 
 const defaultPlatformPageSizes: PlatformPageSizes = {

@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-frame-rate-v2";
+import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-frame-rate-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";

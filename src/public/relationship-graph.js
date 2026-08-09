@@ -282,7 +282,7 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_TARGET_FRAME_RATE = 30;
-export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60, 90, 120]);
+export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60, 90, 120, 144, 165, 240]);
 export const GALAXY_BASE_STAR_COUNT = 7200;
 export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_MAX_CANVAS_PIXELS = 4_000_000;
