@@ -190,11 +190,15 @@ describe("数据库版本化迁移", () => {
     )).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
-    expect(first.get("SELECT toast_position, page_sizes_json FROM platform_ui_settings WHERE id = 1")).toEqual({
+    expect(first.get("SELECT toast_position, page_sizes_json, galaxy_frame_rate FROM platform_ui_settings WHERE id = 1")).toEqual({
       toast_position: "top-right",
-      page_sizes_json: '{"characters":30,"analysisTasks":30,"fileVersions":30}'
+      page_sizes_json: '{"characters":30,"analysisTasks":30,"fileVersions":30}',
+      galaxy_frame_rate: 30
     });
-    expect(first.all("PRAGMA table_info(platform_ui_settings)").some((column) => column.name === "page_sizes_json")).toBe(true);
+    expect(first.all("PRAGMA table_info(platform_ui_settings)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "page_sizes_json",
+      "galaxy_frame_rate"
+    ]));
     expect(first.get("SELECT chapter_id, content FROM chapter_paragraph_search WHERE chapter_id = 'chapter-old'")).toEqual({ chapter_id: "chapter-old", content: "旧正文" });
     expect(first.all("PRAGMA index_list(chapter_paragraph_short_terms)").some(
       (index) => index.name === "idx_chapter_paragraph_short_terms_paragraph"
@@ -298,7 +302,7 @@ describe("数据库版本化迁移", () => {
     second.close();
   });
 
-  it("从已有迁移 74 平滑升级到 76 并重建 AI 历史短词索引", () => {
+  it("从已有迁移 74 平滑升级到 77 并重建 AI 历史短词索引", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-74-upgrade-"));
     roots.push(root);
     const filename = join(root, "migration-74.db");
@@ -316,7 +320,7 @@ describe("数据库版本化迁移", () => {
       VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
       DROP TABLE s3_backup_runs;
       DROP TABLE s3_backup_targets;
-      DELETE FROM schema_migrations WHERE version IN (75, 76);
+      DELETE FROM schema_migrations WHERE version IN (75, 76, 77);
     `);
     const searchRow = legacy.prepare(
       "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"

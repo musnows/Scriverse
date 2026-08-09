@@ -442,8 +442,9 @@ const platformPageSizesSchema = z.object({
 
 const platformUiSettingsSchema = z.object({
   toastPosition: z.enum(["bottom-right", "top-right"]).optional(),
-  pageSizes: platformPageSizesSchema.optional()
-}).strict().refine((input) => input.toastPosition !== undefined || input.pageSizes !== undefined, {
+  pageSizes: platformPageSizesSchema.optional(),
+  galaxyFrameRate: z.union([z.literal(24), z.literal(30), z.literal(60)]).optional()
+}).strict().refine((input) => input.toastPosition !== undefined || input.pageSizes !== undefined || input.galaxyFrameRate !== undefined, {
   message: "至少需要提供一项界面设置"
 });
 
