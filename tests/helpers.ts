@@ -8,8 +8,8 @@ export function createTestRuntime(fetchImpl?: typeof fetch): Runtime {
     ...(fetchImpl ? { fetchImpl } : {}),
     serveUi: false
   });
-  // 每个测试运行时复用同一个本地监听端口，避免 Supertest 为每次请求反复创建临时端口。
-  const server = runtime.app.listen(0);
+  // 每个测试运行时复用同一个本地监听端口，并固定 IPv4 回环以避开代理或端口映射。
+  const server = runtime.app.listen(0, "127.0.0.1");
   server.unref();
   return {
     ...runtime,
