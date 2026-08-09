@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_LAYOUT_CONFIG, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
@@ -301,6 +301,20 @@ describe("人物关系图数据与布局", () => {
     expect(near.x - viewport.width / 2).toBeGreaterThan(far.x - viewport.width / 2);
     expect(getGalaxyNodeDepthOpacity(800)).toBe(1);
     expect(getGalaxyNodeDepthOpacity(2800)).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("复用银河投影结果并限制大图画布像素密度", () => {
+    const camera = { yaw: 0.2, pitch: 0.4, distance: 1500, focalRatio: 1.6, zoom: 1 };
+    const viewport = { width: 2048, height: 720 };
+    const target = { marker: "reuse" };
+    const projected = projectGalaxyPointInto({ x: 100, y: 20, z: -80 }, camera, viewport, target);
+
+    expect(projected).toBe(target);
+    expect(projected).toMatchObject(projectGalaxyPoint({ x: 100, y: 20, z: -80 }, camera, viewport));
+    expect(GALAXY_TARGET_FRAME_RATE).toBe(30);
+    expect(getGalaxyCanvasPixelRatio(2, 2048, 720, 215)).toBe(1.5);
+    expect(getGalaxyCanvasPixelRatio(3, 390, 844, 215)).toBe(1.5);
+    expect(getGalaxyCanvasPixelRatio(1, 1280, 720, 215)).toBe(1);
   });
 
   it("默认按两轮百分之十的复合比例增加边缘旋臂星点", () => {
