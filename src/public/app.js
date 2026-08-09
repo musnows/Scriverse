@@ -17,7 +17,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
-import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260731-drafts-to-ideas-v1";
+import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260809-global-replace-v1";
 import {
   chapterVersionSourceLabel,
   foreshadowStatusLabel,
@@ -36,7 +36,7 @@ import {
   taskScopeLabel,
   timelineStatusLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260804-agent-history-search-v1";
+} from "/display-labels.js?v=20260809-global-replace-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
@@ -329,6 +329,16 @@ function canReadModule(module, work = state.work) {
 function canReadAggregateContent(work = state.work) {
   return ["editor", "settings", "characters", "races", "organizations", "timeline", "relationships", "outlines"]
     .every((module) => canReadModule(module, work));
+}
+
+function canGlobalReplaceScope(scope, work = state.work) {
+  if (scope === "settings") return canEditModule("settings", work);
+  if (scope === "prose-and-settings") return canEditProse(work) && canEditModule("settings", work);
+  return canEditProse(work);
+}
+
+function canGlobalReplaceAny(work = state.work) {
+  return Boolean(work) && (canGlobalReplaceScope("prose", work) || canGlobalReplaceScope("settings", work));
 }
 
 function applyWorkAccessMode() {
@@ -1648,7 +1658,7 @@ function resolveAiProcessDuration(metadata, steps, completedAt) {
   return Math.max(0, completedTime - Math.min(...startedTimes));
 }
 
-function renderAiProcessSteps(message, steps, completed, durationMs = null) {
+function renderAiProcessSteps(message, steps, completed, durationMs = null, visibleContents = null) {
   message.querySelector(".ai-process-details")?.remove();
   if (!Array.isArray(steps) || !steps.length) return;
   const details = document.createElement("details");
@@ -1688,7 +1698,8 @@ function renderAiProcessSteps(message, steps, completed, durationMs = null) {
     label.textContent = `第 ${Number(step.round) || 1} 轮 · ${step.type === "thinking" ? "Thinking" : "中间输出"}`;
     const body = document.createElement("div");
     body.className = "message-body ai-process-step-body";
-    body.innerHTML = renderMarkdown(step.content);
+    const content = visibleContents?.has(step) ? visibleContents.get(step) : step.content;
+    body.innerHTML = renderMarkdown(content);
     section.append(label, body);
     list.append(section);
   }
@@ -1942,7 +1953,7 @@ function applyAiRoleplayCharacter(character) {
   if (active) $("#ai-scope").value = "none";
   $(".ai-panel").classList.toggle("is-roleplaying", active);
   $("#ai-prompt").dataset.placeholder = active
-    ? `以 ${String(state.aiRoleplayCharacter.name)} 的身份开始对话……`
+    ? `与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……`
     : "告诉 AI 你想讨论或修改什么……";
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
@@ -2673,6 +2684,10 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   if (path.includes("/relationships")) affected.add("relationships");
   if (path.includes("/chapter-annotations/") || /\/chapters\/[^/]+\/annotations(?:$|\?)/u.test(path)) affected.add("comments");
   if (path.includes("/reviews")) affected.add("reviews");
+  if (/\/api\/works\/[^/]+\/replace(?:$|\?)/u.test(path)) {
+    affected.add("settings");
+    if (state.work?.id) moduleRequestCache.invalidate(state.work.id, "settings");
+  }
   if (path.includes("/entity-versions/")) {
     if (path.includes("/draft/")) affected.add("drafts");
     if (path.includes("/setting/")) affected.add("settings");
@@ -3510,6 +3525,7 @@ function renderSettingsHub() {
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
+  $("#global-replace-button").classList.toggle("hidden", !canGlobalReplaceAny());
   $("#top-search-button").disabled = !canReadAggregate;
   $("#export-button").disabled = !canExportManuscript;
   $("#export-button").setAttribute("aria-expanded", "false");
@@ -4246,9 +4262,154 @@ async function openSearchDialog() {
   $("#search-dialog .eyebrow").textContent = `当前作品 · 《${state.work.title}》`;
   $("#search-query").value = "";
   $("#search-type").value = "";
+  $("#search-to-replace").disabled = !canGlobalReplaceAny();
   $("#search-results").innerHTML = '<p class="search-results-empty">输入关键词后开始检索。</p>';
   $("#search-dialog").showModal();
   queueMicrotask(() => $("#search-query").focus());
+}
+
+const globalReplaceScopeLabels = Object.freeze({
+  prose: "正文",
+  settings: "设定库",
+  "prose-and-settings": "正文+设定库"
+});
+
+function syncGlobalReplaceScopeOptions() {
+  const dialog = $("#replace-dialog");
+  const options = [...dialog.querySelectorAll('input[name="replaceScope"]')];
+  for (const option of options) {
+    const allowed = canGlobalReplaceScope(option.value);
+    option.disabled = !allowed;
+    option.closest(".replace-scope-option")?.classList.toggle("is-disabled", !allowed);
+  }
+  const selected = options.find((option) => option.checked && !option.disabled) ?? options.find((option) => !option.disabled);
+  options.forEach((option) => { option.checked = option === selected; });
+  const scope = selected?.value ?? "";
+  $("#replace-submit").disabled = !scope || !canGlobalReplaceScope(scope);
+  $("#replace-permission-note").textContent = scope
+    ? "替换完成后，命中的章节和设定会分别生成新的版本历史。"
+    : "当前账户没有可写入的正文或设定库权限。";
+}
+
+function openGlobalReplaceDialog() {
+  if (!state.work) {
+    toast("请先打开一部作品", "error");
+    return;
+  }
+  if (!canGlobalReplaceAny()) {
+    toast("当前账户没有正文或设定库的编辑权限", "error");
+    return;
+  }
+  if ($("#search-dialog").open) $("#search-dialog").close();
+  $("#replace-form").reset();
+  syncGlobalReplaceScopeOptions();
+  $("#replace-dialog").showModal();
+  queueMicrotask(() => $("#replace-find").focus());
+}
+
+async function refreshWorkAfterGlobalReplace(route, result) {
+  const workId = state.work?.id;
+  if (!workId) return;
+  const nextWork = result?.work ?? await api(`/api/works/${encodeURIComponent(workId)}?directory=volumes`);
+  if (!nextWork || nextWork.id !== workId) return;
+  state.work = nextWork;
+  state.work.volumes = state.work.volumes.map((volume) => ({ ...volume, chapters: Array.isArray(volume.chapters) ? volume.chapters : [] }));
+  state.works = state.works.map((work) => work.id === workId ? { ...work, ...nextWork } : work);
+  state.settings = [];
+  loadedVolumeChapterIds.clear();
+  volumeChapterLoadingIds.clear();
+  volumeChapterRequests.clear();
+  for (const volume of state.work.volumes) loadedVolumeChapterIds.add(volume.id);
+  state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));
+  if (String(result?.scope) === "prose" || String(result?.scope) === "prose-and-settings") {
+    state.chapter = null;
+    lastSavedChapterSnapshot = null;
+  }
+  applyWorkAccessMode();
+  showSystemStatus();
+  updateDocumentTitle(state.work);
+  $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
+  $("#top-search-button").disabled = !canReadAggregateContent();
+  renderTree();
+  if (route.view === "editor" && route.chapterId && canReadModule("editor")) {
+    await selectChapter(route.chapterId);
+  } else if (route.view === "module") {
+    await showModule(route.module);
+  } else if (route.view === "settings") {
+    renderSettingsHub();
+    replacePageRoute({ view: "settings", workId: state.work.id, ...settingsRouteContext() });
+  } else if (route.view === "welcome") {
+    showWelcome(true);
+  }
+}
+
+async function submitGlobalReplace(event) {
+  event.preventDefault();
+  if (!state.work) return;
+  const find = $("#replace-find").value;
+  const replacement = $("#replace-with").value;
+  const scope = $("#replace-form").querySelector('input[name="replaceScope"]:checked')?.value ?? "prose";
+  if (!find.trim()) {
+    toast("请输入要查找的内容", "error");
+    $("#replace-find").focus();
+    return;
+  }
+  if (!canGlobalReplaceScope(scope)) {
+    toast("当前账户没有所选范围的编辑权限", "error");
+    syncGlobalReplaceScopeOptions();
+    return;
+  }
+  const dialog = $("#replace-dialog");
+  const reopenDialog = () => {
+    dialog.showModal();
+    syncGlobalReplaceScopeOptions();
+    queueMicrotask(() => $("#replace-find").focus());
+  };
+  dialog.close();
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，执行全局替换会放弃这些修改。是否继续？"))) {
+    reopenDialog();
+    return;
+  }
+  const scopeLabel = globalReplaceScopeLabels[scope] ?? "正文";
+  const replacementLabel = replacement ? `“${replacement}”` : "空内容";
+  const confirmed = await confirmToast(`将把《${state.work.title}》的${scopeLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
+    title: "确认全局替换",
+    confirmLabel: "确认替换"
+  });
+  if (!confirmed) {
+    reopenDialog();
+    return;
+  }
+  const button = $("#replace-submit");
+  const route = currentPageRoute();
+  const workId = state.work.id;
+  button.disabled = true;
+  button.textContent = "替换中…";
+  cancelChapterAutoSave();
+  state.dirty = false;
+  try {
+    const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
+      method: "POST",
+      body: { find, replacement, scope },
+      skipOptimisticVersion: true
+    });
+    $("#replace-dialog").close();
+    if (Number(result.totalMatches) > 0) await refreshWorkAfterGlobalReplace(route, result);
+    if (Number(result.totalMatches) > 0) {
+      const changedTargets = [];
+      if (Number(result.chapterCount) > 0) changedTargets.push(`${result.chapterCount} 章`);
+      if (Number(result.settingCount) > 0) changedTargets.push(`${result.settingCount} 条设定`);
+      toast(`全局替换完成：${result.totalMatches} 处，已更新 ${changedTargets.join("、")}`);
+    } else {
+      toast("没有找到需要替换的内容");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "开始替换";
+    syncGlobalReplaceScopeOptions();
+  }
 }
 
 function highlightedSearchText(value, query) {
@@ -10827,6 +10988,29 @@ async function streamChat(body) {
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
+  const processStepTypewriters = new Map();
+  const processStepVisibleContents = new Map();
+  const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
+    renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
+  };
+  const processStepTypewriter = (step) => {
+    const existing = processStepTypewriters.get(step);
+    if (existing) return existing;
+    processStepVisibleContents.set(step, "");
+    const typewriter = createStreamTypewriter({
+      onRender: (text) => {
+        processStepVisibleContents.set(step, text);
+        renderStreamingProcessSteps(finalAnswerStarted);
+        scrollAiFeedToBottom();
+      }
+    });
+    processStepTypewriters.set(step, typewriter);
+    return typewriter;
+  };
+  const finishProcessStepTypewriters = () => Promise.all([...processStepTypewriters.values()].map((typewriter) => typewriter.finish()));
+  const revealProcessStepTypewriters = () => {
+    for (const typewriter of processStepTypewriters.values()) typewriter.reveal();
+  };
   try {
     const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
       method: "POST",
@@ -10886,7 +11070,7 @@ async function streamChat(body) {
         streamedText += delta;
         if (streamedText.length > 0) finalAnswerStarted = true;
         typewriter.append(delta);
-        if (firstFinalDelta && processSteps.length) renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
+        if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         mountAssistantMessage();
@@ -10896,7 +11080,11 @@ async function streamChat(body) {
         const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        const targetStep = existing ?? step;
+        if (typeof step.content === "string" && step.content.length > 0 && step.type === "thinking") {
+          processStepTypewriter(targetStep).append(step.content);
+        }
+        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = step.type === "thinking"
           ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
           : step.type === "context_compaction"
@@ -10911,7 +11099,7 @@ async function streamChat(body) {
         if (toolCall.status === "failed") setAiAssistantStatus("error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
-        renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "context_compacted") {
@@ -10923,7 +11111,7 @@ async function streamChat(body) {
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
         setAiContextMeter(payload.contextUsage);
-        await typewriter.finish();
+        await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
         message.querySelector(".message-heading > span").textContent = "助手";
@@ -10949,16 +11137,17 @@ async function streamChat(body) {
       if (chunk.done) break;
     }
     if (buffer.trim()) await consume(buffer);
-    await typewriter.finish();
+    await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
     if (streamError) throw streamError;
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
     mountAssistantMessage();
     typewriter.reveal();
+    revealProcessStepTypewriters();
     message.classList.remove("is-streaming");
     content.setAttribute("aria-busy", "false");
     message.querySelector(".message-heading > span").textContent = aiAssistantLabel("生成中断");
-    renderAiProcessSteps(message, processSteps, true, elapsedProcessTime());
+    renderStreamingProcessSteps(true, elapsedProcessTime());
     meta.textContent = "生成中断";
     scrollAiFeedToBottom();
     throw error;
@@ -11365,6 +11554,7 @@ $("#home-button").addEventListener("click", async () => {
 $("#settings-button").addEventListener("click", () => {
   void showSettingsHub();
 });
+$("#global-replace-button").addEventListener("click", openGlobalReplaceDialog);
 $("#account-button").addEventListener("click", () => {
   const expanded = $("#account-menu").classList.toggle("hidden") === false;
   $("#account-button").setAttribute("aria-expanded", String(expanded));
@@ -12620,12 +12810,17 @@ $("#background-task-open-analysis").addEventListener("click", () => {
   showModule("tasks").catch((error) => toast(error.message, "error"));
 });
 $("#search-dialog-close").addEventListener("click", () => $("#search-dialog").close());
+$("#search-to-replace").addEventListener("click", openGlobalReplaceDialog);
 $("#search-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   await runWorkSearch().catch((error) => {
     $("#search-results").innerHTML = `<p class="search-results-status">${esc(error.message)}</p>`;
   });
 });
+$("#replace-dialog-close").addEventListener("click", () => $("#replace-dialog").close());
+$("#replace-cancel").addEventListener("click", () => $("#replace-dialog").close());
+$("#replace-form").querySelectorAll('input[name="replaceScope"]').forEach((input) => input.addEventListener("change", syncGlobalReplaceScopeOptions));
+$("#replace-form").addEventListener("submit", submitGlobalReplace);
 $("#export-button").addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();

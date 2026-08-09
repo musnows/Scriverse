@@ -2186,6 +2186,87 @@ export class Store {
     return this.getChapter(chapterId);
   }
 
+  replaceWorkText(
+    workId: string,
+    input: { find: string; replacement: string; scope: "prose" | "settings" | "prose-and-settings" }
+  ): Record<string, unknown> {
+    const find = input.find;
+    if (!find) throw new AppError(400, "REPLACE_TEXT_REQUIRED", "查找内容不能为空");
+    if (!["prose", "settings", "prose-and-settings"].includes(input.scope)) {
+      throw new AppError(400, "REPLACE_SCOPE_INVALID", "替换范围无效");
+    }
+    const operationId = id("globalReplace");
+    let chapterCount = 0;
+    let settingCount = 0;
+    let totalMatches = 0;
+    const includeProse = input.scope === "prose" || input.scope === "prose-and-settings";
+    const includeSettings = input.scope === "settings" || input.scope === "prose-and-settings";
+
+    const replaceLiteral = (value: string): { content: string; matches: number } => {
+      let matches = 0;
+      let offset = 0;
+      while (true) {
+        const index = value.indexOf(find, offset);
+        if (index < 0) break;
+        matches += 1;
+        offset = index + find.length;
+      }
+      return {
+        content: value.replaceAll(find, () => input.replacement),
+        matches
+      };
+    };
+
+    this.getWork(workId);
+    this.db.transaction(() => {
+      if (includeProse) {
+        const chapters = this.db.all(
+          "SELECT id, content FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+          workId
+        );
+        for (const row of chapters) {
+          const chapterId = requiredString(row, "id");
+          const result = replaceLiteral(requiredString(row, "content"));
+          if (!result.matches || result.content === requiredString(row, "content")) continue;
+          this.saveChapter(chapterId, { content: result.content }, "global-replace", operationId, "全局替换正文");
+          chapterCount += 1;
+          totalMatches += result.matches;
+        }
+      }
+      if (includeSettings) {
+        const settings = this.db.all("SELECT id, content FROM settings WHERE work_id = ? ORDER BY id", workId);
+        for (const row of settings) {
+          const settingId = requiredString(row, "id");
+          const currentContent = requiredString(row, "content");
+          const result = replaceLiteral(currentContent);
+          if (!result.matches || result.content === currentContent) continue;
+          this.updateSetting(settingId, { content: result.content }, "global-replace", operationId, "全局替换设定库");
+          settingCount += 1;
+          totalMatches += result.matches;
+        }
+      }
+      if (totalMatches > 0) {
+        this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", now(), workId);
+        this.audit(workId, "work.global-replace", "work", workId, {
+          operationId,
+          scope: input.scope,
+          chapterCount,
+          settingCount,
+          totalMatches
+        });
+      }
+    });
+
+    return {
+      operationId,
+      scope: input.scope,
+      chapterCount,
+      settingCount,
+      totalMatches,
+      work: this.getWorkDirectory(workId)
+    };
+  }
+
   restoreChapter(chapterId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
     const version = this.db.get("SELECT * FROM chapter_versions WHERE chapter_id = ? AND version_no = ?", chapterId, versionNo);
     if (!version) throw notFound("章节版本");
