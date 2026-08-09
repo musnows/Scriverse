@@ -209,7 +209,7 @@
             <button id="platform-ai-button" class="settings-hub-card hidden" type="button" data-settings-action="ai"><span class="settings-card-mark">AI</span><strong>AI 管理</strong><small>供应商、模型、上下文与全局提示词</small></button>
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
-            <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置、银河图性能及各模块的单页数量</small></button>
             <button id="s3-backup-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">S3</span><strong>S3 备份</strong><small>将整个系统的数据库和图片同步到多个目标</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
@@ -806,6 +806,8 @@
         <div class="dialog-fields">
           <label>Toast 提示位置<select id="toast-position" name="toastPosition" aria-label="Toast 提示位置"><option value="bottom-right">右下角（默认）</option><option value="top-right">右上角</option></select></label>
           <small>该设置对所有用户生效，保存后的提示会立即显示在新位置。</small>
+          <label>银河图动画帧率<select id="galaxy-frame-rate" name="galaxyFrameRate" aria-label="银河图动画帧率"><option value="24">24 FPS（较低负载）</option><option value="30">30 FPS（默认）</option><option value="60">60 FPS（更流畅）</option></select></label>
+          <small>该设置对所有作品和用户生效。更高帧率会让旋转与拖动更流畅，同时增加系统负载。</small>
           <fieldset class="pagination-settings-fieldset">
             <legend>可分页模块单页数量</legend>
             <small>以下模块独立设置，允许 10–100 条；默认均为 30 条。种族层级始终完整展示。</small>
@@ -1024,6 +1026,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260809-galaxy-memory-v3"></script>
+    <script type="module" src="/app.js?v=20260809-galaxy-frame-rate-v1"></script>
   </body>
 </html>

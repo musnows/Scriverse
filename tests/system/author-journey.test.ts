@@ -321,7 +321,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260809-galaxy-memory-v3');
+    expect(page.text).toContain('/app.js?v=20260809-galaxy-frame-rate-v1');
     expect(page.text).toContain('/styles.css?v=20260809-galaxy-memory-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -384,7 +384,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-memory-v3');
+    expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-frame-rate-v1');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');
@@ -444,6 +444,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("background: var(--toast-bg)");
     expect(page.text).toContain('id="platform-ui-settings-button" class="settings-hub-card hidden"');
     expect(page.text).toContain('id="platform-ui-settings-dialog"');
+    expect(page.text).toContain('id="galaxy-frame-rate"');
     expect(page.text).toContain('id="page-size-settings"');
     expect(page.text).toContain('id="page-size-characters"');
     expect(page.text).not.toContain('id="page-size-races"');
@@ -460,6 +461,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('api("/api/ui-settings")');
     expect(application.text).toContain('api("/api/platform/ui-settings"');
     expect(application.text).toContain('pageSizes: {');
+    expect(application.text).toContain('galaxyFrameRate: Number($("#galaxy-frame-rate").value)');
     expect(application.text).toContain('function paginateModuleItems(items, page, sizeKey)');
     expect(application.text).toContain('renderModulePagination(pageResult, "settings", "设定库")');
     expect(application.text).not.toContain('renderModulePagination(pageResult, "races", "种族列表")');
@@ -887,6 +889,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("highlightedKeywords.push(fullLabel)");
     expect(graph.text).toContain("const label = fullLabel.length > 42");
     expect(graph.text).toContain("export function createGalaxyRenderer");
+    expect(graph.text).toContain("export function normalizeGalaxyFrameRate");
     expect(graph.text).toContain("export function createGalaxyStarfield");
     expect(graph.text).toContain("export function projectGalaxyPoint");
     expect(graph.text).toContain("export function getGalaxyNodeFocusCamera");
@@ -895,6 +898,7 @@ describe("作者完整创作流程", () => {
     expect(graph.text).toContain("target.width = 1");
     expect(graph.text).toContain("stars.length = 0");
     expect(application.text).toContain("if (state.galaxy === galaxy) state.galaxy = null");
+    expect(application.text).toContain("frameRate: state.uiSettings.galaxyFrameRate");
     expect(graph.text).toContain("export function getRelationshipNodeFocusView");
     expect(graph.text).toContain("focusViewOnNode(node.id)");
     expect(graph.text).toContain("export function shouldShowRelationshipNodeLabel");

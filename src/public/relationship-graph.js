@@ -94,6 +94,7 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
 });
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_TARGET_FRAME_RATE = 30;
+export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60]);
 export const GALAXY_BASE_STAR_COUNT = 7200;
 export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_MAX_CANVAS_PIXELS = 4_000_000;
@@ -103,6 +104,11 @@ export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   repulsionStrength: 9200,
   desiredEdgeLength: 285
 });
+
+export function normalizeGalaxyFrameRate(value) {
+  const candidate = Number(value);
+  return GALAXY_FRAME_RATE_OPTIONS.includes(candidate) ? candidate : GALAXY_TARGET_FRAME_RATE;
+}
 
 export function formatRelationshipLabel(edge, separator = " · ") {
   const subtype = String(edge?.subtype ?? "").trim();
@@ -1901,6 +1907,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const stats = dialog.querySelector("#galaxy-stats");
   const detail = dialog.querySelector("#galaxy-detail");
   const shell = dialog.querySelector(".galaxy-shell");
+  const targetFrameRate = normalizeGalaxyFrameRate(options.frameRate);
   const seed = `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`;
   const layout = layoutGalaxy(graph, seed);
   const stars = createGalaxyStarfield(`${seed}|stars`);
@@ -1935,6 +1942,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let cameraDrag = null;
   let animationFrame = 0;
   let previousFrameTime = 0;
+  let nextFrameTime = 0;
   let renderedFrameCount = 0;
   let cameraFocus = null;
   let draggedNode = null;
@@ -1952,7 +1960,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.dataset.gridVisible = "false";
   shell.dataset.starPhysicsEnergy = "0";
   shell.dataset.rotationSpeed = String(GALAXY_ROTATION_RADIANS_PER_MS);
-  shell.dataset.targetFrameRate = String(GALAXY_TARGET_FRAME_RATE);
+  shell.dataset.targetFrameRate = String(targetFrameRate);
   shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
   shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
   shell.dataset.layoutDesiredEdgeLength = String(GALAXY_LAYOUT_CONFIG.desiredEdgeLength);
@@ -2188,13 +2196,16 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const renderFrame = (time) => {
     animationFrame = 0;
     if (destroyed || !dialog.open || document.hidden) return;
-    const frameInterval = 1000 / GALAXY_TARGET_FRAME_RATE;
-    if (previousFrameTime && time - previousFrameTime < frameInterval - 2) {
+    const frameInterval = 1000 / targetFrameRate;
+    if (nextFrameTime && time + 1 < nextFrameTime) {
       if (shouldAnimate()) animationFrame = window.requestAnimationFrame(renderFrame);
       return;
     }
     const elapsed = previousFrameTime ? Math.min(50, time - previousFrameTime) : 0;
     previousFrameTime = time;
+    if (!nextFrameTime) nextFrameTime = time;
+    do nextFrameTime += frameInterval;
+    while (nextFrameTime <= time);
     if (cameraFocus) {
       const progress = clamp((time - cameraFocus.startedAt) / cameraFocus.duration, 0, 1);
       const eased = 1 - Math.pow(1 - progress, 3);
@@ -2218,6 +2229,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const startAnimation = () => {
     if (animationFrame || destroyed) return;
     previousFrameTime = 0;
+    nextFrameTime = 0;
     animationFrame = window.requestAnimationFrame(renderFrame);
   };
 
@@ -2225,6 +2237,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     if (animationFrame) window.cancelAnimationFrame(animationFrame);
     animationFrame = 0;
     previousFrameTime = 0;
+    nextFrameTime = 0;
   };
 
   const cancelCameraFocus = () => {
