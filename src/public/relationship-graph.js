@@ -286,6 +286,8 @@ export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60, 90, 120, 144
 export const GALAXY_BASE_STAR_COUNT = 7200;
 export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_MAX_CANVAS_PIXELS = 4_000_000;
+export const GALAXY_NODE_SIZE_GROWTH_THRESHOLD = 3;
+export const GALAXY_NODE_SIZE_FULL_SCALE_DEGREE = 12;
 export const GALAXY_LAYOUT_CONFIG = Object.freeze({
   minimumRadius: 220,
   radialSpan: 830,
@@ -2037,7 +2039,13 @@ export function getGalaxyNodeDegreeScale(maxDegree, nodeCount = 0) {
 
 export function getGalaxyNodeSize(node, maxDegree, nodeCount = 0, appearanceScale = 1) {
   const degree = Math.max(0, Number(node?.degree) || 0);
-  const normalizedDegree = clamp(degree / getGalaxyNodeDegreeScale(maxDegree, nodeCount), 0, 1);
+  const degreeScale = Math.max(
+    GALAXY_NODE_SIZE_FULL_SCALE_DEGREE,
+    getGalaxyNodeDegreeScale(maxDegree, nodeCount)
+  );
+  const scalableDegree = Math.max(0, degree - GALAXY_NODE_SIZE_GROWTH_THRESHOLD);
+  const scalableRange = Math.max(1, degreeScale - GALAXY_NODE_SIZE_GROWTH_THRESHOLD);
+  const normalizedDegree = clamp(scalableDegree / scalableRange, 0, 1);
   return clamp((10 + Math.sqrt(normalizedDegree) * 28) * Math.max(0.1, Number(appearanceScale) || 1), 8, 48);
 }
 
