@@ -3283,13 +3283,7 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
-    const chatTools = this.enabledAgentTools(input.workId, "chat", input.agentToolIds, input.conversationId);
-    const chatProtocol = providerProtocol(this.resolveModel(input.workId, "chat", input.modelId).provider);
-    const useLegacyAnthropicToolFlow = chatTools.length > 0 && chatProtocol === "anthropic-messages";
-    const generated = useLegacyAnthropicToolFlow
-      ? await this.generate({ ...input, taskType: "chat" })
-      : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
-    if (useLegacyAnthropicToolFlow) onDelta(generated.content);
+    const generated = await this.generateStream({ ...input, taskType: "chat" }, onDelta);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -5648,6 +5642,7 @@ export class AiManager {
     };
     const anthropicBlocks = new Map<number, Record<string, unknown>>();
     const anthropicToolInputJson = new Map<number, string>();
+    const finalizedAnthropicToolInputs = new Map<number, string>();
     const openAiToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
     let openAiToolCallsFinalized = false;
     const eventIndex = (payload: Record<string, unknown>): number | null => {
@@ -5666,13 +5661,15 @@ export class AiManager {
     const finalizeAnthropicToolInput = (index: number): void => {
       const block = anthropicBlocks.get(index);
       const inputJson = anthropicToolInputJson.get(index);
-      if (!block || block.type !== "tool_use" || inputJson === undefined) return;
+      if (!block || block.type !== "tool_use") return;
+      const completeInputJson = inputJson ?? JSON.stringify(block.input ?? {});
       try {
-        const parsed = JSON.parse(inputJson) as unknown;
+        const parsed = JSON.parse(completeInputJson) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) block.input = parsed;
       } catch {
         block.input = {};
       }
+      finalizedAnthropicToolInputs.set(index, completeInputJson);
       anthropicToolInputJson.delete(index);
     };
     const consumeEvent = (eventText: string): void => {
@@ -5821,25 +5818,50 @@ export class AiManager {
       reasoning += finalReasoning;
       onThinkingDelta(finalReasoning);
     }
-    const toolCalls: CompletionToolCall[] = openAiToolCallsFinalized
-      ? [...openAiToolCalls.entries()]
-        .sort(([left], [right]) => left - right)
-        .flatMap(([, toolCall]) => toolCall.id && toolCall.name ? [{
+    const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
+    const openAiToolCallsComplete = openAiToolCallsFinalized
+      && sortedOpenAiToolCalls.length > 0
+      && sortedOpenAiToolCalls.every(([, toolCall]) => Boolean(toolCall.id && toolCall.name));
+    const anthropicToolBlocks = [...anthropicBlocks.entries()]
+      .filter(([, block]) => block.type === "tool_use")
+      .sort(([left], [right]) => left - right);
+    const anthropicToolCallsComplete = finishReason === "tool_use"
+      && anthropicToolBlocks.length > 0
+      && anthropicToolBlocks.every(([index, block]) => (
+        finalizedAnthropicToolInputs.has(index)
+        && typeof block.id === "string"
+        && block.id.length > 0
+        && typeof block.name === "string"
+        && block.name.length > 0
+      ));
+    const toolCalls: CompletionToolCall[] = protocol === "anthropic-messages"
+      ? anthropicToolCallsComplete
+        ? anthropicToolBlocks.map(([index, block]) => ({
+          id: String(block.id),
+          type: "function" as const,
+          function: {
+            name: String(block.name),
+            arguments: finalizedAnthropicToolInputs.get(index) ?? "{}"
+          }
+        }))
+        : []
+      : openAiToolCallsComplete
+        ? sortedOpenAiToolCalls.map(([, toolCall]) => ({
           id: toolCall.id,
           type: "function" as const,
           function: { name: toolCall.name, arguments: toolCall.arguments }
-        }] : [])
-      : [];
+        }))
+        : [];
+    if ((finishReason === "tool_calls" || finishReason === "tool_use") && toolCalls.length === 0) {
+      throw new Error(`${protocolLabel} 流式工具调用不完整，finish_reason=${finishReason}`);
+    }
     if (!content.trim() && toolCalls.length === 0) {
       throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
     }
     const anthropicContent = protocol === "anthropic-messages"
       ? [...anthropicBlocks.entries()]
         .sort(([left], [right]) => left - right)
-        .map(([index, block]) => {
-          finalizeAnthropicToolInput(index);
-          return redactProviderSecrets(block, apiKey) as Record<string, unknown>;
-        })
+        .map(([, block]) => redactProviderSecrets(block, apiKey) as Record<string, unknown>)
       : undefined;
     return redactProviderSecrets({
       ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
