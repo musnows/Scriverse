@@ -171,4 +171,91 @@ describe("作品列表批量映射", () => {
       runtime.close();
     }
   });
+
+  it("跨越 500 部作品分片时保留第二批成员、统计和封面", () => {
+    const runtime = createTestRuntime();
+    try {
+      runtime.store.setRelationshipIndexQueuedHandler(null);
+      const owner = runtime.auth.register({ username: "chunk_owner", password: "secure-password-123" }).session.user;
+      const member = runtime.auth.register({ username: "chunk_member", password: "secure-password-123" }).session.user;
+      const works = runWithRequestActor(owner, () => Array.from(
+        { length: 501 },
+        (_, index) => runtime.store.createWork({ title: `分片作品 ${index + 1}` })
+      ));
+      const secondBatchWork = works[0];
+      const firstBatchWork = works[500];
+      if (!firstBatchWork || !secondBatchWork) throw new Error("分片测试作品创建失败");
+      const firstBatchWorkId = String(firstBatchWork.id);
+      const secondBatchWorkId = String(secondBatchWork.id);
+      const secondBatchPermissions = emptyWorkModulePermissions();
+      secondBatchPermissions.prose = "read";
+      for (const [index, work] of works.entries()) {
+        const workId = String(work.id);
+        runtime.auth.addMember(
+          workId,
+          member.userId,
+          workId === secondBatchWorkId ? { permissions: secondBatchPermissions } : { role: "viewer" },
+          owner.userId
+        );
+        runtime.database.run(
+          "UPDATE works SET updated_at = ? WHERE id = ?",
+          new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(),
+          workId
+        );
+      }
+      const seeded = runWithRequestActor(owner, () => {
+        const firstBatchChapters = seedChapters(runtime, firstBatchWorkId, ["第一批章节正文。"]);
+        const secondBatchChapters = seedChapters(runtime, secondBatchWorkId, ["第二批章节正文。"]);
+        runtime.store.setWorkCover(firstBatchWorkId, "image/png", validPng);
+        runtime.store.setWorkCover(secondBatchWorkId, "image/png", validPng);
+        return { firstBatchChapters, secondBatchChapters };
+      });
+      runtime.database.run("UPDATE works SET updated_at = ? WHERE id = ?", "2026-01-01T00:08:20.000Z", firstBatchWorkId);
+      runtime.database.run("UPDATE works SET updated_at = ? WHERE id = ?", "2026-01-01T00:00:00.000Z", secondBatchWorkId);
+
+      const getSpy = vi.spyOn(runtime.database, "get");
+      const allSpy = vi.spyOn(runtime.database, "all");
+      const summaries = runWithRequestActor(
+        { ...member, authentication: "session" },
+        () => runtime.store.listWorks()
+      ) as WorkSummary[];
+
+      expect(summaries).toHaveLength(501);
+      expect(summaries[500]?.id).toBe(secondBatchWorkId);
+      expect(summaryById(summaries, firstBatchWorkId)).toMatchObject({
+        accessRole: "viewer",
+        chapterCount: 1,
+        wordCount: Number(seeded.firstBatchChapters[0]?.wordCount)
+      });
+      expect(summaryById(summaries, firstBatchWorkId).coverUrl)
+        .toContain(`/api/works/${firstBatchWorkId}/cover?v=`);
+      expect(summaryById(summaries, secondBatchWorkId)).toMatchObject({
+        accessRole: "custom",
+        modulePermissions: secondBatchPermissions,
+        chapterCount: 1,
+        wordCount: Number(seeded.secondBatchChapters[0]?.wordCount)
+      });
+      expect(summaryById(summaries, secondBatchWorkId).coverUrl)
+        .toContain(`/api/works/${secondBatchWorkId}/cover?v=`);
+      expect(perWorkGetQueries(getSpy.mock.calls)).toEqual([]);
+
+      const membershipBatches = allSpy.mock.calls.filter(([sql]) => String(sql).includes(
+        "SELECT work_id, role, permissions_json FROM work_memberships"
+      ));
+      const countBatches = allSpy.mock.calls.filter(([sql]) => String(sql).includes(
+        "SELECT work_id, COUNT(*) AS chapter_count"
+      ));
+      const coverBatches = allSpy.mock.calls.filter(([sql]) => String(sql).includes(
+        "SELECT work_id, updated_at FROM work_covers"
+      ));
+      expect(membershipBatches).toHaveLength(2);
+      expect(countBatches).toHaveLength(2);
+      expect(coverBatches).toHaveLength(2);
+      expect(membershipBatches[1]).toContain(secondBatchWorkId);
+      expect(countBatches[1]).toContain(secondBatchWorkId);
+      expect(coverBatches[1]).toContain(secondBatchWorkId);
+    } finally {
+      runtime.close();
+    }
+  });
 });
