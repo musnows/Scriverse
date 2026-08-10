@@ -28,8 +28,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260810-review-status-feedback-v1');
-    expect(application.text).toContain('id="save-agent-tools"');
+expect(page.text).toContain('/app.js?v=20260810-analysis-task-failed-review-status-v1');    expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');
     expect(application.text).toContain('class="ghost-button config-save-button"');
