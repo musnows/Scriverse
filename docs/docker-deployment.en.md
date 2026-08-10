@@ -22,6 +22,14 @@ services:
     image: musnows/scriverse:${SCRIVERSE_TAG:-latest}
     container_name: scriverse
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     ports:
       - "127.0.0.1:13210:13210"
     environment:
@@ -77,6 +85,12 @@ Registration is enabled only when `APP_ALLOW_REGISTRATION` is `true` or `1`; `fa
 `SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` controls how many complete pre-migration database backups are retained. It defaults to 5 and is clamped to a minimum of 2. On each startup, the oldest excess complete backups are removed before a new migration backup is created, preventing a failed-migration restart loop from filling the disk.
 
 `SCRIVERSE_STARTUP_RETRY_LIMIT` controls consecutive failed startup attempts and defaults to 2. Once the limit is reached, the service stops repeating initialization and migration, preserving `<DATA_DIR>/.startup-retry.json` for diagnosis. Fix the root cause, remove that file, and restart the service.
+
+## Container runtime hardening
+
+The official image runs as the non-root UID/GID `1000:1000`, and its runtime layer contains neither a shell nor a package manager. The Compose example above also makes the root filesystem read-only, drops every Linux capability, prevents privilege escalation, limits process creation, and exposes only a `noexec`, `nosuid`, `nodev` in-memory `/tmp`; the `/app/.data` volume remains writable.
+
+Do not run Scriverse as `privileged` or with `network_mode: host`, and never mount the Docker socket, the host root, devices, or unrelated host paths into the container. Keep the host kernel and Docker Engine security updates current, and prefer rootless Docker where practical. These controls reduce lateral movement and container-escape impact after a vulnerability; they do not replace HTTPS, strong credentials, a least-privilege reverse proxy, or regular backups.
 
 ## Pin a release
 

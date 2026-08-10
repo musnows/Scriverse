@@ -1,4 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 import {
   DeleteObjectsCommand,
   HeadObjectCommand,
@@ -6,6 +9,7 @@ import {
   PutObjectCommand,
   S3Client
 } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { encryptObject, generateKek } from "./backup-encryption.js";
 import { CredentialVault, type EncryptedSecret } from "./credential-vault.js";
@@ -79,7 +83,10 @@ export type S3BackupConnection = {
   accessKeyId: string;
   secretAccessKey: string;
   forcePathStyle: boolean;
+  resolvedAddresses?: readonly S3ResolvedAddress[];
 };
+
+export type S3ResolvedAddress = { address: string; family: 4 | 6 };
 
 export type S3ListedObject = {
   key: string;
@@ -99,7 +106,7 @@ export type S3BackupManagerOptions = {
   snapshotDatabase?: () => Buffer | Promise<Buffer>;
   masterKey?: Buffer | string;
   requestTimeoutMs?: number;
-  validateEndpoint?: (endpoint: string) => Promise<unknown>;
+  validateEndpoint?: (endpoint: string) => Promise<readonly S3ResolvedAddress[] | void>;
   now?: () => Date;
   logger?: Logger;
   encryptionConfirmationTtlMs?: number;
@@ -192,6 +199,12 @@ class AwsS3ObjectClient implements S3ObjectClient {
   private readonly client: S3Client;
 
   constructor(connection: S3BackupConnection) {
+    const requestHandler = connection.resolvedAddresses?.length
+      ? new NodeHttpHandler({
+          httpAgent: new HttpAgent({ keepAlive: true, maxSockets: 10, lookup: pinnedS3Lookup(connection) }),
+          httpsAgent: new HttpsAgent({ keepAlive: true, maxSockets: 10, lookup: pinnedS3Lookup(connection) })
+        })
+      : undefined;
     this.client = new S3Client({
       endpoint: connection.endpoint,
       region: connection.region,
@@ -202,7 +215,8 @@ class AwsS3ObjectClient implements S3ObjectClient {
       forcePathStyle: connection.forcePathStyle,
       maxAttempts: 3,
       requestChecksumCalculation: "WHEN_REQUIRED",
-      responseChecksumValidation: "WHEN_REQUIRED"
+      responseChecksumValidation: "WHEN_REQUIRED",
+      ...(requestHandler ? { requestHandler } : {})
     });
   }
 
@@ -267,6 +281,37 @@ class AwsS3ObjectClient implements S3ObjectClient {
   }
 }
 
+function normalizedHostname(value: string): string {
+  return value.replace(/^\[|\]$/gu, "").replace(/\.$/u, "").toLocaleLowerCase("en-US");
+}
+
+function pinnedS3Lookup(connection: S3BackupConnection): LookupFunction {
+  const endpointHostname = normalizedHostname(new URL(connection.endpoint).hostname);
+  const addresses = (connection.resolvedAddresses ?? []).filter(({ address, family }) => isIP(address) === family);
+  return (hostname, options, callback) => {
+    const requestedHostname = normalizedHostname(hostname);
+    const expectedHostname = requestedHostname === endpointHostname
+      || (!connection.forcePathStyle && requestedHostname.endsWith(`.${endpointHostname}`));
+    const requestedFamily = options.family === 4 || options.family === 6 ? options.family : 0;
+    const candidates = expectedHostname
+      ? addresses.filter(({ family }) => requestedFamily === 0 || family === requestedFamily)
+      : [];
+    if (candidates.length === 0) {
+      const error = Object.assign(new Error("S3 endpoint hostname or address was not approved by the SSRF validator"), {
+        code: "ENOTFOUND"
+      });
+      callback(error, "", 0);
+      return;
+    }
+    if (options.all) {
+      callback(null, candidates.map(({ address, family }) => ({ address, family })));
+      return;
+    }
+    const selected = candidates[0]!;
+    callback(null, selected.address, selected.family);
+  };
+}
+
 function requiredString(row: Row, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new AppError(500, "BACKUP_TARGET_INVALID", `S3 备份配置字段 ${key} 无效`);
@@ -306,7 +351,7 @@ export class S3BackupManager {
   private readonly snapshotDatabase: () => Buffer | Promise<Buffer>;
   private readonly masterKey: Buffer | null;
   private readonly requestTimeoutMs: number;
-  private readonly validateEndpoint?: (endpoint: string) => Promise<unknown>;
+  private readonly validateEndpoint?: (endpoint: string) => Promise<readonly S3ResolvedAddress[] | void>;
   private readonly now: () => Date;
   private readonly log: Logger;
   private readonly encryptionConfirmationTtlMs: number;
@@ -731,13 +776,14 @@ export class S3BackupManager {
     let encryptionKey: string | null = null;
     try {
       encryptionKey = this.activeBackupEncryptionKey();
-      await this.validateEndpoint?.(target.endpoint);
+      const resolvedAddresses = await this.validateEndpoint?.(target.endpoint);
       client = this.clientFactory({
         endpoint: target.endpoint,
         region: target.region,
         accessKeyId: target.accessKeyId,
         secretAccessKey: target.secretAccessKey,
-        forcePathStyle: target.forcePathStyle
+        forcePathStyle: target.forcePathStyle,
+        ...(resolvedAddresses?.length ? { resolvedAddresses } : {})
       });
       const databaseSnapshot = await this.snapshotDatabase();
       databaseKey = `${target.rootPrefix}/db/scriverse-${this.snapshotTimestamp(started)}-${runId.replaceAll("-", "").slice(0, 8)}.db`;

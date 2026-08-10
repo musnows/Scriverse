@@ -22,6 +22,14 @@ services:
     image: musnows/scriverse:${SCRIVERSE_TAG:-latest}
     container_name: scriverse
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
     ports:
       - "127.0.0.1:13210:13210"
     environment:
@@ -77,6 +85,12 @@ docker compose up -d --force-recreate
 `SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` 控制启动迁移前的完整数据库备份保留数量，默认保留 5 个版本，最少保留 2 个版本。每次启动时会清理超出数量的最旧完整备份，再为本次迁移保留一个备份位置，避免迁移失败后的重启循环持续占满磁盘。
 
 `SCRIVERSE_STARTUP_RETRY_LIMIT` 控制连续启动失败的次数，默认允许 2 次。达到上限后服务会停止重复执行初始化和迁移流程，并保留 `<DATA_DIR>/.startup-retry.json` 供排查；修复根因后删除该文件再启动服务。
+
+## 容器运行时加固
+
+官方镜像使用 UID/GID `1000:1000` 的非 root 进程，运行层不包含 shell 或包管理器。上面的 Compose 配置进一步启用只读根文件系统、移除全部 Linux capabilities、禁止提权、限制进程数量，并只为 `/tmp` 提供带 `noexec`、`nosuid`、`nodev` 的临时内存文件系统；持久卷 `/app/.data` 仍保持可写。
+
+不要为 Scriverse 容器开启 `privileged`、`network_mode: host`，不要映射 Docker socket、宿主机根目录、设备或其他无关的宿主机路径。及时安装宿主机内核与 Docker 安全更新；条件允许时优先使用 Docker rootless 模式。这些边界与应用鉴权共同降低漏洞后的横向移动和容器逃逸风险，不能替代 HTTPS、强口令、最小权限反向代理和定期备份。
 
 ## 固定正式版本
 
