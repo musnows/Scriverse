@@ -22,7 +22,7 @@ describe("AI 输入框引用气泡", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
-    expect(page.text).toContain('id="ai-prompt" class="ai-prompt" contenteditable="true"');
+    expect(page.text).toContain('id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list"');
     expect(page.text).toContain('aria-controls="ai-mention-menu" aria-haspopup="listbox" aria-expanded="false"');
     expect(page.text).toContain('aria-label="引用角色、设定、章节或上下文能力"');
     expect(page.text).not.toContain('id="ai-include-setting-info"');
