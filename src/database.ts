@@ -3233,14 +3233,14 @@ export class Database {
         this.run("CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC)");
         this.run("CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC)");
         this.run("CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC)");
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (81, ?)", new Date().toISOString());
       });
-      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
-      if (integrity.some((row) => row.integrity_check !== "ok")) {
-        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
-      }
-      const foreignKeys = this.all("PRAGMA foreign_key_check");
-      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
   }
 

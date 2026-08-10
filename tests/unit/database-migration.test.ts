@@ -596,6 +596,34 @@ describe("数据库版本化迁移", () => {
     restarted.close();
   });
 
+  it("迁移 81 的外键检查失败时不登记版本并连续阻断启动", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-list-index-invalid-"));
+    roots.push(root);
+    const filename = join(root, "list-index-invalid.db");
+    const current = new Database(filename);
+    current.run("DROP INDEX idx_ai_suggestions_work");
+    current.run("DROP INDEX idx_file_versions_work");
+    current.run("DROP INDEX idx_chapter_insights_chapter");
+    current.run("DELETE FROM schema_migrations WHERE version = 81");
+    current.close();
+
+    const invalid = new DatabaseSync(filename);
+    invalid.exec("PRAGMA foreign_keys = OFF");
+    invalid.prepare(
+      `INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, snapshot_json, created_at)
+       VALUES ('file-version-invalid-work', 'work-missing', 'invalid.txt', 'txt', 0, 0, '{}', '2026-08-10T00:00:00.000Z')`
+    ).run();
+    invalid.close();
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      expect(() => new Database(filename)).toThrow("数据库外键检查失败：发现 1 条异常记录");
+      const inspected = new DatabaseSync(filename);
+      expect(inspected.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 81").get()?.count).toBe(0);
+      expect(inspected.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
+      inspected.close();
+    }
+  });
+
   it("迁移 53 只重排可重建索引并保留领域数据", () => {
     const filename = createLegacyDatabase();
     const current = new Database(filename);
