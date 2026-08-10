@@ -175,6 +175,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       expect.objectContaining({
         pageKey: `editor:${chapterId}`,
         label: "正文编辑",
+        action: "save",
+        pageDeleted: false,
         actorUserId: owner.user.userId,
         actorDisplayName: "change_owner"
       })
@@ -201,6 +203,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       expect.objectContaining({
         pageKey: `entity-editor:setting:${setting.body.data.id}`,
         label: "设定编辑",
+        action: "save",
+        pageDeleted: false,
         actorUserId: owner.user.userId
       })
     ]);
@@ -227,6 +231,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       expect.objectContaining({
         pageKey: `entity-editor:character:${firstCharacter.body.data.id}`,
         label: "角色编辑",
+        action: "save",
+        pageDeleted: false,
         actorUserId: owner.user.userId
       })
     ]);
@@ -269,6 +275,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       expect.objectContaining({
         pageKey: `entity-editor:relationship:${relationshipId}`,
         label: "人物关系编辑",
+        action: "save",
+        pageDeleted: false,
         actorUserId: owner.user.userId,
         actorDisplayName: "change_owner"
       })
@@ -301,7 +309,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const writerClientId = "c1d2e3f4-a5b6-4789-8abc-def123456789";
     const expectPublishedChange = async (
       page: Record<string, string>,
-      expected: { pageKey: string; label: string; actorUserId: string },
+      expected: { pageKey: string; label: string; action: "save" | "delete"; pageDeleted: boolean; actorUserId: string },
       mutate: () => Promise<unknown>
     ): Promise<void> => {
       await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
@@ -328,7 +336,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "editor", resourceId: chapter.body.data.id },
-      { pageKey: `editor:${chapter.body.data.id}`, label: "正文编辑", actorUserId: owner.user.userId },
+      { pageKey: `editor:${chapter.body.data.id}`, label: "正文编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.delete(`/api/chapters/${chapter.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           expectedVersionNo: chapter.body.data.versionNo
@@ -343,7 +351,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "setting", resourceId: setting.body.data.id },
-      { pageKey: `entity-editor:setting:${setting.body.data.id}`, label: "设定编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:setting:${setting.body.data.id}`, label: "设定编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.delete(`/api/settings/${setting.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           expectedVersionNo: setting.body.data.versionNo
@@ -356,7 +364,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "character", resourceId: removedCharacter.body.data.id },
-      { pageKey: `entity-editor:character:${removedCharacter.body.data.id}`, label: "角色编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:character:${removedCharacter.body.data.id}`, label: "角色编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.delete(`/api/characters/${removedCharacter.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           expectedVersionNo: removedCharacter.body.data.versionNo
@@ -373,7 +381,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "character", resourceId: sectionCharacter.body.data.id },
-      { pageKey: `entity-editor:character:${sectionCharacter.body.data.id}`, label: "角色编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:character:${sectionCharacter.body.data.id}`, label: "角色编辑", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.patch(`/api/character-sections/${updatedSection.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           contentMarkdown: "更新后的档案。",
@@ -390,7 +398,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "character", resourceId: sectionDeleteCharacter.body.data.id },
-      { pageKey: `entity-editor:character:${sectionDeleteCharacter.body.data.id}`, label: "角色编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:character:${sectionDeleteCharacter.body.data.id}`, label: "角色档案章节", action: "delete", pageDeleted: false, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.delete(`/api/character-sections/${removedSection.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           expectedVersionNo: removedSection.body.data.versionNo
@@ -403,7 +411,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "race", resourceId: updatedRace.body.data.id },
-      { pageKey: `entity-editor:race:${updatedRace.body.data.id}`, label: "种族编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:race:${updatedRace.body.data.id}`, label: "种族编辑", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.patch(`/api/races/${updatedRace.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           description: "更新后的种族说明。",
@@ -416,7 +424,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "race", resourceId: removedRace.body.data.id },
-      { pageKey: `entity-editor:race:${removedRace.body.data.id}`, label: "种族编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:race:${removedRace.body.data.id}`, label: "种族编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.delete(`/api/races/${removedRace.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           expectedVersionNo: removedRace.body.data.versionNo
@@ -429,7 +437,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "organization", resourceId: updatedOrganization.body.data.id },
-      { pageKey: `entity-editor:organization:${updatedOrganization.body.data.id}`, label: "组织编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:organization:${updatedOrganization.body.data.id}`, label: "组织编辑", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.patch(`/api/organizations/${updatedOrganization.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           description: "更新后的组织说明。",
@@ -442,7 +450,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "entity-editor", module: "organization", resourceId: removedOrganization.body.data.id },
-      { pageKey: `entity-editor:organization:${removedOrganization.body.data.id}`, label: "组织编辑", actorUserId: owner.user.userId },
+      { pageKey: `entity-editor:organization:${removedOrganization.body.data.id}`, label: "组织编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.delete(`/api/organizations/${removedOrganization.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           expectedVersionNo: removedOrganization.body.data.versionNo
@@ -455,7 +463,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "module", module: "timeline" },
-      { pageKey: "module:timeline", label: "时间轴", actorUserId: owner.user.userId },
+      { pageKey: "module:timeline", label: "时间轴", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
       async () => {
         await owner.agent.patch(`/api/timeline-tracks/${updatedTrack.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
           description: "更新后的轨道说明。",
@@ -468,7 +476,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "module", module: "timeline" },
-      { pageKey: "module:timeline", label: "时间轴", actorUserId: trackDeleter.user.userId },
+      { pageKey: "module:timeline", label: "时间轴轨道", action: "delete", pageDeleted: false, actorUserId: trackDeleter.user.userId },
       async () => {
         await trackDeleter.agent.delete(`/api/timeline-tracks/${removedTrack.body.data.id}`).set("X-CSRF-Token", trackDeleter.csrfToken).send({
           expectedVersionNo: removedTrack.body.data.versionNo
@@ -481,7 +489,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "module", module: "timeline" },
-      { pageKey: "module:timeline", label: "时间轴", actorUserId: eventUpdater.user.userId },
+      { pageKey: "module:timeline", label: "时间轴", action: "save", pageDeleted: false, actorUserId: eventUpdater.user.userId },
       async () => {
         await eventUpdater.agent.patch(`/api/timeline/${updatedEvent.body.data.id}`).set("X-CSRF-Token", eventUpdater.csrfToken).send({
           description: "更新后的事件说明。",
@@ -494,7 +502,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }).expect(201);
     await expectPublishedChange(
       { kind: "module", module: "timeline" },
-      { pageKey: "module:timeline", label: "时间轴", actorUserId: eventDeleter.user.userId },
+      { pageKey: "module:timeline", label: "时间轴事件", action: "delete", pageDeleted: false, actorUserId: eventDeleter.user.userId },
       async () => {
         await eventDeleter.agent.delete(`/api/timeline/${removedEvent.body.data.id}`).set("X-CSRF-Token", eventDeleter.csrfToken).send({
           expectedVersionNo: removedEvent.body.data.versionNo

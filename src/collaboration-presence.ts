@@ -39,10 +39,20 @@ export type PresenceParticipant = PresenceUser & {
   lastSeenAt: string;
 };
 
+export type CollaborativeChangeAction = "save" | "delete";
+
+export type CollaborativeChangeOptions = {
+  action?: CollaborativeChangeAction;
+  label?: string;
+  pageDeleted?: boolean;
+};
+
 export type CollaborativeChange = {
   id: string;
   pageKey: string;
   label: string;
+  action: CollaborativeChangeAction;
+  pageDeleted: boolean;
   actorUserId: string;
   actorDisplayName: string;
   savedAt: string;
@@ -225,11 +235,15 @@ export class CollaborationPresence {
     workId: string,
     pageKey: string,
     actor: { userId: string; displayName: string },
-    label = pageLabelForKey(pageKey)
+    labelOrOptions: string | CollaborativeChangeOptions = {}
   ): CollaborativeChange | null {
     const now = this.now();
     this.prune(now);
-    const publishKey = `${workId}:${pageKey}:${actor.userId}`;
+    const options = typeof labelOrOptions === "string" ? { label: labelOrOptions } : labelOrOptions;
+    const action = options.action ?? "save";
+    const label = options.label ?? pageLabelForKey(pageKey);
+    const pageDeleted = options.pageDeleted === true;
+    const publishKey = `${workId}:${pageKey}:${actor.userId}:${action}`;
     const lastPublishedAt = this.lastPublishedAtMs.get(publishKey);
     if (
       this.minPublishIntervalMs > 0
@@ -253,6 +267,8 @@ export class CollaborationPresence {
       workId,
       pageKey,
       label,
+      action,
+      pageDeleted,
       actorUserId: actor.userId,
       actorDisplayName: actor.displayName,
       savedAt: new Date(now).toISOString(),
@@ -266,6 +282,8 @@ export class CollaborationPresence {
       id: change.id,
       pageKey: change.pageKey,
       label: change.label,
+      action: change.action,
+      pageDeleted: change.pageDeleted,
       actorUserId: change.actorUserId,
       actorDisplayName: change.actorDisplayName,
       savedAt: change.savedAt

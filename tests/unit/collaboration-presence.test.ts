@@ -64,6 +64,8 @@ describe("作品协作者在线状态", () => {
     expect(published).toMatchObject({
       pageKey: "entity-editor:relationship:relationship-1",
       label: "人物关系编辑",
+      action: "save",
+      pageDeleted: false,
       actorUserId: "owner",
       actorDisplayName: "作者"
     });
@@ -122,6 +124,30 @@ describe("作品协作者在线状态", () => {
     expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).not.toBeNull();
   });
 
+  it("在保存节流窗口内仍发布同页删除动作", () => {
+    let now = Date.parse("2026-07-24T10:30:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+    const page = { kind: "entity-editor" as const, module: "setting", resourceId: "setting-1" };
+    const pageKey = entityEditorPageKey("setting", "setting-1");
+
+    presence.heartbeat("work-1", "client-writer", writer, page);
+    const saved = presence.publishChange("work-1", pageKey, actor);
+    now += 1;
+    const deleted = presence.publishChange("work-1", pageKey, actor, {
+      action: "delete",
+      pageDeleted: true
+    });
+
+    expect(saved).toMatchObject({ action: "save", pageDeleted: false, label: "设定编辑" });
+    expect(deleted).toMatchObject({ action: "delete", pageDeleted: true, label: "设定编辑" });
+    expect(presence.heartbeat("work-1", "client-writer", writer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: deleted?.id, action: "delete", pageDeleted: true }),
+      expect.objectContaining({ id: saved?.id, action: "save", pageDeleted: false })
+    ]);
+  });
+
   it("向正文和模块页面下发变更并清理过期事件", () => {
     let now = Date.parse("2026-07-24T11:00:00.000Z");
     const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 0);
@@ -130,7 +156,7 @@ describe("作品协作者在线状态", () => {
 
     presence.heartbeat("work-1", "client-editor", writer, { kind: "editor", resourceId: "chapter-1" });
     const editorChange = presence.publishChange("work-1", editorPageKey("chapter-1"), owner);
-    expect(editorChange).toMatchObject({ pageKey: "editor:chapter-1", label: "正文编辑" });
+    expect(editorChange).toMatchObject({ pageKey: "editor:chapter-1", label: "正文编辑", action: "save", pageDeleted: false });
     expect(presence.heartbeat("work-1", "client-editor", writer, {
       kind: "editor",
       resourceId: "chapter-1"
@@ -138,7 +164,7 @@ describe("作品协作者在线状态", () => {
 
     presence.heartbeat("work-1", "client-timeline", writer, { kind: "module", module: "timeline" });
     const moduleChange = presence.publishChange("work-1", modulePageKey("timeline"), owner);
-    expect(moduleChange).toMatchObject({ pageKey: "module:timeline", label: "时间轴" });
+    expect(moduleChange).toMatchObject({ pageKey: "module:timeline", label: "时间轴", action: "save", pageDeleted: false });
     expect(presence.heartbeat("work-1", "client-timeline", writer, {
       kind: "module",
       module: "timeline"

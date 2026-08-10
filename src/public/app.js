@@ -785,15 +785,40 @@ async function handleCollaborativeChanges(recentChanges) {
   collaborativeChangePromptOpen = true;
   try {
     const changeLabel = latest.label || "当前页面";
-    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已在“${changeLabel}”保存新内容。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
-      title: `${changeLabel}已更新`,
-      confirmLabel: "刷新页面",
+    const deleted = latest.action === "delete";
+    const targetLabel = deleted ? changeLabel.replace(/编辑$/u, "") : changeLabel;
+    const message = deleted
+      ? `${latest.actorDisplayName || "协作者"}已删除当前${targetLabel}。请先确认本地没有需要保留的修改，${latest.pageDeleted ? "确认后返回对应列表。" : "再刷新页面查看最新状态。"}`
+      : `${latest.actorDisplayName || "协作者"}已在“${changeLabel}”保存新内容。请先确认本地没有需要保留的修改，再刷新页面继续查看。`;
+    const shouldReload = await confirmToast(message, {
+      title: deleted ? `${targetLabel}已删除` : `${changeLabel}已更新`,
+      confirmLabel: deleted && latest.pageDeleted ? (latest.pageKey.startsWith("editor:") ? "返回正文" : "返回列表") : "刷新页面",
       cancelLabel: "稍后处理"
     });
-    if (shouldReload) window.location.reload();
+    if (shouldReload) reloadAfterCollaborativeChange(latest);
   } finally {
     collaborativeChangePromptOpen = false;
   }
+}
+
+function reloadAfterCollaborativeChange(change) {
+  const workId = state.work?.id;
+  if (change?.action === "delete" && change.pageDeleted && workId) {
+    const entityModule = {
+      setting: "settings",
+      character: "characters",
+      race: "races",
+      organization: "organizations",
+      relationship: "relationships"
+    }[String(change.pageKey ?? "").split(":")[1] ?? ""];
+    const safeRoute = change.pageKey.startsWith("editor:")
+      ? { view: "editor", workId }
+      : entityModule
+        ? { view: "module", workId, module: entityModule }
+        : { view: "welcome", workId };
+    window.history.replaceState(null, "", serializePageRoute(safeRoute));
+  }
+  window.location.reload();
 }
 
 function schedulePresenceHeartbeat() {
