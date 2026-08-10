@@ -3144,7 +3144,26 @@ function persistentToast(message, type = "info") {
   };
 }
 
+function restoreToastFocus(previousFocus) {
+  if (
+    previousFocus instanceof HTMLElement
+    && previousFocus.isConnected
+    && !previousFocus.matches(":disabled")
+    && previousFocus.getClientRects().length > 0
+  ) {
+    previousFocus.focus({ preventScroll: true });
+    if (document.activeElement === previousFocus) return;
+  }
+  const body = document.body;
+  const previousTabIndex = body.getAttribute("tabindex");
+  body.setAttribute("tabindex", "-1");
+  body.focus({ preventScroll: true });
+  if (previousTabIndex === null) body.removeAttribute("tabindex");
+  else body.setAttribute("tabindex", previousTabIndex);
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
+  const previousFocus = document.activeElement;
   const region = $("#toast-region");
   const element = document.createElement("section");
   element.className = "toast toast-confirmation";
@@ -3173,6 +3192,7 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
     const finish = (confirmed) => {
       element.remove();
       if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+      restoreToastFocus(previousFocus);
       resolve(confirmed);
     };
     cancel.addEventListener("click", () => finish(false), { once: true });

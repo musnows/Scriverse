@@ -44,6 +44,11 @@ const fixture = runWithRequestActor(owner.session.user, () => {
     category: "世界规则",
     content: "等待协作者删除。"
   });
+  const focusSetting = runtime.store.createSetting(workId, {
+    title: "焦点恢复设定",
+    category: "世界规则",
+    content: "等待协作者保存。"
+  });
   const firstCharacter = runtime.store.createCharacter(workId, { name: "林舟" });
   const secondCharacter = runtime.store.createCharacter(workId, { name: "沈星" });
   const deletedCharacter = runtime.store.createCharacter(workId, { name: "待删除角色" });
@@ -62,6 +67,8 @@ const fixture = runWithRequestActor(owner.session.user, () => {
     deletedChapterVersionNo: Number(deletedChapter.versionNo),
     deletedSettingId: String(deletedSetting.id),
     deletedSettingVersionNo: Number(deletedSetting.versionNo),
+    focusSettingId: String(focusSetting.id),
+    focusSettingVersionNo: Number(focusSetting.versionNo),
     characterId: String(firstCharacter.id),
     characterVersionNo: Number(firstCharacter.versionNo),
     deletedCharacterId: String(deletedCharacter.id),
@@ -78,17 +85,20 @@ function ownerDeleteTarget(target: string | null): { path: string; versionNo: nu
   return null;
 }
 
+function writerLocation(target: string | null): string {
+  if (target === "focus-chapter") return `/#view=editor&work=${fixture.workId}&chapter=${fixture.chapterId}`;
+  if (target === "focus-setting") return `/#view=entity-editor&work=${fixture.workId}&entity=setting&id=${fixture.focusSettingId}`;
+  if (target === "focus-character") return `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}`;
+  if (target === "delete-chapter") return `/#view=editor&work=${fixture.workId}&chapter=${fixture.deletedChapterId}`;
+  if (target === "delete-setting") return `/#view=entity-editor&work=${fixture.workId}&entity=setting&id=${fixture.deletedSettingId}`;
+  if (target === "delete-character") return `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.deletedCharacterId}`;
+  return `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}`;
+}
+
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (requestUrl.pathname === "/__e2e/login-writer") {
-    const target = requestUrl.searchParams.get("target");
-    const location = target === "delete-chapter"
-      ? `/#view=editor&work=${fixture.workId}&chapter=${fixture.deletedChapterId}`
-      : target === "delete-setting"
-        ? `/#view=entity-editor&work=${fixture.workId}&entity=setting&id=${fixture.deletedSettingId}`
-        : target === "delete-character"
-          ? `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.deletedCharacterId}`
-          : `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}`;
+    const location = writerLocation(requestUrl.searchParams.get("target"));
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(writer.token)}; Path=/; HttpOnly; SameSite=Lax`);
     response.writeHead(302, { Location: location });
     response.end();
@@ -157,6 +167,37 @@ const server = createServer((request, response) => {
         }
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/__e2e/owner-save-setting" && request.method === "POST") {
+    void (async () => {
+      try {
+        const setting = await fetch(`http://127.0.0.1:${port}/api/settings/${fixture.focusSettingId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `scriverse_session=${encodeURIComponent(owner.token)}`,
+            "X-CSRF-Token": owner.session.csrfToken
+          },
+          body: JSON.stringify({
+            content: `作者已更新协作设定 ${Date.now()}`,
+            expectedVersionNo: fixture.focusSettingVersionNo
+          })
+        });
+        const payload = await setting.json() as { data?: Json; error?: Json };
+        if (!setting.ok) {
+          response.writeHead(setting.status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(payload));
+          return;
+        }
+        fixture.focusSettingVersionNo = Number(payload.data?.versionNo ?? fixture.focusSettingVersionNo);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, versionNo: fixture.focusSettingVersionNo }));
       } catch (error) {
         response.writeHead(500, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
@@ -242,12 +283,14 @@ console.log(JSON.stringify({
   chapterId: fixture.chapterId,
   deletedChapterId: fixture.deletedChapterId,
   deletedSettingId: fixture.deletedSettingId,
+  focusSettingId: fixture.focusSettingId,
   characterId: fixture.characterId,
   deletedCharacterId: fixture.deletedCharacterId,
   relationshipId: fixture.relationshipId,
   writerLogin: `${baseUrl}/__e2e/login-writer`,
   ownerLogin: `${baseUrl}/__e2e/login-owner`,
   ownerSave: `${baseUrl}/__e2e/owner-save-character`,
+  ownerSaveSetting: `${baseUrl}/__e2e/owner-save-setting`,
   ownerDelete: `${baseUrl}/__e2e/owner-delete`
 }));
 
@@ -289,6 +332,23 @@ try {
       && change.actorUserId === owner.session.user.userId
       && change.actorDisplayName === "collab_owner"
     )), `expected targeted chapter change, got ${JSON.stringify(chapterChanges)}`);
+
+    const settingPage = { kind: "entity-editor", module: "setting", resourceId: fixture.focusSettingId };
+    await presence(writer.token, writer.session.csrfToken, writerClientId, settingPage);
+    await presence(owner.token, owner.session.csrfToken, ownerClientId, settingPage);
+    const settingSaveResponse = await fetch(`${baseUrl}/__e2e/owner-save-setting`, { method: "POST" });
+    const settingSavePayload = await settingSaveResponse.json() as Json;
+    assert.equal(settingSaveResponse.status, 200, JSON.stringify(settingSavePayload));
+    assert.equal(settingSavePayload.ok, true);
+
+    const afterSettingSave = await presence(writer.token, writer.session.csrfToken, writerClientId, settingPage);
+    const settingChanges = Array.isArray(afterSettingSave.recentChanges) ? afterSettingSave.recentChanges as Json[] : [];
+    assert.ok(settingChanges.some((change) => (
+      change.pageKey === `entity-editor:setting:${fixture.focusSettingId}`
+      && change.label === "设定编辑"
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted setting change, got ${JSON.stringify(settingChanges)}`);
 
     const characterPage = { kind: "entity-editor", module: "character", resourceId: fixture.characterId };
     await presence(writer.token, writer.session.csrfToken, writerClientId, characterPage);
