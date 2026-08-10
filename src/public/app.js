@@ -4033,6 +4033,7 @@ function showS3BackupEncryptionKey(key) {
 async function changeS3BackupEncryption(event) {
   const toggle = event.currentTarget;
   const enabled = toggle.checked;
+  const restoreToggleFocus = document.activeElement === toggle;
   toggle.disabled = true;
   try {
     const result = await api("/api/platform/backups/encryption", {
@@ -4054,6 +4055,7 @@ async function changeS3BackupEncryption(event) {
     toast(error.message, "error");
   } finally {
     toggle.disabled = false;
+    if (restoreToggleFocus && !$("#s3-backup-key-dialog").open) toggle.focus();
   }
 }
 
@@ -4085,6 +4087,7 @@ function downloadS3BackupEncryptionKey() {
 function confirmS3BackupEncryptionKeySaved() {
   $("#s3-backup-key-value").value = "";
   $("#s3-backup-key-dialog").close();
+  $("#s3-backup-encryption-toggle").focus();
   toast("S3 备份加密已开启，请妥善保管密钥");
 }
 

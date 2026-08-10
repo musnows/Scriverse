@@ -41,7 +41,7 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain('id="s3-backup-run-all"');
     expect(page.text).toContain('id="s3-backup-runs"');
     expect(page.text).toContain('/styles.css?v=20260810-backup-encryption-v1');
-    expect(page.text).toContain('/app.js?v=20260810-backup-encryption-v2');
+    expect(page.text).toContain('/app.js?v=20260810-backup-encryption-v3');
 
     expect(application.text).toContain('/s3-backup-ui.js?v=20260810-backup-encryption-v1');
     expect(application.text).toContain('api("/api/platform/backups/encryption")');
@@ -49,6 +49,8 @@ describe("S3 系统备份界面", () => {
     expect(application.text).toContain('anchor.download = "scriverse-s3-backup-key.txt"');
     expect(application.text).toContain('addEventListener("cancel", (event) => event.preventDefault())');
     expect(application.text).not.toContain('title: "准备开启备份加密"');
+    expect(application.text).toContain('if (restoreToggleFocus && !$("#s3-backup-key-dialog").open) toggle.focus()');
+    expect(application.text).toContain('$("#s3-backup-encryption-toggle").focus()');
     expect(application.text).toContain('api("/api/platform/backups/targets")');
     expect(application.text).toContain('api("/api/platform/backups/runs?limit=100")');
     expect(application.text).toContain('api("/api/platform/backups/run"');
