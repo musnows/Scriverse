@@ -5012,6 +5012,10 @@ function resetWorkScopedUiCaches() {
   draftTypeFilter = "all";
   draftBindingFilters = [];
   draftFiltersPanelOpen = false;
+  settingFilters.keyword = "";
+  settingFilters.category = "";
+  settingFilters.lockState = "all";
+  settingFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];

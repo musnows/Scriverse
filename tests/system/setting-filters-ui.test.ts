@@ -21,7 +21,7 @@ describe("设定筛选界面", () => {
     ]);
 
     expect(page.text).toContain('/styles.css?v=20260811-setting-inline-filters-v2');
-    expect(page.text).toContain('/app.js?v=20260810-setting-filter-focus-v1');
+    expect(page.text).toContain('/app.js?v=20260811-setting-filter-work-scope-v1');
     expect(application.text).toContain('/setting-filters.js?v=20260810-setting-inline-filters-v1');
     expect(application.text).toContain('const settingFilters = { keyword: "", category: "", lockState: "all" };');
     expect(application.text).toContain('aria-label="筛选设定" aria-controls="setting-filter-panel" aria-expanded="${settingFiltersPanelOpen}"');
@@ -38,5 +38,24 @@ describe("设定筛选界面", () => {
     expect(filters.text).toContain('export function filterSettings');
     expect(styles.text).toContain('.setting-filter-toolbar { grid-template-columns:');
     expect(styles.text).toContain('.setting-filter-field input, .setting-filter-field select { width: 100%;');
+  });
+
+  it("切换作品时重置设定筛选与面板状态", async () => {
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    const resetWorkScopedUiCachesSource = application.text.slice(
+      application.text.indexOf("function resetWorkScopedUiCaches()"),
+      application.text.indexOf("async function selectWork(workId, preferredChapterId = null)")
+    );
+    const selectWorkSource = application.text.slice(
+      application.text.indexOf("async function selectWork(workId, preferredChapterId = null)"),
+      application.text.indexOf("function renderTree()")
+    );
+
+    expect(resetWorkScopedUiCachesSource).toContain('settingFilters.keyword = "";');
+    expect(resetWorkScopedUiCachesSource).toContain('settingFilters.category = "";');
+    expect(resetWorkScopedUiCachesSource).toContain('settingFilters.lockState = "all";');
+    expect(resetWorkScopedUiCachesSource).toContain("settingFiltersPanelOpen = false;");
+    expect(resetWorkScopedUiCachesSource).toContain("Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });");
+    expect(selectWorkSource).toContain("if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();");
   });
 });
