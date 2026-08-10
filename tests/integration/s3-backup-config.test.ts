@@ -26,8 +26,8 @@ async function register(runtime: Runtime, username: string): Promise<{
 describe("S3 备份目标配置 API", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    for (const runtime of runtimes.splice(0)) runtime.close();
+  afterEach(async () => {
+    for (const runtime of runtimes.splice(0)) await runtime.close();
   });
 
   it("保存多个目标并加密凭据、规范化目录及保留未更新的凭据", async () => {

@@ -313,7 +313,7 @@ async function shutdown(): Promise<void> {
   server.close();
   mockAi.closeAllConnections();
   mockAi.close();
-  runtime.close();
+  await runtime.close();
   await rm(isolatedDirectory, { recursive: true, force: true });
   process.exit(0);
 }

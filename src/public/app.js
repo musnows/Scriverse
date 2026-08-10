@@ -6573,8 +6573,14 @@ async function renderReviews(page = moduleListPages.reviews) {
   bindModulePagination("reviews", renderReviews);
   bindRecordPreview("[data-open-review]", (id) => openReviewDetailDialog(reviews.find((item) => item.id === id)));
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
-    await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
-    await renderReviews(pageResult.page);
+    button.disabled = true;
+    try {
+      await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
+      await renderReviews(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
   }));
   $("#module-content").querySelectorAll("[data-merge-review]").forEach((button) => button.addEventListener("click", async () => {
     const target = characterById.get(button.dataset.mergeTarget);

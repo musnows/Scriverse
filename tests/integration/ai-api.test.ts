@@ -44,9 +44,9 @@ describe("AI 供应商、模型与建议 API", () => {
     chapterId = chapter.body.data.id;
     await request(runtime.app).post(`/api/works/${workId}/settings`).send({ title: "跃迁限制", category: "世界规则", content: "跃迁后必须冷却十二小时。", locked: true, status: "confirmed" });
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    runtime.close();
+    await runtime.close();
   });
 
   async function configureAi(): Promise<{ providerId: string; modelId: string }> {

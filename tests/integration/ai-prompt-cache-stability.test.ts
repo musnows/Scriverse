@@ -112,9 +112,9 @@ describe("AI 多轮 prompt cache 稳定性", () => {
     }).expect(200);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
-    runtime.close();
+    await runtime.close();
   });
 
   async function streamTurn(instruction: string, scope: Record<string, unknown>, conversationId?: string): Promise<string> {

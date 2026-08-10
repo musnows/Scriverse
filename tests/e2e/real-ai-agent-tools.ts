@@ -403,7 +403,7 @@ try {
     appServer.close();
     await once(appServer, "close");
   }
-  runtime?.close();
+  await runtime?.close();
   mockAi.close();
   if (mockAi.listening) await once(mockAi, "close");
   await rm(isolatedDirectory, { recursive: true, force: true });

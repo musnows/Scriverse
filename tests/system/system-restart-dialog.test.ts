@@ -32,7 +32,7 @@ describe("系统重启认证清理", () => {
       expect(second.body.data.bootId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(second.body.data.bootId).not.toBe(first.body.data.bootId);
     } finally {
-      secondRuntime.close();
+      await secondRuntime.close();
     }
   });
 

@@ -34,8 +34,8 @@ class SchedulerS3Client implements S3ObjectClient {
 describe("S3 备份调度与运行事件 API", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    for (const runtime of runtimes.splice(0)) runtime.close();
+  afterEach(async () => {
+    for (const runtime of runtimes.splice(0)) await runtime.close();
   });
 
   it("按服务器本地时间补跑当天任务、避免重复并保持目标串行", async () => {
