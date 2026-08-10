@@ -312,7 +312,7 @@ describe("数据库版本化迁移", () => {
     second.close();
   });
 
-  it("从已有迁移 74 平滑升级到 79 并重建 AI 历史短词索引", () => {
+  it("从已有迁移 74 平滑升级到 81 并重建 AI 历史短词索引", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-74-upgrade-"));
     roots.push(root);
     const filename = join(root, "migration-74.db");
@@ -330,7 +330,7 @@ describe("数据库版本化迁移", () => {
       VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
       DROP TABLE s3_backup_runs;
       DROP TABLE s3_backup_targets;
-      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79);
+      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79, 80, 81);
     `);
     const searchRow = legacy.prepare(
       "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"
@@ -376,7 +376,7 @@ describe("数据库版本化迁移", () => {
       );
       INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
       VALUES (1, 'top-right', '{"characters":25}', 60, '2026-08-09T00:00:00.000Z');
-      DELETE FROM schema_migrations WHERE version IN (78, 79);
+      DELETE FROM schema_migrations WHERE version IN (78, 79, 80, 81);
     `);
     legacy.close();
 
@@ -413,7 +413,7 @@ describe("数据库版本化迁移", () => {
       );
       INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
       VALUES (1, 'top-right', '{"characters":25}', 120, '2026-08-09T00:00:00.000Z');
-      DELETE FROM schema_migrations WHERE version = 79;
+      DELETE FROM schema_migrations WHERE version IN (79, 80, 81);
     `);
     legacy.close();
 
@@ -426,6 +426,91 @@ describe("数据库版本化迁移", () => {
     });
     expect(() => migrated.run("UPDATE platform_ui_settings SET galaxy_frame_rate = 240 WHERE id = 1")).not.toThrow();
     expect(migrated.get("SELECT galaxy_frame_rate FROM platform_ui_settings WHERE id = 1")).toEqual({ galaxy_frame_rate: 240 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 80 为既有库补建审计列表索引并保留日志", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-audit-index-existing-"));
+    roots.push(root);
+    const filename = join(root, "audit-index-existing.db");
+    const current = new Database(filename);
+    const timestamp = "2026-08-10T00:00:00.000Z";
+    current.run(
+      `INSERT INTO works (id, title, created_at, updated_at)
+       VALUES ('work-audit-index', '审计索引迁移', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO audit_logs (id, work_id, action, entity_type, actor, detail_json, created_at)
+       VALUES ('audit-before-index', 'work-audit-index', 'work.updated', 'work', 'owner', '{}', ?)`,
+      timestamp
+    );
+    current.run("DROP INDEX idx_audit_logs_work_created");
+    current.run("DELETE FROM schema_migrations WHERE version = 80");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 80")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA index_xinfo('idx_audit_logs_work_created')")
+      .filter((column) => column.key === 1)
+      .map((column) => ({ name: column.name, desc: column.desc }))).toEqual([
+      { name: "work_id", desc: 0 },
+      { name: "created_at", desc: 1 }
+    ]);
+    expect(migrated.get("SELECT id FROM audit_logs WHERE id = 'audit-before-index'")).toEqual({ id: "audit-before-index" });
+    expect(migrated.all(
+      `EXPLAIN QUERY PLAN SELECT log.*, user.display_name AS actor_display_name, user.username AS actor_username
+       FROM audit_logs log LEFT JOIN users user ON user.id = log.user_id
+       WHERE log.work_id = ? ORDER BY log.created_at DESC LIMIT 200`,
+      "work-audit-index"
+    ).some((step) => String(step.detail).includes("USING INDEX idx_audit_logs_work_created"))).toBe(true);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 80 在全新库预建索引后可幂等登记并重启", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-audit-index-fresh-"));
+    roots.push(root);
+    const filename = join(root, "audit-index-fresh.db");
+
+    const first = new Database(filename);
+    expect(first.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 80")).toEqual({ count: 1 });
+    expect(first.all("PRAGMA index_list(audit_logs)").filter((index) => index.name === "idx_audit_logs_work_created")).toHaveLength(1);
+    first.close();
+
+    const restarted = new Database(filename);
+    expect(restarted.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 80")).toEqual({ count: 1 });
+    expect(restarted.all("PRAGMA index_list(audit_logs)").filter((index) => index.name === "idx_audit_logs_work_created")).toHaveLength(1);
+    expect(restarted.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(restarted.all("PRAGMA foreign_key_check")).toEqual([]);
+    restarted.close();
+  });
+
+  it("迁移 81 在版本 80 数据库新增备份加密单行表", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-backup-encryption-"));
+    roots.push(root);
+    const filename = join(root, "backup-encryption.db");
+    const current = new Database(filename);
+    current.run("DROP TABLE s3_backup_encryption");
+    current.run("DELETE FROM schema_migrations WHERE version = 81");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 80")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 81")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA table_info(s3_backup_encryption)").map((column) => column.name)).toEqual([
+      "id",
+      "enabled",
+      "kek_encrypted",
+      "kek_iv",
+      "kek_tag",
+      "created_at",
+      "updated_at"
+    ]);
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
