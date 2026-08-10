@@ -47,6 +47,8 @@ const fixture = runWithRequestActor(owner.session.user, () => {
     workId,
     chapterId: String(chapter.id),
     chapterVersionNo: Number(chapter.versionNo),
+    characterId: String(firstCharacter.id),
+    characterVersionNo: Number(firstCharacter.versionNo),
     relationshipId: String(relationship.id),
     relationshipVersionNo: Number(relationship.versionNo)
   };
@@ -56,13 +58,13 @@ const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (requestUrl.pathname === "/__e2e/login-writer") {
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(writer.token)}; Path=/; HttpOnly; SameSite=Lax`);
-    response.writeHead(302, { Location: `/#view=module&work=${fixture.workId}&module=relationships` });
+    response.writeHead(302, { Location: `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}` });
     response.end();
     return;
   }
   if (requestUrl.pathname === "/__e2e/login-owner") {
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(owner.token)}; Path=/; HttpOnly; SameSite=Lax`);
-    response.writeHead(302, { Location: `/#view=module&work=${fixture.workId}&module=relationships` });
+    response.writeHead(302, { Location: `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}` });
     response.end();
     return;
   }
@@ -90,6 +92,37 @@ const server = createServer((request, response) => {
         fixture.chapterVersionNo = Number(payload.data?.versionNo ?? fixture.chapterVersionNo);
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, versionNo: fixture.chapterVersionNo }));
+      } catch (error) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/__e2e/owner-save-character" && request.method === "POST") {
+    void (async () => {
+      try {
+        const character = await fetch(`http://127.0.0.1:${port}/api/characters/${fixture.characterId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `scriverse_session=${encodeURIComponent(owner.token)}`,
+            "X-CSRF-Token": owner.session.csrfToken
+          },
+          body: JSON.stringify({
+            aliases: [`协作更新 ${Date.now()}`],
+            expectedVersionNo: fixture.characterVersionNo
+          })
+        });
+        const payload = await character.json() as { data?: Json; error?: Json };
+        if (!character.ok) {
+          response.writeHead(character.status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(payload));
+          return;
+        }
+        fixture.characterVersionNo = Number(payload.data?.versionNo ?? fixture.characterVersionNo);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, versionNo: fixture.characterVersionNo }));
       } catch (error) {
         response.writeHead(500, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
@@ -142,9 +175,11 @@ console.log(JSON.stringify({
   baseUrl,
   workId: fixture.workId,
   chapterId: fixture.chapterId,
+  characterId: fixture.characterId,
   relationshipId: fixture.relationshipId,
   writerLogin: `${baseUrl}/__e2e/login-writer`,
-  ownerSave: `${baseUrl}/__e2e/owner-save-relationship`
+  ownerLogin: `${baseUrl}/__e2e/login-owner`,
+  ownerSave: `${baseUrl}/__e2e/owner-save-character`
 }));
 
 async function presence(cookieToken: string, csrf: string, clientId: string, page: Json): Promise<Json> {
@@ -179,7 +214,29 @@ try {
 
     const afterChapterSave = await presence(writer.token, writer.session.csrfToken, writerClientId, { kind: "editor", resourceId: fixture.chapterId });
     const chapterChanges = Array.isArray(afterChapterSave.recentChanges) ? afterChapterSave.recentChanges as Json[] : [];
-    assert.deepEqual(chapterChanges, []);
+    assert.ok(chapterChanges.some((change) => (
+      change.pageKey === `editor:${fixture.chapterId}`
+      && change.label === "正文编辑"
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted chapter change, got ${JSON.stringify(chapterChanges)}`);
+
+    const characterPage = { kind: "entity-editor", module: "character", resourceId: fixture.characterId };
+    await presence(writer.token, writer.session.csrfToken, writerClientId, characterPage);
+    await presence(owner.token, owner.session.csrfToken, ownerClientId, characterPage);
+    const characterSaveResponse = await fetch(`${baseUrl}/__e2e/owner-save-character`, { method: "POST" });
+    const characterSavePayload = await characterSaveResponse.json() as Json;
+    assert.equal(characterSaveResponse.status, 200, JSON.stringify(characterSavePayload));
+    assert.equal(characterSavePayload.ok, true);
+
+    const afterCharacterSave = await presence(writer.token, writer.session.csrfToken, writerClientId, characterPage);
+    const characterChanges = Array.isArray(afterCharacterSave.recentChanges) ? afterCharacterSave.recentChanges as Json[] : [];
+    assert.ok(characterChanges.some((change) => (
+      change.pageKey === `entity-editor:character:${fixture.characterId}`
+      && change.label === "角色编辑"
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted character change, got ${JSON.stringify(characterChanges)}`);
 
     const relationshipPage = { kind: "entity-editor", module: "relationship", resourceId: fixture.relationshipId };
     await presence(writer.token, writer.session.csrfToken, writerClientId, relationshipPage);
@@ -201,7 +258,7 @@ try {
     const globalChanges = Array.isArray(globalList.recentChanges) ? globalList.recentChanges as Json[] : [];
     assert.deepEqual(globalChanges, []);
 
-    console.log("[e2e] collaboration-refresh: targeted relationship changes OK");
+    console.log("[e2e] collaboration-refresh: targeted chapter, character and relationship changes OK");
 
     server.closeAllConnections();
     server.close();

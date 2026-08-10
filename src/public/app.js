@@ -753,7 +753,7 @@ async function refreshPresence() {
       presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
       const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
-      void handleRelationshipCollaborativeChanges(recentChanges);
+      void handleCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -763,10 +763,9 @@ async function refreshPresence() {
   return presenceParticipants;
 }
 
-async function handleRelationshipCollaborativeChanges(recentChanges) {
+async function handleCollaborativeChanges(recentChanges) {
   if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
   const localKey = presencePageKey(presencePageForRoute());
-  if (!localKey.startsWith("entity-editor:relationship:")) return;
   const selfId = state.user?.userId;
   const incoming = recentChanges.filter((change) => (
     change
@@ -785,8 +784,9 @@ async function handleRelationshipCollaborativeChanges(recentChanges) {
   }
   collaborativeChangePromptOpen = true;
   try {
-    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新当前人物关系。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
-      title: "人物关系已更新",
+    const changeLabel = latest.label || "当前页面";
+    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已在“${changeLabel}”保存新内容。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
+      title: `${changeLabel}已更新`,
       confirmLabel: "刷新页面",
       cancelLabel: "稍后处理"
     });
