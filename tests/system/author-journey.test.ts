@@ -62,7 +62,7 @@ describe("作者完整创作流程", () => {
   });
 
   afterAll(async () => {
-    runtime.close();
+    await runtime.close();
     mockServer.close();
     await once(mockServer, "close");
   });
@@ -321,8 +321,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260810-entity-save-feedback-v1');
-    expect(page.text).toContain('/styles.css?v=20260810-relationship-preview-fullscreen-v1');
+    expect(page.text).toContain('/app.js?v=20260811-analysis-task-mention-presence-backup-v1');
+    expect(page.text).toContain('/styles.css?v=20260811-analysis-task-mention-presence-backup-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -430,10 +430,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".analysis-type-description");
     expect(page.text).toContain('id="setting-editor-confirm"');
     expect(application.text).toContain('review: "已完成"');
+    expect(application.text).toContain('failed: "失败"');
+    expect(application.text).toContain('/background-task-center.js?v=20260810-analysis-task-failed-v1');
+    expect(application.text).toContain('if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };');
     expect(application.text).not.toContain('review: "待审核"');
     expect(application.text).toContain('"分析已完成"');
     expect(application.text).not.toContain("结果进入审核状态");
     expect(styles.text).toContain("--toast-bg:");
+    expect(styles.text).toContain(".task-status-badge.is-partial, .task-status-badge.is-failed");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
     expect(styles.text).toContain("--relationship-network-surface: #eef2f7");
     expect(styles.text).toContain("--relationship-network-surface: #12121a");
@@ -1008,7 +1012,9 @@ describe("作者完整创作流程", () => {
       scope: { type: "chapter", chapterId },
       modelId: model.body.data.id
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，林舟望向逐渐远去的北港。"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"飞船离开北港。"}');
+    expect(streamed.text.indexOf('"delta":"舱门关闭，"')).toBeLessThan(streamed.text.indexOf('"delta":"飞船离开北港。"'));
     expect(streamed.text).toContain("event: complete");
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({

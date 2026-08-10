@@ -54,10 +54,11 @@ import {
   normalizeTimelineSortDirection,
   timelineTrackColorIndex
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
-import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
-import { collectS3BackupRunTransitions, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260804-s3-backup-v1";
+import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
+import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -153,16 +154,9 @@ const cachedWorkModules = new Set([
   "ai-settings"
 ]);
 
-function createPresenceClientId() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
-}
-
-const presenceClientId = createPresenceClientId();
+let presenceSessionStorage = null;
+try { presenceSessionStorage = window.sessionStorage; } catch { /* 浏览器禁用存储时使用页面级新标识 */ }
+const presenceClientId = createPresenceClientId(presenceSessionStorage);
 const presenceHeartbeatInterval = 12_000;
 const systemBootCheckInterval = 8_000;
 let presenceParticipants = [];
@@ -198,6 +192,8 @@ let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 let s3BackupTargets = [];
 let s3BackupRuns = [];
+let s3BackupEncryption = { enabled: false, keyConfiguredAt: null };
+let s3BackupEncryptionConfirmationToken = null;
 let editingS3BackupTargetId = null;
 let s3BackupPollTimer = null;
 let s3BackupPollRequest = 0;
@@ -248,18 +244,19 @@ function analysisTaskStatusLabel(status) {
     review: "已完成",
     completed: "已完成",
     partial: "部分失败",
+    failed: "失败",
     expired: "已过期",
     cancelled: "已取消"
   })[String(status)] ?? "未知状态";
 }
 
 function canRerunAnalysisTask(task) {
-  return ["review", "completed", "partial", "expired", "cancelled"].includes(String(task?.status ?? ""));
+  return ["review", "completed", "partial", "failed", "expired", "cancelled"].includes(String(task?.status ?? ""));
 }
 
 function normalizedAnalysisTaskStatus(status) {
   const value = String(status);
-  return ["pending", "running", "review", "completed", "partial", "expired", "cancelled"].includes(value)
+  return ["pending", "running", "review", "completed", "partial", "failed", "expired", "cancelled"].includes(value)
     ? value
     : "unknown";
 }
@@ -953,6 +950,7 @@ let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 let aiMentionMatch = null;
 let aiMentionRange = null;
+let aiMentionActiveIndex = -1;
 let settingsReturnContext = null;
 let entityEditorType = null;
 let entityEditorDirty = false;
@@ -2071,7 +2069,46 @@ function aiPromptTextBeforeCursor() {
 function hideAiMentionMenu() {
   aiMentionMatch = null;
   aiMentionRange = null;
-  $("#ai-mention-menu").classList.add("hidden");
+  aiMentionActiveIndex = -1;
+  const prompt = $("#ai-prompt");
+  const menu = $("#ai-mention-menu");
+  prompt.setAttribute("aria-expanded", "false");
+  prompt.removeAttribute("aria-activedescendant");
+  menu.querySelectorAll("[role=option]").forEach((option) => {
+    option.classList.remove("is-active");
+    option.setAttribute("aria-selected", "false");
+  });
+  menu.classList.add("hidden");
+}
+
+function setAiMentionActiveOption(nextIndex) {
+  const prompt = $("#ai-prompt");
+  const options = [...$("#ai-mention-menu").querySelectorAll("[role=option]")];
+  if (!options.length) {
+    aiMentionActiveIndex = -1;
+    prompt.removeAttribute("aria-activedescendant");
+    return null;
+  }
+  aiMentionActiveIndex = (nextIndex + options.length) % options.length;
+  let activeOption = null;
+  options.forEach((option, index) => {
+    const active = index === aiMentionActiveIndex;
+    option.classList.toggle("is-active", active);
+    option.setAttribute("aria-selected", String(active));
+    if (active) activeOption = option;
+  });
+  prompt.setAttribute("aria-activedescendant", activeOption.id);
+  activeOption.scrollIntoView({ block: "nearest" });
+  return activeOption;
+}
+
+function moveAiMentionActiveOption(direction) {
+  const optionCount = $("#ai-mention-menu").querySelectorAll("[role=option]").length;
+  if (!optionCount) return null;
+  const nextIndex = aiMentionActiveIndex < 0
+    ? (direction > 0 ? 0 : optionCount - 1)
+    : aiMentionActiveIndex + direction;
+  return setAiMentionActiveOption(nextIndex);
 }
 
 function syncAiReferencesWithPrompt() {
@@ -2100,10 +2137,13 @@ function updateAiMentionMenu() {
   }))) ?? [];
   const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query)
     .filter((item) => item.kind !== "context-settings" || $("#ai-task").value !== "roleplay");
+  aiMentionActiveIndex = -1;
+  prompt.removeAttribute("aria-activedescendant");
   menu.innerHTML = options.length
-    ? options.map((item) => `<button class="ai-mention-option" type="button" role="option" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
+    ? options.map((item, index) => `<button id="ai-mention-option-${index}" class="ai-mention-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
     : '<p class="ai-mention-empty">没有匹配的角色、设定、章节或上下文能力</p>';
   menu.classList.remove("hidden");
+  prompt.setAttribute("aria-expanded", "true");
 }
 
 function selectAiMention(button) {
@@ -3959,6 +3999,17 @@ function s3BackupTargetFailed(target) {
   return Number.isFinite(failedAt) && (!Number.isFinite(succeededAt) || failedAt > succeededAt);
 }
 
+function renderS3BackupEncryption() {
+  const presentation = s3BackupEncryptionPresentation(s3BackupEncryption);
+  const toggle = $("#s3-backup-encryption-toggle");
+  toggle.checked = s3BackupEncryption.enabled;
+  $("#s3-backup-encryption-description").textContent = presentation.description;
+  const status = $("#s3-backup-encryption-status");
+  status.className = `s3-backup-status ${presentation.statusClass}`.trim();
+  status.textContent = presentation.label;
+  $("#s3-backup-encryption-warning").classList.toggle("hidden", !presentation.showPrivateBucketWarning);
+}
+
 function renderS3BackupTargets() {
   const enabledCount = s3BackupTargets.filter((target) => target.enabled).length;
   $("#s3-backup-summary").textContent = s3BackupTargets.length
@@ -4031,12 +4082,15 @@ async function loadS3BackupData({ loading = false } = {}) {
     $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">正在读取备份目标……</p>';
     $("#s3-backup-runs").innerHTML = '<p class="s3-backup-empty">正在读取运行记录……</p>';
   }
-  const [targets, runs] = await Promise.all([
+  const [targets, runs, encryption] = await Promise.all([
     api("/api/platform/backups/targets"),
-    api("/api/platform/backups/runs?limit=30")
+    api("/api/platform/backups/runs?limit=30"),
+    api("/api/platform/backups/encryption")
   ]);
   s3BackupTargets = targets;
   s3BackupRuns = runs.items;
+  s3BackupEncryption = encryption;
+  renderS3BackupEncryption();
   renderS3BackupTargets();
   renderS3BackupRuns();
 }
@@ -4047,9 +4101,103 @@ async function openS3BackupDialog() {
   if (!dialog.open) dialog.showModal();
   try {
     await loadS3BackupData({ loading: true });
+    if (!s3BackupEncryption.enabled) {
+      toast("未开启备份加密，请将 S3 桶设置为私有桶，避免数据泄露", "warning");
+    }
   } catch (error) {
     $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">备份配置加载失败，请稍后刷新。</p>';
     toast(error.message, "error");
+  }
+}
+
+function showS3BackupEncryptionKey(key, confirmationToken) {
+  s3BackupEncryptionConfirmationToken = confirmationToken;
+  $("#s3-backup-key-value").value = key;
+  const dialog = $("#s3-backup-key-dialog");
+  if (!dialog.open) dialog.showModal();
+  queueMicrotask(() => $("#s3-backup-key-copy").focus());
+}
+
+async function changeS3BackupEncryption(event) {
+  const toggle = event.currentTarget;
+  const enabled = toggle.checked;
+  const restoreToggleFocus = document.activeElement === toggle;
+  toggle.disabled = true;
+  try {
+    const result = await api("/api/platform/backups/encryption", {
+      method: "POST",
+      body: { enabled }
+    });
+    s3BackupEncryption = {
+      enabled: result.enabled === true,
+      keyConfiguredAt: result.keyConfiguredAt ?? s3BackupEncryption.keyConfiguredAt
+    };
+    renderS3BackupEncryption();
+    if (typeof result.key === "string" && result.key && typeof result.confirmationToken === "string" && result.confirmationToken) {
+      showS3BackupEncryptionKey(result.key, result.confirmationToken);
+    } else {
+      toast(enabled ? "S3 备份加密已开启" : "S3 备份加密已关闭；历史加密备份仍可使用原密钥恢复");
+    }
+  } catch (error) {
+    renderS3BackupEncryption();
+    toast(error.message, "error");
+  } finally {
+    toggle.disabled = false;
+    if (restoreToggleFocus && !$("#s3-backup-key-dialog").open) toggle.focus();
+  }
+}
+
+async function copyS3BackupEncryptionKey() {
+  const field = $("#s3-backup-key-value");
+  try {
+    await navigator.clipboard.writeText(field.value);
+    toast("备份加密密钥已复制");
+  } catch {
+    field.focus();
+    field.select();
+    toast("无法自动复制，请手动复制密钥", "error");
+  }
+}
+
+function downloadS3BackupEncryptionKey() {
+  const value = $("#s3-backup-key-value").value;
+  const url = URL.createObjectURL(new Blob([s3BackupEncryptionKeyFile(value)], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "scriverse-s3-backup-key.txt";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  toast("备份加密密钥文件已下载");
+}
+
+async function confirmS3BackupEncryptionKeySaved() {
+  const confirmationToken = s3BackupEncryptionConfirmationToken;
+  if (!confirmationToken) return toast("备份加密确认已失效，请刷新后重新开启", "error");
+  const button = $("#s3-backup-key-confirm");
+  button.disabled = true;
+  button.textContent = "正在开启";
+  try {
+    const result = await api("/api/platform/backups/encryption/confirm", {
+      method: "POST",
+      body: { confirmationToken }
+    });
+    s3BackupEncryption = {
+      enabled: result.enabled === true,
+      keyConfiguredAt: result.keyConfiguredAt ?? null
+    };
+    renderS3BackupEncryption();
+    s3BackupEncryptionConfirmationToken = null;
+    $("#s3-backup-key-value").value = "";
+    $("#s3-backup-key-dialog").close();
+    $("#s3-backup-encryption-toggle").focus();
+    toast("S3 备份加密已开启，请妥善保管密钥");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "我已保存";
   }
 }
 
@@ -6578,8 +6726,14 @@ async function renderReviews(page = moduleListPages.reviews) {
   bindModulePagination("reviews", renderReviews);
   bindRecordPreview("[data-open-review]", (id) => openReviewDetailDialog(reviews.find((item) => item.id === id)));
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
-    await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
-    await renderReviews(pageResult.page);
+    button.disabled = true;
+    try {
+      await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
+      await renderReviews(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
   }));
   $("#module-content").querySelectorAll("[data-merge-review]").forEach((button) => button.addEventListener("click", async () => {
     const target = characterById.get(button.dataset.mergeTarget);
@@ -7618,6 +7772,7 @@ function backgroundProductUpdateMarkup() {
 
 function backgroundTaskTransitionMessage(transition) {
   const label = analysisTaskTypeLabel(transition.task.taskType);
+  if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };
   if (transition.status === "partial") return { message: `${label}部分失败，请打开任务详情查看`, type: "error" };
   if (transition.status === "expired") return { message: `${label}已过期，正文可能已发生变化`, type: "error" };
   if (transition.status === "cancelled") return { message: `${label}已取消`, type: "info" };
@@ -12239,6 +12394,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         captchaAnswer: form.get("captchaAnswer")
       }
     });
+    if (systemRestartDetected) stagePresenceClientIdForRelogin(presenceSessionStorage, presenceClientId);
     window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
     window.location.reload();
   } catch (error) {
@@ -12329,6 +12485,15 @@ $("#platform-ui-settings-return").addEventListener("click", () => returnToSettin
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#s3-backup-close").addEventListener("click", () => $("#s3-backup-dialog").close());
 $("#s3-backup-settings-return").addEventListener("click", () => returnToSettingsHub("#s3-backup-button", "#s3-backup-dialog").catch((error) => toast(error.message, "error")));
+$("#s3-backup-encryption-toggle").addEventListener("change", (event) => void changeS3BackupEncryption(event));
+$("#s3-backup-key-copy").addEventListener("click", () => void copyS3BackupEncryptionKey());
+$("#s3-backup-key-download").addEventListener("click", downloadS3BackupEncryptionKey);
+$("#s3-backup-key-confirm").addEventListener("click", () => void confirmS3BackupEncryptionKeySaved());
+$("#s3-backup-key-dialog").addEventListener("cancel", (event) => event.preventDefault());
+$("#s3-backup-key-dialog").addEventListener("close", () => {
+  s3BackupEncryptionConfirmationToken = null;
+  $("#s3-backup-key-value").value = "";
+});
 $("#s3-backup-add").addEventListener("click", () => openS3BackupTargetDialog());
 $("#s3-backup-run-all").addEventListener("click", (event) => void queueS3BackupRuns(null, event.currentTarget));
 $("#s3-backup-refresh").addEventListener("click", async (event) => {
@@ -12940,10 +13105,25 @@ $("#ai-history-dialog").addEventListener("close", () => {
   $("#ai-history-toggle").setAttribute("aria-expanded", "false");
 });
 $("#ai-prompt").addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !$("#ai-mention-menu").classList.contains("hidden")) {
-    event.preventDefault();
-    hideAiMentionMenu();
-    return;
+  const mentionMenuVisible = !$("#ai-mention-menu").classList.contains("hidden");
+  if (mentionMenuVisible) {
+    if (!event.isComposing && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      if (moveAiMentionActiveOption(event.key === "ArrowDown" ? 1 : -1)) event.preventDefault();
+      return;
+    }
+    if (shouldSendAiPrompt(event)) {
+      const activeOption = $("#ai-mention-menu").querySelector('[role="option"][aria-selected="true"]');
+      if (activeOption) {
+        event.preventDefault();
+        selectAiMention(activeOption);
+        return;
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideAiMentionMenu();
+      return;
+    }
   }
   if (shouldSendAiPrompt(event)) {
     event.preventDefault();

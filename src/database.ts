@@ -6,7 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 79;
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表。
+export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
+export const DATABASE_SCHEMA_VERSION = 84;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -726,6 +728,8 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_volumes_work ON volumes(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_chapters_work ON chapters(work_id, volume_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_versions_chapter ON chapter_versions(chapter_id, version_no DESC);
+      CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_settings_work ON settings(work_id, category);
       CREATE INDEX IF NOT EXISTS idx_drafts_work ON drafts(work_id, draft_type, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_characters_work ON characters(work_id, name);
@@ -736,8 +740,10 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tasks_work ON analysis_tasks(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_calls_work ON ai_calls(work_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_audit_logs_work_created ON audit_logs(work_id, created_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_character_names_primary ON character_names(character_id) WHERE kind = 'primary';
       CREATE INDEX IF NOT EXISTS idx_character_names_character ON character_names(character_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_character_versions_character ON character_versions(character_id, version_no DESC);
@@ -3211,6 +3217,100 @@ export class Database {
       }
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(80)) {
+      this.transaction(() => {
+        this.run("CREATE INDEX IF NOT EXISTS idx_audit_logs_work_created ON audit_logs(work_id, created_at DESC)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (80, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(81)) {
+      this.transaction(() => {
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC)");
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (81, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(83)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS presence_entries (
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          client_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          avatar_url TEXT,
+          page_kind TEXT NOT NULL,
+          page_module TEXT,
+          page_resource_id TEXT,
+          last_seen_at TEXT NOT NULL,
+          PRIMARY KEY(work_id, client_id)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_entries_work ON presence_entries(work_id, last_seen_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_entries_last_seen ON presence_entries(last_seen_at)");
+        this.run(`CREATE TABLE IF NOT EXISTS presence_changes (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          page_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          actor_user_id TEXT NOT NULL,
+          actor_display_name TEXT NOT NULL,
+          saved_at TEXT NOT NULL,
+          recipient_client_ids_json TEXT NOT NULL DEFAULT '[]'
+            CHECK(json_valid(recipient_client_ids_json) AND json_type(recipient_client_ids_json) = 'array')
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_changes_work ON presence_changes(work_id, page_key, saved_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_changes_saved_at ON presence_changes(saved_at)");
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (83, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(84)) {
+      this.transaction(() => {
+        // 兼容曾使用更早迁移号创建备份加密表的开发版本，并确保列表索引完整。
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC)");
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_encryption (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          kek_encrypted TEXT,
+          kek_iv TEXT,
+          kek_tag TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(
+            (kek_encrypted IS NULL AND kek_iv IS NULL AND kek_tag IS NULL)
+            OR (kek_encrypted IS NOT NULL AND kek_iv IS NOT NULL AND kek_tag IS NOT NULL)
+          ),
+          CHECK(enabled = 0 OR kek_encrypted IS NOT NULL)
+        )`);
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (84, ?)", new Date().toISOString());
+      });
     }
   }
 

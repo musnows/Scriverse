@@ -75,6 +75,8 @@ describe("安全限速器", () => {
     }
     const blockedAi = await expensiveAgent.post("/API/WORKS/work_1/TASKS").expect(429);
     expect(blockedAi.body.error.code).toBe("EXPENSIVE_API_RATE_LIMITED");
+    await expensiveAgent.post("/api/tasks/task_1/run").expect(429);
+    await expensiveAgent.post("/api/tasks/task_1/rerun").expect(429);
 
     await expensiveAgent.get("/api/works/work_1/export").expect(200);
     for (let index = 0; index < 9; index += 1) {

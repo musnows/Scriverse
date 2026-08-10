@@ -16,7 +16,7 @@ import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
-import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
@@ -40,6 +40,7 @@ import {
   entityEditorPageKey,
   presencePageKinds
 } from "./collaboration-presence.js";
+import { PresenceStore } from "./presence-store.js";
 import {
   analysisTaskReadModules,
   clearSessionCookie,
@@ -505,6 +506,12 @@ const s3BackupRunQuerySchema = z.object({
   afterSequence: z.coerce.number().int().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional()
 }).strict();
+const s3BackupEncryptionSchema = z.object({
+  enabled: z.boolean()
+}).strict();
+const s3BackupEncryptionConfirmationSchema = z.object({
+  confirmationToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u, "备份加密确认令牌格式无效")
+}).strict();
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -581,7 +588,8 @@ const contextSchema = z.object({
   includeSettingInfo: z.boolean().optional()
 });
 
-const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
+/** 创建任务 API 的分析类型校验：仅允许可新建类型，历史类型在运行层保留防御性拒绝。 */
+export const creatableAnalysisTaskTypeSchema = z.enum(CREATABLE_ANALYSIS_TASK_TYPES);
 const relationshipSourceRefSchema = z.object({
   sourceType: z.string().trim().min(1).max(50).regex(/^[a-z][a-z-]*$/u),
   sourceId: identifier,
@@ -625,7 +633,7 @@ const relationshipAnalysisScopeSchema = z.object({
 });
 const analysisTaskSchema = z.union([
   z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
-  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
+  z.object({ taskType: creatableAnalysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
     if (input.scope?.includeAllSettings !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "includeAllSettings"], message: "包含所有设定仅支持人物关系分析" });
     }
@@ -683,8 +691,10 @@ export type Runtime = {
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
-  close: () => void;
+  close: () => Promise<void>;
 };
+
+export const RUNTIME_BACKUP_IDLE_TIMEOUT_MS = 9_000;
 
 function data(response: Response, value: unknown, status = 200): void {
   response.status(status).json({ data: value });
@@ -1014,7 +1024,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
-  const collaborationPresence = new CollaborationPresence();
+  const collaborationPresence = new CollaborationPresence(
+    45_000,
+    Date.now,
+    120_000,
+    50,
+    { store: new PresenceStore(database) }
+  );
   const publishRelationshipChange = (workId: string, relationshipId: string): void => {
     const actor = currentRequestActor();
     if (!actor || !workId || !relationshipId) return;
@@ -2175,6 +2191,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ui-settings", (request, response) => {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
+  app.get("/api/platform/backups/encryption", (_request, response) => {
+    data(response, backups.getEncryptionState());
+  });
+  app.post("/api/platform/backups/encryption", (request, response) => {
+    const input = parse(s3BackupEncryptionSchema, request.body);
+    data(response, backups.setEncryptionEnabled(input.enabled));
+  });
+  app.post("/api/platform/backups/encryption/confirm", (request, response) => {
+    const input = parse(s3BackupEncryptionConfirmationSchema, request.body);
+    data(response, backups.confirmEncryptionEnabled(input.confirmationToken));
+  });
   app.get("/api/platform/backups/targets", (_request, response) => data(response, backups.listTargets()));
   app.post("/api/platform/backups/targets", (request, response) => {
     data(response, backups.createTarget(parse(s3BackupTargetBaseSchema, request.body)), 201);
@@ -2725,12 +2752,34 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   backups.startScheduler();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close: () => {
-    logger.info("runtime.closing");
-    backups.dispose();
-    ai.dispose();
-    database.close();
-    if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
-    logger.info("runtime.closed");
-  } };
+  let closePromise: Promise<void> | null = null;
+  let stopping = false;
+  let closed = false;
+  const close = (): Promise<void> => {
+    if (closed) return Promise.resolve();
+    if (closePromise) return closePromise;
+    if (!stopping) {
+      stopping = true;
+      logger.info("runtime.closing");
+      backups.dispose();
+      ai.dispose();
+    }
+    closePromise = (async () => {
+      try {
+        await backups.waitForIdle(RUNTIME_BACKUP_IDLE_TIMEOUT_MS);
+        collaborationPresence.close();
+        database.close();
+        if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+        closed = true;
+        logger.info("runtime.closed");
+      } catch (error) {
+        logger.error("runtime.close_failed", { error: sanitizeError(error) });
+        throw error;
+      } finally {
+        if (!closed) closePromise = null;
+      }
+    })();
+    return closePromise;
+  };
+  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close };
 }

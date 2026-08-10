@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("知识模块布局切换", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("设定、角色、种族、组织、伏笔与审核保留卡片并支持列表切换", async () => {
@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260810-relationship-preview-fullscreen-v1');
-    expect(page.text).toContain('/app.js?v=20260810-entity-save-feedback-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260810-entity-save-feedback-v1"></script>');
+    expect(page.text).toContain('/styles.css?v=20260811-analysis-task-mention-presence-backup-v1');
+    expect(page.text).toContain('/app.js?v=20260811-analysis-task-mention-presence-backup-v1');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260811-analysis-task-mention-presence-backup-v1"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
