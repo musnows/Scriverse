@@ -1576,6 +1576,55 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
+  it("工具定义开启时在上游响应结束前推送首个正文 delta", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let upstreamFinished = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as {
+        stream?: boolean;
+        tools?: Array<{ function?: { name?: string } }>;
+      };
+      expect(body.stream).toBe(true);
+      expect(body.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ function: expect.objectContaining({ name: "story_index" }) })
+      ]));
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"首个"}}]}\n\n'));
+          setTimeout(() => {
+            upstreamFinished = true;
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"增量"},"finish_reason":"stop"}]}\n\n'));
+            controller.enqueue(encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4}}\n\n'));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          }, 20);
+        }
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const deltas: string[] = [];
+    const firstDeltaBeforeUpstreamFinished: boolean[] = [];
+    const generated = await runtime.ai.createStreamingChat({
+      workId,
+      instruction: "不调用工具，直接回答。",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      maxAttempts: 1
+    }, (delta) => {
+      if (deltas.length === 0) firstDeltaBeforeUpstreamFinished.push(!upstreamFinished);
+      deltas.push(delta);
+    });
+
+    expect(firstDeltaBeforeUpstreamFinished).toEqual([true]);
+    expect(deltas).toEqual(["首个", "增量"]);
+    expect(generated.content).toBe("首个增量");
+  });
+
   it("首轮对话默认使用提示词前十五字并可由独立模型生成标题", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -1796,13 +1845,35 @@ describe("AI 供应商、模型与建议 API", () => {
     let completionCount = 0;
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      const body = JSON.parse(String(init?.body)) as {
+        stream?: boolean;
+        tools?: Array<{ function?: { name?: string } }>;
+        messages: Array<{ role: string; reasoning_content?: string | null; tool_calls?: Array<{ function?: { arguments?: string } }> }>;
+      };
+      expect(body.stream).toBe(true);
+      expect(body.tools).toEqual(expect.arrayContaining([
+        expect.objectContaining({ function: expect.objectContaining({ name: "story_index" }) })
+      ]));
       completionCount += 1;
       if (completionCount === 1) {
-        return new Response(JSON.stringify({ choices: [{ message: { content: "我先读取作品目录。", reasoning_content: "需要先确认作品结构。", tool_calls: [{ id: "stream-tool", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }], usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 50 } } }), { status: 200 });
+        return new Response([
+          'data: {"choices":[{"delta":{"reasoning_content":"需要先确认作品结构。"}}]}',
+          'data: {"choices":[{"delta":{"content":"我先读取作品目录。"}}]}',
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"stream-tool","type":"function","function":{"name":"story_","arguments":"{\\"lim"}}]}}]}',
+          'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"index","arguments":"it\\":1}"}}]},"finish_reason":"tool_calls"}]}',
+          'data: {"choices":[],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":50},"completion_tokens":6}}',
+          "data: [DONE]"
+        ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
       }
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; reasoning_content?: string | null }> };
       expect(body.messages.find((message) => message.role === "assistant")?.reasoning_content).toBe("需要先确认作品结构。");
-      return new Response(JSON.stringify({ choices: [{ message: { content: "已读取目录。", reasoning_content: "目录结果足以回答。" } }], usage: { prompt_tokens: 200, prompt_tokens_details: { cached_tokens: 150 }, completion_tokens: 8 } }), { status: 200 });
+      expect(body.messages.find((message) => message.role === "assistant")?.tool_calls?.[0]?.function?.arguments).toBe("{\"limit\":1}");
+      return new Response([
+        'data: {"choices":[{"delta":{"reasoning_content":"目录结果足以回答。"}}]}',
+        'data: {"choices":[{"delta":{"content":"已读取"}}]}',
+        'data: {"choices":[{"delta":{"content":"目录。"},"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":200,"prompt_tokens_details":{"cached_tokens":150},"completion_tokens":8}}',
+        "data: [DONE]"
+      ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
     });
 
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
@@ -1814,17 +1885,22 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain("event: tool_call");
     expect(streamed.text).toContain("event: process_step");
     expect(streamed.text).toContain('"type":"thinking","round":1,"content":"需要先确认作品结构。"');
-    expect(streamed.text).toContain('"type":"intermediate","round":1,"content":"我先读取作品目录。"');
     expect(streamed.text).toContain('"type":"thinking","round":2,"content":"目录结果足以回答。"');
     expect(streamed.text.indexOf('"type":"thinking","round":1')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"我先读取作品目录。"}');
+    expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
     expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
     expect(streamed.text).toContain('"result":{"ok":true');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"已读取"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"目录。"}');
     expect(streamed.text).toContain('event: complete');
     expect(streamed.text).toContain('"outputTokens":8,"cacheHitPercent":66.7');
     expect(streamed.text).toContain('"toolCalls":[{"id":"stream-tool"');
     expect(streamed.text).toContain('"processSteps":[{"id":"process_');
+    const generatedSuggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
+    expect(generatedSuggestions.body.data[0].content).toBe("我先读取作品目录。已读取目录。");
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];

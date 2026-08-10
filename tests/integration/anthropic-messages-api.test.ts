@@ -196,4 +196,70 @@ describe("Anthropic Messages 供应商", () => {
       cacheHitRate: 33.3
     });
   });
+
+  it("流式收集 tool_use 参数、执行工具并继续输出正文", async () => {
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["story_index"] }).expect(200);
+    let streamRound = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      expect(String(input)).toBe("https://api.longcat.chat/anthropic/v1/messages");
+      const body = JSON.parse(String(init?.body)) as {
+        stream?: boolean;
+        tools?: Array<{ name?: string }>;
+        tool_choice?: Record<string, unknown>;
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      };
+      expect(body.stream).toBe(true);
+      expect(body.tools).toEqual(expect.arrayContaining([expect.objectContaining({ name: "story_index" })]));
+      expect(body.tool_choice).toEqual({ type: "auto" });
+      streamRound += 1;
+      if (streamRound === 1) {
+        return new Response([
+          'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":30}}}',
+          'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"先读取目录。"}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"stream-signature"}}',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+          'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_stream","name":"story_index","input":{}}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"lim"}}',
+          'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"it\\":1}"}}',
+          'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}',
+          'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}',
+          'event: message_stop\ndata: {"type":"message_stop"}'
+        ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+
+      const assistant = body.messages.find((message) => message.role === "assistant");
+      expect(assistant?.content).toEqual(expect.arrayContaining([
+        { type: "thinking", thinking: "先读取目录。", signature: "stream-signature" },
+        { type: "tool_use", id: "toolu_stream", name: "story_index", input: { limit: 1 } }
+      ]));
+      const toolResult = body.messages.find((message) => message.role === "user"
+        && message.content.some((block) => block.type === "tool_result"));
+      expect(toolResult?.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "toolu_stream" });
+      return new Response([
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":50}}}',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"已读取"}}',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"目录。"}}',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}',
+        'event: message_stop\ndata: {"type":"message_stop"}'
+      ].join("\n\n"), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "读取目录后回答。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(streamRound).toBe(2);
+    expect(response.text).toContain('event: tool_call');
+    expect(response.text).toContain('"id":"toolu_stream","name":"story_index"');
+    expect(response.text).toContain('event: delta\ndata: {"delta":"已读取"}');
+    expect(response.text).toContain('event: delta\ndata: {"delta":"目录。"}');
+    expect(response.text.indexOf("event: tool_call")).toBeLessThan(response.text.indexOf('"delta":"已读取"'));
+    const suggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
+    expect(suggestions.body.data[0].content).toBe("已读取目录。");
+  });
 });
