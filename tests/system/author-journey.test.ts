@@ -71,6 +71,7 @@ describe("作者完整创作流程", () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
+    const chapterVirtualization = await request(runtime.app).get("/chapter-editor-virtualization.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
     expect(page.text).not.toContain('id="chapter-insight"');
     expect(page.text).toContain('id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false"');
@@ -93,9 +94,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chapter-stats { display: none; }");
     expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
-    expect(application.text).toContain("function renderChapterLineNumbers()");
+    expect(application.text).toContain("function renderChapterLineNumbers({ targetLineIndex = null } = {})");
     expect(application.text).toContain("syncChapterLineNumberScroll");
-    expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
+    expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, totalHeight)");
+    expect(application.text).toContain('/chapter-editor-virtualization.js?v=20260810-visible-lines-v1');
+    expect(application.text).toContain("scheduleChapterLineNumbers(chapterLineInputRenderDelay)");
+    expect(application.text).toContain("inner.dataset.renderedLineCount");
+    expect(chapterVirtualization.text).toContain("export function buildChapterLineMirror(value)");
+    expect(chapterVirtualization.text).toContain("export function findChapterLineWindow(lineCount, getBounds, viewportStart, viewportEnd)");
     expect(application.text).toContain('element.className = "toast chapter-insight-toast"');
     expect(application.text).toContain('element.id = "chapter-insight-toast"');
     expect(application.text).toContain('chapterName.className = "chapter-insight-toast-chapter-title"');
