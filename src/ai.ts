@@ -5661,7 +5661,9 @@ export class AiManager {
     };
     const anthropicBlocks = new Map<number, Record<string, unknown>>();
     const anthropicToolInputJson = new Map<number, string>();
+    const finalizedAnthropicToolInputs = new Map<number, string>();
     const openAiToolCalls = new Map<number, CompletionToolCall>();
+    let openAiToolCallsFinalized = false;
     const eventIndex = (payload: Record<string, unknown>): number | null => {
       const index = payload.index;
       return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : null;
@@ -5678,13 +5680,15 @@ export class AiManager {
     const finalizeAnthropicToolInput = (index: number): void => {
       const block = anthropicBlocks.get(index);
       const inputJson = anthropicToolInputJson.get(index);
-      if (!block || block.type !== "tool_use" || inputJson === undefined) return;
+      if (!block || block.type !== "tool_use") return;
+      const completeInputJson = inputJson ?? JSON.stringify(block.input ?? {});
       try {
-        const parsed = JSON.parse(inputJson) as unknown;
+        const parsed = JSON.parse(completeInputJson) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) block.input = parsed;
       } catch {
         block.input = {};
       }
+      finalizedAnthropicToolInputs.set(index, completeInputJson);
       anthropicToolInputJson.delete(index);
     };
     const consumeEvent = (eventText: string): void => {
@@ -5762,6 +5766,7 @@ export class AiManager {
         if (eventDelta.type === "text_delta" && typeof eventDelta.text === "string" && eventDelta.text.length > 0) {
           appendContent(eventDelta.text);
         }
+        if (type === "message_stop") upstreamDone = true;
         return;
       }
       const streamUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
@@ -5772,7 +5777,10 @@ export class AiManager {
       const choice = choices[0] && typeof choices[0] === "object" && !Array.isArray(choices[0])
         ? choices[0] as Record<string, unknown>
         : null;
-      if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
+      if (typeof choice?.finish_reason === "string") {
+        finishReason = choice.finish_reason;
+        if (finishReason === "tool_calls") openAiToolCallsFinalized = true;
+      }
       const deltaRecord = choice?.delta && typeof choice.delta === "object" && !Array.isArray(choice.delta)
         ? choice.delta as Record<string, unknown>
         : {};
@@ -5789,7 +5797,7 @@ export class AiManager {
           type: "function" as const,
           function: { name: "", arguments: "" }
         };
-        if (typeof toolCallDelta.id === "string") current.id += toolCallDelta.id;
+        if (!current.id && typeof toolCallDelta.id === "string") current.id = toolCallDelta.id;
         const fn = toolCallDelta.function && typeof toolCallDelta.function === "object" && !Array.isArray(toolCallDelta.function)
           ? toolCallDelta.function as Record<string, unknown>
           : {};
@@ -5841,40 +5849,67 @@ export class AiManager {
       reasoning += finalReasoning;
       onThinkingDelta(finalReasoning);
     }
+    const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
+    const openAiToolCallsComplete = openAiToolCallsFinalized
+      && sortedOpenAiToolCalls.length > 0
+      && sortedOpenAiToolCalls.every(([, toolCall]) => Boolean(toolCall.id && toolCall.function.name));
+    const anthropicToolBlocks = [...anthropicBlocks.entries()]
+      .filter(([, block]) => block.type === "tool_use")
+      .sort(([left], [right]) => left - right);
+    const anthropicToolCallsComplete = finishReason === "tool_use"
+      && anthropicToolBlocks.length > 0
+      && anthropicToolBlocks.every(([index, block]) => (
+        finalizedAnthropicToolInputs.has(index)
+        && typeof block.id === "string"
+        && block.id.length > 0
+        && typeof block.name === "string"
+        && block.name.length > 0
+      ));
+    const toolCalls: CompletionToolCall[] = protocol === "anthropic-messages"
+      ? anthropicToolCallsComplete
+        ? anthropicToolBlocks.map(([index, block]) => ({
+          id: String(block.id),
+          type: "function" as const,
+          function: {
+            name: String(block.name),
+            arguments: finalizedAnthropicToolInputs.get(index) ?? "{}"
+          }
+        }))
+        : []
+      : openAiToolCallsComplete
+        ? sortedOpenAiToolCalls.map(([, toolCall]) => toolCall)
+        : [];
+    if ((finishReason === "tool_calls" || finishReason === "tool_use") && toolCalls.length === 0) {
+      throw new Error(`${protocolLabel} 流式工具调用不完整，finish_reason=${finishReason}`);
+    }
+    if (!content.trim() && toolCalls.length === 0) {
+      throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
+    }
     const anthropicContent = protocol === "anthropic-messages"
       ? [...anthropicBlocks.entries()]
         .sort(([left], [right]) => left - right)
-        .map(([index, block]) => {
-          finalizeAnthropicToolInput(index);
-          return redactProviderSecrets(block, apiKey) as Record<string, unknown>;
-        })
+        .map(([, block]) => redactProviderSecrets(block, apiKey) as Record<string, unknown>)
       : undefined;
     const usageRecord = usage && typeof usage === "object" && !Array.isArray(usage)
       ? usage as Record<string, unknown>
       : undefined;
-    const payload = protocol === "anthropic-messages"
-      ? parseCompletionPayload(protocol, {
-        ...(usageRecord ? { usage: usageRecord } : {}),
-        stop_reason: finishReason === "unknown" ? null : finishReason,
-        content: anthropicContent ?? []
-      })
-      : {
-        ...(usageRecord ? { usage: usageRecord } : {}),
-        choices: [{
-          finish_reason: finishReason === "unknown" ? null : finishReason,
-          message: {
-            content: content || null,
-            reasoning_content: reasoning || null,
-            tool_calls: [...openAiToolCalls.entries()]
-              .sort(([left], [right]) => left - right)
-              .map(([, toolCall]) => toolCall)
-          }
-        }]
-      } satisfies CompletionPayload;
-    if (!content.trim() && !(payload.choices?.[0]?.message?.tool_calls?.length)) {
-      throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    }
-    return payload;
+    const normalizedFinishReason = finishReason === "unknown"
+      ? null
+      : protocol === "anthropic-messages" && finishReason === "max_tokens"
+        ? "length"
+        : finishReason;
+    return {
+      ...(usageRecord ? { usage: usageRecord } : {}),
+      choices: [{
+        finish_reason: normalizedFinishReason,
+        message: {
+          content: content || null,
+          reasoning_content: reasoning || null,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+          ...(anthropicContent?.length ? { anthropic_content: anthropicContent } : {})
+        }
+      }]
+    };
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {

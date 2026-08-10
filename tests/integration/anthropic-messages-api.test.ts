@@ -172,6 +172,96 @@ describe("Anthropic Messages 供应商", () => {
     });
   });
 
+  it("Anthropic 工具参数在 content_block_stop 前只拼接，收齐后才执行并继续流式回答", async () => {
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["story_index"] }).expect(200);
+    let releaseToolBlock = (): void => undefined;
+    const toolBlockGate = new Promise<void>((resolve) => {
+      releaseToolBlock = resolve;
+    });
+    let firstRoundFinished = false;
+    let streamedCompletionCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      streamedCompletionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        stream?: boolean;
+        tools?: Array<{ name?: string }>;
+        messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+      };
+      expect(body.stream).toBe(true);
+      expect(body.tools?.some((tool) => tool.name === "story_index")).toBe(true);
+      if (streamedCompletionCount === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            const send = (payload: Record<string, unknown>): void => {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+            };
+            send({ type: "message_start", message: { usage: { input_tokens: 20 } } });
+            send({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+            send({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "我先读取目录。" } });
+            send({ type: "content_block_stop", index: 0 });
+            send({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_stream", name: "story_index", input: {} } });
+            send({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"lim' } });
+            await toolBlockGate;
+            send({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: 'it":1}' } });
+            send({ type: "content_block_stop", index: 1 });
+            send({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 5 } });
+            send({ type: "message_stop" });
+            firstRoundFinished = true;
+            controller.close();
+          }
+        }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+      const assistant = body.messages.find((message) => message.role === "assistant");
+      expect(assistant?.content).toEqual(expect.arrayContaining([
+        { type: "tool_use", id: "toolu_stream", name: "story_index", input: { limit: 1 } }
+      ]));
+      const toolResult = body.messages.find((message) => (
+        message.role === "user" && message.content.some((block) => block.type === "tool_result")
+      ));
+      expect(toolResult?.content[0]).toMatchObject({ type: "tool_result", tool_use_id: "toolu_stream" });
+      return new Response([
+        { type: "message_start", message: { usage: { input_tokens: 30 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "已读取" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "目录。" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 4 } },
+        { type: "message_stop" }
+      ].map((payload) => `data: ${JSON.stringify(payload)}`).join("\n\n") + "\n\n", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+
+    const deltas: string[] = [];
+    const toolEvents: Array<{ arguments: unknown }> = [];
+    const generatedPromise = runtime.ai.createStreamingChat({
+      workId,
+      instruction: "读取目录后回答。",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      onToolCall: (toolCall) => toolEvents.push({ arguments: toolCall.arguments })
+    }, (delta) => deltas.push(delta));
+    const safetyRelease = setTimeout(releaseToolBlock, 1_000);
+    for (let index = 0; index < 100 && deltas.length === 0; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(deltas).toEqual(["我先读取目录。"]);
+    expect(toolEvents).toHaveLength(0);
+    expect(firstRoundFinished).toBe(false);
+    releaseToolBlock();
+    clearTimeout(safetyRelease);
+
+    const generated = await generatedPromise;
+    expect(generated.content).toBe("我先读取目录。已读取目录。");
+    expect(generated.toolCalls).toEqual([
+      expect.objectContaining({ id: "toolu_stream", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
+    ]);
+    expect(toolEvents).toEqual([{ arguments: { offset: 0, limit: 1 } }]);
+    expect(streamedCompletionCount).toBe(2);
+  });
+
   it("解析 LongCat Messages SSE 的思考、正文与用量", async () => {
     streaming = true;
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
