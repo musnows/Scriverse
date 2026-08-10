@@ -126,6 +126,34 @@ docker compose start scriverse
 
 如果改用主机目录挂载，确保该目录可由容器内的非 root `node` 用户写入。不要使用 `chmod 777` 放宽整个数据目录权限。
 
+### S3 备份加密与手动恢复
+
+系统管理员可以在“设置 → S3 备份”中开启全局备份加密。首次开启时，Scriverse 会生成一把 256 位 KEK（Key Encryption Key），并只在该次开启流程中展示。必须立即复制或下载密钥文件，将其保存到 Scriverse 设备和 S3 桶之外的安全位置，再确认“我已保存”。密钥丢失后，即使数据库和 S3 对象仍然完好，加密备份也无法恢复。
+
+开启后，每个数据库快照、`master.key` 和新上传图片都会使用独立随机 DEK（Data Encryption Key）执行 AES-256-GCM 加密；DEK 再由 KEK 通过 AES-256-GCM 包装。对象键不变，密文以 ASCII 魔数 `SCRIVERSE-ENC1` 开头。关闭加密只影响后续上传，不会删除 KEK，历史密文仍可用原密钥解密。已存在的明文图片对象不会自动重写；无论是否开启加密，仍建议使用私有桶，未开启时必须确保桶不允许公开读取。
+
+版本 1 信封使用以下大端二进制布局：
+
+```text
+SCRIVERSE-ENC1 | version:u8 | algorithm:u8 |
+wrap_iv_len:u8 | wrap_tag_len:u8 | payload_iv_len:u8 | payload_tag_len:u8 |
+wrapped_dek_len:u16 | ciphertext_len:u64 |
+wrap_iv | wrap_tag | payload_iv | payload_tag | wrapped_dek | ciphertext
+```
+
+`version` 和 `algorithm` 当前均为 `1`，IV 为 12 字节，GCM tag 为 16 字节，DEK 为 32 字节；从魔数到 `ciphertext_len` 末尾的固定头同时作为包装 DEK 和数据负载的 GCM AAD。
+
+当前版本不提供完整恢复 CLI。需要手动恢复时：
+
+1. 从 S3 下载目标数据库快照和同一备份根路径下的 `master.key`；需要恢复图片时一并下载对应对象。
+2. 检查对象是否以 `SCRIVERSE-ENC1` 开头。没有魔数的旧对象是明文，不应套用解密流程。
+3. 将用户留存的 base64url KEK 解码为 32 字节，按信封长度字段切分各部分。
+4. 以固定头作为 AAD，使用 KEK、`wrap_iv` 和 `wrap_tag` 解密 `wrapped_dek`，得到 32 字节 DEK。
+5. 继续以固定头作为 AAD，使用 DEK、`payload_iv` 和 `payload_tag` 解密 `ciphertext`。数据库对象应得到原始 SQLite 文件，`master.key` 对象应得到原始 CredentialVault 主密钥。
+6. 停止 Scriverse 写入后，将恢复出的数据库与 `master.key` 按完整数据卷恢复规范放回；启动前先在副本上执行 SQLite 完整性和外键检查。
+
+任何魔数、版本、长度、GCM tag 或密钥校验失败都应视为对象损坏或密钥不匹配，不得继续用不完整结果启动服务。
+
 ## 升级
 
 1. 备份完整数据卷。
