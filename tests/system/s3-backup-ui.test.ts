@@ -48,6 +48,7 @@ describe("S3 系统备份界面", () => {
     expect(application.text).toContain('toast("未开启备份加密，请将 S3 桶设置为私有桶，避免数据泄露", "warning")');
     expect(application.text).toContain('anchor.download = "scriverse-s3-backup-key.txt"');
     expect(application.text).toContain('addEventListener("cancel", (event) => event.preventDefault())');
+    expect(application.text).not.toContain('title: "准备开启备份加密"');
     expect(application.text).toContain('api("/api/platform/backups/targets")');
     expect(application.text).toContain('api("/api/platform/backups/runs?limit=100")');
     expect(application.text).toContain('api("/api/platform/backups/run"');

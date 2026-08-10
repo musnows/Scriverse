@@ -4035,16 +4035,6 @@ async function changeS3BackupEncryption(event) {
   const enabled = toggle.checked;
   toggle.disabled = true;
   try {
-    if (enabled && !s3BackupEncryption.keyConfiguredAt) {
-      const confirmed = await confirmToast(
-        "系统将生成一把仅展示一次的备份加密密钥。继续后必须立即复制或下载，丢失密钥将无法恢复加密备份。",
-        { title: "准备开启备份加密", confirmLabel: "生成并显示密钥" }
-      );
-      if (!confirmed) {
-        renderS3BackupEncryption();
-        return;
-      }
-    }
     const result = await api("/api/platform/backups/encryption", {
       method: "POST",
       body: { enabled }
