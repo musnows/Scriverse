@@ -1,4 +1,7 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { Agent as HttpAgent } from "node:http";
+import { Agent as HttpsAgent } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 import {
   DeleteObjectsCommand,
   HeadObjectCommand,
@@ -6,7 +9,9 @@ import {
   PutObjectCommand,
   S3Client
 } from "@aws-sdk/client-s3";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { encryptObject, generateKek } from "./backup-encryption.js";
 import { CredentialVault, type EncryptedSecret } from "./credential-vault.js";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError } from "./errors.js";
@@ -78,7 +83,10 @@ export type S3BackupConnection = {
   accessKeyId: string;
   secretAccessKey: string;
   forcePathStyle: boolean;
+  resolvedAddresses?: readonly S3ResolvedAddress[];
 };
+
+export type S3ResolvedAddress = { address: string; family: 4 | 6 };
 
 export type S3ListedObject = {
   key: string;
@@ -98,14 +106,31 @@ export type S3BackupManagerOptions = {
   snapshotDatabase?: () => Buffer | Promise<Buffer>;
   masterKey?: Buffer | string;
   requestTimeoutMs?: number;
-  validateEndpoint?: (endpoint: string) => Promise<unknown>;
+  validateEndpoint?: (endpoint: string) => Promise<readonly S3ResolvedAddress[] | void>;
   now?: () => Date;
   logger?: Logger;
+  encryptionConfirmationTtlMs?: number;
 };
 
 export type S3BackupQueueReceipt = {
   acceptedTargetIds: string[];
   skippedTargetIds: string[];
+};
+
+export type S3BackupEncryptionState = {
+  enabled: boolean;
+  keyConfiguredAt: string | null;
+};
+
+export type S3BackupEncryptionUpdate = S3BackupEncryptionState & {
+  key?: string;
+  confirmationToken?: string;
+};
+
+type PendingBackupEncryption = {
+  key: string;
+  confirmationTokenHash: Buffer;
+  expiresAtMs: number;
 };
 
 type RuntimeTarget = S3BackupTarget & {
@@ -174,6 +199,12 @@ class AwsS3ObjectClient implements S3ObjectClient {
   private readonly client: S3Client;
 
   constructor(connection: S3BackupConnection) {
+    const requestHandler = connection.resolvedAddresses?.length
+      ? new NodeHttpHandler({
+          httpAgent: new HttpAgent({ keepAlive: true, maxSockets: 10, lookup: pinnedS3Lookup(connection) }),
+          httpsAgent: new HttpsAgent({ keepAlive: true, maxSockets: 10, lookup: pinnedS3Lookup(connection) })
+        })
+      : undefined;
     this.client = new S3Client({
       endpoint: connection.endpoint,
       region: connection.region,
@@ -184,7 +215,8 @@ class AwsS3ObjectClient implements S3ObjectClient {
       forcePathStyle: connection.forcePathStyle,
       maxAttempts: 3,
       requestChecksumCalculation: "WHEN_REQUIRED",
-      responseChecksumValidation: "WHEN_REQUIRED"
+      responseChecksumValidation: "WHEN_REQUIRED",
+      ...(requestHandler ? { requestHandler } : {})
     });
   }
 
@@ -249,6 +281,37 @@ class AwsS3ObjectClient implements S3ObjectClient {
   }
 }
 
+function normalizedHostname(value: string): string {
+  return value.replace(/^\[|\]$/gu, "").replace(/\.$/u, "").toLocaleLowerCase("en-US");
+}
+
+function pinnedS3Lookup(connection: S3BackupConnection): LookupFunction {
+  const endpointHostname = normalizedHostname(new URL(connection.endpoint).hostname);
+  const addresses = (connection.resolvedAddresses ?? []).filter(({ address, family }) => isIP(address) === family);
+  return (hostname, options, callback) => {
+    const requestedHostname = normalizedHostname(hostname);
+    const expectedHostname = requestedHostname === endpointHostname
+      || (!connection.forcePathStyle && requestedHostname.endsWith(`.${endpointHostname}`));
+    const requestedFamily = options.family === 4 || options.family === 6 ? options.family : 0;
+    const candidates = expectedHostname
+      ? addresses.filter(({ family }) => requestedFamily === 0 || family === requestedFamily)
+      : [];
+    if (candidates.length === 0) {
+      const error = Object.assign(new Error("S3 endpoint hostname or address was not approved by the SSRF validator"), {
+        code: "ENOTFOUND"
+      });
+      callback(error, "", 0);
+      return;
+    }
+    if (options.all) {
+      callback(null, candidates.map(({ address, family }) => ({ address, family })));
+      return;
+    }
+    const selected = candidates[0]!;
+    callback(null, selected.address, selected.family);
+  };
+}
+
 function requiredString(row: Row, key: string): string {
   const value = row[key];
   if (typeof value !== "string") throw new AppError(500, "BACKUP_TARGET_INVALID", `S3 备份配置字段 ${key} 无效`);
@@ -288,12 +351,14 @@ export class S3BackupManager {
   private readonly snapshotDatabase: () => Buffer | Promise<Buffer>;
   private readonly masterKey: Buffer | null;
   private readonly requestTimeoutMs: number;
-  private readonly validateEndpoint?: (endpoint: string) => Promise<unknown>;
+  private readonly validateEndpoint?: (endpoint: string) => Promise<readonly S3ResolvedAddress[] | void>;
   private readonly now: () => Date;
   private readonly log: Logger;
+  private readonly encryptionConfirmationTtlMs: number;
   private readonly queuedTargetIds = new Set<string>();
   private executionChain: Promise<void> = Promise.resolve();
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private pendingBackupEncryption: PendingBackupEncryption | null = null;
   private disposed = false;
 
   constructor(
@@ -313,6 +378,10 @@ export class S3BackupManager {
     this.validateEndpoint = options.validateEndpoint;
     this.now = options.now ?? (() => new Date());
     this.log = options.logger ?? logger;
+    const encryptionConfirmationTtlMs = Number(options.encryptionConfirmationTtlMs ?? 10 * 60_000);
+    this.encryptionConfirmationTtlMs = Number.isFinite(encryptionConfirmationTtlMs) && encryptionConfirmationTtlMs > 0
+      ? Math.floor(encryptionConfirmationTtlMs)
+      : 10 * 60_000;
   }
 
   listTargets(): S3BackupTarget[] {
@@ -321,6 +390,126 @@ export class S3BackupManager {
 
   getTarget(targetId: string): S3BackupTarget {
     return this.mapTarget(this.requireTargetRow(targetId));
+  }
+
+  getEncryptionState(): S3BackupEncryptionState {
+    const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+    if (!row) return { enabled: false, keyConfiguredAt: null };
+    const keyConfigured = this.hasBackupEncryptionKey(row);
+    if (Number(row.enabled) === 1 && !keyConfigured) {
+      throw new AppError(500, "BACKUP_ENCRYPTION_STATE_INVALID", "S3 备份加密配置缺少密钥");
+    }
+    return {
+      enabled: Number(row.enabled) === 1,
+      keyConfiguredAt: keyConfigured ? requiredString(row, "created_at") : null
+    };
+  }
+
+  setEncryptionEnabled(enabled: boolean): S3BackupEncryptionUpdate {
+    if (!enabled) this.pendingBackupEncryption = null;
+    return this.database.transaction(() => {
+      const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+      const currentEnabled = Number(row?.enabled ?? 0) === 1;
+      const keyConfigured = row ? this.hasBackupEncryptionKey(row) : false;
+      if (currentEnabled && !keyConfigured) {
+        throw new AppError(500, "BACKUP_ENCRYPTION_STATE_INVALID", "S3 备份加密配置缺少密钥");
+      }
+      if (currentEnabled === enabled) {
+        return {
+          enabled,
+          keyConfiguredAt: keyConfigured && row ? requiredString(row, "created_at") : null
+        };
+      }
+
+      const timestamp = this.now().toISOString();
+      if (!enabled) {
+        this.database.run("UPDATE s3_backup_encryption SET enabled = 0, updated_at = ? WHERE id = 1", timestamp);
+        this.store.audit(
+          PLATFORM_AI_WORK_ID,
+          "platform.backup-encryption.disabled",
+          "s3-backup-encryption",
+          "s3-backup-encryption"
+        );
+        return {
+          enabled: false,
+          keyConfiguredAt: keyConfigured && row ? requiredString(row, "created_at") : null
+        };
+      }
+
+      if (row && keyConfigured) {
+        this.database.run("UPDATE s3_backup_encryption SET enabled = 1, updated_at = ? WHERE id = 1", timestamp);
+        this.store.audit(
+          PLATFORM_AI_WORK_ID,
+          "platform.backup-encryption.enabled",
+          "s3-backup-encryption",
+          "s3-backup-encryption",
+          { keyGenerated: false }
+        );
+        return { enabled: true, keyConfiguredAt: requiredString(row, "created_at") };
+      }
+
+      const key = generateKek();
+      const confirmationToken = randomBytes(32).toString("base64url");
+      this.pendingBackupEncryption = {
+        key,
+        confirmationTokenHash: createHash("sha256").update(confirmationToken).digest(),
+        expiresAtMs: this.now().getTime() + this.encryptionConfirmationTtlMs
+      };
+      return { enabled: false, keyConfiguredAt: null, key, confirmationToken };
+    });
+  }
+
+  confirmEncryptionEnabled(confirmationToken: string): S3BackupEncryptionState {
+    const pending = this.pendingBackupEncryption;
+    const tokenHash = createHash("sha256").update(confirmationToken).digest();
+    if (!pending || pending.expiresAtMs <= this.now().getTime() || !timingSafeEqual(pending.confirmationTokenHash, tokenHash)) {
+      if (pending && pending.expiresAtMs <= this.now().getTime()) this.pendingBackupEncryption = null;
+      throw new AppError(409, "BACKUP_ENCRYPTION_CONFIRMATION_INVALID", "备份加密确认已失效，请重新开启并保存新密钥");
+    }
+
+    const state = this.database.transaction(() => {
+      const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+      const currentEnabled = Number(row?.enabled ?? 0) === 1;
+      const keyConfigured = row ? this.hasBackupEncryptionKey(row) : false;
+      if (currentEnabled || keyConfigured) {
+        throw new AppError(409, "BACKUP_ENCRYPTION_CONFIRMATION_INVALID", "备份加密状态已变化，请刷新后重试");
+      }
+
+      const timestamp = this.now().toISOString();
+      const encrypted = this.vault.encrypt(pending.key);
+      if (row) {
+        this.database.run(
+          `UPDATE s3_backup_encryption SET enabled = 1, kek_encrypted = ?, kek_iv = ?, kek_tag = ?,
+           created_at = ?, updated_at = ? WHERE id = 1`,
+          encrypted.encrypted,
+          encrypted.iv,
+          encrypted.tag,
+          timestamp,
+          timestamp
+        );
+      } else {
+        this.database.run(
+          `INSERT INTO s3_backup_encryption (
+            id, enabled, kek_encrypted, kek_iv, kek_tag, created_at, updated_at
+          ) VALUES (1, 1, ?, ?, ?, ?, ?)`,
+          encrypted.encrypted,
+          encrypted.iv,
+          encrypted.tag,
+          timestamp,
+          timestamp
+        );
+      }
+      this.store.audit(
+        PLATFORM_AI_WORK_ID,
+        "platform.backup-encryption.enabled",
+        "s3-backup-encryption",
+        "s3-backup-encryption",
+        { keyGenerated: true }
+      );
+      return { enabled: true, keyConfiguredAt: timestamp };
+    });
+    this.pendingBackupEncryption = null;
+    return state;
   }
 
   createTarget(input: S3BackupTargetInput): S3BackupTarget {
@@ -541,6 +730,7 @@ export class S3BackupManager {
 
   dispose(): void {
     this.disposed = true;
+    this.pendingBackupEncryption = null;
     if (this.schedulerTimer) clearInterval(this.schedulerTimer);
     this.schedulerTimer = null;
   }
@@ -583,29 +773,34 @@ export class S3BackupManager {
     let imagesUploaded = 0;
     let imagesSkipped = 0;
     let databasesDeleted = 0;
+    let encryptionKey: string | null = null;
     try {
-      await this.validateEndpoint?.(target.endpoint);
+      encryptionKey = this.activeBackupEncryptionKey();
+      const resolvedAddresses = await this.validateEndpoint?.(target.endpoint);
       client = this.clientFactory({
         endpoint: target.endpoint,
         region: target.region,
         accessKeyId: target.accessKeyId,
         secretAccessKey: target.secretAccessKey,
-        forcePathStyle: target.forcePathStyle
+        forcePathStyle: target.forcePathStyle,
+        ...(resolvedAddresses?.length ? { resolvedAddresses } : {})
       });
       const databaseSnapshot = await this.snapshotDatabase();
       databaseKey = `${target.rootPrefix}/db/scriverse-${this.snapshotTimestamp(started)}-${runId.replaceAll("-", "").slice(0, 8)}.db`;
       if (!this.masterKey) throw new AppError(500, "BACKUP_MASTER_KEY_UNAVAILABLE", "S3 备份缺少 CredentialVault 恢复密钥");
+      const masterKeyBody = encryptionKey ? encryptObject(this.masterKey, encryptionKey) : this.masterKey;
       await this.withRequestTimeout(client.putObject({
         bucket: target.bucket,
         key: `${target.rootPrefix}/master.key`,
-        body: this.masterKey,
+        body: masterKeyBody,
         contentType: "application/octet-stream"
       }), "上传 CredentialVault 恢复密钥");
+      const databaseBody = encryptionKey ? encryptObject(databaseSnapshot, encryptionKey) : databaseSnapshot;
       await this.withRequestTimeout(client.putObject({
         bucket: target.bucket,
         key: databaseKey,
-        body: databaseSnapshot,
-        contentType: "application/vnd.sqlite3"
+        body: databaseBody,
+        contentType: encryptionKey ? "application/octet-stream" : "application/vnd.sqlite3"
       }), "上传数据库快照");
 
       if (target.backupImages) {
@@ -615,11 +810,12 @@ export class S3BackupManager {
             continue;
           }
           const body = await source.read();
+          const uploadBody = encryptionKey ? encryptObject(body, encryptionKey) : body;
           await this.withRequestTimeout(client.putObject({
             bucket: target.bucket,
             key: source.objectKey,
-            body,
-            contentType: source.contentType,
+            body: uploadBody,
+            contentType: encryptionKey ? "application/octet-stream" : source.contentType,
             metadata: { sha256: source.sha256 }
           }), "上传图片");
           imagesUploaded += 1;
@@ -664,7 +860,11 @@ export class S3BackupManager {
         databasesDeleted
       });
     } catch (error) {
-      const serverResponse = s3FailureServerResponse(error, [target.accessKeyId, target.secretAccessKey]);
+      const serverResponse = s3FailureServerResponse(error, [
+        target.accessKeyId,
+        target.secretAccessKey,
+        ...(encryptionKey ? [encryptionKey] : [])
+      ]);
       const errorMessage = typeof serverResponse.message === "string" ? serverResponse.message : "S3 备份失败";
       const finishedAt = this.now().toISOString();
       this.database.transaction(() => {
@@ -720,6 +920,29 @@ export class S3BackupManager {
     const row = this.database.get("SELECT * FROM s3_backup_targets WHERE id = ?", targetId);
     if (!row) throw new AppError(404, "BACKUP_TARGET_NOT_FOUND", "S3 备份目标不存在");
     return row;
+  }
+
+  private hasBackupEncryptionKey(row: Row): boolean {
+    return typeof row.kek_encrypted === "string"
+      && typeof row.kek_iv === "string"
+      && typeof row.kek_tag === "string";
+  }
+
+  private activeBackupEncryptionKey(): string | null {
+    const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+    if (!row || Number(row.enabled) !== 1) return null;
+    if (!this.hasBackupEncryptionKey(row)) {
+      throw new AppError(500, "BACKUP_ENCRYPTION_STATE_INVALID", "S3 备份加密配置缺少密钥");
+    }
+    try {
+      return this.vault.decrypt({
+        encrypted: requiredString(row, "kek_encrypted"),
+        iv: requiredString(row, "kek_iv"),
+        tag: requiredString(row, "kek_tag")
+      });
+    } catch {
+      throw new AppError(500, "BACKUP_ENCRYPTION_KEY_UNAVAILABLE", "S3 备份加密密钥无法读取");
+    }
   }
 
   private runtimeTarget(row: Row): RuntimeTarget {

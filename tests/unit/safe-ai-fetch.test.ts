@@ -16,10 +16,31 @@ describe("assertSafeAiEndpoint", () => {
     });
   });
 
+  it("拒绝 IPv4 映射、NAT64 与保留网段伪装的内网地址", async () => {
+    await expect(assertSafeAiEndpoint("http://[::ffff:127.0.0.1]:8080/v1")).rejects.toMatchObject({
+      code: "UNSAFE_PROVIDER_ENDPOINT"
+    });
+    await expect(assertSafeAiEndpoint("https://[64:ff9b::7f00:1]/v1")).rejects.toMatchObject({
+      code: "UNSAFE_PROVIDER_ENDPOINT"
+    });
+    await expect(assertSafeAiEndpoint("https://198.18.0.1/v1")).rejects.toMatchObject({
+      code: "UNSAFE_PROVIDER_ENDPOINT"
+    });
+  });
+
   it("允许公网 HTTPS 地址", async () => {
     await expect(assertSafeAiEndpoint("https://93.184.216.34/v1")).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ family: expect.any(Number) })
     ]));
+  });
+
+  it("允许公网 IPv6 与映射公网地址的 NAT64 端点", async () => {
+    await expect(assertSafeAiEndpoint("https://[2606:4700:4700::1111]/v1")).resolves.toEqual([
+      { address: "2606:4700:4700::1111", family: 6 }
+    ]);
+    await expect(assertSafeAiEndpoint("https://[64:ff9b::5db8:d822]/v1")).resolves.toEqual([
+      { address: "64:ff9b::5db8:d822", family: 6 }
+    ]);
   });
 
   it("拒绝公网 HTTP 地址传输供应商凭据", async () => {

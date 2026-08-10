@@ -141,7 +141,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     }));
   });
 
-  it("仅在双方查看同一人物关系时返回更新提醒", async () => {
+  it("仅向正在查看同一页面的协作者返回主要编辑更新提醒", async () => {
     const owner = await register(runtime, "change_owner");
     const writer = await register(runtime, "change_writer");
     const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "变更提醒作品" }).expect(201);
@@ -171,7 +171,43 @@ describe("用户、作品权限与操作者追踪 API", () => {
       clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       page: { kind: "editor", resourceId: chapterId }
     }).expect(200);
-    expect(chapterHeartbeat.body.data.recentChanges).toEqual([]);
+    expect(chapterHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({
+        pageKey: `editor:${chapterId}`,
+        label: "正文编辑",
+        action: "save",
+        pageDeleted: false,
+        actorUserId: owner.user.userId,
+        actorDisplayName: "change_owner"
+      })
+    ]);
+
+    const setting = await owner.agent.post(`/api/works/${workId}/settings`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "跃迁规则",
+      category: "世界规则",
+      content: "跃迁后必须冷却十二小时。"
+    }).expect(201);
+    await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "setting", resourceId: setting.body.data.id }
+    }).expect(200);
+    await owner.agent.patch(`/api/settings/${setting.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+      content: "跃迁后必须冷却二十四小时。",
+      expectedVersionNo: setting.body.data.versionNo
+    }).expect(200);
+    const settingHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "setting", resourceId: setting.body.data.id }
+    }).expect(200);
+    expect(settingHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({
+        pageKey: `entity-editor:setting:${setting.body.data.id}`,
+        label: "设定编辑",
+        action: "save",
+        pageDeleted: false,
+        actorUserId: owner.user.userId
+      })
+    ]);
 
     const firstCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
       name: "林舟"
@@ -179,6 +215,27 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const secondCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
       name: "沈星"
     }).expect(201);
+    await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "character", resourceId: firstCharacter.body.data.id }
+    }).expect(200);
+    await owner.agent.patch(`/api/characters/${firstCharacter.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+      aliases: ["舰长"],
+      expectedVersionNo: firstCharacter.body.data.versionNo
+    }).expect(200);
+    const characterHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      page: { kind: "entity-editor", module: "character", resourceId: firstCharacter.body.data.id }
+    }).expect(200);
+    expect(characterHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({
+        pageKey: `entity-editor:character:${firstCharacter.body.data.id}`,
+        label: "角色编辑",
+        action: "save",
+        pageDeleted: false,
+        actorUserId: owner.user.userId
+      })
+    ]);
     const relationship = await owner.agent.post(`/api/works/${workId}/relationships`).set("X-CSRF-Token", owner.csrfToken).send({
       fromCharacterId: firstCharacter.body.data.id,
       toCharacterId: secondCharacter.body.data.id,
@@ -218,6 +275,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       expect.objectContaining({
         pageKey: `entity-editor:relationship:${relationshipId}`,
         label: "人物关系编辑",
+        action: "save",
+        pageDeleted: false,
         actorUserId: owner.user.userId,
         actorDisplayName: "change_owner"
       })
@@ -228,6 +287,300 @@ describe("用户、作品权限与操作者追踪 API", () => {
       page: { kind: "module", module: "relationships" }
     }).expect(200);
     expect(globalList.body.data.recentChanges).toEqual([]);
+  });
+
+  it("在节流窗口内向后来进入同页的协作者返回下一次保存提醒", async () => {
+    const owner = await register(runtime, "late_change_owner");
+    const writer = await register(runtime, "late_change_writer");
+    const lateWriter = await register(runtime, "late_change_reader");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({
+      title: "后来加入提醒作品"
+    }).expect(201);
+    const workId = work.body.data.id;
+    for (const member of [writer, lateWriter]) {
+      await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+        userId: member.user.userId,
+        role: "editor"
+      }).expect(201);
+    }
+
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "第一卷"
+    }).expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "原始正文。"
+    }).expect(201);
+    const chapterId = chapter.body.data.id;
+    const page = { kind: "editor", resourceId: chapterId };
+
+    await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      page
+    }).expect(200);
+    const firstUpdate = await owner.agent.patch(`/api/chapters/${chapterId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      content: "第一次更新。",
+      expectedVersionNo: chapter.body.data.versionNo
+    }).expect(200);
+    const firstHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      page
+    }).expect(200);
+    expect(firstHeartbeat.body.data.recentChanges).toHaveLength(1);
+    const firstChangeId = firstHeartbeat.body.data.recentChanges[0]?.id;
+
+    const joinedHeartbeat = await lateWriter.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", lateWriter.csrfToken).send({
+      clientId: "22222222-2222-4222-8222-222222222222",
+      page
+    }).expect(200);
+    expect(joinedHeartbeat.body.data.recentChanges).toEqual([]);
+
+    await owner.agent.patch(`/api/chapters/${chapterId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      content: "第二次更新。",
+      expectedVersionNo: firstUpdate.body.data.versionNo
+    }).expect(200);
+    const writerHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      page
+    }).expect(200);
+    const lateWriterHeartbeat = await lateWriter.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", lateWriter.csrfToken).send({
+      clientId: "22222222-2222-4222-8222-222222222222",
+      page
+    }).expect(200);
+
+    expect(writerHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({ id: firstChangeId, actorUserId: owner.user.userId })
+    ]);
+    expect(lateWriterHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({
+        pageKey: `editor:${chapterId}`,
+        actorUserId: owner.user.userId
+      })
+    ]);
+    expect(lateWriterHeartbeat.body.data.recentChanges[0]?.id).not.toBe(firstChangeId);
+  });
+
+  it("在主要删除和设定库写路径发布对应页面变更", async () => {
+    const owner = await register(runtime, "route_change_owner");
+    const writer = await register(runtime, "route_change_writer");
+    const trackDeleter = await register(runtime, "track_deleter");
+    const eventUpdater = await register(runtime, "event_updater");
+    const eventDeleter = await register(runtime, "event_deleter");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({
+      title: "主要写路径广播作品"
+    }).expect(201);
+    const workId = work.body.data.id;
+    for (const member of [writer, trackDeleter, eventUpdater, eventDeleter]) {
+      await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+        userId: member.user.userId,
+        role: "editor"
+      }).expect(201);
+    }
+
+    const writerClientId = "c1d2e3f4-a5b6-4789-8abc-def123456789";
+    const expectPublishedChange = async (
+      page: Record<string, string>,
+      expected: { pageKey: string; label: string; action: "save" | "delete"; pageDeleted: boolean; actorUserId: string },
+      mutate: () => Promise<unknown>
+    ): Promise<void> => {
+      await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+        clientId: writerClientId,
+        page
+      }).expect(200);
+      await mutate();
+      const heartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+        clientId: writerClientId,
+        page
+      }).expect(200);
+      expect(heartbeat.body.data.recentChanges).toEqual(expect.arrayContaining([
+        expect.objectContaining(expected)
+      ]));
+    };
+
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "第一卷"
+    }).expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
+      volumeId: volume.body.data.id,
+      title: "待删除章节",
+      content: "待删除正文。"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "editor", resourceId: chapter.body.data.id },
+      { pageKey: `editor:${chapter.body.data.id}`, label: "正文编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.delete(`/api/chapters/${chapter.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          expectedVersionNo: chapter.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const setting = await owner.agent.post(`/api/works/${workId}/settings`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "待删除设定",
+      category: "世界规则",
+      content: "旧规则。"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "setting", resourceId: setting.body.data.id },
+      { pageKey: `entity-editor:setting:${setting.body.data.id}`, label: "设定编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.delete(`/api/settings/${setting.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          expectedVersionNo: setting.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const removedCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "待删除角色"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "character", resourceId: removedCharacter.body.data.id },
+      { pageKey: `entity-editor:character:${removedCharacter.body.data.id}`, label: "角色编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.delete(`/api/characters/${removedCharacter.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          expectedVersionNo: removedCharacter.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const sectionCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "档案更新角色"
+    }).expect(201);
+    const updatedSection = await owner.agent.post(`/api/characters/${sectionCharacter.body.data.id}/sections`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "角色概览",
+      contentMarkdown: "原始档案。"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "character", resourceId: sectionCharacter.body.data.id },
+      { pageKey: `entity-editor:character:${sectionCharacter.body.data.id}`, label: "角色编辑", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.patch(`/api/character-sections/${updatedSection.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          contentMarkdown: "更新后的档案。",
+          expectedVersionNo: updatedSection.body.data.versionNo
+        }).expect(200);
+      }
+    );
+
+    const sectionDeleteCharacter = await owner.agent.post(`/api/works/${workId}/characters`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "档案删除角色"
+    }).expect(201);
+    const removedSection = await owner.agent.post(`/api/characters/${sectionDeleteCharacter.body.data.id}/sections`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "待删除档案"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "character", resourceId: sectionDeleteCharacter.body.data.id },
+      { pageKey: `entity-editor:character:${sectionDeleteCharacter.body.data.id}`, label: "角色档案章节", action: "delete", pageDeleted: false, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.delete(`/api/character-sections/${removedSection.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          expectedVersionNo: removedSection.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const updatedRace = await owner.agent.post(`/api/works/${workId}/races`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "更新种族"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "race", resourceId: updatedRace.body.data.id },
+      { pageKey: `entity-editor:race:${updatedRace.body.data.id}`, label: "种族编辑", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.patch(`/api/races/${updatedRace.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          description: "更新后的种族说明。",
+          expectedVersionNo: updatedRace.body.data.versionNo
+        }).expect(200);
+      }
+    );
+    const removedRace = await owner.agent.post(`/api/works/${workId}/races`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "删除种族"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "race", resourceId: removedRace.body.data.id },
+      { pageKey: `entity-editor:race:${removedRace.body.data.id}`, label: "种族编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.delete(`/api/races/${removedRace.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          expectedVersionNo: removedRace.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const updatedOrganization = await owner.agent.post(`/api/works/${workId}/organizations`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "更新组织"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "organization", resourceId: updatedOrganization.body.data.id },
+      { pageKey: `entity-editor:organization:${updatedOrganization.body.data.id}`, label: "组织编辑", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.patch(`/api/organizations/${updatedOrganization.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          description: "更新后的组织说明。",
+          expectedVersionNo: updatedOrganization.body.data.versionNo
+        }).expect(200);
+      }
+    );
+    const removedOrganization = await owner.agent.post(`/api/works/${workId}/organizations`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "删除组织"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "entity-editor", module: "organization", resourceId: removedOrganization.body.data.id },
+      { pageKey: `entity-editor:organization:${removedOrganization.body.data.id}`, label: "组织编辑", action: "delete", pageDeleted: true, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.delete(`/api/organizations/${removedOrganization.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          expectedVersionNo: removedOrganization.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const updatedTrack = await owner.agent.post(`/api/works/${workId}/timeline-tracks`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "更新轨道"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "module", module: "timeline" },
+      { pageKey: "module:timeline", label: "时间轴", action: "save", pageDeleted: false, actorUserId: owner.user.userId },
+      async () => {
+        await owner.agent.patch(`/api/timeline-tracks/${updatedTrack.body.data.id}`).set("X-CSRF-Token", owner.csrfToken).send({
+          description: "更新后的轨道说明。",
+          expectedVersionNo: updatedTrack.body.data.versionNo
+        }).expect(200);
+      }
+    );
+    const removedTrack = await owner.agent.post(`/api/works/${workId}/timeline-tracks`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "删除轨道"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "module", module: "timeline" },
+      { pageKey: "module:timeline", label: "时间轴轨道", action: "delete", pageDeleted: false, actorUserId: trackDeleter.user.userId },
+      async () => {
+        await trackDeleter.agent.delete(`/api/timeline-tracks/${removedTrack.body.data.id}`).set("X-CSRF-Token", trackDeleter.csrfToken).send({
+          expectedVersionNo: removedTrack.body.data.versionNo
+        }).expect(204);
+      }
+    );
+
+    const updatedEvent = await owner.agent.post(`/api/works/${workId}/timeline`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "更新事件"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "module", module: "timeline" },
+      { pageKey: "module:timeline", label: "时间轴", action: "save", pageDeleted: false, actorUserId: eventUpdater.user.userId },
+      async () => {
+        await eventUpdater.agent.patch(`/api/timeline/${updatedEvent.body.data.id}`).set("X-CSRF-Token", eventUpdater.csrfToken).send({
+          description: "更新后的事件说明。",
+          expectedVersionNo: updatedEvent.body.data.versionNo
+        }).expect(200);
+      }
+    );
+    const removedEvent = await owner.agent.post(`/api/works/${workId}/timeline`).set("X-CSRF-Token", owner.csrfToken).send({
+      name: "删除事件"
+    }).expect(201);
+    await expectPublishedChange(
+      { kind: "module", module: "timeline" },
+      { pageKey: "module:timeline", label: "时间轴事件", action: "delete", pageDeleted: false, actorUserId: eventDeleter.user.userId },
+      async () => {
+        await eventDeleter.agent.delete(`/api/timeline/${removedEvent.body.data.id}`).set("X-CSRF-Token", eventDeleter.csrfToken).send({
+          expectedVersionNo: removedEvent.body.data.versionNo
+        }).expect(204);
+      }
+    );
   });
 
   it("首个用户成为管理员，并完成作品邀请、共同编辑与越权拦截", async () => {

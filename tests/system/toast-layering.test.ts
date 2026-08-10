@@ -32,6 +32,13 @@ describe("系统 Toast 图层", () => {
     ]);
 
     expect(application).not.toContain("window.confirm(");
+    expect(application).toContain("function restoreToastFocus(previousFocus)");
+    expect(application).toContain("const previousFocus = document.activeElement;");
+    expect(application).toContain("previousFocus.isConnected");
+    expect(application).toContain('previousFocus.matches(":disabled")');
+    expect(application).toContain("document.activeElement === previousFocus");
+    expect(application).toContain('body.setAttribute("tabindex", "-1")');
+    expect(application).toContain("restoreToastFocus(previousFocus);");
     expect(application).toContain("function confirmToast(message");
     expect(application).toContain("function inputToast(message");
     expect(application).toContain("async function confirmDiscardChanges(");

@@ -64,21 +64,33 @@ describe("Docker 依赖清单规范化", () => {
     expect(statSync(lockPath).mtimeMs).toBe(0);
   });
 
-  it("在依赖层之后才复制含版本号的真实清单", () => {
+  it("使用无 shell 的非 root 运行层并只复制生产依赖", () => {
     const dockerfile = readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
-    const runtimeStage = dockerfile.slice(dockerfile.indexOf("AS runtime"));
-    const normalizedManifestCopy = runtimeStage.indexOf("COPY --from=dependency-manifests");
-    const productionInstall = runtimeStage.indexOf("npm ci --omit=dev");
+    const productionDependenciesStage = dockerfile.slice(
+      dockerfile.indexOf("AS production-dependencies"),
+      dockerfile.indexOf("AS build")
+    );
+    const runtimeStage = dockerfile.slice(dockerfile.indexOf("FROM ${RUNTIME_IMAGE} AS runtime"));
+    const normalizedManifestCopy = productionDependenciesStage.indexOf("COPY --from=dependency-manifests");
+    const productionInstall = productionDependenciesStage.indexOf("npm ci --omit=dev --ignore-scripts");
+    const productionModulesCopy = runtimeStage.indexOf("COPY --from=production-dependencies /app/node_modules");
     const buildCopy = runtimeStage.indexOf("COPY --from=build /app/dist");
     const versionedManifestCopy = runtimeStage.lastIndexOf("COPY package.json package-lock.json");
     const runtimeEnv = runtimeStage.indexOf("ENV NODE_ENV=production");
 
     expect(normalizedManifestCopy).toBeGreaterThan(-1);
     expect(productionInstall).toBeGreaterThan(normalizedManifestCopy);
+    expect(dockerfile).toMatch(/ARG RUNTIME_IMAGE=gcr\.io\/distroless\/cc-debian12:nonroot@sha256:[a-f0-9]{64}/u);
+    expect(runtimeStage).toContain("FROM ${RUNTIME_IMAGE} AS runtime");
+    expect(runtimeStage).not.toContain("RUN ");
+    expect(runtimeStage).toContain("COPY --from=build /usr/local/bin/node /nodejs/bin/node");
+    expect(productionModulesCopy).toBeGreaterThan(-1);
     expect(runtimeStage).not.toContain("COPY --chown=node:node src/public");
-    expect(buildCopy).toBeGreaterThan(productionInstall);
+    expect(buildCopy).toBeGreaterThan(productionModulesCopy);
     expect(versionedManifestCopy).toBeGreaterThan(buildCopy);
     expect(runtimeEnv).toBeGreaterThan(versionedManifestCopy);
+    expect(runtimeStage).toContain("USER 1000:1000");
+    expect(runtimeStage).toContain('ENTRYPOINT ["/nodejs/bin/node"]');
     expect(runtimeStage).toContain("TZ=Asia/Shanghai");
   });
 });

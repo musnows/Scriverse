@@ -31,6 +31,9 @@ describe("注册入口状态", () => {
     expect(application.text).toContain('const login = mode === "login" || registerTab.disabled;');
     expect(application.text).not.toContain('$("#auth-register-tab").classList.toggle("hidden", !canRegister);');
     expect(page.text).toContain('id="register-setup-token-field" class="hidden"');
+    expect(page.text).toContain('<form id="login-form" class="auth-form" method="post" action="/api/auth/login">');
+    expect(page.text).toContain('<form id="register-form" class="auth-form hidden" method="post" action="/api/auth/register">');
+    expect(page.text).toContain('<form id="password-form" class="account-settings-form password-settings-form" method="post" action="/api/auth/password">');
     expect(application.text).toContain('setupTokenField.classList.toggle("hidden", !setupTokenRequired);');
     expect(application.text).toContain("setupTokenInput.required = setupTokenRequired;");
     expect(styles.text).toContain(".auth-tabs button:disabled {");
