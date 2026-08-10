@@ -113,6 +113,33 @@ describe("作品协作者在线状态", () => {
     expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).not.toBeNull();
   });
 
+  it("在节流窗口内向后来进入同页的收件人发布下一次保存", () => {
+    let now = Date.parse("2026-07-24T10:15:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const firstViewer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const lateViewer = { userId: "reader", username: "reader", displayName: "后来加入者", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+    const page = { kind: "editor" as const, resourceId: "chapter-1" };
+    const pageKey = editorPageKey("chapter-1");
+
+    presence.heartbeat("work-1", "client-writer", firstViewer, page);
+    const firstChange = presence.publishChange("work-1", pageKey, actor);
+
+    now += 1_000;
+    expect(presence.heartbeat("work-1", "client-reader", lateViewer, page).recentChanges).toEqual([]);
+    const secondChange = presence.publishChange("work-1", pageKey, actor);
+
+    expect(firstChange).not.toBeNull();
+    expect(secondChange).not.toBeNull();
+    expect(secondChange?.id).not.toBe(firstChange?.id);
+    expect(presence.heartbeat("work-1", "client-writer", firstViewer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: firstChange?.id })
+    ]);
+    expect(presence.heartbeat("work-1", "client-reader", lateViewer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: secondChange?.id })
+    ]);
+  });
+
   it("允许关闭发布节流", () => {
     const presence = new CollaborationPresence(45_000, Date.now, 120_000, 50, 0);
     const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };

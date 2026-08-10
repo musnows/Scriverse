@@ -175,7 +175,7 @@ export class CollaborationPresence {
   private readonly changes: ChangeEntry[] = [];
   private readonly dirtyEntryKeys = new Set<string>();
   private readonly pendingChanges = new Map<string, ChangeEntry>();
-  private readonly lastPublishedAtMs = new Map<string, number>();
+  private readonly lastPublishedAtMsByRecipient = new Map<string, number>();
   private readonly persistenceStore: CollaborationPresenceStore | null;
   private readonly cleanupIntervalMs: number;
   private readonly minPublishIntervalMs: number;
@@ -244,12 +244,6 @@ export class CollaborationPresence {
     const label = options.label ?? pageLabelForKey(pageKey);
     const pageDeleted = options.pageDeleted === true;
     const publishKey = `${workId}:${pageKey}:${actor.userId}:${action}`;
-    const lastPublishedAt = this.lastPublishedAtMs.get(publishKey);
-    if (
-      this.minPublishIntervalMs > 0
-      && lastPublishedAt !== undefined
-      && now - lastPublishedAt < this.minPublishIntervalMs
-    ) return null;
     const recipients = [...this.entries.values()]
       .filter((entry) => (
         entry.workId === workId
@@ -259,9 +253,19 @@ export class CollaborationPresence {
       .map((entry) => ({ userId: entry.userId, clientId: entry.clientId }))
       .filter((recipient, index, values) => values.findIndex((candidate) => (
         candidate.userId === recipient.userId && candidate.clientId === recipient.clientId
-      )) === index);
+      )) === index)
+      .filter((recipient) => {
+        if (this.minPublishIntervalMs <= 0) return true;
+        const throttleKey = `${publishKey}:${recipient.userId}:${recipient.clientId}`;
+        const lastPublishedAt = this.lastPublishedAtMsByRecipient.get(throttleKey);
+        return lastPublishedAt === undefined || now - lastPublishedAt >= this.minPublishIntervalMs;
+      });
     if (recipients.length === 0) return null;
-    if (this.minPublishIntervalMs > 0) this.lastPublishedAtMs.set(publishKey, now);
+    if (this.minPublishIntervalMs > 0) {
+      for (const recipient of recipients) {
+        this.lastPublishedAtMsByRecipient.set(`${publishKey}:${recipient.userId}:${recipient.clientId}`, now);
+      }
+    }
     const change: ChangeEntry = {
       id: `change-${now}-${randomUUID()}`,
       workId,
@@ -358,9 +362,9 @@ export class CollaborationPresence {
         this.dirtyEntryKeys.delete(key);
       }
     }
-    for (const [key, publishedAtMs] of this.lastPublishedAtMs) {
+    for (const [key, publishedAtMs] of this.lastPublishedAtMsByRecipient) {
       if (this.minPublishIntervalMs <= 0 || now - publishedAtMs >= this.minPublishIntervalMs) {
-        this.lastPublishedAtMs.delete(key);
+        this.lastPublishedAtMsByRecipient.delete(key);
       }
     }
     this.pruneChanges(now);

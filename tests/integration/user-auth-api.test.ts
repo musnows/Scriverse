@@ -289,6 +289,78 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(globalList.body.data.recentChanges).toEqual([]);
   });
 
+  it("在节流窗口内向后来进入同页的协作者返回下一次保存提醒", async () => {
+    const owner = await register(runtime, "late_change_owner");
+    const writer = await register(runtime, "late_change_writer");
+    const lateWriter = await register(runtime, "late_change_reader");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({
+      title: "后来加入提醒作品"
+    }).expect(201);
+    const workId = work.body.data.id;
+    for (const member of [writer, lateWriter]) {
+      await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+        userId: member.user.userId,
+        role: "editor"
+      }).expect(201);
+    }
+
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({
+      title: "第一卷"
+    }).expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "原始正文。"
+    }).expect(201);
+    const chapterId = chapter.body.data.id;
+    const page = { kind: "editor", resourceId: chapterId };
+
+    await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      page
+    }).expect(200);
+    const firstUpdate = await owner.agent.patch(`/api/chapters/${chapterId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      content: "第一次更新。",
+      expectedVersionNo: chapter.body.data.versionNo
+    }).expect(200);
+    const firstHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      page
+    }).expect(200);
+    expect(firstHeartbeat.body.data.recentChanges).toHaveLength(1);
+    const firstChangeId = firstHeartbeat.body.data.recentChanges[0]?.id;
+
+    const joinedHeartbeat = await lateWriter.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", lateWriter.csrfToken).send({
+      clientId: "22222222-2222-4222-8222-222222222222",
+      page
+    }).expect(200);
+    expect(joinedHeartbeat.body.data.recentChanges).toEqual([]);
+
+    await owner.agent.patch(`/api/chapters/${chapterId}`).set("X-CSRF-Token", owner.csrfToken).send({
+      content: "第二次更新。",
+      expectedVersionNo: firstUpdate.body.data.versionNo
+    }).expect(200);
+    const writerHeartbeat = await writer.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", writer.csrfToken).send({
+      clientId: "11111111-1111-4111-8111-111111111111",
+      page
+    }).expect(200);
+    const lateWriterHeartbeat = await lateWriter.agent.post(`/api/works/${workId}/presence`).set("X-CSRF-Token", lateWriter.csrfToken).send({
+      clientId: "22222222-2222-4222-8222-222222222222",
+      page
+    }).expect(200);
+
+    expect(writerHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({ id: firstChangeId, actorUserId: owner.user.userId })
+    ]);
+    expect(lateWriterHeartbeat.body.data.recentChanges).toEqual([
+      expect.objectContaining({
+        pageKey: `editor:${chapterId}`,
+        actorUserId: owner.user.userId
+      })
+    ]);
+    expect(lateWriterHeartbeat.body.data.recentChanges[0]?.id).not.toBe(firstChangeId);
+  });
+
   it("在主要删除和设定库写路径发布对应页面变更", async () => {
     const owner = await register(runtime, "route_change_owner");
     const writer = await register(runtime, "route_change_writer");
