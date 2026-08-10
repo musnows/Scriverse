@@ -1576,6 +1576,83 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
+  it("流式用户消息持久化手动与自动角色引用且角色扮演不自动识别", async () => {
+    const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾潮" }).expect(201);
+    const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const roleplayCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "宋遥" }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    const sentContexts: string[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+      sentContexts.push(JSON.stringify(body.messages ?? []));
+      return new Response('data: {"choices":[{"delta":{"content":"已确认引用。"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请让顾潮与林舟一起出场。",
+      scope: { type: "none", characterIds: [manualCharacter.body.data.id] },
+      modelId,
+      conversationId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const userMessagePayload = JSON.parse(streamed.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      message?: { metadata?: { mentionCharacterIds?: string[] } };
+    };
+    expect(userMessagePayload.message?.metadata?.mentionCharacterIds).toEqual([
+      manualCharacter.body.data.id,
+      automaticCharacter.body.data.id
+    ]);
+    expect(sentContexts[0]).toContain("<selected_characters>");
+    expect(sentContexts[0]).toContain("<mentioned_characters>");
+    expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).characters).toEqual([
+      automaticCharacter.body.data.id
+    ]);
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.messages[0].metadata.mentionCharacterIds).toEqual([
+      manualCharacter.body.data.id,
+      automaticCharacter.body.data.id
+    ]);
+
+    const plainStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请概括当前问题。",
+      scope: { type: "none" },
+      modelId,
+      conversationId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const plainUserMessagePayload = JSON.parse(plainStream.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      message?: { metadata?: Record<string, unknown> };
+    };
+    expect(plainUserMessagePayload.message?.metadata).not.toHaveProperty("mentionCharacterIds");
+
+    const roleplayConversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const roleplayConversationId = String(roleplayConversation.body.data.id);
+    await request(runtime.app).patch(`/api/ai-conversations/${roleplayConversationId}/roleplay`).send({
+      characterId: roleplayCharacter.body.data.id
+    }).expect(200);
+    const roleplayStream = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "林舟现在在哪里？",
+      scope: { type: "none" },
+      modelId,
+      conversationId: roleplayConversationId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const roleplayUserMessagePayload = JSON.parse(roleplayStream.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      message?: { metadata?: Record<string, unknown> };
+    };
+    expect(roleplayUserMessagePayload.message?.metadata).not.toHaveProperty("mentionCharacterIds");
+    expect(sentContexts.at(-1)).not.toContain("<mentioned_characters>");
+    expect(runtime.store.getAiConversationInjectedEntities(roleplayConversationId, workId).characters).toEqual([]);
+  });
+
   it("工具定义开启时在上游响应结束前推送首个正文 delta", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

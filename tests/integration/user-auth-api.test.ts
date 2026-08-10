@@ -2028,6 +2028,67 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
   });
 
+  it("无角色读取权限时从对话消息 metadata 移除角色引用", async () => {
+    const owner = await register(runtime, "ai_message_mention_owner");
+    const collaborator = await register(runtime, "ai_message_mention_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 消息角色引用权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "机密角色" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "read",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const conversation = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(201);
+    const conversationId = String(conversation.body.data.id);
+    runtime.store.addAiConversationMessage(conversationId, {
+      role: "user",
+      content: "可读取的对话正文",
+      metadata: {
+        mentionCharacterIds: [String(character.body.data.id)],
+        modelDisplayName: "保留的模型信息"
+      }
+    });
+
+    const ownerView = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(ownerView.body.data.messages[0].metadata.mentionCharacterIds).toEqual([character.body.data.id]);
+
+    const collaboratorView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(collaboratorView.body.data.messages[0]).toMatchObject({
+      content: "可读取的对话正文",
+      metadata: { modelDisplayName: "保留的模型信息" }
+    });
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionCharacterIds");
+
+    const pagedView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}?page=1&limit=20`).expect(200);
+    expect(pagedView.body.data.messagesPage.items[0].metadata).toEqual({ modelDisplayName: "保留的模型信息" });
+  });
+
   it("AI 建议与对话按成员正文权限脱敏", async () => {
     const owner = await register(runtime, "ai_redact_owner");
     const collaborator = await register(runtime, "ai_redact_reader");

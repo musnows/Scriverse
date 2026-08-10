@@ -3916,6 +3916,20 @@ export class AiManager {
     return { action: "compacted", usage: compactedUsage, compaction };
   }
 
+  /** 解析本轮指令中的自动角色提及；仅返回合并范围，不改写对话累计注入状态。 */
+  resolveInstructionMentions(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId">
+  ): ContextScope {
+    if (input.taskType !== "chat" || this.roleplayCharacterId(input.workId, input.conversationId)) return input.scope;
+    return this.matchAndMergeInstructionEntities(
+      input.workId,
+      input.instruction,
+      input.scope,
+      input.conversationId,
+      false
+    );
+  }
+
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
     const { model } = this.resolveModel(input.workId, "chat", input.modelId);
@@ -4141,7 +4155,7 @@ export class AiManager {
       : undefined;
     const scope = roleplayCharacterId || input.taskType !== "chat"
       ? baseScope
-      : this.applyKeywordEntityMentions(
+      : this.matchAndMergeInstructionEntities(
         input.workId,
         input.instruction,
         baseScope,
@@ -4151,7 +4165,7 @@ export class AiManager {
     return this.contextBuilder.buildPlan(input.workId, scope, workContextBudgetTokens, bookSummaryMaximumTokens, input.instruction);
   }
 
-  private applyKeywordEntityMentions(
+  private matchAndMergeInstructionEntities(
     workId: string,
     instruction: string,
     scope: ContextScope,
