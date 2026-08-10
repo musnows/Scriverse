@@ -3,7 +3,8 @@ import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } f
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
-import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
@@ -964,6 +965,9 @@ function setupPanelResize(handle, side) {
 }
 
 let chapterLineNumberFrame = null;
+let chapterLineNumberTimer = null;
+let chapterLineLayout = null;
+let chapterLineVirtualWindow = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
 let chapterWhitespaceVisible = true;
@@ -973,6 +977,7 @@ let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
+const chapterLineInputRenderDelay = 32;
 let aiMentionMatch = null;
 let aiMentionRange = null;
 let aiMentionActiveIndex = -1;
@@ -1129,6 +1134,13 @@ function syncChapterLineNumberScroll() {
     whitespace.style.transform = `translate(${-input.scrollLeft}px, ${-input.scrollTop}px)`;
     whitespace.dataset.scrollTop = String(input.scrollTop);
   }
+  if (!chapterLineVirtualWindow) return;
+  const buffer = input.clientHeight * 0.35;
+  const viewportBottom = input.scrollTop + input.clientHeight;
+  const needsPreviousLines = chapterLineVirtualWindow.start > 0 && input.scrollTop < chapterLineVirtualWindow.top + buffer;
+  const needsNextLines = chapterLineVirtualWindow.end < chapterLineVirtualWindow.lineCount
+    && viewportBottom > chapterLineVirtualWindow.bottom - buffer;
+  if (needsPreviousLines || needsNextLines) scheduleChapterLineNumbers();
 }
 
 function syncChapterWhitespaceControls() {
@@ -1144,7 +1156,7 @@ function toggleChapterWhitespaceVisibility() {
   scheduleChapterLineNumbers();
 }
 
-function renderChapterWhitespaceMarkers(input, style) {
+function renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, totalHeight) {
   const overlay = $("#chapter-whitespace-overlay");
   const inner = $("#chapter-whitespace-inner");
   syncChapterWhitespaceControls();
@@ -1152,10 +1164,17 @@ function renderChapterWhitespaceMarkers(input, style) {
   overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
   if (!chapterWhitespaceVisible) {
     inner.replaceChildren();
+    delete inner.dataset.virtualStart;
+    delete inner.dataset.virtualEnd;
+    delete inner.dataset.renderedLineCount;
     return;
   }
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  const firstLineTop = getLineBounds(lineWindow.start).top;
   Object.assign(inner.style, {
     width: `${input.clientWidth}px`,
+    height: `${Math.max(input.clientHeight, totalHeight + paddingTop + paddingBottom)}px`,
     fontFamily: style.fontFamily,
     fontSize: style.fontSize,
     fontWeight: style.fontWeight,
@@ -1164,11 +1183,14 @@ function renderChapterWhitespaceMarkers(input, style) {
     letterSpacing: style.letterSpacing,
     tabSize: style.tabSize,
     padding: style.padding,
+    paddingTop: `${paddingTop + firstLineTop}px`,
+    whiteSpace: style.whiteSpace,
     overflowWrap: style.overflowWrap,
     wordBreak: style.wordBreak
   });
   const fragment = document.createDocumentFragment();
-  for (const token of tokenizeVisibleSpaces(input.value.replace(/\r\n?/gu, "\n"))) {
+  const visibleText = layout.lines.slice(lineWindow.start, lineWindow.end).join("\n");
+  for (const token of tokenizeVisibleSpaces(visibleText)) {
     if (token.type === "text") {
       fragment.append(document.createTextNode(token.text));
       continue;
@@ -1180,9 +1202,93 @@ function renderChapterWhitespaceMarkers(input, style) {
     fragment.append(marker);
   }
   inner.replaceChildren(fragment);
+  inner.dataset.virtualStart = String(lineWindow.start);
+  inner.dataset.virtualEnd = String(lineWindow.end - 1);
+  inner.dataset.renderedLineCount = String(lineWindow.end - lineWindow.start);
 }
 
-function renderChapterLineNumbers() {
+function prepareChapterLineLayout(input, measure, style, contentWidth) {
+  Object.assign(measure.style, {
+    width: `${contentWidth}px`,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    tabSize: style.tabSize,
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak
+  });
+  const value = input.value.replace(/\r\n?/gu, "\n");
+  const styleKey = JSON.stringify([
+    contentWidth,
+    style.fontFamily,
+    style.fontSize,
+    style.fontWeight,
+    style.fontStyle,
+    style.lineHeight,
+    style.letterSpacing,
+    style.tabSize,
+    style.overflowWrap,
+    style.wordBreak
+  ]);
+  if (!chapterLineLayout || chapterLineLayout.value !== value) {
+    const mirror = buildChapterLineMirror(value);
+    measure.textContent = mirror.text;
+    chapterLineLayout = { ...mirror, value, styleKey, bounds: new Map() };
+  } else if (chapterLineLayout.styleKey !== styleKey) {
+    chapterLineLayout.styleKey = styleKey;
+    chapterLineLayout.bounds.clear();
+  }
+  return chapterLineLayout;
+}
+
+function createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight = null) {
+  const textNode = measure.firstChild;
+  const measureRect = measure.getBoundingClientRect();
+  const contentHeight = Number.isFinite(targetHeight) && targetHeight > 0 ? targetHeight : measureRect.height;
+  const geometryScale = measureRect.height > 0 ? contentHeight / measureRect.height : 1;
+  const geometryKey = `${measureRect.height}:${contentHeight}:${lineHeight}`;
+  if (layout.geometryKey !== geometryKey) {
+    layout.geometryKey = geometryKey;
+    layout.bounds.clear();
+  }
+  return {
+    measureHeight: contentHeight,
+    getLineBounds(index) {
+      const cached = layout.bounds.get(index);
+      if (cached) return cached;
+      const range = document.createRange();
+      const start = layout.offsets[index];
+      range.setStart(textNode, start);
+      range.setEnd(textNode, start + layout.lines[index].length + 1);
+      const rects = [...range.getClientRects()].filter((rect) => rect.height > 0);
+      let top;
+      let bottom;
+      if (rects.length > 0) {
+        const lineBoxes = rects.map((rect) => {
+          const height = Math.max(lineHeight, rect.height);
+          const leading = Math.max(0, (lineHeight - rect.height) / 2);
+          const boxTop = (rect.top - measureRect.top - leading) * geometryScale;
+          return { top: boxTop, bottom: boxTop + height * geometryScale };
+        });
+        top = Math.max(0, Math.min(...lineBoxes.map((box) => box.top)));
+        bottom = Math.max(...lineBoxes.map((box) => box.bottom));
+      } else {
+        const scaledLineHeight = lineHeight * geometryScale;
+        const availableHeight = Math.max(0, contentHeight - scaledLineHeight);
+        top = layout.lines.length > 1 ? availableHeight * index / (layout.lines.length - 1) : 0;
+        bottom = top + scaledLineHeight;
+      }
+      const bounds = { top, bottom: Math.max(top + lineHeight * geometryScale, bottom) };
+      layout.bounds.set(index, bounds);
+      return bounds;
+    }
+  };
+}
+
+function renderChapterLineNumbers({ targetLineIndex = null } = {}) {
   const input = $("#chapter-content");
   const inner = $("#chapter-line-numbers-inner");
   const measure = $("#chapter-line-measure");
@@ -1192,28 +1298,28 @@ function renderChapterLineNumbers() {
   const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
   const numberStyle = getComputedStyle($("#chapter-line-numbers"));
   const numberLineHeight = parseFloat(numberStyle.lineHeight) || parseFloat(numberStyle.fontSize) * 1.2;
-  inner.style.top = `${calculateLineNumberTop(parseFloat(style.paddingTop), lineHeight, numberLineHeight)}px`;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  inner.style.top = `${calculateLineNumberTop(paddingTop, lineHeight, numberLineHeight)}px`;
   const numberTextOffset = calculateLineNumberTextOffset(lineHeight, numberLineHeight);
-  Object.assign(measure.style, {
-    width: `${contentWidth}px`,
-    fontFamily: style.fontFamily,
-    fontSize: style.fontSize,
-    fontWeight: style.fontWeight,
-    fontStyle: style.fontStyle,
-    lineHeight: style.lineHeight,
-    letterSpacing: style.letterSpacing,
-    tabSize: style.tabSize
-  });
-  const lines = input.value.replace(/\r\n?/gu, "\n").split("\n");
-  const measureRows = lines.map((line) => {
-    const row = document.createElement("div");
-    row.textContent = line || "\u200b";
-    return row;
-  });
-  measure.replaceChildren(...measureRows);
-  const measureRect = measure.getBoundingClientRect();
+  const layout = prepareChapterLineLayout(input, measure, style, contentWidth);
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  const scrollContentHeight = input.scrollHeight - paddingTop - paddingBottom;
+  const targetHeight = input.scrollHeight > input.clientHeight + 1 ? scrollContentHeight : null;
+  const { getLineBounds, measureHeight } = createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight);
+  if (Number.isInteger(targetLineIndex)) {
+    const safeTarget = Math.max(0, Math.min(targetLineIndex, layout.lines.length - 1));
+    input.scrollTop = Math.max(0, getLineBounds(safeTarget).top + paddingTop - input.clientHeight / 3);
+  }
+  const viewportTop = Math.max(0, input.scrollTop - paddingTop);
+  const overscan = Math.max(input.clientHeight, lineHeight * 8);
+  const lineWindow = findChapterLineWindow(
+    layout.lines.length,
+    getLineBounds,
+    viewportTop - overscan,
+    viewportTop + input.clientHeight + overscan
+  );
   const numbers = document.createDocumentFragment();
-  measureRows.forEach((row, index) => {
+  for (let index = lineWindow.start; index < lineWindow.end; index += 1) {
     const number = document.createElement("button");
     number.type = "button";
     number.className = "chapter-line-number";
@@ -1226,27 +1332,54 @@ function renderChapterLineNumbers() {
       number.classList.add("is-line-selected");
       number.setAttribute("aria-pressed", "true");
     }
-    const rowRect = row.getBoundingClientRect();
-    const rowHeight = calculateLineNumberRowHeight(lineHeight, rowRect.height);
-    number.style.top = `${calculateLineNumberRowTop(measureRect.top, rowRect.top)}px`;
-    number.style.height = `${rowHeight}px`;
+    const bounds = getLineBounds(index);
+    number.style.top = `${bounds.top}px`;
+    number.style.height = `${bounds.bottom - bounds.top}px`;
     number.style.paddingTop = `${numberTextOffset}px`;
     numbers.append(number);
-  });
+  }
   inner.replaceChildren(numbers);
-  inner.style.height = `${measureRect.height}px`;
-  inner.dataset.lineCount = String(lines.length);
-  measure.replaceChildren();
-  renderChapterWhitespaceMarkers(input, style);
+  inner.style.height = `${measureHeight}px`;
+  inner.dataset.lineCount = String(layout.lines.length);
+  inner.dataset.virtualStart = String(lineWindow.start);
+  inner.dataset.virtualEnd = String(lineWindow.end - 1);
+  inner.dataset.renderedLineCount = String(lineWindow.end - lineWindow.start);
+  const firstBounds = getLineBounds(lineWindow.start);
+  const lastBounds = getLineBounds(lineWindow.end - 1);
+  chapterLineVirtualWindow = {
+    start: lineWindow.start,
+    end: lineWindow.end,
+    lineCount: layout.lines.length,
+    top: firstBounds.top + paddingTop,
+    bottom: lastBounds.bottom + paddingTop
+  };
+  renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, measureHeight);
   syncChapterLineNumberScroll();
 }
 
-function scheduleChapterLineNumbers() {
+function requestChapterLineNumberFrame() {
   if (chapterLineNumberFrame !== null) return;
   chapterLineNumberFrame = requestAnimationFrame(() => {
     chapterLineNumberFrame = null;
     renderChapterLineNumbers();
   });
+}
+
+function scheduleChapterLineNumbers(delay = 0) {
+  const wait = typeof delay === "number" && Number.isFinite(delay) ? Math.max(0, delay) : 0;
+  if (wait === 0) {
+    if (chapterLineNumberTimer !== null) {
+      clearTimeout(chapterLineNumberTimer);
+      chapterLineNumberTimer = null;
+    }
+    requestChapterLineNumberFrame();
+    return;
+  }
+  if (chapterLineNumberFrame !== null || chapterLineNumberTimer !== null) return;
+  chapterLineNumberTimer = setTimeout(() => {
+    chapterLineNumberTimer = null;
+    requestChapterLineNumberFrame();
+  }, wait);
 }
 
 function collapseChapterInputBlankLines(input) {
@@ -1265,10 +1398,10 @@ function collapseChapterInputBlankLines(input) {
 function lineIndexAtPointer(clientY) {
   const rows = [...$("#chapter-line-numbers-inner").querySelectorAll(".chapter-line-number")];
   if (!rows.length) return 0;
-  for (let index = 0; index < rows.length; index += 1) {
-    if (clientY < rows[index].getBoundingClientRect().bottom) return index;
+  for (const row of rows) {
+    if (clientY < row.getBoundingClientRect().bottom) return Number(row.dataset.lineIndex);
   }
-  return rows.length - 1;
+  return Number(rows[rows.length - 1].dataset.lineIndex);
 }
 
 function paintChapterLineSelection(anchor, focus) {
@@ -4669,10 +4802,8 @@ function revealChapterSearchLines(startLine, endLine) {
   input.setSelectionRange(selection.startOffset, selection.startOffset + selection.text.length);
   scheduleChapterLineNumbers();
   requestAnimationFrame(() => {
+    renderChapterLineNumbers({ targetLineIndex: selection.safeStart });
     paintChapterLineSelection(selection.safeStart, selection.safeEnd);
-    const row = $("#chapter-line-numbers-inner").querySelector(`[data-line-index="${selection.safeStart}"]`);
-    if (row) input.scrollTop = Math.max(0, row.offsetTop - input.clientHeight / 3);
-    syncChapterLineNumberScroll();
   });
 }
 
@@ -12567,7 +12698,7 @@ $("#chapter-content").addEventListener("input", (event) => {
   updateChapterStats();
   scheduleChapterAutoSave();
   clearChapterLineSelection();
-  scheduleChapterLineNumbers();
+  scheduleChapterLineNumbers(chapterLineInputRenderDelay);
   setAiContextMeter(null);
 });
 $("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
