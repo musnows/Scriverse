@@ -1,4 +1,5 @@
 import type {
+  CollaborativeChangeRecipient,
   CollaborationPresenceStore,
   PersistedCollaborativeChange,
   PersistedPresenceEntry,
@@ -58,13 +59,26 @@ function parsePage(row: PresenceEntryRow): PresencePage | null {
   return null;
 }
 
-function parseRecipients(value: unknown): string[] {
+function uniqueRecipients(recipients: CollaborativeChangeRecipient[]): CollaborativeChangeRecipient[] {
+  return recipients.filter((recipient, index, values) => values.findIndex((candidate) => (
+    candidate.userId === recipient.userId && candidate.clientId === recipient.clientId
+  )) === index);
+}
+
+function parseRecipients(value: unknown): CollaborativeChangeRecipient[] {
   if (typeof value !== "string") return [];
   try {
     const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed)
-      ? [...new Set(parsed.filter((item): item is string => typeof item === "string" && item.length > 0))]
-      : [];
+    if (!Array.isArray(parsed)) return [];
+    const recipients: CollaborativeChangeRecipient[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const candidate = item as Record<string, unknown>;
+      const userId = requiredString(candidate.userId);
+      const clientId = requiredString(candidate.clientId);
+      if (userId && clientId) recipients.push({ userId, clientId });
+    }
+    return uniqueRecipients(recipients);
   } catch {
     return [];
   }
@@ -135,7 +149,7 @@ export class PresenceStore implements CollaborationPresenceStore {
         actorUserId,
         actorDisplayName,
         savedAt,
-        recipientClientIds: parseRecipients(row.recipient_client_ids_json)
+        recipients: parseRecipients(row.recipient_client_ids_json)
       });
     }
     return changes.reverse();
@@ -187,7 +201,7 @@ export class PresenceStore implements CollaborationPresenceStore {
           change.actorUserId,
           change.actorDisplayName,
           change.savedAt,
-          JSON.stringify([...new Set(change.recipientClientIds)])
+          JSON.stringify(uniqueRecipients(change.recipients))
         );
       }
       if (batch.entryExpiryCutoff !== undefined) {

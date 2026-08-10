@@ -172,4 +172,34 @@ describe("作品协作者在线状态", () => {
       database.close();
     }
   });
+
+  it("重启后相同 clientId 仅向原账户恢复定向变更", () => {
+    const now = Date.parse("2026-07-24T12:00:00.000Z");
+    const database = new Database(":memory:");
+    createPresenceWork(database);
+    const store = new PresenceStore(database);
+    const owner = { userId: "owner", username: "owner", displayName: "作者", avatarUrl: null };
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const otherMember = { userId: "other", username: "other", displayName: "其他成员", avatarUrl: null };
+    const page = { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" } as const;
+    const pageKey = entityEditorPageKey("relationship", "relationship-1");
+    const first = new CollaborationPresence(45_000, () => now, 120_000, 50, { store, flushIntervalMs: 1_000_000 });
+    let second: CollaborationPresence | null = null;
+    try {
+      first.heartbeat("work-1", "shared-client", writer, page);
+      const change = first.publishChange("work-1", pageKey, owner);
+      expect(change).not.toBeNull();
+      first.close();
+
+      second = new CollaborationPresence(45_000, () => now, 120_000, 50, { store, flushIntervalMs: 1_000_000 });
+      expect(second.heartbeat("work-1", "shared-client", otherMember, page).recentChanges).toEqual([]);
+      expect(second.heartbeat("work-1", "shared-client", writer, page).recentChanges).toEqual([
+        expect.objectContaining({ id: change?.id })
+      ]);
+    } finally {
+      second?.close();
+      first.close();
+      database.close();
+    }
+  });
 });

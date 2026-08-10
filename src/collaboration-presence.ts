@@ -48,6 +48,11 @@ export type CollaborativeChange = {
   savedAt: string;
 };
 
+export type CollaborativeChangeRecipient = {
+  userId: string;
+  clientId: string;
+};
+
 export type PresenceHeartbeatResult = {
   participants: PresenceParticipant[];
   recentChanges: CollaborativeChange[];
@@ -62,7 +67,7 @@ export type PersistedPresenceEntry = PresenceUser & {
 
 export type PersistedCollaborativeChange = CollaborativeChange & {
   workId: string;
-  recipientClientIds: string[];
+  recipients: CollaborativeChangeRecipient[];
 };
 
 export type PresencePersistenceBatch = {
@@ -93,7 +98,7 @@ type PresenceEntry = PresenceParticipant & {
 type ChangeEntry = CollaborativeChange & {
   workId: string;
   savedAtMs: number;
-  recipientClientIds: string[];
+  recipients: CollaborativeChangeRecipient[];
 };
 
 const moduleLabels: Record<string, string> = {
@@ -217,14 +222,17 @@ export class CollaborationPresence {
   ): CollaborativeChange | null {
     const now = this.now();
     this.prune(now);
-    const recipientClientIds = [...new Set([...this.entries.values()]
+    const recipients = [...this.entries.values()]
       .filter((entry) => (
         entry.workId === workId
         && entry.page.key === pageKey
         && entry.userId !== actor.userId
       ))
-      .map((entry) => entry.clientId))];
-    if (recipientClientIds.length === 0) return null;
+      .map((entry) => ({ userId: entry.userId, clientId: entry.clientId }))
+      .filter((recipient, index, values) => values.findIndex((candidate) => (
+        candidate.userId === recipient.userId && candidate.clientId === recipient.clientId
+      )) === index);
+    if (recipients.length === 0) return null;
     const change: ChangeEntry = {
       id: `change-${now}-${randomUUID()}`,
       workId,
@@ -234,7 +242,7 @@ export class CollaborationPresence {
       actorDisplayName: actor.displayName,
       savedAt: new Date(now).toISOString(),
       savedAtMs: now,
-      recipientClientIds
+      recipients
     };
     this.changes.push(change);
     this.pendingChanges.set(change.id, change);
@@ -251,14 +259,18 @@ export class CollaborationPresence {
 
   listChanges(workId: string, pageKey: string, receiverClientId: string, now = this.now()): CollaborativeChange[] {
     this.pruneChanges(now);
+    const receiverUserId = this.entries.get(`${workId}:${receiverClientId}`)?.userId;
+    if (!receiverUserId) return [];
     return this.changes
       .filter((change) => (
         change.workId === workId
         && change.pageKey === pageKey
-        && change.recipientClientIds.includes(receiverClientId)
+        && change.recipients.some((recipient) => (
+          recipient.userId === receiverUserId && recipient.clientId === receiverClientId
+        ))
       ))
       .sort((left, right) => right.savedAtMs - left.savedAtMs)
-      .map(({ workId: _workId, savedAtMs: _savedAtMs, recipientClientIds: _recipientClientIds, ...change }) => change);
+      .map(({ workId: _workId, savedAtMs: _savedAtMs, recipients: _recipients, ...change }) => change);
   }
 
   flush(forceCleanup = false): void {
@@ -346,7 +358,7 @@ export class CollaborationPresence {
       actorUserId: change.actorUserId,
       actorDisplayName: change.actorDisplayName,
       savedAt: change.savedAt,
-      recipientClientIds: [...change.recipientClientIds]
+      recipients: change.recipients.map((recipient) => ({ ...recipient }))
     };
   }
 
@@ -382,7 +394,9 @@ export class CollaborationPresence {
       this.changes.push({
         ...persisted,
         savedAtMs,
-        recipientClientIds: [...new Set(persisted.recipientClientIds)]
+        recipients: persisted.recipients.filter((recipient, index, values) => values.findIndex((candidate) => (
+          candidate.userId === recipient.userId && candidate.clientId === recipient.clientId
+        )) === index)
       });
       knownChangeIds.add(persisted.id);
     }

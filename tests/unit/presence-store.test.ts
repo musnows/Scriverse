@@ -25,7 +25,10 @@ function change(workId: string, id: string, savedAt: string): PersistedCollabora
     actorUserId: "owner",
     actorDisplayName: "作者",
     savedAt,
-    recipientClientIds: ["client-boundary", "client-boundary"]
+    recipients: [
+      { userId: "user-client-boundary", clientId: "client-boundary" },
+      { userId: "user-client-boundary", clientId: "client-boundary" }
+    ]
   };
 }
 
@@ -80,8 +83,31 @@ describe("协作状态持久层", () => {
       expect.objectContaining({
         id: "change-1",
         savedAt: "2026-07-24T08:00:01.000Z",
-        recipientClientIds: ["client-boundary"]
+        recipients: [{ userId: "user-client-boundary", clientId: "client-boundary" }]
       })
+    ]);
+    expect(database.get("SELECT recipient_client_ids_json FROM presence_changes WHERE id = ?", "change-1")).toEqual({
+      recipient_client_ids_json: '[{"userId":"user-client-boundary","clientId":"client-boundary"}]'
+    });
+  });
+
+  it("读取旧版仅含 clientId 的收件列表时安全地拒绝投递", () => {
+    database.run(
+      `INSERT INTO presence_changes (
+         id, work_id, page_key, label, actor_user_id, actor_display_name, saved_at, recipient_client_ids_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      "legacy-change",
+      "work-1",
+      "editor:chapter-1",
+      "正文编辑",
+      "owner",
+      "作者",
+      "2026-07-24T08:00:01.000Z",
+      JSON.stringify(["client-boundary"])
+    );
+
+    expect(store.loadChanges("2026-07-24T08:00:00.000Z", 50)).toEqual([
+      expect.objectContaining({ id: "legacy-change", recipients: [] })
     ]);
   });
 

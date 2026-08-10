@@ -83,11 +83,13 @@ describe("协作状态重启恢复", () => {
     runtime = createRuntime(options);
     const owner = await register(runtime, "restart_owner");
     const writer = await register(runtime, "restart_writer");
+    const otherMember = await register(runtime, "restart_other_member");
     const ownerApi = authenticated(runtime, owner);
     const writerApi = authenticated(runtime, writer);
     const work = await ownerApi.post("/api/works").send({ title: "重启恢复作品" }).expect(201);
     const workId = work.body.data.id as string;
     await ownerApi.post(`/api/works/${workId}/members`).send({ userId: writer.userId, role: "editor" }).expect(201);
+    await ownerApi.post(`/api/works/${workId}/members`).send({ userId: otherMember.userId, role: "editor" }).expect(201);
     const firstCharacter = await ownerApi.post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
     const secondCharacter = await ownerApi.post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
     const relationship = await ownerApi.post(`/api/works/${workId}/relationships`).send({
@@ -121,7 +123,14 @@ describe("协作状态重启恢复", () => {
     runtime = createRuntime(options);
     const restoredWriter = await login(runtime, "restart_writer");
     const restoredOwner = await login(runtime, "restart_owner");
+    const restoredOtherMember = await login(runtime, "restart_other_member");
     const restoredWriterApi = authenticated(runtime, restoredWriter);
+    const restoredOtherMemberApi = authenticated(runtime, restoredOtherMember);
+    const crossAccount = await restoredOtherMemberApi.post(`/api/works/${workId}/presence`).send({
+      clientId: writerClientId,
+      page
+    }).expect(200);
+    expect(crossAccount.body.data.recentChanges).toEqual([]);
     // 模拟系统重启后重新登录的同一标签页一次性沿用旧 clientId。
     const restored = await restoredWriterApi.post(`/api/works/${workId}/presence`).send({
       clientId: writerClientId,
