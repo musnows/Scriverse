@@ -1790,6 +1790,81 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
   });
 
+  it("OpenAI 工具参数收齐前只转发正文，结束标记后才执行工具并继续流式回答", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    let releaseFirstRound = (): void => undefined;
+    const firstRoundGate = new Promise<void>((resolve) => {
+      releaseFirstRound = resolve;
+    });
+    let firstRoundFinished = false;
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as {
+        stream?: boolean;
+        tools?: Array<{ function?: { name?: string } }>;
+        messages: Array<{ role: string; tool_calls?: Array<{ function?: { arguments?: string } }> }>;
+      };
+      expect(body.stream).toBe(true);
+      expect(body.tools?.some((tool) => tool.function?.name === "story_index")).toBe(true);
+      if (completionCount === 1) {
+        return new Response(new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"我先读取目录。"}}]}\n\n'));
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"stream-tool","type":"function","function":{"name":"story_index","arguments":"{\\"lim"}}]}}]}\n\n'));
+            await firstRoundGate;
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"it\\":1}"}}]},"finish_reason":"tool_calls"}]}\n\n'));
+            controller.enqueue(encoder.encode('data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":5}}\n\n'));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            firstRoundFinished = true;
+            controller.close();
+          }
+        }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+      }
+      const assistant = body.messages.find((message) => message.role === "assistant");
+      expect(assistant?.tool_calls?.[0]?.function?.arguments).toBe('{"limit":1}');
+      expect(body.messages.some((message) => message.role === "tool")).toBe(true);
+      return new Response([
+        'data: {"choices":[{"delta":{"content":"已读取"}}]}',
+        'data: {"choices":[{"delta":{"content":"目录。"},"finish_reason":"stop"}]}',
+        'data: {"choices":[],"usage":{"prompt_tokens":30,"completion_tokens":4}}',
+        "data: [DONE]"
+      ].join("\n\n") + "\n\n", { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const deltas: string[] = [];
+    const toolEvents: Array<{ arguments: unknown }> = [];
+    const generatedPromise = runtime.ai.createStreamingChat({
+      workId,
+      instruction: "读取目录后回答。",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      onToolCall: (toolCall) => toolEvents.push({ arguments: toolCall.arguments })
+    }, (delta) => deltas.push(delta));
+    const safetyRelease = setTimeout(releaseFirstRound, 1_000);
+    for (let index = 0; index < 100 && deltas.length === 0; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    expect(deltas).toEqual(["我先读取目录。"]);
+    expect(toolEvents).toHaveLength(0);
+    expect(firstRoundFinished).toBe(false);
+    releaseFirstRound();
+    clearTimeout(safetyRelease);
+
+    const generated = await generatedPromise;
+    expect(generated.content).toBe("我先读取目录。已读取目录。");
+    expect(generated.toolCalls).toEqual([
+      expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
+    ]);
+    expect(toolEvents).toEqual([{ arguments: { offset: 0, limit: 1 } }]);
+    expect(completionCount).toBe(2);
+  });
+
   it("通过 SSE 推送工具调用并在对话 metadata 中持久化详情", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

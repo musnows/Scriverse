@@ -3284,10 +3284,12 @@ export class AiManager {
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
     const chatTools = this.enabledAgentTools(input.workId, "chat", input.agentToolIds, input.conversationId);
-    const generated = chatTools.length
+    const chatProtocol = providerProtocol(this.resolveModel(input.workId, "chat", input.modelId).provider);
+    const useLegacyAnthropicToolFlow = chatTools.length > 0 && chatProtocol === "anthropic-messages";
+    const generated = useLegacyAnthropicToolFlow
       ? await this.generate({ ...input, taskType: "chat" })
       : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
-    if (chatTools.length) onDelta(generated.content);
+    if (useLegacyAnthropicToolFlow) onDelta(generated.content);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -4949,6 +4951,14 @@ export class AiManager {
   }
 
   async generate(input: GenerateInput): Promise<GenerateResult> {
+    return this.generateCompletion(input);
+  }
+
+  private async generateCompletion(
+    input: GenerateInput,
+    onDelta?: (delta: string) => void
+  ): Promise<GenerateResult> {
+    const streaming = onDelta !== undefined;
     const generationRoleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
@@ -5041,7 +5051,7 @@ export class AiManager {
       providerId: stringValue(provider, "id"),
       modelId: stringValue(model, "id"),
       protocol,
-      streaming: false,
+      streaming,
       contextChars: context.length,
       instructionChars: input.instruction.length,
       toolCount: tools.length
@@ -5077,6 +5087,9 @@ export class AiManager {
       let cacheUsageComplete = true;
       let totalInputTokens = 0;
       let totalCachedInputTokens = 0;
+      let streamedContent = "";
+      let generationRequestCount = 0;
+      const streamingThinkingSteps = new Map<number, { id: string; createdAt: string }>();
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
         parameters?: Record<string, unknown>;
@@ -5090,6 +5103,13 @@ export class AiManager {
         const requestParameters = options.parameters ?? parameters;
         const purpose = options.purpose ?? "generation";
         const requestTools = toolChoice === "auto" ? tools : [];
+        const useStreamingResponse = streaming && purpose === "generation";
+        const generationRound = useStreamingResponse ? generationRequestCount + 1 : null;
+        const thinkingStep = generationRound === null ? null : {
+          id: id("process"),
+          createdAt: now()
+        };
+        if (generationRound !== null && thinkingStep) streamingThinkingSteps.set(generationRound, thinkingStep);
         const roundParameters = this.constrainParametersForDailyTokenQuota(
           input.workId,
           requestMessages,
@@ -5116,6 +5136,24 @@ export class AiManager {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           let retryable = true;
+          let attemptEmitted = false;
+          const emitContent = (delta: string): void => {
+            attemptEmitted = true;
+            streamedContent += delta;
+            onDelta?.(delta);
+          };
+          const emitThinking = (delta: string): void => {
+            if (generationRound === null || !thinkingStep) return;
+            attemptEmitted = true;
+            input.onProcessStep?.({
+              id: thinkingStep.id,
+              type: "thinking",
+              round: generationRound,
+              content: delta,
+              createdAt: thinkingStep.createdAt,
+              append: true
+            });
+          };
           const attemptStartedAt = process.hrtime.bigint();
           const traceAttempt: AiCallTraceAttempt = {
             attempt,
@@ -5135,18 +5173,29 @@ export class AiManager {
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
-                  headers: providerRequestHeaders(protocol, accessToken, "application/json"),
+                  headers: providerRequestHeaders(protocol, accessToken, useStreamingResponse ? "text/event-stream" : "application/json"),
                   body: JSON.stringify(buildCompletionRequestBody({
-                  protocol,
-                  model: stringValue(model, "model_id"),
-                  messages: requestMessages,
-                  parameters: roundParameters,
-                  tools: requestTools,
-                  toolChoice
-                })),
+                    protocol,
+                    model: stringValue(model, "model_id"),
+                    messages: requestMessages,
+                    parameters: roundParameters,
+                    tools: requestTools,
+                    toolChoice,
+                    ...(useStreamingResponse ? { stream: true } : {})
+                  })),
                   signal: controller.signal
                 });
-                return { ok: response.ok, status: response.status, body: await readResponseTextLimited(response) };
+                if (!response.ok) {
+                  return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
+                }
+                if (useStreamingResponse && response.headers.get("Content-Type")?.toLowerCase().includes("text/event-stream")) {
+                  return {
+                    ok: true as const,
+                    status: response.status,
+                    payload: await this.readCompletionStream(response, protocol, activeSecrets, emitContent, emitThinking)
+                  };
+                }
+                return { ok: true as const, status: response.status, body: await readResponseTextLimited(response) };
               } finally {
                 clearTimeout(timeout);
                 input.signal?.removeEventListener("abort", forwardAbort);
@@ -5160,30 +5209,41 @@ export class AiManager {
               durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000
             });
             if (candidate.ok) {
-              try {
-                const parsed = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(candidate.body), activeSecrets));
-                traceAttempt.completedAt = now();
-                traceAttempt.status = "completed";
-                traceAttempt.httpStatus = candidate.status;
-                traceAttempt.response = sanitizeCompletionTraceResponse(parsed);
-                saveTrace();
-                completionRequestCount += 1;
-                const cacheUsage = resolveInputCacheUsage(parsed.usage);
-                if (!cacheUsage) cacheUsageComplete = false;
-                else {
-                  totalInputTokens += cacheUsage.inputTokens;
-                  totalCachedInputTokens += cacheUsage.cachedInputTokens;
+              let parsed: CompletionPayload;
+              if ("payload" in candidate && candidate.payload) {
+                parsed = candidate.payload;
+              } else {
+                try {
+                  parsed = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(candidate.body), activeSecrets));
+                } catch {
+                  throw new Error(`${providerProtocolLabelText(protocol)} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
                 }
-                const outputText = completionPayloadOutputText(parsed);
-                trackUsage(resolveAiTokenUsage(
-                  parsed.usage,
-                  estimateAiTokens(JSON.stringify(requestMessages)),
-                  outputText ? estimateAiTokens(outputText) : 0
-                ));
-                return parsed;
-              } catch {
-                throw new Error(`${providerProtocolLabelText(protocol)} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
+                if (useStreamingResponse) {
+                  const streamedChoice = parsed.choices?.[0];
+                  if (streamedChoice?.message?.reasoning_content) emitThinking(streamedChoice.message.reasoning_content);
+                  if (streamedChoice?.message?.content) emitContent(streamedChoice.message.content);
+                }
               }
+              traceAttempt.completedAt = now();
+              traceAttempt.status = "completed";
+              traceAttempt.httpStatus = candidate.status;
+              traceAttempt.response = sanitizeCompletionTraceResponse(parsed);
+              saveTrace();
+              completionRequestCount += 1;
+              if (useStreamingResponse) generationRequestCount += 1;
+              const cacheUsage = resolveInputCacheUsage(parsed.usage);
+              if (!cacheUsage) cacheUsageComplete = false;
+              else {
+                totalInputTokens += cacheUsage.inputTokens;
+                totalCachedInputTokens += cacheUsage.cachedInputTokens;
+              }
+              const outputText = completionPayloadOutputText(parsed);
+              trackUsage(resolveAiTokenUsage(
+                parsed.usage,
+                estimateAiTokens(JSON.stringify(requestMessages)),
+                outputText ? estimateAiTokens(outputText) : 0
+              ));
+              return parsed;
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
             traceAttempt.completedAt = now();
@@ -5197,6 +5257,7 @@ export class AiManager {
             }
           } catch (error) {
             lastFailure = error;
+            if (attemptEmitted) retryable = false;
             if (traceAttempt.status === "running") {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
@@ -5354,9 +5415,16 @@ export class AiManager {
       const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
         const reasoning = currentChoice?.message?.reasoning_content;
         if (reasoning?.trim()) {
-          const step: AiProcessStep = { id: id("process"), type: "thinking", round, content: reasoning, createdAt: now() };
+          const streamingStep = streamingThinkingSteps.get(round);
+          const step: AiProcessStep = {
+            id: streamingStep?.id ?? id("process"),
+            type: "thinking",
+            round,
+            content: reasoning,
+            createdAt: streamingStep?.createdAt ?? now()
+          };
           processSteps.push(step);
-          input.onProcessStep?.(step);
+          if (!streaming) input.onProcessStep?.(step);
         }
         const intermediate = currentChoice?.message?.content;
         if (includeIntermediate && intermediate?.trim()) {
@@ -5448,15 +5516,16 @@ export class AiManager {
         choice = payload.choices?.[0];
       }
       recordChoiceProcess(choice, toolRound + 1, false);
-      const content = choice?.message?.content;
-      if (!content?.trim()) {
+      const finalContent = choice?.message?.content;
+      if (!finalContent?.trim()) {
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
         const suffix = choice?.finish_reason === "length" || reasoningLength > 0
           ? `；模型已生成 ${reasoningLength} 个推理字符，请提高 max_tokens 输出预算`
           : "";
         throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
-      const outputTokens = resolveOutputTokens(payload.usage, content);
+      const content = streaming ? streamedContent : finalContent;
+      const outputTokens = resolveOutputTokens(payload.usage, finalContent);
       const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
         ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
         : undefined;
@@ -5480,7 +5549,7 @@ export class AiManager {
         callId,
         workId: input.workId,
         taskType: input.taskType,
-        streaming: false,
+        streaming,
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         outputChars: content.length,
         outputTokens,
@@ -5503,7 +5572,9 @@ export class AiManager {
         contextUsage: this.completionContextUsage(effectiveInput, model, completionMessages, tools)
       };
     } catch (error) {
-      const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 调用失败";
+      const message = error instanceof Error
+        ? redactProviderSecretsText(error.message, ...activeSecrets)
+        : streaming ? "AI 流式调用失败" : "AI 调用失败";
       const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run(
         `UPDATE ai_calls
@@ -5525,7 +5596,7 @@ export class AiManager {
         callId,
         workId: input.workId,
         taskType: input.taskType,
-        streaming: false,
+        streaming,
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
@@ -5541,214 +5612,16 @@ export class AiManager {
   }
 
   private async generateStream(input: GenerateInput, onDelta: (delta: string) => void): Promise<GenerateResult> {
-    const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input, model);
-    const preset = safeJsonObject(stringValue(model, "preset_json"));
-    const messages = this.buildMessages(input, context);
-    let parameters: Record<string, unknown>;
-    try {
-      parameters = this.constrainParametersForContext(model, messages, {
-        ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
-        ...thinkingParameters(provider, model)
-      });
-    } catch (error) {
-      if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
-      throw initialContextWindowError(error, provider, model);
-    }
-    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters);
-    const callId = id("call");
-    this.store.db.run(
-      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
-       status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-      callId,
-      input.workId,
-      input.taskType,
-      stringValue(provider, "id"),
-      stringValue(model, "id"),
-      JSON.stringify(input.scope),
-      JSON.stringify(parameters),
-      context.length + input.instruction.length,
-      now(),
-      currentRequestActor()?.userId ?? null
-    );
-    const callStartedAt = process.hrtime.bigint();
-    const protocol = providerProtocol(provider);
-    logger.info("ai.call.started", {
-      callId,
-      workId: input.workId,
-      taskType: input.taskType,
-      providerId: stringValue(provider, "id"),
-      modelId: stringValue(model, "id"),
-      protocol,
-      streaming: true,
-      contextChars: context.length,
-      instructionChars: input.instruction.length
-    });
-    let activeSecrets: string[] = [];
-    try {
-      const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
-      activeSecrets = [credentialSecret, accessToken];
-      const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
-      const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: {
-        content: string;
-        reasoning: string;
-        outputTokens: number;
-        cacheHitPercent?: number;
-        anthropicContent?: Record<string, unknown>[];
-        tokenUsage: ResolvedAiTokenUsage;
-      } | null = null;
-      let lastFailure: unknown = null;
-      let emitted = false;
-      const thinkingStepId = id("process");
-      const thinkingCreatedAt = now();
-      for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-        const attemptStartedAt = process.hrtime.bigint();
-        logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, streaming: true });
-        try {
-          const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
-            const controller = new AbortController();
-            const forwardAbort = (): void => controller.abort(input.signal?.reason);
-            if (input.signal?.aborted) forwardAbort();
-            else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-            const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(AI_INTERACTIVE_TIMEOUT_MS / 1_000)} 秒）`)), AI_INTERACTIVE_TIMEOUT_MS);
-            try {
-              const response = await this.outboundFetch(endpoint, {
-                method: "POST",
-                headers: providerRequestHeaders(protocol, accessToken, "text/event-stream"),
-                body: JSON.stringify(buildCompletionRequestBody({
-                  protocol,
-                  model: stringValue(model, "model_id"),
-                  messages,
-                  parameters,
-                  stream: true
-                })),
-                signal: controller.signal
-              });
-              if (!response.ok) return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
-              const streamed = await this.readCompletionStream(
-                response,
-                protocol,
-                estimateAiTokens(JSON.stringify(messages)),
-                activeSecrets,
-                (delta) => {
-                  emitted = true;
-                  onDelta(delta);
-                },
-                (delta) => {
-                  emitted = true;
-                  input.onProcessStep?.({ id: thinkingStepId, type: "thinking", round: 1, content: delta, createdAt: thinkingCreatedAt, append: true });
-                }
-              );
-              return { ok: true as const, status: response.status, result: streamed };
-            } finally {
-              clearTimeout(timeout);
-              input.signal?.removeEventListener("abort", forwardAbort);
-            }
-          });
-          logger.info("ai.call.attempt_completed", {
-            callId,
-            attempt,
-            status: candidate.status,
-            ok: candidate.ok,
-            durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
-            streaming: true
-          });
-          if (candidate.ok) {
-            streamedResult = candidate.result;
-            break;
-          }
-          lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
-          if (candidate.status !== 429 && candidate.status < 500) attempt = maximumAttempts;
-        } catch (error) {
-          lastFailure = error;
-          logger.warn("ai.call.attempt_failed", {
-            callId,
-            attempt,
-            retryable: !input.signal?.aborted && !emitted && attempt < maximumAttempts,
-            durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
-            streaming: true,
-            error: aiErrorForLog(error)
-          });
-          if (input.signal?.aborted || emitted || attempt >= maximumAttempts) throw error;
-        }
-        if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
-      }
-      if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, reasoning, outputTokens, cacheHitPercent, anthropicContent, tokenUsage } = streamedResult;
-      const processSteps: AiProcessStep[] = reasoning.trim()
-        ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
-        : [];
-      this.store.db.run(
-        `UPDATE ai_calls
-         SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
-             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
-             token_usage_source = ?, completed_at = ?
-         WHERE id = ?`,
-        content.length,
-        tokenUsage.inputTokens,
-        tokenUsage.outputTokens,
-        tokenUsage.cachedInputTokens,
-        tokenUsage.cacheEligibleInputTokens,
-        tokenUsage.cacheEligibleInputTokens > 0 ? 1 : 0,
-        tokenUsage.source,
-        now(),
-        callId
-      );
-      logger.info("ai.call.completed", {
-        callId,
-        workId: input.workId,
-        taskType: input.taskType,
-        streaming: true,
-        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
-        outputChars: content.length,
-        outputTokens
-      });
-      return {
-        callId,
-        content,
-        outputTokens,
-        ...(reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
-        ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
-        ...(anthropicContent?.length ? { anthropicContent } : {}),
-        provider: this.mapProvider(provider),
-        model: this.mapModel(model),
-        context,
-        toolCalls: [],
-        processSteps,
-        contextUsage: this.completionContextUsage(input, model, messages, [])
-      };
-    } catch (error) {
-      const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 流式调用失败";
-      const failureTarget = aiFailureTargetDetails(provider, model);
-      this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
-      logger.error("ai.call.failed", {
-        callId,
-        workId: input.workId,
-        taskType: input.taskType,
-        streaming: true,
-        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
-        error: aiErrorForLog(error)
-      });
-      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message, ...failureTarget });
-    }
+    return this.generateCompletion(input, onDelta);
   }
 
   private async readCompletionStream(
     response: Response,
     protocol: AiProviderProtocol,
-    estimatedInputTokens: number,
     apiKey: string | string[],
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
-  ): Promise<{
-    content: string;
-    reasoning: string;
-    outputTokens: number;
-    cacheHitPercent?: number;
-    anthropicContent?: Record<string, unknown>[];
-    tokenUsage: ResolvedAiTokenUsage;
-  }> {
+  ): Promise<CompletionPayload> {
     const protocolLabel = providerProtocolLabelText(protocol);
     if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
     const reader = response.body.getReader();
@@ -5775,6 +5648,8 @@ export class AiManager {
     };
     const anthropicBlocks = new Map<number, Record<string, unknown>>();
     const anthropicToolInputJson = new Map<number, string>();
+    const openAiToolCalls = new Map<number, { id: string; name: string; arguments: string }>();
+    let openAiToolCallsFinalized = false;
     const eventIndex = (payload: Record<string, unknown>): number | null => {
       const index = payload.index;
       return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : null;
@@ -5869,6 +5744,7 @@ export class AiManager {
         if (eventDelta.type === "text_delta" && typeof eventDelta.text === "string" && eventDelta.text.length > 0) {
           appendContent(eventDelta.text);
         }
+        if (type === "message_stop") upstreamDone = true;
         return;
       }
       const streamUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
@@ -5879,10 +5755,28 @@ export class AiManager {
       const choice = choices[0] && typeof choices[0] === "object" && !Array.isArray(choices[0])
         ? choices[0] as Record<string, unknown>
         : null;
-      if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
+      if (typeof choice?.finish_reason === "string") {
+        finishReason = choice.finish_reason;
+        if (finishReason === "tool_calls") openAiToolCallsFinalized = true;
+      }
       const deltaRecord = choice?.delta && typeof choice.delta === "object" && !Array.isArray(choice.delta)
         ? choice.delta as Record<string, unknown>
         : {};
+      const streamedToolCalls = Array.isArray(deltaRecord.tool_calls) ? deltaRecord.tool_calls : [];
+      for (const value of streamedToolCalls) {
+        if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+        const toolCallDelta = value as Record<string, unknown>;
+        const index = toolCallDelta.index;
+        if (typeof index !== "number" || !Number.isInteger(index) || index < 0) continue;
+        const current = openAiToolCalls.get(index) ?? { id: "", name: "", arguments: "" };
+        if (!current.id && typeof toolCallDelta.id === "string") current.id = toolCallDelta.id;
+        const fn = toolCallDelta.function && typeof toolCallDelta.function === "object" && !Array.isArray(toolCallDelta.function)
+          ? toolCallDelta.function as Record<string, unknown>
+          : {};
+        if (typeof fn.name === "string") current.name += fn.name;
+        if (typeof fn.arguments === "string") current.arguments += fn.arguments;
+        openAiToolCalls.set(index, current);
+      }
       const thinkingDelta = deltaRecord.reasoning_content;
       if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
         appendReasoning(thinkingDelta);
@@ -5927,9 +5821,18 @@ export class AiManager {
       reasoning += finalReasoning;
       onThinkingDelta(finalReasoning);
     }
-    if (!content.trim()) throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    const cacheHitPercent = resolveCacheHitPercent(usage);
-    const outputTokens = resolveOutputTokens(usage, content);
+    const toolCalls: CompletionToolCall[] = openAiToolCallsFinalized
+      ? [...openAiToolCalls.entries()]
+        .sort(([left], [right]) => left - right)
+        .flatMap(([, toolCall]) => toolCall.id && toolCall.name ? [{
+          id: toolCall.id,
+          type: "function" as const,
+          function: { name: toolCall.name, arguments: toolCall.arguments }
+        }] : [])
+      : [];
+    if (!content.trim() && toolCalls.length === 0) {
+      throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
+    }
     const anthropicContent = protocol === "anthropic-messages"
       ? [...anthropicBlocks.entries()]
         .sort(([left], [right]) => left - right)
@@ -5938,14 +5841,18 @@ export class AiManager {
           return redactProviderSecrets(block, apiKey) as Record<string, unknown>;
         })
       : undefined;
-    return {
-      content,
-      reasoning,
-      outputTokens,
-      ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
-      ...(anthropicContent?.length ? { anthropicContent } : {}),
-      tokenUsage: resolveAiTokenUsage(usage, estimatedInputTokens, outputTokens)
-    };
+    return redactProviderSecrets({
+      ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
+      choices: [{
+        finish_reason: finishReason,
+        message: {
+          content: content || null,
+          reasoning_content: reasoning || null,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+          ...(anthropicContent?.length ? { anthropic_content: anthropicContent } : {})
+        }
+      }]
+    }, apiKey) as CompletionPayload;
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
