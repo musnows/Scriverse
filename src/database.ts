@@ -6,7 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 80;
+// 版本 81 由 Store 在实体版本基线迁移完成后写入；后续数据库迁移必须从版本 82 开始。
+export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 81;
+export const DATABASE_SCHEMA_VERSION = ENTITY_VERSION_BASELINE_MIGRATION_VERSION;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {

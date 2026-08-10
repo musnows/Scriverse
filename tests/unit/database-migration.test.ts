@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { DATABASE_SCHEMA_VERSION, Database } from "../../src/database.js";
+import { Store } from "../../src/store.js";
 
 const roots: string[] = [];
 
@@ -68,6 +69,7 @@ describe("数据库版本化迁移", () => {
   it("无损回填角色主名与别名并支持幂等重启", () => {
     const filename = createLegacyDatabase();
     const first = new Database(filename);
+    new Store(first);
     expect(first.all("SELECT display_name, kind FROM character_names ORDER BY character_id, sort_order")).toEqual([
       { display_name: "魔斯拉", kind: "primary" },
       { display_name: "小魔", kind: "alias" },
@@ -302,7 +304,7 @@ describe("数据库版本化迁移", () => {
     second.close();
   });
 
-  it("从已有迁移 74 平滑升级到 80 并重建 AI 历史短词索引", () => {
+  it("从已有迁移 74 平滑升级到当前版本并重建 AI 历史短词索引", () => {
     const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-74-upgrade-"));
     roots.push(root);
     const filename = join(root, "migration-74.db");
@@ -332,6 +334,7 @@ describe("数据库版本化迁移", () => {
     legacy.close();
 
     const migrated = new Database(filename);
+    new Store(migrated);
     expect(migrated.get("SELECT MAX(version) AS version FROM schema_migrations")?.version).toBe(DATABASE_SCHEMA_VERSION);
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_runs'")?.name).toBe("s3_backup_runs");
     expect(migrated.all(
