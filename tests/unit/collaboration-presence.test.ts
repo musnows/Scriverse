@@ -64,6 +64,8 @@ describe("作品协作者在线状态", () => {
     expect(published).toMatchObject({
       pageKey: "entity-editor:relationship:relationship-1",
       label: "人物关系编辑",
+      action: "save",
+      pageDeleted: false,
       actorUserId: "owner",
       actorDisplayName: "作者"
     });
@@ -87,6 +89,145 @@ describe("作品协作者在线状态", () => {
     now += 120_001;
     const expired = presence.heartbeat("work-1", "client-writer", writer, { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" });
     expect(expired.recentChanges).toEqual([]);
+  });
+
+  it("按作品页面和操作者限制变更发布频率", () => {
+    let now = Date.parse("2026-07-24T10:00:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+
+    presence.heartbeat("work-1", "client-editor-1", writer, { kind: "editor", resourceId: "chapter-1" });
+    presence.heartbeat("work-1", "client-editor-2", writer, { kind: "editor", resourceId: "chapter-2" });
+
+    expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).not.toBeNull();
+    now += 1_000;
+    expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).toBeNull();
+    expect(presence.publishChange("work-1", editorPageKey("chapter-1"), {
+      userId: "co-owner",
+      displayName: "共同作者"
+    })).not.toBeNull();
+    expect(presence.publishChange("work-1", editorPageKey("chapter-2"), actor)).not.toBeNull();
+
+    now += 29_000;
+    expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).not.toBeNull();
+  });
+
+  it("在节流窗口内向后来进入同页的收件人发布下一次保存", () => {
+    let now = Date.parse("2026-07-24T10:15:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const firstViewer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const lateViewer = { userId: "reader", username: "reader", displayName: "后来加入者", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+    const page = { kind: "editor" as const, resourceId: "chapter-1" };
+    const pageKey = editorPageKey("chapter-1");
+
+    presence.heartbeat("work-1", "client-writer", firstViewer, page);
+    const firstChange = presence.publishChange("work-1", pageKey, actor);
+
+    now += 1_000;
+    expect(presence.heartbeat("work-1", "client-reader", lateViewer, page).recentChanges).toEqual([]);
+    const secondChange = presence.publishChange("work-1", pageKey, actor);
+
+    expect(firstChange).not.toBeNull();
+    expect(secondChange).not.toBeNull();
+    expect(secondChange?.id).not.toBe(firstChange?.id);
+    expect(presence.heartbeat("work-1", "client-writer", firstViewer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: firstChange?.id })
+    ]);
+    expect(presence.heartbeat("work-1", "client-reader", lateViewer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: secondChange?.id })
+    ]);
+  });
+
+  it("同一 clientId 切换账号时隔离历史收件人与节流状态", () => {
+    let now = Date.parse("2026-07-24T10:20:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const otherMember = { userId: "other", username: "other", displayName: "其他成员", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+    const page = { kind: "editor" as const, resourceId: "chapter-1" };
+    const pageKey = editorPageKey("chapter-1");
+
+    presence.heartbeat("work-1", "shared-client", writer, page);
+    const firstChange = presence.publishChange("work-1", pageKey, actor);
+
+    now += 1_000;
+    expect(presence.heartbeat("work-1", "shared-client", otherMember, page).recentChanges).toEqual([]);
+    const secondChange = presence.publishChange("work-1", pageKey, actor);
+
+    expect(firstChange).not.toBeNull();
+    expect(secondChange).not.toBeNull();
+    expect(presence.heartbeat("work-1", "shared-client", otherMember, page).recentChanges).toEqual([
+      expect.objectContaining({ id: secondChange?.id })
+    ]);
+    expect(presence.heartbeat("work-1", "shared-client", writer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: firstChange?.id })
+    ]);
+  });
+
+  it("允许关闭发布节流", () => {
+    const presence = new CollaborationPresence(45_000, Date.now, 120_000, 50, 0);
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+
+    presence.heartbeat("work-1", "client-writer", writer, { kind: "editor", resourceId: "chapter-1" });
+
+    expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).not.toBeNull();
+    expect(presence.publishChange("work-1", editorPageKey("chapter-1"), actor)).not.toBeNull();
+  });
+
+  it("在保存节流窗口内仍发布同页删除动作", () => {
+    let now = Date.parse("2026-07-24T10:30:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+    const page = { kind: "entity-editor" as const, module: "setting", resourceId: "setting-1" };
+    const pageKey = entityEditorPageKey("setting", "setting-1");
+
+    presence.heartbeat("work-1", "client-writer", writer, page);
+    const saved = presence.publishChange("work-1", pageKey, actor);
+    now += 1;
+    const deleted = presence.publishChange("work-1", pageKey, actor, {
+      action: "delete",
+      pageDeleted: true
+    });
+
+    expect(saved).toMatchObject({ action: "save", pageDeleted: false, label: "设定编辑" });
+    expect(deleted).toMatchObject({ action: "delete", pageDeleted: true, label: "设定编辑" });
+    expect(presence.heartbeat("work-1", "client-writer", writer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: deleted?.id, action: "delete", pageDeleted: true }),
+      expect.objectContaining({ id: saved?.id, action: "save", pageDeleted: false })
+    ]);
+  });
+
+  it("向正文和模块页面下发变更并清理过期事件", () => {
+    let now = Date.parse("2026-07-24T11:00:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 0);
+    const owner = { userId: "owner", displayName: "作者" };
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+
+    presence.heartbeat("work-1", "client-editor", writer, { kind: "editor", resourceId: "chapter-1" });
+    const editorChange = presence.publishChange("work-1", editorPageKey("chapter-1"), owner);
+    expect(editorChange).toMatchObject({ pageKey: "editor:chapter-1", label: "正文编辑", action: "save", pageDeleted: false });
+    expect(presence.heartbeat("work-1", "client-editor", writer, {
+      kind: "editor",
+      resourceId: "chapter-1"
+    }).recentChanges).toEqual([expect.objectContaining({ id: editorChange?.id })]);
+
+    presence.heartbeat("work-1", "client-timeline", writer, { kind: "module", module: "timeline" });
+    const moduleChange = presence.publishChange("work-1", modulePageKey("timeline"), owner);
+    expect(moduleChange).toMatchObject({ pageKey: "module:timeline", label: "时间轴", action: "save", pageDeleted: false });
+    expect(presence.heartbeat("work-1", "client-timeline", writer, {
+      kind: "module",
+      module: "timeline"
+    }).recentChanges).toEqual([expect.objectContaining({ id: moduleChange?.id })]);
+
+    now += 120_001;
+    expect(presence.heartbeat("work-1", "client-timeline", writer, {
+      kind: "module",
+      module: "timeline"
+    }).recentChanges).toEqual([]);
   });
 
   it("生成稳定的页面键与标签", () => {

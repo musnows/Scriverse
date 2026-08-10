@@ -39,10 +39,20 @@ export type PresenceParticipant = PresenceUser & {
   lastSeenAt: string;
 };
 
+export type CollaborativeChangeAction = "save" | "delete";
+
+export type CollaborativeChangeOptions = {
+  action?: CollaborativeChangeAction;
+  label?: string;
+  pageDeleted?: boolean;
+};
+
 export type CollaborativeChange = {
   id: string;
   pageKey: string;
   label: string;
+  action: CollaborativeChangeAction;
+  pageDeleted: boolean;
   actorUserId: string;
   actorDisplayName: string;
   savedAt: string;
@@ -87,6 +97,7 @@ export type CollaborationPresencePersistenceOptions = {
   store: CollaborationPresenceStore;
   flushIntervalMs?: number;
   cleanupIntervalMs?: number;
+  minPublishIntervalMs?: number;
 };
 
 type PresenceEntry = PresenceParticipant & {
@@ -164,8 +175,10 @@ export class CollaborationPresence {
   private readonly changes: ChangeEntry[] = [];
   private readonly dirtyEntryKeys = new Set<string>();
   private readonly pendingChanges = new Map<string, ChangeEntry>();
+  private readonly lastPublishedAtMsByRecipient = new Map<string, number>();
   private readonly persistenceStore: CollaborationPresenceStore | null;
   private readonly cleanupIntervalMs: number;
+  private readonly minPublishIntervalMs: number;
   private maintenanceTimer: NodeJS.Timeout | null = null;
   private lastCleanupAt: number;
   private closed = false;
@@ -175,8 +188,12 @@ export class CollaborationPresence {
     private readonly now: () => number = Date.now,
     private readonly changeTtlMs = 120_000,
     private readonly maxChanges = 50,
-    persistence?: CollaborationPresencePersistenceOptions
+    persistenceOrMinPublishInterval?: CollaborationPresencePersistenceOptions | number
   ) {
+    const persistence = typeof persistenceOrMinPublishInterval === "number" ? undefined : persistenceOrMinPublishInterval;
+    this.minPublishIntervalMs = typeof persistenceOrMinPublishInterval === "number"
+      ? persistenceOrMinPublishInterval
+      : persistence?.minPublishIntervalMs ?? 30_000;
     this.persistenceStore = persistence?.store ?? null;
     this.cleanupIntervalMs = Math.max(1, persistence?.cleanupIntervalMs ?? 60_000);
     this.lastCleanupAt = this.now();
@@ -218,10 +235,15 @@ export class CollaborationPresence {
     workId: string,
     pageKey: string,
     actor: { userId: string; displayName: string },
-    label = pageLabelForKey(pageKey)
+    labelOrOptions: string | CollaborativeChangeOptions = {}
   ): CollaborativeChange | null {
     const now = this.now();
     this.prune(now);
+    const options = typeof labelOrOptions === "string" ? { label: labelOrOptions } : labelOrOptions;
+    const action = options.action ?? "save";
+    const label = options.label ?? pageLabelForKey(pageKey);
+    const pageDeleted = options.pageDeleted === true;
+    const publishKey = `${workId}:${pageKey}:${actor.userId}:${action}`;
     const recipients = [...this.entries.values()]
       .filter((entry) => (
         entry.workId === workId
@@ -231,13 +253,26 @@ export class CollaborationPresence {
       .map((entry) => ({ userId: entry.userId, clientId: entry.clientId }))
       .filter((recipient, index, values) => values.findIndex((candidate) => (
         candidate.userId === recipient.userId && candidate.clientId === recipient.clientId
-      )) === index);
+      )) === index)
+      .filter((recipient) => {
+        if (this.minPublishIntervalMs <= 0) return true;
+        const throttleKey = `${publishKey}:${recipient.userId}:${recipient.clientId}`;
+        const lastPublishedAt = this.lastPublishedAtMsByRecipient.get(throttleKey);
+        return lastPublishedAt === undefined || now - lastPublishedAt >= this.minPublishIntervalMs;
+      });
     if (recipients.length === 0) return null;
+    if (this.minPublishIntervalMs > 0) {
+      for (const recipient of recipients) {
+        this.lastPublishedAtMsByRecipient.set(`${publishKey}:${recipient.userId}:${recipient.clientId}`, now);
+      }
+    }
     const change: ChangeEntry = {
       id: `change-${now}-${randomUUID()}`,
       workId,
       pageKey,
       label,
+      action,
+      pageDeleted,
       actorUserId: actor.userId,
       actorDisplayName: actor.displayName,
       savedAt: new Date(now).toISOString(),
@@ -251,6 +286,8 @@ export class CollaborationPresence {
       id: change.id,
       pageKey: change.pageKey,
       label: change.label,
+      action: change.action,
+      pageDeleted: change.pageDeleted,
       actorUserId: change.actorUserId,
       actorDisplayName: change.actorDisplayName,
       savedAt: change.savedAt
@@ -325,6 +362,11 @@ export class CollaborationPresence {
         this.dirtyEntryKeys.delete(key);
       }
     }
+    for (const [key, publishedAtMs] of this.lastPublishedAtMsByRecipient) {
+      if (this.minPublishIntervalMs <= 0 || now - publishedAtMs >= this.minPublishIntervalMs) {
+        this.lastPublishedAtMsByRecipient.delete(key);
+      }
+    }
     this.pruneChanges(now);
   }
 
@@ -355,6 +397,8 @@ export class CollaborationPresence {
       workId: change.workId,
       pageKey: change.pageKey,
       label: change.label,
+      action: change.action,
+      pageDeleted: change.pageDeleted,
       actorUserId: change.actorUserId,
       actorDisplayName: change.actorDisplayName,
       savedAt: change.savedAt,

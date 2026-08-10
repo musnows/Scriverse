@@ -22,6 +22,8 @@ function change(workId: string, id: string, savedAt: string): PersistedCollabora
     workId,
     pageKey: "editor:chapter-1",
     label: "正文编辑",
+    action: "delete",
+    pageDeleted: true,
     actorUserId: "owner",
     actorDisplayName: "作者",
     savedAt,
@@ -83,10 +85,14 @@ describe("协作状态持久层", () => {
       expect.objectContaining({
         id: "change-1",
         savedAt: "2026-07-24T08:00:01.000Z",
+        action: "delete",
+        pageDeleted: true,
         recipients: [{ userId: "user-client-boundary", clientId: "client-boundary" }]
       })
     ]);
-    expect(database.get("SELECT recipient_client_ids_json FROM presence_changes WHERE id = ?", "change-1")).toEqual({
+    expect(database.get("SELECT action, page_deleted, recipient_client_ids_json FROM presence_changes WHERE id = ?", "change-1")).toEqual({
+      action: "delete",
+      page_deleted: 1,
       recipient_client_ids_json: '[{"userId":"user-client-boundary","clientId":"client-boundary"}]'
     });
   });
@@ -107,7 +113,7 @@ describe("协作状态持久层", () => {
     );
 
     expect(store.loadChanges("2026-07-24T08:00:00.000Z", 50)).toEqual([
-      expect.objectContaining({ id: "legacy-change", recipients: [] })
+      expect.objectContaining({ id: "legacy-change", action: "save", pageDeleted: false, recipients: [] })
     ]);
   });
 

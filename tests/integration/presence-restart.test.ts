@@ -55,7 +55,8 @@ async function login(runtime: Runtime, username: string): Promise<SessionCredent
 function authenticated(runtime: Runtime, credentials: SessionCredentials) {
   return {
     post: (path: string) => request(runtime.app).post(path).set("Cookie", credentials.cookie).set("X-CSRF-Token", credentials.csrfToken),
-    patch: (path: string) => request(runtime.app).patch(path).set("Cookie", credentials.cookie).set("X-CSRF-Token", credentials.csrfToken)
+    patch: (path: string) => request(runtime.app).patch(path).set("Cookie", credentials.cookie).set("X-CSRF-Token", credentials.csrfToken),
+    delete: (path: string) => request(runtime.app).delete(path).set("Cookie", credentials.cookie).set("X-CSRF-Token", credentials.csrfToken)
   };
 }
 
@@ -100,9 +101,16 @@ describe("协作状态重启恢复", () => {
       directed: false
     }).expect(201);
     const relationshipId = relationship.body.data.id as string;
+    const deletedSetting = await ownerApi.post(`/api/works/${workId}/settings`).send({
+      title: "待删除设定",
+      category: "世界规则",
+      content: "等待删除。"
+    }).expect(201);
     const page = { kind: "entity-editor", module: "relationship", resourceId: relationshipId };
+    const deletedSettingPage = { kind: "entity-editor", module: "setting", resourceId: deletedSetting.body.data.id };
     const ownerClientId = "08c6a5c8-0f18-4718-8568-b8d0de36fd82";
     const writerClientId = "b85a4479-69e0-44f7-92f2-f44e69a6729a";
+    const deletedSettingClientId = "d04407cb-1d0e-497e-9bc4-e9a661d306cb";
 
     await writerApi.post(`/api/works/${workId}/presence`).send({
       clientId: writerClientId,
@@ -118,6 +126,13 @@ describe("协作状态重启恢复", () => {
       subtype: "盟友",
       expectedVersionNo: unobservedUpdate.body.data.versionNo
     }).expect(200);
+    await writerApi.post(`/api/works/${workId}/presence`).send({
+      clientId: deletedSettingClientId,
+      page: deletedSettingPage
+    }).expect(200);
+    await ownerApi.delete(`/api/settings/${deletedSetting.body.data.id}`).send({
+      expectedVersionNo: deletedSetting.body.data.versionNo
+    }).expect(204);
 
     await runtime.close();
     runtime = createRuntime(options);
@@ -144,8 +159,28 @@ describe("协作状态重启恢复", () => {
     expect(restored.body.data.recentChanges).toEqual([
       expect.objectContaining({
         pageKey: `entity-editor:relationship:${relationshipId}`,
+        action: "save",
+        pageDeleted: false,
         actorUserId: owner.userId,
         actorDisplayName: "restart_owner"
+      })
+    ]);
+
+    const crossAccountDeletion = await restoredOtherMemberApi.post(`/api/works/${workId}/presence`).send({
+      clientId: deletedSettingClientId,
+      page: deletedSettingPage
+    }).expect(200);
+    expect(crossAccountDeletion.body.data.recentChanges).toEqual([]);
+    const restoredDeletion = await restoredWriterApi.post(`/api/works/${workId}/presence`).send({
+      clientId: deletedSettingClientId,
+      page: deletedSettingPage
+    }).expect(200);
+    expect(restoredDeletion.body.data.recentChanges).toEqual([
+      expect.objectContaining({
+        pageKey: `entity-editor:setting:${deletedSetting.body.data.id}`,
+        action: "delete",
+        pageDeleted: true,
+        actorUserId: owner.userId
       })
     ]);
 

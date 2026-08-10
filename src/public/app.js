@@ -753,7 +753,7 @@ async function refreshPresence() {
       presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
       const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
-      void handleRelationshipCollaborativeChanges(recentChanges);
+      void handleCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -763,10 +763,9 @@ async function refreshPresence() {
   return presenceParticipants;
 }
 
-async function handleRelationshipCollaborativeChanges(recentChanges) {
+async function handleCollaborativeChanges(recentChanges) {
   if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
   const localKey = presencePageKey(presencePageForRoute());
-  if (!localKey.startsWith("entity-editor:relationship:")) return;
   const selfId = state.user?.userId;
   const incoming = recentChanges.filter((change) => (
     change
@@ -785,15 +784,41 @@ async function handleRelationshipCollaborativeChanges(recentChanges) {
   }
   collaborativeChangePromptOpen = true;
   try {
-    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新当前人物关系。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
-      title: "人物关系已更新",
-      confirmLabel: "刷新页面",
+    const changeLabel = latest.label || "当前页面";
+    const deleted = latest.action === "delete";
+    const targetLabel = deleted ? changeLabel.replace(/编辑$/u, "") : changeLabel;
+    const message = deleted
+      ? `${latest.actorDisplayName || "协作者"}已删除当前${targetLabel}。请先确认本地没有需要保留的修改，${latest.pageDeleted ? "确认后返回对应列表。" : "再刷新页面查看最新状态。"}`
+      : `${latest.actorDisplayName || "协作者"}已在“${changeLabel}”保存新内容。请先确认本地没有需要保留的修改，再刷新页面继续查看。`;
+    const shouldReload = await confirmToast(message, {
+      title: deleted ? `${targetLabel}已删除` : `${changeLabel}已更新`,
+      confirmLabel: deleted && latest.pageDeleted ? (latest.pageKey.startsWith("editor:") ? "返回正文" : "返回列表") : "刷新页面",
       cancelLabel: "稍后处理"
     });
-    if (shouldReload) window.location.reload();
+    if (shouldReload) reloadAfterCollaborativeChange(latest);
   } finally {
     collaborativeChangePromptOpen = false;
   }
+}
+
+function reloadAfterCollaborativeChange(change) {
+  const workId = state.work?.id;
+  if (change?.action === "delete" && change.pageDeleted && workId) {
+    const entityModule = {
+      setting: "settings",
+      character: "characters",
+      race: "races",
+      organization: "organizations",
+      relationship: "relationships"
+    }[String(change.pageKey ?? "").split(":")[1] ?? ""];
+    const safeRoute = change.pageKey.startsWith("editor:")
+      ? { view: "editor", workId }
+      : entityModule
+        ? { view: "module", workId, module: entityModule }
+        : { view: "welcome", workId };
+    window.history.replaceState(null, "", serializePageRoute(safeRoute));
+  }
+  window.location.reload();
 }
 
 function schedulePresenceHeartbeat() {
@@ -3119,7 +3144,26 @@ function persistentToast(message, type = "info") {
   };
 }
 
+function restoreToastFocus(previousFocus) {
+  if (
+    previousFocus instanceof HTMLElement
+    && previousFocus.isConnected
+    && !previousFocus.matches(":disabled")
+    && previousFocus.getClientRects().length > 0
+  ) {
+    previousFocus.focus({ preventScroll: true });
+    if (document.activeElement === previousFocus) return;
+  }
+  const body = document.body;
+  const previousTabIndex = body.getAttribute("tabindex");
+  body.setAttribute("tabindex", "-1");
+  body.focus({ preventScroll: true });
+  if (previousTabIndex === null) body.removeAttribute("tabindex");
+  else body.setAttribute("tabindex", previousTabIndex);
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
+  const previousFocus = document.activeElement;
   const region = $("#toast-region");
   const element = document.createElement("section");
   element.className = "toast toast-confirmation";
@@ -3148,6 +3192,7 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
     const finish = (confirmed) => {
       element.remove();
       if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+      restoreToastFocus(previousFocus);
       resolve(confirmed);
     };
     cancel.addEventListener("click", () => finish(false), { once: true });
