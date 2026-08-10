@@ -4,7 +4,9 @@ import { createTestRuntime, seedChapter } from "../helpers.js";
 
 describe("AI 上下文组装", () => {
   const runtimes: ReturnType<typeof createTestRuntime>[] = [];
-  afterEach(() => runtimes.splice(0).forEach((runtime) => runtime.close()));
+  afterEach(async () => {
+    for (const runtime of runtimes.splice(0)) await runtime.close();
+  });
 
   it("正文范围默认注入轻量组织/种族与锁定设定，不含组织设定正文", async () => {
     const runtime = createTestRuntime();

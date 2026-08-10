@@ -84,8 +84,8 @@ describe("Google Vertex 供应商 API", () => {
     chapterId = chapter.body.data.id;
   });
 
-  afterEach(() => {
-    runtime.close();
+  afterEach(async () => {
+    await runtime.close();
   });
 
   it("拒绝非法服务账号 JSON，并在合法配置下换票后完成探测与调用", async () => {

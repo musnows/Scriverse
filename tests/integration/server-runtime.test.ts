@@ -1,14 +1,17 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { Agent, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity } from "../../src/security.js";
 import {
   isDevelopmentServer,
   isLoopbackHost,
   PRE_MIGRATION_BACKUP_RETENTION_ENV,
+  SERVER_SHUTDOWN_TIMEOUT_MS,
   STARTUP_RETRY_LIMIT_ENV,
   STARTUP_RETRY_STATE_FILENAME,
+  installServerShutdownHandlers,
   resolvePreMigrationBackupRetention,
   resolveStartupRetryLimit,
   startLocalServer,
@@ -211,6 +214,72 @@ describe("本地服务运行时", () => {
     chmodSync(masterKeyPath, 0o644);
     expect(loadMasterSecret(masterKeyPath)).toHaveLength(43);
     expect(statSync(masterKeyPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("关闭服务时主动清理 keep-alive 连接并完成运行时关闭", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-keep-alive-close-"));
+    roots.push(root);
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "test" }
+    });
+    runningServers.push(running);
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const request = httpRequest(`${running.url}/api/health`, { agent }, (response) => {
+          response.resume();
+          response.once("end", resolve);
+        });
+        request.once("error", reject);
+        request.end();
+      });
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const closeTimeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Server close did not finish with an idle keep-alive connection")), 1_000);
+        timer.unref();
+      });
+      try {
+        await Promise.race([running.close(), closeTimeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } finally {
+      agent.destroy();
+    }
+  });
+
+  it("收到关闭信号后十秒未结束则强制退出", async () => {
+    vi.useFakeTimers();
+    const originalSigintListeners = new Set(process.listeners("SIGINT"));
+    const originalSigtermListeners = new Set(process.listeners("SIGTERM"));
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    let sigintListener: NodeJS.SignalsListener | undefined;
+    let sigtermListener: NodeJS.SignalsListener | undefined;
+    try {
+      installServerShutdownHandlers({
+        close: () => new Promise<void>(() => undefined)
+      } as RunningLocalServer);
+      sigintListener = process.listeners("SIGINT").find((listener) => !originalSigintListeners.has(listener));
+      sigtermListener = process.listeners("SIGTERM").find((listener) => !originalSigtermListeners.has(listener));
+      expect(sigintListener).toBeTypeOf("function");
+      expect(sigtermListener).toBeTypeOf("function");
+
+      sigtermListener?.("SIGTERM");
+      await vi.advanceTimersByTimeAsync(SERVER_SHUTDOWN_TIMEOUT_MS - 1);
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(exit).toHaveBeenCalledOnce();
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      if (sigintListener) process.removeListener("SIGINT", sigintListener);
+      if (sigtermListener) process.removeListener("SIGTERM", sigtermListener);
+      exit.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("升级数据库前完整备份数据库、主密钥和附件", async () => {

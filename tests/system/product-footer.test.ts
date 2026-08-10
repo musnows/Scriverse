@@ -78,7 +78,7 @@ describe("产品信息页脚", () => {
       expect(update.body.data.checkedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
       expect(update.body.data.nextCheckAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
     } finally {
-      releaseRuntime.close();
+      await releaseRuntime.close();
     }
   });
 
