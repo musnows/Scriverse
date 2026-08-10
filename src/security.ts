@@ -293,20 +293,73 @@ function parseIpv4(address: string): number[] | null {
   return address.split(".").map(Number);
 }
 
+function parseIpv6(address: string): number[] | null {
+  const normalized = address.replace(/^\[|\]$/gu, "").toLocaleLowerCase("en-US");
+  if (isIP(normalized) !== 6) return null;
+  const ipv4Tail = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/u)?.[1];
+  const source = ipv4Tail
+    ? normalized.slice(0, -ipv4Tail.length) + (() => {
+        const octets = parseIpv4(ipv4Tail);
+        if (!octets) return "";
+        return `${((octets[0] ?? 0) << 8 | (octets[1] ?? 0)).toString(16)}:${((octets[2] ?? 0) << 8 | (octets[3] ?? 0)).toString(16)}`;
+      })()
+    : normalized;
+  const halves = source.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const missing = halves.length === 2 ? 8 - left.length - right.length : 0;
+  const groups = halves.length === 2 ? [...left, ...Array.from({ length: missing }, () => "0"), ...right] : left;
+  if ((halves.length === 2 && missing < 1) || groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/u.test(group))) return null;
+  return groups.map((group) => Number.parseInt(group, 16));
+}
+
+function embeddedIpv4(address: number[]): string {
+  const high = address[6] ?? 0;
+  const low = address[7] ?? 0;
+  return `${high >>> 8}.${high & 0xff}.${low >>> 8}.${low & 0xff}`;
+}
+
 function unsafeIpKind(address: string): "private" | "blocked" | null {
   const ipv4 = parseIpv4(address);
   if (ipv4) {
     const a = ipv4[0] ?? -1;
     const b = ipv4[1] ?? -1;
+    const c = ipv4[2] ?? -1;
     if (a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return "private";
-    if (a === 0 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || a >= 224) return "blocked";
+    if (
+      a === 0
+      || (a === 100 && b >= 64 && b <= 127)
+      || (a === 169 && b === 254)
+      || (a === 192 && b === 0 && (c === 0 || c === 2))
+      || (a === 192 && b === 88 && c === 99)
+      || (a === 198 && (b === 18 || b === 19))
+      || (a === 198 && b === 51 && c === 100)
+      || (a === 203 && b === 0 && c === 113)
+      || a >= 224
+    ) return "blocked";
     return null;
   }
-  const normalized = address.toLocaleLowerCase();
-  if (normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd")) return "private";
-  if (normalized === "::" || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb") || normalized.startsWith("ff")) return "blocked";
-  if (normalized.startsWith("::ffff:")) return unsafeIpKind(normalized.slice(7));
-  return null;
+  const ipv6 = parseIpv6(address);
+  if (!ipv6) return "blocked";
+  const firstFiveZero = ipv6.slice(0, 5).every((value) => value === 0);
+  if (firstFiveZero && ipv6[5] === 0xffff) return unsafeIpKind(embeddedIpv4(ipv6));
+  const firstSixZero = ipv6.slice(0, 6).every((value) => value === 0);
+  if (firstSixZero) {
+    if (ipv6[6] === 0 && ipv6[7] === 1) return "private";
+    return "blocked";
+  }
+  const nat64WellKnown = ipv6[0] === 0x0064
+    && ipv6[1] === 0xff9b
+    && ipv6.slice(2, 6).every((value) => value === 0);
+  if (nat64WellKnown) return unsafeIpKind(embeddedIpv4(ipv6));
+  const first = ipv6[0] ?? 0;
+  if ((first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfec0) return "private";
+  const globallyRoutable = (first & 0xe000) === 0x2000;
+  const ietfSpecial = first === 0x2001 && ((ipv6[1] ?? 0) & 0xfe00) === 0;
+  const sixToFour = first === 0x2002;
+  const documentation = first === 0x3fff && ((ipv6[1] ?? 0) & 0xf000) === 0;
+  return globallyRoutable && !ietfSpecial && !sixToFour && !documentation ? null : "blocked";
 }
 
 type SafeAiEndpointAddress = { address: string; family: 4 | 6 };
@@ -327,6 +380,10 @@ const pinnedAiAgent = new Agent({
   }
 });
 
+function normalizedUrlHostname(url: URL): string {
+  return url.hostname.replace(/^\[|\]$/gu, "").toLocaleLowerCase("en-US");
+}
+
 function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAddress[]): void {
   const key = hostname.toLocaleLowerCase();
   if (!pinnedAiAddresses.has(key) && pinnedAiAddresses.size >= maximumPinnedAiHosts) {
@@ -342,9 +399,10 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
     throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
   }
-  const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
-    ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
-    : (await lookup(endpoint.hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
+  const hostname = normalizedUrlHostname(endpoint);
+  const addresses: SafeAiEndpointAddress[] = isIP(hostname)
+    ? [{ address: hostname, family: isIP(hostname) as 4 | 6 }]
+    : (await lookup(hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
       address,
       family: family as 4 | 6
     }));
@@ -352,7 +410,7 @@ export async function assertSafeAiEndpoint(value: string, allowPrivateNetwork = 
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
     if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
-      logger.warn("security.ai_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
+      logger.warn("security.ai_endpoint.blocked", { hostname, addressKind: kind });
       throw new AppError(400, "UNSAFE_PROVIDER_ENDPOINT", "AI 供应商地址指向受保护的本机、内网或链路本地网络");
     }
   }
@@ -367,9 +425,10 @@ export async function assertSafeS3Endpoint(value: string, allowPrivateNetwork = 
   if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
     throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务地址必须是无内嵌凭据的 HTTP 或 HTTPS 地址");
   }
-  const addresses: SafeAiEndpointAddress[] = isIP(endpoint.hostname)
-    ? [{ address: endpoint.hostname, family: isIP(endpoint.hostname) as 4 | 6 }]
-    : (await lookup(endpoint.hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
+  const hostname = normalizedUrlHostname(endpoint);
+  const addresses: SafeAiEndpointAddress[] = isIP(hostname)
+    ? [{ address: hostname, family: isIP(hostname) as 4 | 6 }]
+    : (await lookup(hostname, { all: true, verbatim: true }).catch(() => [])).map(({ address, family }) => ({
       address,
       family: family as 4 | 6
     }));
@@ -377,7 +436,7 @@ export async function assertSafeS3Endpoint(value: string, allowPrivateNetwork = 
   for (const { address } of addresses) {
     const kind = unsafeIpKind(address);
     if (kind === "blocked" || (kind === "private" && !allowPrivateNetwork)) {
-      logger.warn("security.s3_endpoint.blocked", { hostname: endpoint.hostname, addressKind: kind });
+      logger.warn("security.s3_endpoint.blocked", { hostname, addressKind: kind });
       throw new AppError(400, "UNSAFE_S3_ENDPOINT", "S3 服务地址指向受保护的本机、内网或链路本地网络");
     }
   }
@@ -403,18 +462,20 @@ export async function fetchSafeAiEndpoint(
   let currentUrl = url;
   const baseHeaders = new Headers(init.headers);
   for (let hop = 0; hop <= maxRedirects; hop += 1) {
-    logger.debug("ai.outbound_request.validating", { hostname: new URL(currentUrl).hostname, hop });
+    const currentEndpoint = new URL(currentUrl);
+    const currentHostname = normalizedUrlHostname(currentEndpoint);
+    logger.debug("ai.outbound_request.validating", { hostname: currentHostname, hop });
     const validatedAddresses = await validateOutboundUrl?.(currentUrl);
     const requestInit: RequestInit & { dispatcher?: Agent } = {
       ...init,
       headers: baseHeaders,
       redirect: "manual" as const,
       ...(Array.isArray(validatedAddresses) && validatedAddresses.length
-        ? (rememberPinnedAiAddresses(new URL(currentUrl).hostname, validatedAddresses), { dispatcher: pinnedAiAgent })
+        ? (rememberPinnedAiAddresses(currentHostname, validatedAddresses), { dispatcher: pinnedAiAgent })
         : {})
     };
     const response = await fetchImpl(currentUrl, requestInit);
-    logger.debug("ai.outbound_request.response", { hostname: new URL(currentUrl).hostname, hop, status: response.status });
+    logger.debug("ai.outbound_request.response", { hostname: currentHostname, hop, status: response.status });
     if (!redirectStatuses.has(response.status)) return response;
     const location = response.headers.get("location");
     if (!location) {
