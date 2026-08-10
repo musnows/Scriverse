@@ -33,6 +33,7 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain("我已保存");
     expect(page.text).toContain("确认已保存后才会开启加密");
     expect(page.text).toContain("刷新页面会放弃此次开启，下次可重新生成");
+    expect(page.text).toContain("开启加密不会回写桶内已有的明文图片对象，请继续将所有 S3 桶保持为私有桶");
     expect(page.text).toContain('id="s3-backup-target-dialog"');
     expect(page.text).toContain('id="s3-backup-base-path"');
     expect(page.text).toContain('id="s3-backup-access-key"');

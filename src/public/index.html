@@ -887,7 +887,7 @@
     <dialog id="s3-backup-key-dialog" class="dialog s3-backup-key-dialog" aria-labelledby="s3-backup-key-title" aria-describedby="s3-backup-key-description">
       <div class="dialog-header"><div><span class="eyebrow">仅显示这一次</span><h2 id="s3-backup-key-title">立即保存备份加密密钥</h2><p id="s3-backup-key-description" class="dialog-header-meta">密钥丢失后，任何人都无法恢复加密备份。请先复制或下载并存放到 Scriverse 设备之外。</p></div></div>
       <div class="s3-backup-key-body">
-        <div class="s3-backup-encryption-warning" role="alert"><strong>确认已保存后才会开启加密</strong><p>Scriverse 不会在后续设置页面再次展示这把密钥。刷新页面会放弃此次开启，下次可重新生成；关闭已启用的加密不会清除密钥，以便历史备份继续可恢复。</p></div>
+        <div class="s3-backup-encryption-warning" role="alert"><strong>确认已保存后才会开启加密</strong><p>Scriverse 不会在后续设置页面再次展示这把密钥。刷新页面会放弃此次开启，下次可重新生成；关闭已启用的加密不会清除密钥，以便历史备份继续可恢复。开启加密不会回写桶内已有的明文图片对象，请继续将所有 S3 桶保持为私有桶。</p></div>
         <label>备份加密密钥<textarea id="s3-backup-key-value" rows="3" readonly spellcheck="false" aria-label="备份加密密钥"></textarea></label>
         <div class="s3-backup-key-actions"><button id="s3-backup-key-copy" class="ghost-button" type="button">复制密钥</button><button id="s3-backup-key-download" class="ghost-button" type="button">下载密钥文件</button></div>
       </div>
