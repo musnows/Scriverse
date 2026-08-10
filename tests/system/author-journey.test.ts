@@ -686,6 +686,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("updateDocumentTitle(state.work)");
     expect(page.text).toContain('data-module="races"');
     expect(page.text).toContain('</svg>种族</button>');
+    expect(page.text).toContain('data-module="settings">');
+    expect(page.text).toContain('</svg>设定</button>');
+    expect(page.text).not.toContain('</svg>设定库</button>');
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('<span class="nav-label">大纲/伏笔</span>');
     expect(page.text).toMatch(/data-module="races"[\s\S]*id="module-more-button"[\s\S]*class="module-nav-secondary hidden"[^>]*data-module="outlines"/u);
