@@ -21,7 +21,7 @@ describe("列表 API 分页", () => {
       expect(secondPage.body.data).toMatchObject({ page: 2, limit: 2, hasMore: false, nextPage: null });
       expect(secondPage.body.data.items).toHaveLength(1);
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   });
 
@@ -38,7 +38,7 @@ describe("列表 API 分页", () => {
       expect(page.body.data).toMatchObject({ page: 2, limit: 2, hasMore: false, nextPage: null, total: 3 });
       expect(page.body.data.items).toHaveLength(1);
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   });
 
@@ -49,7 +49,7 @@ describe("列表 API 分页", () => {
       await request(runtime.app).get("/api/works?page=0").expect(400);
       await request(runtime.app).get("/api/works?page=1&page=2").expect(400);
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   });
 });

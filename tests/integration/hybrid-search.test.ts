@@ -6,8 +6,8 @@ import { createTestRuntime, seedChapter } from "../helpers.js";
 describe("作品混合检索", () => {
   let runtime: Runtime | null = null;
 
-  afterEach(() => {
-    runtime?.close();
+  afterEach(async () => {
+    await runtime?.close();
     runtime = null;
   });
 

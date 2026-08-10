@@ -63,8 +63,8 @@ describe("协作状态重启恢复", () => {
   let runtime: Runtime | null = null;
   let root: string | null = null;
 
-  afterEach(() => {
-    runtime?.close();
+  afterEach(async () => {
+    await runtime?.close();
     runtime = null;
     if (root) rmSync(root, { recursive: true, force: true });
     root = null;
@@ -117,7 +117,7 @@ describe("协作状态重启恢复", () => {
       expectedVersionNo: unobservedUpdate.body.data.versionNo
     }).expect(200);
 
-    runtime.close();
+    await runtime.close();
     runtime = createRuntime(options);
     const restoredWriter = await login(runtime, "restart_writer");
     const restoredOwner = await login(runtime, "restart_owner");

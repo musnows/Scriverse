@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("知识模块布局切换", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("设定、角色、种族、组织、伏笔与审核保留卡片并支持列表切换", async () => {

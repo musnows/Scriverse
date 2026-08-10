@@ -3,7 +3,9 @@ import { createTestRuntime, seedChapter } from "../helpers.js";
 
 describe("AI 对话 system 时钟冻结", () => {
   const runtimes: ReturnType<typeof createTestRuntime>[] = [];
-  afterEach(() => runtimes.splice(0).forEach((runtime) => runtime.close()));
+  afterEach(async () => {
+    for (const runtime of runtimes.splice(0)) await runtime.close();
+  });
 
   it("首轮写入后禁止更新，分支对话继承原时钟", async () => {
     const runtime = createTestRuntime();

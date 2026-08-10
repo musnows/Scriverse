@@ -14,10 +14,18 @@ export function createTestRuntime(fetchImpl?: typeof fetch): Runtime {
   return {
     ...runtime,
     app: server as unknown as Runtime["app"],
-    close: () => {
-      server.closeAllConnections();
-      server.close();
-      runtime.close();
+    close: async () => {
+      try {
+        if (server.listening) {
+          const serverClose = new Promise<void>((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve());
+          });
+          server.closeAllConnections();
+          await serverClose;
+        }
+      } finally {
+        await runtime.close();
+      }
     }
   };
 }

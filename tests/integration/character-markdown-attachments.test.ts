@@ -8,7 +8,7 @@ describe("人物 Markdown 章节与附件", () => {
   let runtime: ReturnType<typeof createTestRuntime>;
 
   beforeEach(() => { runtime = createTestRuntime(); });
-  afterEach(() => { runtime.close(); });
+  afterEach(() => runtime.close());
 
   it("将上传图片转为更小的无损 WebP 并按内容去重", async () => {
     const work = await createWork(runtime);
