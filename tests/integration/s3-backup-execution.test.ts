@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -197,6 +198,62 @@ describe("S3 数据库与图片备份执行", () => {
     expect(run).toMatchObject({ status: "succeeded", imagesUploaded: 0, imagesSkipped: 0 });
     expect(client.events.some((event) => event.startsWith("head:"))).toBe(false);
     expect([...client.objects.keys()]).toEqual([`${target.rootPrefix}/master.key`, run.databaseKey]);
+  });
+
+  it("使用校验时解析的地址连接 S3，避免 SDK 再次 DNS 解析", async () => {
+    const receivedHosts: string[] = [];
+    const server = createServer((request, response) => {
+      receivedHosts.push(request.headers.host ?? "");
+      request.resume();
+      request.on("end", () => {
+        if (request.method === "GET") {
+          response.setHeader("Content-Type", "application/xml");
+          response.end('<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>backup-bucket</Name><Prefix>scriverse/db/</Prefix><KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated></ListBucketResult>');
+          return;
+        }
+        response.statusCode = 200;
+        response.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("测试 S3 服务未监听 TCP 端口");
+    try {
+      const endpoint = `http://s3-rebinding.invalid:${address.port}`;
+      const runtime = createRuntime({
+        databasePath: ":memory:",
+        masterSecret: "s3-pinning-test-master-secret-with-enough-length",
+        disableUserAuth: true,
+        serveUi: false,
+        backupOptions: {
+          snapshotDatabase: () => Buffer.from("pinned-database-snapshot"),
+          requestTimeoutMs: 2_000,
+          validateEndpoint: async (candidate) => {
+            expect(candidate).toBe(endpoint);
+            return [{ address: "127.0.0.1", family: 4 }];
+          }
+        }
+      });
+      runtimes.push(runtime);
+      const target = runtime.backups.createTarget({
+        name: "DNS 固定目标",
+        endpoint,
+        bucket: "backup-bucket",
+        accessKeyId: "access-pinned",
+        secretAccessKey: "secret-pinned",
+        forcePathStyle: false,
+        enabled: true,
+        backupImages: false
+      });
+
+      const run = await runtime.backups.runTarget(target.id, "manual");
+
+      expect(run.status).toBe("succeeded");
+      expect(receivedHosts).toHaveLength(3);
+      expect(receivedHosts.every((host) => host === `backup-bucket.s3-rebinding.invalid:${address.port}`)).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 
   it("确认前保持明文，确认后加密数据库、恢复密钥与图片，关闭后保留 KEK", async () => {
