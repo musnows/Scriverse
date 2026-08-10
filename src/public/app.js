@@ -3116,13 +3116,19 @@ function toast(message, type = "info") {
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
   if (button.disabled) return null;
   const initialLabel = button.textContent;
+  const initialInert = busyTarget.inert;
   const activeElement = document.activeElement;
+  let focusTarget = busyTarget.contains(activeElement) ? activeElement : null;
   let finalLabel = initialLabel;
   button.disabled = true;
   try {
-    const prepared = await prepare();
-    if (prepared === null) return null;
+    // prepare 会在首次 await 前同步采集快照；同一事件循环内随即锁定，避免新的输入插入。
+    const preparation = prepare();
+    if (busyTarget.contains(document.activeElement)) focusTarget = document.activeElement;
+    busyTarget.inert = true;
     busyTarget.setAttribute("aria-busy", "true");
+    const prepared = await preparation;
+    if (prepared === null) return null;
     button.textContent = "保存中…";
     toast("正在保存…");
     await new Promise((resolve) => window.setTimeout(resolve, 0));
@@ -3135,10 +3141,11 @@ async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
     return null;
   } finally {
     busyTarget.removeAttribute("aria-busy");
+    busyTarget.inert = initialInert;
     button.disabled = false;
     button.textContent = finalLabel;
-    if (!busyTarget.contains(document.activeElement) && activeElement === button && button.isConnected) {
-      button.focus({ preventScroll: true });
+    if (!busyTarget.contains(document.activeElement) && focusTarget?.isConnected) {
+      focusTarget.focus({ preventScroll: true });
     }
   }
 }
