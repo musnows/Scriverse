@@ -1,6 +1,11 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
-import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import {
+  Database,
+  ENTITY_VERSION_BASELINE_MIGRATION_VERSION,
+  PLATFORM_AI_WORK_ID,
+  type Row
+} from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
@@ -580,7 +585,7 @@ function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInje
 
 export class Store {
   constructor(readonly db: Database) {
-    this.backfillEntityVersionBaselines();
+    this.migrateEntityVersionBaselines();
   }
 
   private currentEntityVersionNo(type: VersionedEntityType, entityId: string): number {
@@ -829,6 +834,28 @@ export class Store {
       for (const [type, entityId, timestamp] of entities) {
         this.recordEntityVersion(type, entityId, "migration", null, "建立版本基线", timestamp);
       }
+    });
+  }
+
+  private migrateEntityVersionBaselines(): void {
+    const migrationSql = "SELECT 1 AS present FROM schema_migrations WHERE version = ?";
+    if (this.db.get(migrationSql, ENTITY_VERSION_BASELINE_MIGRATION_VERSION)) return;
+    this.db.transaction(() => {
+      if (this.db.get(migrationSql, ENTITY_VERSION_BASELINE_MIGRATION_VERSION)) return;
+      if (!this.db.get("SELECT 1 AS present FROM entity_versions LIMIT 1")) {
+        this.backfillEntityVersionBaselines();
+      }
+      const integrity = this.db.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.db.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+      this.db.run(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        ENTITY_VERSION_BASELINE_MIGRATION_VERSION,
+        now()
+      );
     });
   }
 
@@ -7375,7 +7402,7 @@ export class Store {
 
   updateTask(taskId: string, input: { status: string; progress?: number; result?: unknown; failures?: unknown[] }): Record<string, unknown> {
     const current = this.getTask(taskId);
-    const terminal = ["completed", "partial", "review", "expired", "cancelled"];
+    const terminal = ["completed", "partial", "failed", "review", "expired", "cancelled"];
     if (terminal.includes(String(current.status)) && input.status !== current.status) {
       throw new AppError(409, "INVALID_TASK_TRANSITION", "终态任务不能再变更状态");
     }

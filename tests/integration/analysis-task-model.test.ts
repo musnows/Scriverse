@@ -81,7 +81,12 @@ describe("AI 分析任务模型", () => {
     }).expect(201);
     expect(overriddenTask.body.data.model.id).toBe(modelA.body.data.id);
 
-    await request(runtime.app).post(`/api/tasks/${defaultTask.body.data.id}/run`).send({}).expect(200);
+    const completed = await request(runtime.app).post(`/api/tasks/${defaultTask.body.data.id}/run`).send({}).expect(200);
+    expect(completed.body.data).toMatchObject({
+      taskType: "book-analysis",
+      status: "review",
+      result: { content: "已完成全书综合分析。", callId: expect.stringMatching(/^call_/u) }
+    });
     expect(requestedModels).toEqual(["analysis-model-a"]);
     const storedTask = runtime.database.get<Record<string, unknown>>(
       "SELECT model_id FROM analysis_tasks WHERE id = ?",

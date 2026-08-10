@@ -1,4 +1,11 @@
-import type { AiInjectedEntities, AiMessage, ContextScope, TaskType } from "./domain.js";
+import {
+  ANALYSIS_TASK_TYPES,
+  type AiInjectedEntities,
+  type AiMessage,
+  type AnalysisTaskType,
+  type ContextScope,
+  type TaskType
+} from "./domain.js";
 import {
   buildCompletionRequestBody,
   isAiProviderProtocol,
@@ -112,6 +119,16 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
+const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
+
+function isAnalysisTaskType(value: string): value is AnalysisTaskType {
+  return analysisTaskTypes.has(value);
+}
+
+function unsupportedTaskType(taskType: string): AppError {
+  return new AppError(400, "UNSUPPORTED_TASK_TYPE", `不支持的任务类型：${taskType}`);
+}
+
 // A small but non-transparent 128x128 PNG. The model test must exercise an actual image_url
 // payload, while keeping the request cheap and avoiding any user data in the probe.
 const MULTIMODAL_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAPoAAAD6AG1e1JrAAACfklEQVR4nO2cwY3EQBACJ8LOglRJyw4DJOpR/xOUuF17Zp91H9xsBi/9B8AhABIcC4AEx78AJDg+AyDB8SEQCY5vAUhwfA1EguM5ABIcD4KQ4HgSiATHo2AkON4FIMHxMggJjreBSHC8DkaC4zwAEhwHQpDgOBGEBMeRMCQ4zgQiwXEoFAmOU8FIcBwLR4LjXgASHBdDkOC4GYQEx9UwJDjuBiLBcTkUCY7bwUhwXA8319P5fQCPS8APRChfAgIUBOFRWADlS0CAgiA8CgugfAkIUBCER2EBlC8BAQqC8CgsgPIlIEBBEB6FBVC+BAQoCMKjsADKl4AABUF4FBZA+RIQoCAIj8ICKF8CAhQE4VFYAOVLQICCIDwKC6B8CQhQEIRHYQGULwEBCoLwKCyA8iUgQEEQHoUFUL4EBCgIwqOwAMqXgAAFQXgUFkD5EhCgIAiPwgIoXwICFAThUVgA5UtAgIIgPAoLoHwJCFAQhEdhAZQvAQEKgvAoLIDyJSBAQRAehQVQvgQEKAjCo7AAypeAAAVBeBQWQPkSEKAgCI/CAihfAgIUBOFRWADlS0CAgiA8CgugfAkIUBCER2EBlC8BAQqC8CgsgPIlIEBBEB6FBVC+BAQoCMKjsADKl4AABUF4FBZA+RIQoCAIj8ICKF8CAhQE4VFYAOVLQICCIDwKC6B8CQhQEIRHYQGULwEBCoLwKCyA8iUgQEEQHoUFUL4EBCgIwqOwAMqXgAAFQXgUFkD5EhCgIAiPwgIoXwICFAThUVgA5UtAgIIgPAoLoHwJCFAQhEdhAZQvAQEKgvAoLIDyJSBAQRAehQVQvgQEKAjCo7AAypeAAAVBeJQfFY4JQ620WGEAAAAASUVORK5CYII=";
@@ -2426,7 +2443,7 @@ export class AiManager {
         failures: [{ message, ...(error instanceof AppError ? { code: error.code } : {}) }]
       });
     }
-    if (current.status !== "partial") return;
+    if (current.status !== "partial" && current.status !== "failed") return;
     const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
     const settings = this.store.recordAutoRunFailure(workId, message, disposition.pauseImmediately);
     logger.warn("ai.auto_run.task_failed", {
@@ -3191,7 +3208,7 @@ export class AiManager {
 
   rerunTask(taskId: string, modelOverrideId?: string): Record<string, unknown> {
     const original = this.store.getTask(taskId);
-    const rerunnableStatuses = new Set(["review", "completed", "partial", "expired", "cancelled"]);
+    const rerunnableStatuses = new Set(["review", "completed", "partial", "failed", "expired", "cancelled"]);
     if (!rerunnableStatuses.has(String(original.status))) {
       throw new AppError(409, "TASK_NOT_RERUNNABLE", "只有已结束的分析任务可以按原配置重跑");
     }
@@ -3686,7 +3703,9 @@ export class AiManager {
     const taskController = new AbortController();
     this.taskControllers.set(taskId, taskController);
     try {
-      const taskType = String(task.taskType);
+      const taskTypeValue = String(task.taskType);
+      if (!isAnalysisTaskType(taskTypeValue)) throw unsupportedTaskType(taskTypeValue);
+      const taskType = taskTypeValue;
       const scope = task.scope as ContextScope;
       let result: Record<string, unknown>;
       if (taskType === "chapter-analysis") {
@@ -3705,17 +3724,19 @@ export class AiManager {
         result = await this.runSettingExtraction(workId, scope, selectedModelId, taskId);
       } else if (taskType === "consistency-check") {
         result = await this.runConsistencyCheck(workId, scope, selectedModelId, taskId);
-      } else {
+      } else if (taskType === "book-analysis") {
         const generated = await this.generate({
           workId,
           taskId,
-          taskType: taskType === "book-analysis" ? "book-analysis" : "chapter-analysis",
+          taskType: "book-analysis",
           instruction: "请基于上下文完成分析，给出有原文依据的中文结论。",
           scope,
           signal: taskController.signal,
           ...(selectedModelId ? { modelId: selectedModelId } : {})
         });
         result = { content: generated.content, callId: generated.callId };
+      } else {
+        throw unsupportedTaskType(taskType);
       }
       if (!this.taskCanCommit(taskId)) {
         logger.warn("ai.task.result_discarded", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
@@ -3746,7 +3767,8 @@ export class AiManager {
           throw error;
         }
       }
-      this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [failure] });
+      const failedStatus = error instanceof AppError && error.code === "UNSUPPORTED_TASK_TYPE" ? "failed" : "partial";
+      this.store.updateTask(taskId, { status: failedStatus, progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {

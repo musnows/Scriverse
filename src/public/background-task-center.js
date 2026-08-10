@@ -1,5 +1,5 @@
 const activeTaskStatuses = new Set(["pending", "running"]);
-const terminalTaskStatuses = new Set(["review", "completed", "partial", "expired", "cancelled"]);
+const terminalTaskStatuses = new Set(["review", "completed", "partial", "failed", "expired", "cancelled"]);
 
 export function backgroundTaskActivityCount(taskPage, relationshipIndex) {
   const pendingCount = Number(taskPage?.stats?.pendingCount ?? 0);
