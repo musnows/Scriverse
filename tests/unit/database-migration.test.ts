@@ -103,6 +103,16 @@ describe("数据库版本化迁移", () => {
       "server_response_json"
     ]));
     expect(first.all("PRAGMA index_list(s3_backup_runs)").some((index) => index.name === "idx_s3_backup_runs_started")).toBe(true);
+    expect(first.all("PRAGMA table_info(s3_backup_encryption)").map((column) => column.name)).toEqual([
+      "id",
+      "enabled",
+      "kek_encrypted",
+      "kek_iv",
+      "kek_tag",
+      "created_at",
+      "updated_at"
+    ]);
+    expect(first.get("SELECT COUNT(*) AS count FROM s3_backup_encryption")).toEqual({ count: 0 });
     expect(first.get("SELECT is_dead FROM characters WHERE id = 'character-a'")).toEqual({ is_dead: 0 });
     expect(first.get("SELECT is_extinct FROM races WHERE id = 'race_migration_1'")).toEqual({ is_extinct: 0 });
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);

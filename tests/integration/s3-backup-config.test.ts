@@ -120,6 +120,50 @@ describe("S3 备份目标配置 API", () => {
     await request(runtime.app).post("/api/platform/backups/targets").send({ ...valid, retentionCount: 0 }).expect(400);
   });
 
+  it("只在首次开启时返回 KEK，并在关闭后保留密钥与审计记录", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+
+    const initial = await request(runtime.app).get("/api/platform/backups/encryption").expect(200);
+    expect(initial.body.data).toEqual({ enabled: false, keyConfiguredAt: null });
+
+    const enabled = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
+    expect(enabled.body.data).toMatchObject({ enabled: true, key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u) });
+    expect(enabled.body.data.keyConfiguredAt).toEqual(expect.any(String));
+    const key = String(enabled.body.data.key);
+    const stored = runtime.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+    expect(JSON.stringify(stored)).not.toContain(key);
+    expect(stored).toMatchObject({ enabled: 1 });
+
+    const listed = await request(runtime.app).get("/api/platform/backups/encryption").expect(200);
+    expect(listed.body.data).toEqual({ enabled: true, keyConfiguredAt: enabled.body.data.keyConfiguredAt });
+    expect(JSON.stringify(listed.body.data)).not.toContain(key);
+
+    const repeated = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
+    expect(repeated.body.data).toEqual({ enabled: true, keyConfiguredAt: enabled.body.data.keyConfiguredAt });
+
+    const disabled = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: false }).expect(200);
+    expect(disabled.body.data).toEqual({ enabled: false, keyConfiguredAt: enabled.body.data.keyConfiguredAt });
+    const reenabled = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
+    expect(reenabled.body.data).toEqual({ enabled: true, keyConfiguredAt: enabled.body.data.keyConfiguredAt });
+
+    const auditRows = runtime.database.all<{ action: string; detail_json: string }>(
+      "SELECT action, detail_json FROM audit_logs WHERE entity_type = 's3-backup-encryption' ORDER BY rowid"
+    );
+    expect(auditRows.map((row) => row.action)).toEqual([
+      "platform.backup-encryption.enabled",
+      "platform.backup-encryption.disabled",
+      "platform.backup-encryption.enabled"
+    ]);
+    expect(JSON.stringify(auditRows)).not.toContain(key);
+
+    await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: "yes" }).expect(400);
+    await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true, key: "forbidden" }).expect(400);
+    await request(runtime.app).post("/api/platform/backups/encryption").send({}).expect(400);
+    expect(runtime.database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("仅允许带有效 CSRF 的系统管理员管理备份目标", async () => {
     const runtime = createRuntime({
       databasePath: ":memory:",
@@ -142,12 +186,21 @@ describe("S3 备份目标配置 API", () => {
       secretAccessKey: "secret"
     };
     await request(runtime.app).get("/api/platform/backups/targets").expect(401);
+    await request(runtime.app).get("/api/platform/backups/encryption").expect(401);
     await writer.agent.get("/api/platform/backups/targets").expect(403);
     await writer.agent.get("/api/platform/backups/runs").expect(403);
+    await writer.agent.get("/api/platform/backups/encryption").expect(403);
     await writer.agent.post("/api/platform/backups/targets").set("X-CSRF-Token", writer.csrfToken).send(body).expect(403);
+    await writer.agent.post("/api/platform/backups/encryption").set("X-CSRF-Token", writer.csrfToken).send({ enabled: true }).expect(403);
     await writer.agent.post("/api/platform/backups/run").set("X-CSRF-Token", writer.csrfToken).send({}).expect(403);
     await admin.agent.post("/api/platform/backups/targets").send(body).expect(403);
+    await admin.agent.post("/api/platform/backups/encryption").send({ enabled: true }).expect(403);
     await admin.agent.post("/api/platform/backups/run").send({}).expect(403);
     await admin.agent.post("/api/platform/backups/targets").set("X-CSRF-Token", admin.csrfToken).send(body).expect(201);
+    const encryption = await admin.agent.post("/api/platform/backups/encryption")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ enabled: true })
+      .expect(200);
+    expect(encryption.body.data.key).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   });
 });
