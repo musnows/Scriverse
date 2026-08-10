@@ -39,6 +39,7 @@ describe("系统重启认证清理", () => {
   it("确认系统重启提示并返回登录页时清理业务弹层", async () => {
     const page = await request(runtime.app).get("/").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
+    const presenceClientIdModule = await request(runtime.app).get("/presence-client-id.js?v=20260810-presence-relogin-v1").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('id="system-restart-dialog" class="dialog system-restart-dialog"');
@@ -53,6 +54,10 @@ describe("系统重启认证清理", () => {
     expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "login" }));');
     expect(application.text).toContain("toastRegion.replaceChildren();");
     expect(application.text).toContain("showAuth(false);");
+    expect(application.text).toContain('import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";');
+    expect(application.text).toContain("const presenceClientId = createPresenceClientId(presenceSessionStorage);");
+    expect(application.text).toContain("if (systemRestartDetected) stagePresenceClientIdForRelogin(presenceSessionStorage, presenceClientId);");
+    expect(presenceClientIdModule.text).toContain('export const PRESENCE_CLIENT_ID_BEFORE_RELOGIN_KEY = "scriverse-presence-client-id-before-relogin-v1";');
     const observeSystemBootBlock = application.text.slice(
       application.text.indexOf("function observeSystemBootId(value)"),
       application.text.indexOf("async function checkSystemBoot(forceFresh = false)")

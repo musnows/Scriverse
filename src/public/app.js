@@ -58,6 +58,7 @@ import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackground
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import { collectS3BackupRunTransitions, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260804-s3-backup-v1";
+import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -153,16 +154,9 @@ const cachedWorkModules = new Set([
   "ai-settings"
 ]);
 
-function createPresenceClientId() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
-}
-
-const presenceClientId = createPresenceClientId();
+let presenceSessionStorage = null;
+try { presenceSessionStorage = window.sessionStorage; } catch { /* 浏览器禁用存储时使用页面级新标识 */ }
+const presenceClientId = createPresenceClientId(presenceSessionStorage);
 const presenceHeartbeatInterval = 12_000;
 const systemBootCheckInterval = 8_000;
 let presenceParticipants = [];
@@ -12132,6 +12126,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         captchaAnswer: form.get("captchaAnswer")
       }
     });
+    if (systemRestartDetected) stagePresenceClientIdForRelogin(presenceSessionStorage, presenceClientId);
     window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
     window.location.reload();
   } catch (error) {
