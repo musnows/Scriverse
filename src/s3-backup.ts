@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   DeleteObjectsCommand,
   HeadObjectCommand,
@@ -7,6 +7,7 @@ import {
   S3Client
 } from "@aws-sdk/client-s3";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { encryptObject, generateKek } from "./backup-encryption.js";
 import { CredentialVault, type EncryptedSecret } from "./credential-vault.js";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError } from "./errors.js";
@@ -387,7 +388,7 @@ export class S3BackupManager {
         return { enabled: true, keyConfiguredAt: requiredString(row, "created_at") };
       }
 
-      const key = randomBytes(32).toString("base64url");
+      const key = generateKek();
       const encrypted = this.vault.encrypt(key);
       if (row) {
         this.database.run(
@@ -661,7 +662,9 @@ export class S3BackupManager {
     let imagesUploaded = 0;
     let imagesSkipped = 0;
     let databasesDeleted = 0;
+    let encryptionKey: string | null = null;
     try {
+      encryptionKey = this.activeBackupEncryptionKey();
       await this.validateEndpoint?.(target.endpoint);
       client = this.clientFactory({
         endpoint: target.endpoint,
@@ -673,17 +676,19 @@ export class S3BackupManager {
       const databaseSnapshot = await this.snapshotDatabase();
       databaseKey = `${target.rootPrefix}/db/scriverse-${this.snapshotTimestamp(started)}-${runId.replaceAll("-", "").slice(0, 8)}.db`;
       if (!this.masterKey) throw new AppError(500, "BACKUP_MASTER_KEY_UNAVAILABLE", "S3 备份缺少 CredentialVault 恢复密钥");
+      const masterKeyBody = encryptionKey ? encryptObject(this.masterKey, encryptionKey) : this.masterKey;
       await this.withRequestTimeout(client.putObject({
         bucket: target.bucket,
         key: `${target.rootPrefix}/master.key`,
-        body: this.masterKey,
+        body: masterKeyBody,
         contentType: "application/octet-stream"
       }), "上传 CredentialVault 恢复密钥");
+      const databaseBody = encryptionKey ? encryptObject(databaseSnapshot, encryptionKey) : databaseSnapshot;
       await this.withRequestTimeout(client.putObject({
         bucket: target.bucket,
         key: databaseKey,
-        body: databaseSnapshot,
-        contentType: "application/vnd.sqlite3"
+        body: databaseBody,
+        contentType: encryptionKey ? "application/octet-stream" : "application/vnd.sqlite3"
       }), "上传数据库快照");
 
       if (target.backupImages) {
@@ -693,11 +698,12 @@ export class S3BackupManager {
             continue;
           }
           const body = await source.read();
+          const uploadBody = encryptionKey ? encryptObject(body, encryptionKey) : body;
           await this.withRequestTimeout(client.putObject({
             bucket: target.bucket,
             key: source.objectKey,
-            body,
-            contentType: source.contentType,
+            body: uploadBody,
+            contentType: encryptionKey ? "application/octet-stream" : source.contentType,
             metadata: { sha256: source.sha256 }
           }), "上传图片");
           imagesUploaded += 1;
@@ -742,7 +748,11 @@ export class S3BackupManager {
         databasesDeleted
       });
     } catch (error) {
-      const serverResponse = s3FailureServerResponse(error, [target.accessKeyId, target.secretAccessKey]);
+      const serverResponse = s3FailureServerResponse(error, [
+        target.accessKeyId,
+        target.secretAccessKey,
+        ...(encryptionKey ? [encryptionKey] : [])
+      ]);
       const errorMessage = typeof serverResponse.message === "string" ? serverResponse.message : "S3 备份失败";
       const finishedAt = this.now().toISOString();
       this.database.transaction(() => {
@@ -804,6 +814,23 @@ export class S3BackupManager {
     return typeof row.kek_encrypted === "string"
       && typeof row.kek_iv === "string"
       && typeof row.kek_tag === "string";
+  }
+
+  private activeBackupEncryptionKey(): string | null {
+    const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+    if (!row || Number(row.enabled) !== 1) return null;
+    if (!this.hasBackupEncryptionKey(row)) {
+      throw new AppError(500, "BACKUP_ENCRYPTION_STATE_INVALID", "S3 备份加密配置缺少密钥");
+    }
+    try {
+      return this.vault.decrypt({
+        encrypted: requiredString(row, "kek_encrypted"),
+        iv: requiredString(row, "kek_iv"),
+        tag: requiredString(row, "kek_tag")
+      });
+    } catch {
+      throw new AppError(500, "BACKUP_ENCRYPTION_KEY_UNAVAILABLE", "S3 备份加密密钥无法读取");
+    }
   }
 
   private runtimeTarget(row: Row): RuntimeTarget {
