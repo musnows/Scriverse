@@ -199,16 +199,21 @@ describe("S3 数据库与图片备份执行", () => {
     expect([...client.objects.keys()]).toEqual([`${target.rootPrefix}/master.key`, run.databaseKey]);
   });
 
-  it("开启后加密数据库、恢复密钥与图片，关闭后恢复明文且保留 KEK", async () => {
+  it("确认前保持明文，确认后加密数据库、恢复密钥与图片，关闭后保留 KEK", async () => {
     const client = new FakeS3Client();
     const runtime = testRuntime({ clientFactory: () => client });
     runtimes.push(runtime);
     const work = runtime.store.createWork({ title: "加密备份测试作品" });
-    const encryptedCover = Buffer.from("encrypted-cover-content");
-    runtime.store.setWorkCover(String(work.id), "image/png", encryptedCover);
-    const enabled = runtime.backups.setEncryptionEnabled(true);
-    expect(enabled.key).toMatch(/^[A-Za-z0-9_-]{43}$/u);
-    const key = String(enabled.key);
+    const pendingCover = Buffer.from("pending-cover-content");
+    runtime.store.setWorkCover(String(work.id), "image/png", pendingCover);
+    const prepared = runtime.backups.setEncryptionEnabled(true);
+    expect(prepared).toMatchObject({
+      enabled: false,
+      keyConfiguredAt: null,
+      key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+      confirmationToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u)
+    });
+    const key = String(prepared.key);
     const target = runtime.backups.createTarget({
       name: "加密目标",
       endpoint: "https://encrypted.example.com",
@@ -219,6 +224,21 @@ describe("S3 数据库与图片备份执行", () => {
       backupImages: true
     });
 
+    const pendingRun = await runtime.backups.runTarget(target.id, "manual");
+    expect(client.objects.get(String(pendingRun.databaseKey))).toMatchObject({
+      body: Buffer.from("consistent-database-snapshot"),
+      contentType: "application/vnd.sqlite3"
+    });
+    expect(client.objects.get(`${target.rootPrefix}/master.key`)?.body.toString())
+      .toBe("s3-execution-test-master-secret-with-enough-length");
+    const pendingCoverHash = createHash("sha256").update(pendingCover).digest("hex");
+    expect(client.objects.get(`${target.rootPrefix}/img/${pendingCoverHash.slice(0, 2)}/${pendingCoverHash}.png`))
+      .toMatchObject({ body: pendingCover, contentType: "image/png" });
+
+    const enabled = runtime.backups.confirmEncryptionEnabled(String(prepared.confirmationToken));
+    expect(enabled).toEqual({ enabled: true, keyConfiguredAt: expect.any(String) });
+    const encryptedCover = Buffer.from("encrypted-cover-content");
+    runtime.store.setWorkCover(String(work.id), "image/png", encryptedCover);
     const encryptedRun = await runtime.backups.runTarget(target.id, "manual");
     expect(encryptedRun.status).toBe("succeeded");
     const databaseObject = client.objects.get(String(encryptedRun.databaseKey));
@@ -278,7 +298,9 @@ describe("S3 数据库与图片备份执行", () => {
       }
     });
     runtimes.push(runtime);
-    const encryptionKey = String(runtime.backups.setEncryptionEnabled(true).key);
+    const preparedEncryption = runtime.backups.setEncryptionEnabled(true);
+    const encryptionKey = String(preparedEncryption.key);
+    runtime.backups.confirmEncryptionEnabled(String(preparedEncryption.confirmationToken));
     for (const [name, endpoint] of [
       ["第一个", "https://first.example.com"],
       ["失败目标", "https://failed.example.com"],

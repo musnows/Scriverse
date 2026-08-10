@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   DeleteObjectsCommand,
   HeadObjectCommand,
@@ -102,6 +102,7 @@ export type S3BackupManagerOptions = {
   validateEndpoint?: (endpoint: string) => Promise<unknown>;
   now?: () => Date;
   logger?: Logger;
+  encryptionConfirmationTtlMs?: number;
 };
 
 export type S3BackupQueueReceipt = {
@@ -116,6 +117,13 @@ export type S3BackupEncryptionState = {
 
 export type S3BackupEncryptionUpdate = S3BackupEncryptionState & {
   key?: string;
+  confirmationToken?: string;
+};
+
+type PendingBackupEncryption = {
+  key: string;
+  confirmationTokenHash: Buffer;
+  expiresAtMs: number;
 };
 
 type RuntimeTarget = S3BackupTarget & {
@@ -301,9 +309,11 @@ export class S3BackupManager {
   private readonly validateEndpoint?: (endpoint: string) => Promise<unknown>;
   private readonly now: () => Date;
   private readonly log: Logger;
+  private readonly encryptionConfirmationTtlMs: number;
   private readonly queuedTargetIds = new Set<string>();
   private executionChain: Promise<void> = Promise.resolve();
   private schedulerTimer: ReturnType<typeof setInterval> | null = null;
+  private pendingBackupEncryption: PendingBackupEncryption | null = null;
   private disposed = false;
 
   constructor(
@@ -323,6 +333,10 @@ export class S3BackupManager {
     this.validateEndpoint = options.validateEndpoint;
     this.now = options.now ?? (() => new Date());
     this.log = options.logger ?? logger;
+    const encryptionConfirmationTtlMs = Number(options.encryptionConfirmationTtlMs ?? 10 * 60_000);
+    this.encryptionConfirmationTtlMs = Number.isFinite(encryptionConfirmationTtlMs) && encryptionConfirmationTtlMs > 0
+      ? Math.floor(encryptionConfirmationTtlMs)
+      : 10 * 60_000;
   }
 
   listTargets(): S3BackupTarget[] {
@@ -347,6 +361,7 @@ export class S3BackupManager {
   }
 
   setEncryptionEnabled(enabled: boolean): S3BackupEncryptionUpdate {
+    if (!enabled) this.pendingBackupEncryption = null;
     return this.database.transaction(() => {
       const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
       const currentEnabled = Number(row?.enabled ?? 0) === 1;
@@ -389,7 +404,34 @@ export class S3BackupManager {
       }
 
       const key = generateKek();
-      const encrypted = this.vault.encrypt(key);
+      const confirmationToken = randomBytes(32).toString("base64url");
+      this.pendingBackupEncryption = {
+        key,
+        confirmationTokenHash: createHash("sha256").update(confirmationToken).digest(),
+        expiresAtMs: this.now().getTime() + this.encryptionConfirmationTtlMs
+      };
+      return { enabled: false, keyConfiguredAt: null, key, confirmationToken };
+    });
+  }
+
+  confirmEncryptionEnabled(confirmationToken: string): S3BackupEncryptionState {
+    const pending = this.pendingBackupEncryption;
+    const tokenHash = createHash("sha256").update(confirmationToken).digest();
+    if (!pending || pending.expiresAtMs <= this.now().getTime() || !timingSafeEqual(pending.confirmationTokenHash, tokenHash)) {
+      if (pending && pending.expiresAtMs <= this.now().getTime()) this.pendingBackupEncryption = null;
+      throw new AppError(409, "BACKUP_ENCRYPTION_CONFIRMATION_INVALID", "备份加密确认已失效，请重新开启并保存新密钥");
+    }
+
+    const state = this.database.transaction(() => {
+      const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+      const currentEnabled = Number(row?.enabled ?? 0) === 1;
+      const keyConfigured = row ? this.hasBackupEncryptionKey(row) : false;
+      if (currentEnabled || keyConfigured) {
+        throw new AppError(409, "BACKUP_ENCRYPTION_CONFIRMATION_INVALID", "备份加密状态已变化，请刷新后重试");
+      }
+
+      const timestamp = this.now().toISOString();
+      const encrypted = this.vault.encrypt(pending.key);
       if (row) {
         this.database.run(
           `UPDATE s3_backup_encryption SET enabled = 1, kek_encrypted = ?, kek_iv = ?, kek_tag = ?,
@@ -419,8 +461,10 @@ export class S3BackupManager {
         "s3-backup-encryption",
         { keyGenerated: true }
       );
-      return { enabled: true, keyConfiguredAt: timestamp, key };
+      return { enabled: true, keyConfiguredAt: timestamp };
     });
+    this.pendingBackupEncryption = null;
+    return state;
   }
 
   createTarget(input: S3BackupTargetInput): S3BackupTarget {
@@ -641,6 +685,7 @@ export class S3BackupManager {
 
   dispose(): void {
     this.disposed = true;
+    this.pendingBackupEncryption = null;
     if (this.schedulerTimer) clearInterval(this.schedulerTimer);
     this.schedulerTimer = null;
   }

@@ -120,24 +120,69 @@ describe("S3 备份目标配置 API", () => {
     await request(runtime.app).post("/api/platform/backups/targets").send({ ...valid, retentionCount: 0 }).expect(400);
   });
 
-  it("只在首次开启时返回 KEK，并在关闭后保留密钥与审计记录", async () => {
+  it("首次开启必须确认 KEK，刷新重试安全且确认后才启用", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);
 
     const initial = await request(runtime.app).get("/api/platform/backups/encryption").expect(200);
     expect(initial.body.data).toEqual({ enabled: false, keyConfiguredAt: null });
 
-    const enabled = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
-    expect(enabled.body.data).toMatchObject({ enabled: true, key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u) });
-    expect(enabled.body.data.keyConfiguredAt).toEqual(expect.any(String));
-    const key = String(enabled.body.data.key);
+    const firstPrepare = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
+    expect(firstPrepare.body.data).toMatchObject({
+      enabled: false,
+      keyConfiguredAt: null,
+      key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+      confirmationToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u)
+    });
+    const firstKey = String(firstPrepare.body.data.key);
+    const firstToken = String(firstPrepare.body.data.confirmationToken);
+    expect(runtime.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1")).toBeUndefined();
+    expect(runtime.database.all("SELECT * FROM audit_logs WHERE entity_type = 's3-backup-encryption'")).toEqual([]);
+
+    const pending = await request(runtime.app).get("/api/platform/backups/encryption").expect(200);
+    expect(pending.body.data).toEqual({ enabled: false, keyConfiguredAt: null });
+    expect(JSON.stringify(pending.body.data)).not.toContain(firstKey);
+    expect(JSON.stringify(pending.body.data)).not.toContain(firstToken);
+
+    const refreshedPrepare = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
+    expect(refreshedPrepare.body.data).toMatchObject({
+      enabled: false,
+      keyConfiguredAt: null,
+      key: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+      confirmationToken: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u)
+    });
+    const key = String(refreshedPrepare.body.data.key);
+    const confirmationToken = String(refreshedPrepare.body.data.confirmationToken);
+    expect(key).not.toBe(firstKey);
+    expect(confirmationToken).not.toBe(firstToken);
+
+    const staleConfirmation = await request(runtime.app).post("/api/platform/backups/encryption/confirm")
+      .send({ confirmationToken: firstToken })
+      .expect(409);
+    expect(staleConfirmation.body.error.code).toBe("BACKUP_ENCRYPTION_CONFIRMATION_INVALID");
+    expect((await request(runtime.app).get("/api/platform/backups/encryption").expect(200)).body.data)
+      .toEqual({ enabled: false, keyConfiguredAt: null });
+    expect(runtime.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1")).toBeUndefined();
+    expect(runtime.database.all("SELECT * FROM audit_logs WHERE entity_type = 's3-backup-encryption'")).toEqual([]);
+
+    const enabled = await request(runtime.app).post("/api/platform/backups/encryption/confirm")
+      .send({ confirmationToken })
+      .expect(200);
+    expect(enabled.body.data).toEqual({ enabled: true, keyConfiguredAt: expect.any(String) });
     const stored = runtime.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
     expect(JSON.stringify(stored)).not.toContain(key);
+    expect(JSON.stringify(stored)).not.toContain(confirmationToken);
     expect(stored).toMatchObject({ enabled: 1 });
 
     const listed = await request(runtime.app).get("/api/platform/backups/encryption").expect(200);
     expect(listed.body.data).toEqual({ enabled: true, keyConfiguredAt: enabled.body.data.keyConfiguredAt });
     expect(JSON.stringify(listed.body.data)).not.toContain(key);
+    expect(JSON.stringify(listed.body.data)).not.toContain(confirmationToken);
+
+    const consumedConfirmation = await request(runtime.app).post("/api/platform/backups/encryption/confirm")
+      .send({ confirmationToken })
+      .expect(409);
+    expect(consumedConfirmation.body.error.code).toBe("BACKUP_ENCRYPTION_CONFIRMATION_INVALID");
 
     const repeated = await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true }).expect(200);
     expect(repeated.body.data).toEqual({ enabled: true, keyConfiguredAt: enabled.body.data.keyConfiguredAt });
@@ -160,6 +205,9 @@ describe("S3 备份目标配置 API", () => {
     await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: "yes" }).expect(400);
     await request(runtime.app).post("/api/platform/backups/encryption").send({ enabled: true, key: "forbidden" }).expect(400);
     await request(runtime.app).post("/api/platform/backups/encryption").send({}).expect(400);
+    await request(runtime.app).post("/api/platform/backups/encryption/confirm").send({ confirmationToken: "invalid" }).expect(400);
+    await request(runtime.app).post("/api/platform/backups/encryption/confirm").send({ confirmationToken, unknown: true }).expect(400);
+    await request(runtime.app).post("/api/platform/backups/encryption/confirm").send({}).expect(400);
     expect(runtime.database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
@@ -192,9 +240,12 @@ describe("S3 备份目标配置 API", () => {
     await writer.agent.get("/api/platform/backups/encryption").expect(403);
     await writer.agent.post("/api/platform/backups/targets").set("X-CSRF-Token", writer.csrfToken).send(body).expect(403);
     await writer.agent.post("/api/platform/backups/encryption").set("X-CSRF-Token", writer.csrfToken).send({ enabled: true }).expect(403);
+    await writer.agent.post("/api/platform/backups/encryption/confirm").set("X-CSRF-Token", writer.csrfToken)
+      .send({ confirmationToken: "a".repeat(43) }).expect(403);
     await writer.agent.post("/api/platform/backups/run").set("X-CSRF-Token", writer.csrfToken).send({}).expect(403);
     await admin.agent.post("/api/platform/backups/targets").send(body).expect(403);
     await admin.agent.post("/api/platform/backups/encryption").send({ enabled: true }).expect(403);
+    await admin.agent.post("/api/platform/backups/encryption/confirm").send({ confirmationToken: "a".repeat(43) }).expect(403);
     await admin.agent.post("/api/platform/backups/run").send({}).expect(403);
     await admin.agent.post("/api/platform/backups/targets").set("X-CSRF-Token", admin.csrfToken).send(body).expect(201);
     const encryption = await admin.agent.post("/api/platform/backups/encryption")
@@ -202,5 +253,10 @@ describe("S3 备份目标配置 API", () => {
       .send({ enabled: true })
       .expect(200);
     expect(encryption.body.data.key).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    const confirmed = await admin.agent.post("/api/platform/backups/encryption/confirm")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ confirmationToken: encryption.body.data.confirmationToken })
+      .expect(200);
+    expect(confirmed.body.data.enabled).toBe(true);
   });
 });

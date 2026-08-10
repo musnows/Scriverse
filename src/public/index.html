@@ -887,7 +887,7 @@
     <dialog id="s3-backup-key-dialog" class="dialog s3-backup-key-dialog" aria-labelledby="s3-backup-key-title" aria-describedby="s3-backup-key-description">
       <div class="dialog-header"><div><span class="eyebrow">仅显示这一次</span><h2 id="s3-backup-key-title">立即保存备份加密密钥</h2><p id="s3-backup-key-description" class="dialog-header-meta">密钥丢失后，任何人都无法恢复加密备份。请先复制或下载并存放到 Scriverse 设备之外。</p></div></div>
       <div class="s3-backup-key-body">
-        <div class="s3-backup-encryption-warning" role="alert"><strong>关闭此提示前必须完成保存</strong><p>Scriverse 不会在后续设置页面再次展示这把密钥。关闭加密也不会清除它，以便历史备份继续可恢复。</p></div>
+        <div class="s3-backup-encryption-warning" role="alert"><strong>确认已保存后才会开启加密</strong><p>Scriverse 不会在后续设置页面再次展示这把密钥。刷新页面会放弃此次开启，下次可重新生成；关闭已启用的加密不会清除密钥，以便历史备份继续可恢复。</p></div>
         <label>备份加密密钥<textarea id="s3-backup-key-value" rows="3" readonly spellcheck="false" aria-label="备份加密密钥"></textarea></label>
         <div class="s3-backup-key-actions"><button id="s3-backup-key-copy" class="ghost-button" type="button">复制密钥</button><button id="s3-backup-key-download" class="ghost-button" type="button">下载密钥文件</button></div>
       </div>
@@ -1047,6 +1047,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260810-backup-encryption-v3"></script>
+    <script type="module" src="/app.js?v=20260810-backup-encryption-v4"></script>
   </body>
 </html>

@@ -31,6 +31,8 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain('id="s3-backup-key-download"');
     expect(page.text).toContain('id="s3-backup-key-confirm"');
     expect(page.text).toContain("我已保存");
+    expect(page.text).toContain("确认已保存后才会开启加密");
+    expect(page.text).toContain("刷新页面会放弃此次开启，下次可重新生成");
     expect(page.text).toContain('id="s3-backup-target-dialog"');
     expect(page.text).toContain('id="s3-backup-base-path"');
     expect(page.text).toContain('id="s3-backup-access-key"');
@@ -41,10 +43,13 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain('id="s3-backup-run-all"');
     expect(page.text).toContain('id="s3-backup-runs"');
     expect(page.text).toContain('/styles.css?v=20260810-backup-encryption-v1');
-    expect(page.text).toContain('/app.js?v=20260810-backup-encryption-v3');
+    expect(page.text).toContain('/app.js?v=20260810-backup-encryption-v4');
 
     expect(application.text).toContain('/s3-backup-ui.js?v=20260810-backup-encryption-v1');
     expect(application.text).toContain('api("/api/platform/backups/encryption")');
+    expect(application.text).toContain('api("/api/platform/backups/encryption/confirm"');
+    expect(application.text).toContain("s3BackupEncryptionConfirmationToken = confirmationToken");
+    expect(application.text).toContain("async function confirmS3BackupEncryptionKeySaved()");
     expect(application.text).toContain('toast("未开启备份加密，请将 S3 桶设置为私有桶，避免数据泄露", "warning")');
     expect(application.text).toContain('anchor.download = "scriverse-s3-backup-key.txt"');
     expect(application.text).toContain('addEventListener("cancel", (event) => event.preventDefault())');

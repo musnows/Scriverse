@@ -199,6 +199,7 @@ let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, er
 let s3BackupTargets = [];
 let s3BackupRuns = [];
 let s3BackupEncryption = { enabled: false, keyConfiguredAt: null };
+let s3BackupEncryptionConfirmationToken = null;
 let editingS3BackupTargetId = null;
 let s3BackupPollTimer = null;
 let s3BackupPollRequest = 0;
@@ -4023,7 +4024,8 @@ async function openS3BackupDialog() {
   }
 }
 
-function showS3BackupEncryptionKey(key) {
+function showS3BackupEncryptionKey(key, confirmationToken) {
+  s3BackupEncryptionConfirmationToken = confirmationToken;
   $("#s3-backup-key-value").value = key;
   const dialog = $("#s3-backup-key-dialog");
   if (!dialog.open) dialog.showModal();
@@ -4045,8 +4047,8 @@ async function changeS3BackupEncryption(event) {
       keyConfiguredAt: result.keyConfiguredAt ?? s3BackupEncryption.keyConfiguredAt
     };
     renderS3BackupEncryption();
-    if (typeof result.key === "string" && result.key) {
-      showS3BackupEncryptionKey(result.key);
+    if (typeof result.key === "string" && result.key && typeof result.confirmationToken === "string" && result.confirmationToken) {
+      showS3BackupEncryptionKey(result.key, result.confirmationToken);
     } else {
       toast(enabled ? "S3 备份加密已开启" : "S3 备份加密已关闭；历史加密备份仍可使用原密钥恢复");
     }
@@ -4084,11 +4086,33 @@ function downloadS3BackupEncryptionKey() {
   toast("备份加密密钥文件已下载");
 }
 
-function confirmS3BackupEncryptionKeySaved() {
-  $("#s3-backup-key-value").value = "";
-  $("#s3-backup-key-dialog").close();
-  $("#s3-backup-encryption-toggle").focus();
-  toast("S3 备份加密已开启，请妥善保管密钥");
+async function confirmS3BackupEncryptionKeySaved() {
+  const confirmationToken = s3BackupEncryptionConfirmationToken;
+  if (!confirmationToken) return toast("备份加密确认已失效，请刷新后重新开启", "error");
+  const button = $("#s3-backup-key-confirm");
+  button.disabled = true;
+  button.textContent = "正在开启";
+  try {
+    const result = await api("/api/platform/backups/encryption/confirm", {
+      method: "POST",
+      body: { confirmationToken }
+    });
+    s3BackupEncryption = {
+      enabled: result.enabled === true,
+      keyConfiguredAt: result.keyConfiguredAt ?? null
+    };
+    renderS3BackupEncryption();
+    s3BackupEncryptionConfirmationToken = null;
+    $("#s3-backup-key-value").value = "";
+    $("#s3-backup-key-dialog").close();
+    $("#s3-backup-encryption-toggle").focus();
+    toast("S3 备份加密已开启，请妥善保管密钥");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "我已保存";
+  }
 }
 
 function updateS3BackupRootPreview() {
@@ -12260,9 +12284,10 @@ $("#s3-backup-settings-return").addEventListener("click", () => returnToSettings
 $("#s3-backup-encryption-toggle").addEventListener("change", (event) => void changeS3BackupEncryption(event));
 $("#s3-backup-key-copy").addEventListener("click", () => void copyS3BackupEncryptionKey());
 $("#s3-backup-key-download").addEventListener("click", downloadS3BackupEncryptionKey);
-$("#s3-backup-key-confirm").addEventListener("click", confirmS3BackupEncryptionKeySaved);
+$("#s3-backup-key-confirm").addEventListener("click", () => void confirmS3BackupEncryptionKeySaved());
 $("#s3-backup-key-dialog").addEventListener("cancel", (event) => event.preventDefault());
 $("#s3-backup-key-dialog").addEventListener("close", () => {
+  s3BackupEncryptionConfirmationToken = null;
   $("#s3-backup-key-value").value = "";
 });
 $("#s3-backup-add").addEventListener("click", () => openS3BackupTargetDialog());
