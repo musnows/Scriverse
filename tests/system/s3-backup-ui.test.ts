@@ -22,6 +22,18 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain("将整个系统的数据库和图片同步到多个目标");
     expect(page.text).toContain('id="s3-backup-dialog"');
     expect(page.text).toContain("备份范围始终是整个 Scriverse 系统，不按作品拆分");
+    expect(page.text).toContain('id="s3-backup-encryption-toggle"');
+    expect(page.text).toContain('id="s3-backup-encryption-warning"');
+    expect(page.text).toContain("请将所有 S3 目标桶设置为私有桶");
+    expect(page.text).toContain('id="s3-backup-key-dialog"');
+    expect(page.text).toContain('id="s3-backup-key-value"');
+    expect(page.text).toContain('id="s3-backup-key-copy"');
+    expect(page.text).toContain('id="s3-backup-key-download"');
+    expect(page.text).toContain('id="s3-backup-key-confirm"');
+    expect(page.text).toContain("我已保存");
+    expect(page.text).toContain("确认已保存后才会开启加密");
+    expect(page.text).toContain("刷新页面会放弃此次开启，下次可重新生成");
+    expect(page.text).toContain("开启加密不会回写桶内已有的明文图片对象，请继续将所有 S3 桶保持为私有桶");
     expect(page.text).toContain('id="s3-backup-target-dialog"');
     expect(page.text).toContain('id="s3-backup-base-path"');
     expect(page.text).toContain('id="s3-backup-access-key"');
@@ -31,10 +43,20 @@ describe("S3 系统备份界面", () => {
     expect(page.text).toContain('id="s3-backup-retention-count"');
     expect(page.text).toContain('id="s3-backup-run-all"');
     expect(page.text).toContain('id="s3-backup-runs"');
-    expect(page.text).toContain('/styles.css?v=20260811-analysis-task-mention-a11y-v1');
-    expect(page.text).toContain('/app.js?v=20260811-analysis-task-mention-presence-v1');
+    expect(page.text).toContain('/styles.css?v=20260811-analysis-task-mention-presence-backup-v1');
+    expect(page.text).toContain('/app.js?v=20260811-analysis-task-mention-presence-backup-v1');
 
-    expect(application.text).toContain('/s3-backup-ui.js?v=20260804-s3-backup-v1');
+    expect(application.text).toContain('/s3-backup-ui.js?v=20260810-backup-encryption-v1');
+    expect(application.text).toContain('api("/api/platform/backups/encryption")');
+    expect(application.text).toContain('api("/api/platform/backups/encryption/confirm"');
+    expect(application.text).toContain("s3BackupEncryptionConfirmationToken = confirmationToken");
+    expect(application.text).toContain("async function confirmS3BackupEncryptionKeySaved()");
+    expect(application.text).toContain('toast("未开启备份加密，请将 S3 桶设置为私有桶，避免数据泄露", "warning")');
+    expect(application.text).toContain('anchor.download = "scriverse-s3-backup-key.txt"');
+    expect(application.text).toContain('addEventListener("cancel", (event) => event.preventDefault())');
+    expect(application.text).not.toContain('title: "准备开启备份加密"');
+    expect(application.text).toContain('if (restoreToggleFocus && !$("#s3-backup-key-dialog").open) toggle.focus()');
+    expect(application.text).toContain('$("#s3-backup-encryption-toggle").focus()');
     expect(application.text).toContain('api("/api/platform/backups/targets")');
     expect(application.text).toContain('api("/api/platform/backups/runs?limit=100")');
     expect(application.text).toContain('api("/api/platform/backups/run"');
@@ -46,7 +68,11 @@ describe("S3 系统备份界面", () => {
 
     expect(helpers.text).toContain("export function collectS3BackupRunTransitions");
     expect(helpers.text).toContain("export function s3BackupFailureToast");
+    expect(helpers.text).toContain("export function s3BackupEncryptionPresentation");
+    expect(helpers.text).toContain("export function s3BackupEncryptionKeyFile");
     expect(styles.text).toContain(".dialog.s3-backup-dialog { width: min(900px, 94vw); }");
+    expect(styles.text).toContain(".s3-backup-encryption { display: grid;");
+    expect(styles.text).toContain(".dialog.s3-backup-key-dialog { width: min(620px, 94vw); }");
     expect(styles.text).toContain(".dialog.s3-backup-target-dialog { width: min(780px, 94vw); height: min(720px, calc(100dvh - 24px));");
     expect(styles.text).toContain(".s3-backup-target-dialog > form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto;");
     expect(styles.text).toContain(".s3-backup-target-meta { grid-column: 1 / -1;");

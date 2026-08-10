@@ -506,6 +506,12 @@ const s3BackupRunQuerySchema = z.object({
   afterSequence: z.coerce.number().int().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional()
 }).strict();
+const s3BackupEncryptionSchema = z.object({
+  enabled: z.boolean()
+}).strict();
+const s3BackupEncryptionConfirmationSchema = z.object({
+  confirmationToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/u, "备份加密确认令牌格式无效")
+}).strict();
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -2184,6 +2190,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.get("/api/platform/ui-settings", (_request, response) => data(response, store.getPlatformUiSettings()));
   app.patch("/api/platform/ui-settings", (request, response) => {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
+  });
+  app.get("/api/platform/backups/encryption", (_request, response) => {
+    data(response, backups.getEncryptionState());
+  });
+  app.post("/api/platform/backups/encryption", (request, response) => {
+    const input = parse(s3BackupEncryptionSchema, request.body);
+    data(response, backups.setEncryptionEnabled(input.enabled));
+  });
+  app.post("/api/platform/backups/encryption/confirm", (request, response) => {
+    const input = parse(s3BackupEncryptionConfirmationSchema, request.body);
+    data(response, backups.confirmEncryptionEnabled(input.confirmationToken));
   });
   app.get("/api/platform/backups/targets", (_request, response) => data(response, backups.listTargets()));
   app.post("/api/platform/backups/targets", (request, response) => {

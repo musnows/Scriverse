@@ -6,9 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 83;
+export const DATABASE_SCHEMA_VERSION = 84;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3281,6 +3281,35 @@ export class Database {
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (83, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(84)) {
+      this.transaction(() => {
+        // 兼容曾使用更早迁移号创建备份加密表的开发版本，并确保列表索引完整。
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC)");
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_encryption (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          kek_encrypted TEXT,
+          kek_iv TEXT,
+          kek_tag TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(
+            (kek_encrypted IS NULL AND kek_iv IS NULL AND kek_tag IS NULL)
+            OR (kek_encrypted IS NOT NULL AND kek_iv IS NOT NULL AND kek_tag IS NOT NULL)
+          ),
+          CHECK(enabled = 0 OR kek_encrypted IS NOT NULL)
+        )`);
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (84, ?)", new Date().toISOString());
       });
     }
   }

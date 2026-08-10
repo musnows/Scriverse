@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260811-analysis-task-mention-a11y-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260811-analysis-task-mention-presence-backup-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -836,6 +836,17 @@
         <div class="settings-dialog-header-actions"><button id="s3-backup-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="s3-backup-close" class="dialog-close" aria-label="关闭 S3 系统备份" type="button">×</button></div>
       </div>
       <div class="s3-backup-body">
+        <fieldset class="s3-backup-encryption" aria-describedby="s3-backup-encryption-description">
+          <legend>备份加密</legend>
+          <div class="s3-backup-encryption-control">
+            <label><input id="s3-backup-encryption-toggle" type="checkbox"><span><strong>使用端到端加密</strong><small id="s3-backup-encryption-description">开启后，数据库快照、CredentialVault 恢复密钥和新上传图片都会先在本机加密。</small></span></label>
+            <span id="s3-backup-encryption-status" class="s3-backup-status">正在读取状态</span>
+          </div>
+          <div id="s3-backup-encryption-warning" class="s3-backup-encryption-warning hidden" role="note">
+            <strong>当前备份为明文</strong>
+            <p>请将所有 S3 目标桶设置为私有桶，避免数据库、密钥与图片被公开访问。</p>
+          </div>
+        </fieldset>
         <section class="s3-backup-overview" aria-labelledby="s3-backup-overview-title">
           <div><h3 id="s3-backup-overview-title">备份目标</h3><p id="s3-backup-summary">正在读取备份配置……</p></div>
           <div class="s3-backup-overview-actions"><button id="s3-backup-run-all" class="ghost-button" type="button">立即备份已启用目标</button><button id="s3-backup-add" class="primary-button" type="button">新增目标</button></div>
@@ -871,6 +882,16 @@
         </div>
         <div class="dialog-actions"><button id="s3-backup-target-cancel" class="ghost-button" type="button">取消</button><button id="s3-backup-target-save" class="primary-button" type="submit">保存目标</button></div>
       </form>
+    </dialog>
+
+    <dialog id="s3-backup-key-dialog" class="dialog s3-backup-key-dialog" aria-labelledby="s3-backup-key-title" aria-describedby="s3-backup-key-description">
+      <div class="dialog-header"><div><span class="eyebrow">仅显示这一次</span><h2 id="s3-backup-key-title">立即保存备份加密密钥</h2><p id="s3-backup-key-description" class="dialog-header-meta">密钥丢失后，任何人都无法恢复加密备份。请先复制或下载并存放到 Scriverse 设备之外。</p></div></div>
+      <div class="s3-backup-key-body">
+        <div class="s3-backup-encryption-warning" role="alert"><strong>确认已保存后才会开启加密</strong><p>Scriverse 不会在后续设置页面再次展示这把密钥。刷新页面会放弃此次开启，下次可重新生成；关闭已启用的加密不会清除密钥，以便历史备份继续可恢复。开启加密不会回写桶内已有的明文图片对象，请继续将所有 S3 桶保持为私有桶。</p></div>
+        <label>备份加密密钥<textarea id="s3-backup-key-value" rows="3" readonly spellcheck="false" aria-label="备份加密密钥"></textarea></label>
+        <div class="s3-backup-key-actions"><button id="s3-backup-key-copy" class="ghost-button" type="button">复制密钥</button><button id="s3-backup-key-download" class="ghost-button" type="button">下载密钥文件</button></div>
+      </div>
+      <div class="dialog-actions"><button id="s3-backup-key-confirm" class="primary-button" type="button">我已保存</button></div>
     </dialog>
 
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
@@ -1026,6 +1047,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260811-analysis-task-mention-presence-v1"></script>
+    <script type="module" src="/app.js?v=20260811-analysis-task-mention-presence-backup-v1"></script>
   </body>
 </html>

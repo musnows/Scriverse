@@ -105,6 +105,16 @@ describe("数据库版本化迁移", () => {
       "server_response_json"
     ]));
     expect(first.all("PRAGMA index_list(s3_backup_runs)").some((index) => index.name === "idx_s3_backup_runs_started")).toBe(true);
+    expect(first.all("PRAGMA table_info(s3_backup_encryption)").map((column) => column.name)).toEqual([
+      "id",
+      "enabled",
+      "kek_encrypted",
+      "kek_iv",
+      "kek_tag",
+      "created_at",
+      "updated_at"
+    ]);
+    expect(first.get("SELECT COUNT(*) AS count FROM s3_backup_encryption")).toEqual({ count: 0 });
     expect(first.get("SELECT is_dead FROM characters WHERE id = 'character-a'")).toEqual({ is_dead: 0 });
     expect(first.get("SELECT is_extinct FROM races WHERE id = 'race_migration_1'")).toEqual({ is_extinct: 0 });
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
@@ -342,7 +352,7 @@ describe("数据库版本化迁移", () => {
       VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
       DROP TABLE s3_backup_runs;
       DROP TABLE s3_backup_targets;
-      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79, 80, 81, 82, 83);
+      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79, 80, 81, 82, 83, 84);
     `);
     const searchRow = legacy.prepare(
       "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"
@@ -389,7 +399,7 @@ describe("数据库版本化迁移", () => {
       );
       INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
       VALUES (1, 'top-right', '{"characters":25}', 60, '2026-08-09T00:00:00.000Z');
-      DELETE FROM schema_migrations WHERE version IN (78, 79, 80, 81, 82, 83);
+      DELETE FROM schema_migrations WHERE version IN (78, 79, 80, 81, 82, 83, 84);
     `);
     legacy.close();
 
@@ -426,7 +436,7 @@ describe("数据库版本化迁移", () => {
       );
       INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
       VALUES (1, 'top-right', '{"characters":25}', 120, '2026-08-09T00:00:00.000Z');
-      DELETE FROM schema_migrations WHERE version IN (79, 80, 81, 82, 83);
+      DELETE FROM schema_migrations WHERE version IN (79, 80, 81, 82, 83, 84);
     `);
     legacy.close();
 
@@ -657,14 +667,16 @@ describe("数据库版本化迁移", () => {
 
     const legacy = new DatabaseSync(filename);
     legacy.exec(`
+      DROP TABLE s3_backup_encryption;
       DROP TABLE presence_changes;
       DROP TABLE presence_entries;
-      DELETE FROM schema_migrations WHERE version = 83;
+      DELETE FROM schema_migrations WHERE version IN (83, 84);
     `);
     legacy.close();
 
     const migrated = new Database(filename);
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 83")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 84")).toEqual({ count: 1 });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'presence_entries'")).toEqual({ name: "presence_entries" });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'presence_changes'")).toEqual({ name: "presence_changes" });
     expect(migrated.all("PRAGMA index_list(presence_entries)").map((index) => index.name)).toEqual(expect.arrayContaining([
@@ -691,9 +703,10 @@ describe("数据库版本化迁移", () => {
     const invalid = new DatabaseSync(filename);
     invalid.exec(`
       PRAGMA foreign_keys = OFF;
+      DROP TABLE s3_backup_encryption;
       DROP TABLE presence_changes;
       DROP TABLE presence_entries;
-      DELETE FROM schema_migrations WHERE version = 83;
+      DELETE FROM schema_migrations WHERE version IN (83, 84);
       INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, snapshot_json, created_at)
       VALUES ('presence-migration-invalid-work', 'work-missing', 'invalid.txt', 'txt', 0, 0, '{}', '2026-08-10T00:00:00.000Z');
     `);
@@ -702,9 +715,46 @@ describe("数据库版本化迁移", () => {
     expect(() => new Database(filename)).toThrow("数据库外键检查失败：发现 1 条异常记录");
     const inspected = new DatabaseSync(filename);
     expect(inspected.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 83").get()?.count).toBe(0);
+    expect(inspected.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 84").get()?.count).toBe(0);
     expect(inspected.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('presence_entries', 'presence_changes')").get()?.count).toBe(0);
+    expect(inspected.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_encryption'").get()?.count).toBe(0);
     expect(inspected.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
     inspected.close();
+  });
+
+  it("迁移 84 新增备份加密单行表并兼容早期开发数据库", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-backup-encryption-"));
+    roots.push(root);
+    const filename = join(root, "backup-encryption.db");
+    const current = new Database(filename);
+    new Store(current);
+    current.run("DROP TABLE s3_backup_encryption");
+    current.run("DROP INDEX idx_ai_suggestions_work");
+    current.run("DROP INDEX idx_file_versions_work");
+    current.run("DROP INDEX idx_chapter_insights_chapter");
+    current.run("DELETE FROM schema_migrations WHERE version = 84");
+    current.close();
+
+    const migrated = new Database(filename);
+    for (const version of [81, 82, 83, 84]) {
+      expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = ?", version)).toEqual({ count: 1 });
+    }
+    expect(migrated.all("PRAGMA table_info(s3_backup_encryption)").map((column) => column.name)).toEqual([
+      "id",
+      "enabled",
+      "kek_encrypted",
+      "kek_iv",
+      "kek_tag",
+      "created_at",
+      "updated_at"
+    ]);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM s3_backup_encryption")).toEqual({ count: 0 });
+    expect(migrated.all("PRAGMA index_list(ai_suggestions)").some((index) => index.name === "idx_ai_suggestions_work")).toBe(true);
+    expect(migrated.all("PRAGMA index_list(file_versions)").some((index) => index.name === "idx_file_versions_work")).toBe(true);
+    expect(migrated.all("PRAGMA index_list(chapter_insights)").some((index) => index.name === "idx_chapter_insights_chapter")).toBe(true);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 
   it("迁移 53 只重排可重建索引并保留领域数据", () => {
