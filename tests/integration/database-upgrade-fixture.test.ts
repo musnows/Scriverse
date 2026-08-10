@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
+import { Store } from "../../src/store.js";
 
 const roots: string[] = [];
 const fixtureDatabase = fileURLToPath(new URL(
@@ -25,6 +26,7 @@ describe("真实数据库升级夹具", () => {
     expect(readDatabaseSchemaVersion(databasePath)).toBe(72);
     const database = new Database(databasePath);
     try {
+      new Store(database);
       expect(Number(database.get("SELECT MAX(version) AS version FROM schema_migrations")?.version)).toBe(DATABASE_SCHEMA_VERSION);
       expect(Number(database.get("SELECT COUNT(*) AS count FROM works")?.count)).toBeGreaterThan(0);
       expect(database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
@@ -35,6 +37,7 @@ describe("真实数据库升级夹具", () => {
 
     const restartedDatabase = new Database(databasePath);
     try {
+      new Store(restartedDatabase);
       expect(Number(restartedDatabase.get("SELECT MAX(version) AS version FROM schema_migrations")?.version)).toBe(DATABASE_SCHEMA_VERSION);
       expect(restartedDatabase.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
       expect(restartedDatabase.all("PRAGMA foreign_key_check")).toEqual([]);
