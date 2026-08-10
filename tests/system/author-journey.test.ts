@@ -1012,7 +1012,9 @@ describe("作者完整创作流程", () => {
       scope: { type: "chapter", chapterId },
       modelId: model.body.data.id
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，林舟望向逐渐远去的北港。"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"飞船离开北港。"}');
+    expect(streamed.text.indexOf('"delta":"舱门关闭，"')).toBeLessThan(streamed.text.indexOf('"delta":"飞船离开北港。"'));
     expect(streamed.text).toContain("event: complete");
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
