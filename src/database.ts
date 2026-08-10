@@ -6,9 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 84;
+export const DATABASE_SCHEMA_VERSION = 85;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3310,6 +3310,24 @@ export class Database {
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (84, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(85)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(presence_changes)").map((row) => String(row.name)));
+        if (!columns.has("action")) {
+          this.run("ALTER TABLE presence_changes ADD COLUMN action TEXT NOT NULL DEFAULT 'save' CHECK(action IN ('save', 'delete'))");
+        }
+        if (!columns.has("page_deleted")) {
+          this.run("ALTER TABLE presence_changes ADD COLUMN page_deleted INTEGER NOT NULL DEFAULT 0 CHECK(page_deleted IN (0, 1))");
+        }
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (85, ?)", new Date().toISOString());
       });
     }
   }

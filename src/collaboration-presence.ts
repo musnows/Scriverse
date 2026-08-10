@@ -397,6 +397,8 @@ export class CollaborationPresence {
       workId: change.workId,
       pageKey: change.pageKey,
       label: change.label,
+      action: change.action,
+      pageDeleted: change.pageDeleted,
       actorUserId: change.actorUserId,
       actorDisplayName: change.actorDisplayName,
       savedAt: change.savedAt,

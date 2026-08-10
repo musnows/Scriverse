@@ -140,6 +140,32 @@ describe("作品协作者在线状态", () => {
     ]);
   });
 
+  it("同一 clientId 切换账号时隔离历史收件人与节流状态", () => {
+    let now = Date.parse("2026-07-24T10:20:00.000Z");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, 30_000);
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const otherMember = { userId: "other", username: "other", displayName: "其他成员", avatarUrl: null };
+    const actor = { userId: "owner", displayName: "作者" };
+    const page = { kind: "editor" as const, resourceId: "chapter-1" };
+    const pageKey = editorPageKey("chapter-1");
+
+    presence.heartbeat("work-1", "shared-client", writer, page);
+    const firstChange = presence.publishChange("work-1", pageKey, actor);
+
+    now += 1_000;
+    expect(presence.heartbeat("work-1", "shared-client", otherMember, page).recentChanges).toEqual([]);
+    const secondChange = presence.publishChange("work-1", pageKey, actor);
+
+    expect(firstChange).not.toBeNull();
+    expect(secondChange).not.toBeNull();
+    expect(presence.heartbeat("work-1", "shared-client", otherMember, page).recentChanges).toEqual([
+      expect.objectContaining({ id: secondChange?.id })
+    ]);
+    expect(presence.heartbeat("work-1", "shared-client", writer, page).recentChanges).toEqual([
+      expect.objectContaining({ id: firstChange?.id })
+    ]);
+  });
+
   it("允许关闭发布节流", () => {
     const presence = new CollaborationPresence(45_000, Date.now, 120_000, 50, 0);
     const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };

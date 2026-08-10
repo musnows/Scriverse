@@ -26,6 +26,8 @@ type PresenceChangeRow = {
   work_id: unknown;
   page_key: unknown;
   label: unknown;
+  action: unknown;
+  page_deleted: unknown;
   actor_user_id: unknown;
   actor_display_name: unknown;
   saved_at: unknown;
@@ -124,7 +126,7 @@ export class PresenceStore implements CollaborationPresenceStore {
     if (resolvedLimit === 0) return [];
     const changes: PersistedCollaborativeChange[] = [];
     for (const row of this.database.all<PresenceChangeRow>(
-      `SELECT id, work_id, page_key, label, actor_user_id, actor_display_name,
+      `SELECT id, work_id, page_key, label, action, page_deleted, actor_user_id, actor_display_name,
               saved_at, recipient_client_ids_json
        FROM presence_changes
        WHERE saved_at >= ?
@@ -137,6 +139,8 @@ export class PresenceStore implements CollaborationPresenceStore {
       const workId = requiredString(row.work_id);
       const pageKey = requiredString(row.page_key);
       const label = requiredString(row.label);
+      const action = row.action === "delete" ? "delete" : "save";
+      const pageDeleted = Number(row.page_deleted) === 1;
       const actorUserId = requiredString(row.actor_user_id);
       const actorDisplayName = requiredString(row.actor_display_name);
       const savedAt = requiredString(row.saved_at);
@@ -146,6 +150,8 @@ export class PresenceStore implements CollaborationPresenceStore {
         workId,
         pageKey,
         label,
+        action,
+        pageDeleted,
         actorUserId,
         actorDisplayName,
         savedAt,
@@ -190,14 +196,16 @@ export class PresenceStore implements CollaborationPresenceStore {
       for (const change of batch.changes) {
         this.database.run(
           `INSERT INTO presence_changes (
-             id, work_id, page_key, label, actor_user_id, actor_display_name,
+             id, work_id, page_key, label, action, page_deleted, actor_user_id, actor_display_name,
              saved_at, recipient_client_ids_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO NOTHING`,
           change.id,
           change.workId,
           change.pageKey,
           change.label,
+          change.action,
+          change.pageDeleted ? 1 : 0,
           change.actorUserId,
           change.actorDisplayName,
           change.savedAt,
