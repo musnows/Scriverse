@@ -87,6 +87,7 @@ export type CollaborationPresencePersistenceOptions = {
   store: CollaborationPresenceStore;
   flushIntervalMs?: number;
   cleanupIntervalMs?: number;
+  minPublishIntervalMs?: number;
 };
 
 type PresenceEntry = PresenceParticipant & {
@@ -164,8 +165,10 @@ export class CollaborationPresence {
   private readonly changes: ChangeEntry[] = [];
   private readonly dirtyEntryKeys = new Set<string>();
   private readonly pendingChanges = new Map<string, ChangeEntry>();
+  private readonly lastPublishedAtMs = new Map<string, number>();
   private readonly persistenceStore: CollaborationPresenceStore | null;
   private readonly cleanupIntervalMs: number;
+  private readonly minPublishIntervalMs: number;
   private maintenanceTimer: NodeJS.Timeout | null = null;
   private lastCleanupAt: number;
   private closed = false;
@@ -175,8 +178,12 @@ export class CollaborationPresence {
     private readonly now: () => number = Date.now,
     private readonly changeTtlMs = 120_000,
     private readonly maxChanges = 50,
-    persistence?: CollaborationPresencePersistenceOptions
+    persistenceOrMinPublishInterval?: CollaborationPresencePersistenceOptions | number
   ) {
+    const persistence = typeof persistenceOrMinPublishInterval === "number" ? undefined : persistenceOrMinPublishInterval;
+    this.minPublishIntervalMs = typeof persistenceOrMinPublishInterval === "number"
+      ? persistenceOrMinPublishInterval
+      : persistence?.minPublishIntervalMs ?? 30_000;
     this.persistenceStore = persistence?.store ?? null;
     this.cleanupIntervalMs = Math.max(1, persistence?.cleanupIntervalMs ?? 60_000);
     this.lastCleanupAt = this.now();
@@ -222,6 +229,13 @@ export class CollaborationPresence {
   ): CollaborativeChange | null {
     const now = this.now();
     this.prune(now);
+    const publishKey = `${workId}:${pageKey}:${actor.userId}`;
+    const lastPublishedAt = this.lastPublishedAtMs.get(publishKey);
+    if (
+      this.minPublishIntervalMs > 0
+      && lastPublishedAt !== undefined
+      && now - lastPublishedAt < this.minPublishIntervalMs
+    ) return null;
     const recipients = [...this.entries.values()]
       .filter((entry) => (
         entry.workId === workId
@@ -233,6 +247,7 @@ export class CollaborationPresence {
         candidate.userId === recipient.userId && candidate.clientId === recipient.clientId
       )) === index);
     if (recipients.length === 0) return null;
+    if (this.minPublishIntervalMs > 0) this.lastPublishedAtMs.set(publishKey, now);
     const change: ChangeEntry = {
       id: `change-${now}-${randomUUID()}`,
       workId,
@@ -323,6 +338,11 @@ export class CollaborationPresence {
       if (now - entry.lastSeenMs > this.timeoutMs) {
         this.entries.delete(key);
         this.dirtyEntryKeys.delete(key);
+      }
+    }
+    for (const [key, publishedAtMs] of this.lastPublishedAtMs) {
+      if (this.minPublishIntervalMs <= 0 || now - publishedAtMs >= this.minPublishIntervalMs) {
+        this.lastPublishedAtMs.delete(key);
       }
     }
     this.pruneChanges(now);
