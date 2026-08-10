@@ -1615,13 +1615,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 }
 .task-status-badge.is-running .task-status-indicator::after { animation: task-status-running-ripple 1.8s ease-out infinite; }
 .task-status-badge.is-review, .task-status-badge.is-completed { --task-status-color: var(--green); }
-.task-status-badge.is-partial { --task-status-color: var(--accent); }
+.task-status-badge.is-partial, .task-status-badge.is-failed { --task-status-color: var(--accent); }
 .task-status-badge.is-expired { --task-status-color: color-mix(in srgb, var(--muted) 72%, var(--accent)); border-style: dashed; }
 .task-status-badge.is-cancelled, .task-status-badge.is-unknown { --task-status-color: var(--muted); }
 .task-status-badge.is-cancelled .task-status-indicator, .task-status-badge.is-unknown .task-status-indicator { background: transparent; border: 1px solid currentColor; box-shadow: none; }
 .task-status-badge.is-state-change { animation: task-status-enter .42s cubic-bezier(.22, .8, .32, 1) both; }
 .task-status-badge.is-running.is-state-change { animation: task-status-enter .42s cubic-bezier(.22, .8, .32, 1) both, task-status-running-breathe 1.8s ease-in-out .42s infinite; }
-.task-status-badge.is-partial.is-state-change { animation: task-status-attention .46s ease-out both; }
+.task-status-badge.is-partial.is-state-change, .task-status-badge.is-failed.is-state-change { animation: task-status-attention .46s ease-out both; }
 .task-progress-cell { width: 128px; }
 .task-progress { display: grid; grid-template-columns: 36px minmax(58px, 1fr); align-items: center; gap: 8px; min-width: 102px; }
 .task-progress-value { color: var(--ink); font-family: var(--font-latin), monospace; font-size: 11px; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -1629,7 +1629,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-progress-fill { position: relative; display: block; width: var(--task-progress); height: 100%; overflow: hidden; border-radius: inherit; background: var(--muted); transition: width .35s ease; }
 .task-progress.is-running .task-progress-fill { background: var(--task-running); }
 .task-progress.is-review .task-progress-fill, .task-progress.is-completed .task-progress-fill { background: var(--green); }
-.task-progress.is-partial .task-progress-fill { background: var(--accent); }
+.task-progress.is-partial .task-progress-fill, .task-progress.is-failed .task-progress-fill { background: var(--accent); }
 .task-progress.is-running .task-progress-fill::after {
   content: "";
   position: absolute;
@@ -2437,7 +2437,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-composer { position: relative; }
 .ai-mention-menu { position: absolute; z-index: 20; left: 0; right: 0; bottom: calc(100% + 6px); max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 12px 34px rgba(49,42,32,.18); }
 .ai-mention-option { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
-.ai-mention-option:hover, .ai-mention-option:focus-visible { background: var(--paper-deep); }
+.ai-mention-option:hover, .ai-mention-option:focus-visible, .ai-mention-option.is-active { background: var(--paper-deep); }
 .ai-mention-option small { color: var(--accent); font-size: 8px; }
 .ai-mention-option strong { overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .ai-mention-empty { margin: 0; padding: 10px; color: var(--muted); font-size: 10px; text-align: center; }

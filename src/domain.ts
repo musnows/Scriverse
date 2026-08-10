@@ -24,11 +24,34 @@ export const TASK_TYPES = [
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
 
+/** 创建任务 API 允许新建的分析任务类型（运行层已实现对应执行路径）。 */
+export const CREATABLE_ANALYSIS_TASK_TYPES = [
+  "chapter-analysis",
+  "character-extraction",
+  "character-summary",
+  "character-identity-audit",
+  "timeline-analysis",
+  "relationship-analysis",
+  "worldview-analysis",
+  "setting-extraction",
+  "consistency-check",
+  "book-analysis"
+] as const;
+export type CreatableAnalysisTaskType = (typeof CREATABLE_ANALYSIS_TASK_TYPES)[number];
+
+/** 仅可读取的历史分析任务类型：创建 API 不允许新建，运行层保留防御性拒绝。 */
+export const HISTORICAL_ANALYSIS_TASK_TYPES = ["structure", "report-update"] as const;
+
+/** 全量分析任务类型（可新建 + 历史）：单一来源，供运行层白名单与历史任务读取。 */
+export const ANALYSIS_TASK_TYPES = [...CREATABLE_ANALYSIS_TASK_TYPES, ...HISTORICAL_ANALYSIS_TASK_TYPES] as const;
+export type AnalysisTaskType = (typeof ANALYSIS_TASK_TYPES)[number];
+
 export const ANALYSIS_STATUSES = [
   "pending",
   "running",
   "completed",
   "partial",
+  "failed",
   "review",
   "expired",
   "cancelled"

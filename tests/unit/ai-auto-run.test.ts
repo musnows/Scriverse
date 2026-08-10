@@ -39,4 +39,13 @@ describe("AI 分析队列失败策略", () => {
       pauseImmediately: true
     });
   });
+
+  it("对不支持的任务类型直接失败且不重试", () => {
+    const unsupported = new AppError(400, "UNSUPPORTED_TASK_TYPE", "不支持的任务类型：structure");
+    expect(autoRunFailureDisposition(unsupported, 1)).toEqual({
+      retry: false,
+      retryDelayMs: 0,
+      pauseImmediately: false
+    });
+  });
 });

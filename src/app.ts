@@ -16,7 +16,7 @@ import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
-import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
@@ -582,7 +582,8 @@ const contextSchema = z.object({
   includeSettingInfo: z.boolean().optional()
 });
 
-const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
+/** 创建任务 API 的分析类型校验：仅允许可新建类型，历史类型在运行层保留防御性拒绝。 */
+export const creatableAnalysisTaskTypeSchema = z.enum(CREATABLE_ANALYSIS_TASK_TYPES);
 const relationshipSourceRefSchema = z.object({
   sourceType: z.string().trim().min(1).max(50).regex(/^[a-z][a-z-]*$/u),
   sourceId: identifier,
@@ -626,7 +627,7 @@ const relationshipAnalysisScopeSchema = z.object({
 });
 const analysisTaskSchema = z.union([
   z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
-  z.object({ taskType: analysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
+  z.object({ taskType: creatableAnalysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
     if (input.scope?.includeAllSettings !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "includeAllSettings"], message: "包含所有设定仅支持人物关系分析" });
     }

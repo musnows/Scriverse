@@ -268,6 +268,33 @@ describe("分析任务自动运行", () => {
     expect(secondPage.body.data.items).toHaveLength(25);
   });
 
+  it.each(["structure", "report-update", "future-analysis"])("不支持的任务类型 %s 明确失败且自动运行不重试", async (taskType) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => {
+      throw new Error("不支持的任务不应调用 AI 供应商");
+    });
+    const runtime = createTestRuntime(fetchMock);
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "不支持的任务类型测试" });
+    const task = runtime.store.createTask(String(work.id), {
+      taskType,
+      scope: { type: "book" }
+    });
+
+    await expect(runtime.ai.runTask(String(task.id), undefined, undefined, { autoRun: true })).rejects.toMatchObject({
+      status: 400,
+      code: "UNSUPPORTED_TASK_TYPE",
+      message: `不支持的任务类型：${taskType}`
+    });
+    expect(runtime.store.getTask(String(task.id))).toMatchObject({
+      status: "failed",
+      progress: 100,
+      attemptCount: 1,
+      nextAttemptAt: null,
+      failures: [{ message: `不支持的任务类型：${taskType}`, code: "UNSUPPORTED_TASK_TYPE" }]
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("以事务原子认领待执行任务并遵守运行上限", () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);

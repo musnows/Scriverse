@@ -6,7 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 82;
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表。
+export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
+export const DATABASE_SCHEMA_VERSION = 83;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3242,7 +3244,7 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (81, ?)", new Date().toISOString());
       });
     }
-    if (!applied.has(82)) {
+    if (!applied.has(83)) {
       this.transaction(() => {
         this.run(`CREATE TABLE IF NOT EXISTS presence_entries (
           work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -3278,7 +3280,7 @@ export class Database {
         }
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
-        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (82, ?)", new Date().toISOString());
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (83, ?)", new Date().toISOString());
       });
     }
   }
