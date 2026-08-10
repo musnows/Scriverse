@@ -6,8 +6,8 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 由 Store 在实体版本基线迁移完成后写入；后续数据库迁移必须从版本 82 开始。
-export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 81;
+// 版本 81 用于列表查询索引；版本 82 由 Store 在实体版本基线迁移完成后写入，后续迁移从 83 开始。
+export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
 export const DATABASE_SCHEMA_VERSION = ENTITY_VERSION_BASELINE_MIGRATION_VERSION;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
@@ -728,6 +728,8 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_volumes_work ON volumes(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_chapters_work ON chapters(work_id, volume_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_versions_chapter ON chapter_versions(chapter_id, version_no DESC);
+      CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC);
+      CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_settings_work ON settings(work_id, category);
       CREATE INDEX IF NOT EXISTS idx_drafts_work ON drafts(work_id, draft_type, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_characters_work ON characters(work_id, name);
@@ -738,6 +740,7 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_character_merges_work ON character_merges(work_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_tasks_work ON analysis_tasks(work_id, status);
       CREATE INDEX IF NOT EXISTS idx_calls_work ON ai_calls(work_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_work_created ON audit_logs(work_id, created_at DESC);
@@ -3226,6 +3229,20 @@ export class Database {
       }
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(81)) {
+      this.transaction(() => {
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC)");
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (81, ?)", new Date().toISOString());
+      });
     }
   }
 

@@ -149,6 +149,26 @@ describe("作品工作台按需加载", () => {
     expect(renderReviewsSource).toContain('`/api/works/${state.work.id}/characters?includeMerged=1`');
   });
 
+  it("审核状态按钮在提交期间禁用并向用户反馈失败", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const renderReviewsSource = application.slice(
+      application.indexOf("async function renderReviews("),
+      application.indexOf("async function renderTasks(")
+    );
+    const statusHandlerSource = renderReviewsSource.slice(
+      renderReviewsSource.indexOf('querySelectorAll("[data-review-id]")'),
+      renderReviewsSource.indexOf('querySelectorAll("[data-merge-review]")')
+    );
+
+    expect(statusHandlerSource).toContain("button.disabled = true;");
+    expect(statusHandlerSource).toContain("try {");
+    expect(statusHandlerSource).toContain('await api(`/api/reviews/${button.dataset.reviewId}`');
+    expect(statusHandlerSource).toContain("await renderReviews(pageResult.page);");
+    expect(statusHandlerSource).toContain("} catch (error) {");
+    expect(statusHandlerSource).toContain('toast(error.message, "error");');
+    expect(statusHandlerSource).toContain("button.disabled = false;");
+  });
+
   it("角色分页不覆盖跨模块全量引用缓存", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const renderCharactersSource = application.slice(
