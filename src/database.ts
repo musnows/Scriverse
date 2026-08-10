@@ -6,7 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 82;
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表。
+export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
+export const DATABASE_SCHEMA_VERSION = 84;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3242,9 +3244,48 @@ export class Database {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (81, ?)", new Date().toISOString());
       });
     }
-    if (!applied.has(82)) {
+    if (!applied.has(83)) {
       this.transaction(() => {
-        // 兼容曾使用版本 81 创建备份加密表的开发版本，确保列表索引不会因版本号碰撞缺失。
+        this.run(`CREATE TABLE IF NOT EXISTS presence_entries (
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          client_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          avatar_url TEXT,
+          page_kind TEXT NOT NULL,
+          page_module TEXT,
+          page_resource_id TEXT,
+          last_seen_at TEXT NOT NULL,
+          PRIMARY KEY(work_id, client_id)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_entries_work ON presence_entries(work_id, last_seen_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_entries_last_seen ON presence_entries(last_seen_at)");
+        this.run(`CREATE TABLE IF NOT EXISTS presence_changes (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          page_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          actor_user_id TEXT NOT NULL,
+          actor_display_name TEXT NOT NULL,
+          saved_at TEXT NOT NULL,
+          recipient_client_ids_json TEXT NOT NULL DEFAULT '[]'
+            CHECK(json_valid(recipient_client_ids_json) AND json_type(recipient_client_ids_json) = 'array')
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_changes_work ON presence_changes(work_id, page_key, saved_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_changes_saved_at ON presence_changes(saved_at)");
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (83, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(84)) {
+      this.transaction(() => {
+        // 兼容曾使用更早迁移号创建备份加密表的开发版本，并确保列表索引完整。
         this.run("CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC)");
         this.run("CREATE INDEX IF NOT EXISTS idx_file_versions_work ON file_versions(work_id, created_at DESC, id DESC)");
         this.run("CREATE INDEX IF NOT EXISTS idx_chapter_insights_chapter ON chapter_insights(chapter_id, chapter_version DESC, created_at DESC)");
@@ -3268,7 +3309,7 @@ export class Database {
         }
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
-        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (82, ?)", new Date().toISOString());
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (84, ?)", new Date().toISOString());
       });
     }
   }

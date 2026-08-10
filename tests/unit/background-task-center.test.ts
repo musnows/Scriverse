@@ -38,6 +38,15 @@ describe("全局后台任务中心", () => {
     expect(unchanged.transitions).toEqual([]);
   });
 
+  it("把明确失败识别为终态变化", () => {
+    const initial = collectBackgroundTaskTransitions(new Map([["failed-task", "running"]]), [
+      { id: "failed-task", status: "failed" }
+    ], true);
+    expect(initial.transitions).toEqual([
+      expect.objectContaining({ previousStatus: "running", status: "failed" })
+    ]);
+  });
+
   it("活动任务或打开弹窗时采用更短轮询间隔", () => {
     expect(backgroundTaskPollDelay(1, false)).toBe(5_000);
     expect(backgroundTaskPollDelay(0, true)).toBe(5_000);
