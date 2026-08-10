@@ -49,6 +49,7 @@ import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
   resolveTimelineActiveTrackId,
@@ -1004,6 +1005,8 @@ const moduleListPages = {
 };
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
+const settingFilters = { keyword: "", category: "", lockState: "all" };
+let settingFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
 let settingEditorItem = null;
@@ -5903,6 +5906,17 @@ function bindRaceTreeExpandToggle() {
   });
 }
 
+function mountSettingFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="setting-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="setting-filter-toggle" aria-label="筛选设定" aria-controls="setting-filter-panel" aria-expanded="${settingFiltersPanelOpen}" title="筛选设定"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  const toggle = $("#module-header-actions").querySelector('[data-module-header-action="setting-filter-toggle"]');
+  toggle?.addEventListener("click", () => {
+    settingFiltersPanelOpen = !settingFiltersPanelOpen;
+    $("#setting-filter-panel")?.classList.toggle("hidden", !settingFiltersPanelOpen);
+    toggle.setAttribute("aria-expanded", String(settingFiltersPanelOpen));
+  });
+}
+
 function mountCharacterFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.remove();
   $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="character-filter-toggle" aria-label="筛选角色" aria-controls="character-filter-panel" aria-expanded="${characterFiltersPanelOpen}" title="筛选角色"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
@@ -6260,19 +6274,75 @@ function entityLifecycleBadge(active, label) {
 async function renderSettings(page = moduleListPages.settings) {
   const records = await moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`);
   state.settings = records;
-  mountModuleCount(records.length);
-  const pageResult = paginateModuleItems(records, page, "settings");
-  moduleListPages.settings = pageResult.page;
-  const layout = readModuleLayout();
-  if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
-  $("#module-content").innerHTML = records.length
-    ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
-    : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
-  bindModuleLayoutToggle(() => renderSettings(pageResult.page));
-  bindModulePagination("settings", renderSettings);
-  const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
-  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
-  bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
+  const categories = [...new Set([
+    ...records.map((item) => String(item.category ?? "").trim()).filter(Boolean),
+    ...(settingFilters.category ? [settingFilters.category] : [])
+  ])].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const hasSettingFilters = () => Boolean(settingFilters.keyword.trim() || settingFilters.category || settingFilters.lockState !== "all");
+  const filterToolbar = `<section id="setting-filter-panel" class="character-filter-toolbar setting-filter-toolbar${settingFiltersPanelOpen ? "" : " hidden"}" aria-label="设定筛选">
+    <label class="setting-filter-field" for="setting-keyword-filter"><span>按关键词搜索</span><input id="setting-keyword-filter" type="search" value="${esc(settingFilters.keyword)}" placeholder="搜索标题或内容" aria-label="按关键词搜索设定" autocomplete="off"></label>
+    <label class="setting-filter-field" for="setting-category-filter"><span>按分类筛选</span><select id="setting-category-filter" aria-label="按分类筛选设定"><option value="">全部分类</option>${categories.map((category) => `<option value="${esc(category)}" ${settingFilters.category === category ? "selected" : ""}>${esc(category)}</option>`).join("")}</select></label>
+    <label class="setting-filter-field" for="setting-lock-filter"><span>按锁定状态筛选</span><select id="setting-lock-filter" aria-label="按锁定状态筛选设定"><option value="all" ${settingFilters.lockState === "all" ? "selected" : ""}>全部锁定状态</option><option value="locked" ${settingFilters.lockState === "locked" ? "selected" : ""}>仅已锁定</option><option value="unlocked" ${settingFilters.lockState === "unlocked" ? "selected" : ""}>仅未锁定</option></select></label>
+    <div class="character-filter-toolbar-actions"><span id="setting-filter-result-count" class="character-filter-result-count${hasSettingFilters() ? "" : " hidden"}" role="status" aria-live="polite"></span><button id="clear-setting-filters" class="ghost-button" type="button" ${hasSettingFilters() ? "" : "disabled"}>重置筛选</button></div>
+  </section><div id="setting-filter-results"></div>`;
+  $("#module-content").innerHTML = filterToolbar;
+  mountSettingFilterToggle();
+
+  const renderSettingResults = (requestedPage = moduleListPages.settings) => {
+    const filteredRecords = filterSettings(state.settings, settingFilters);
+    const pageResult = paginateModuleItems(filteredRecords, requestedPage, "settings");
+    moduleListPages.settings = pageResult.page;
+    mountModuleCount(filteredRecords.length);
+    const layout = readModuleLayout();
+    if (filteredRecords.length) mountModuleLayoutToggle(layout, "设定列表样式");
+    else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+    $("#setting-filter-results").innerHTML = filteredRecords.length
+      ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
+      : records.length
+        ? emptyModule("没有符合筛选条件的设定", "可以调整关键词、分类、锁定状态或重置筛选。")
+        : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
+    const filtersActive = hasSettingFilters();
+    const resultCount = $("#setting-filter-result-count");
+    resultCount.textContent = filtersActive ? `筛选后剩余 ${filteredRecords.length} 条设定` : "";
+    resultCount.classList.toggle("hidden", !filtersActive);
+    $("#clear-setting-filters").disabled = !filtersActive;
+    bindModuleLayoutToggle(() => renderSettingResults(pageResult.page));
+    bindModulePagination("settings", renderSettingResults);
+    const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
+    $("#setting-filter-results").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
+    bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
+  };
+
+  $("#setting-keyword-filter").addEventListener("input", (event) => {
+    settingFilters.keyword = event.currentTarget.value;
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#setting-category-filter").addEventListener("change", (event) => {
+    settingFilters.category = event.currentTarget.value;
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#setting-lock-filter").addEventListener("change", (event) => {
+    settingFilters.lockState = ["locked", "unlocked"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#clear-setting-filters").addEventListener("click", () => {
+    settingFilters.keyword = "";
+    settingFilters.category = "";
+    settingFilters.lockState = "all";
+    $("#setting-keyword-filter").value = "";
+    $("#setting-category-filter").value = "";
+    $("#setting-lock-filter").value = "all";
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  renderSettingResults(page);
 }
 
 async function renderCharacters(page = characterListPage) {
