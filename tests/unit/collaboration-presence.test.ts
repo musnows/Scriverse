@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CollaborationPresence,
   editorPageKey,
@@ -6,6 +6,18 @@ import {
   modulePageKey,
   pageLabelForKey
 } from "../../src/collaboration-presence.js";
+import { Database } from "../../src/database.js";
+import { PresenceStore } from "../../src/presence-store.js";
+
+function createPresenceWork(database: Database, workId = "work-1"): void {
+  database.run(
+    "INSERT INTO works (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+    workId,
+    "协作测试作品",
+    "2026-07-24T08:00:00.000Z",
+    "2026-07-24T08:00:00.000Z"
+  );
+}
 
 describe("作品协作者在线状态", () => {
   it("按浏览器标签页记录受控页面并清理过期状态", () => {
@@ -86,5 +98,78 @@ describe("作品协作者在线状态", () => {
     expect(pageLabelForKey("entity-editor:relationship:relationship-1")).toBe("人物关系编辑");
     expect(pageLabelForKey("module:outlines")).toBe("大纲与伏笔");
     expect(pageLabelForKey("module:comments")).toBe("正文评论");
+  });
+
+  it("合并同一客户端的高频心跳并在批量同步时只写最新状态", () => {
+    let now = Date.parse("2026-07-24T10:00:00.000Z");
+    const database = new Database(":memory:");
+    createPresenceWork(database);
+    const store = new PresenceStore(database);
+    const flush = vi.spyOn(store, "flush");
+    const presence = new CollaborationPresence(45_000, () => now, 120_000, 50, {
+      store,
+      flushIntervalMs: 1_000_000
+    });
+    try {
+      const user = { userId: "owner", username: "owner", displayName: "作者", avatarUrl: null };
+      presence.heartbeat("work-1", "client-owner", user, { kind: "welcome" });
+      now += 1_000;
+      presence.heartbeat("work-1", "client-owner", user, { kind: "module", module: "timeline" });
+
+      expect(flush).not.toHaveBeenCalled();
+      presence.flush();
+
+      expect(flush).toHaveBeenCalledTimes(1);
+      expect(flush.mock.calls[0]?.[0].entries).toEqual([
+        expect.objectContaining({
+          clientId: "client-owner",
+          page: { kind: "module", module: "timeline" },
+          lastSeenAt: "2026-07-24T10:00:01.000Z"
+        })
+      ]);
+      expect(database.get("SELECT page_kind, page_module FROM presence_entries WHERE client_id = 'client-owner'")).toEqual({
+        page_kind: "module",
+        page_module: "timeline"
+      });
+    } finally {
+      presence.close();
+      database.close();
+    }
+  });
+
+  it("从持久层恢复在线状态与定向变更并保证重启后的变更 ID 唯一", () => {
+    const now = Date.parse("2026-07-24T11:00:00.000Z");
+    const database = new Database(":memory:");
+    createPresenceWork(database);
+    const store = new PresenceStore(database);
+    const owner = { userId: "owner", username: "owner", displayName: "作者", avatarUrl: null };
+    const writer = { userId: "writer", username: "writer", displayName: "协作者", avatarUrl: null };
+    const page = { kind: "entity-editor", module: "relationship", resourceId: "relationship-1" } as const;
+    const pageKey = entityEditorPageKey("relationship", "relationship-1");
+    const first = new CollaborationPresence(45_000, () => now, 120_000, 50, { store, flushIntervalMs: 1_000_000 });
+    let second: CollaborationPresence | null = null;
+    try {
+      first.heartbeat("work-1", "client-owner", owner, page);
+      first.heartbeat("work-1", "client-writer", writer, page);
+      const firstChange = first.publishChange("work-1", pageKey, owner);
+      expect(firstChange).not.toBeNull();
+      first.close();
+
+      second = new CollaborationPresence(45_000, () => now, 120_000, 50, { store, flushIntervalMs: 1_000_000 });
+      const restored = second.heartbeat("work-1", "client-writer", writer, page);
+      expect(restored.participants).toEqual(expect.arrayContaining([
+        expect.objectContaining({ clientId: "client-owner", page: { key: pageKey, label: "人物关系编辑" } }),
+        expect.objectContaining({ clientId: "client-writer", page: { key: pageKey, label: "人物关系编辑" } })
+      ]));
+      expect(restored.recentChanges).toEqual([expect.objectContaining({ id: firstChange?.id })]);
+
+      const secondChange = second.publishChange("work-1", pageKey, owner);
+      expect(secondChange).not.toBeNull();
+      expect(secondChange?.id).not.toBe(firstChange?.id);
+    } finally {
+      second?.close();
+      first.close();
+      database.close();
+    }
   });
 });

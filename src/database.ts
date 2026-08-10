@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 79;
+export const DATABASE_SCHEMA_VERSION = 80;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3204,6 +3204,45 @@ export class Database {
         this.run("DROP TABLE platform_ui_settings");
         this.run("ALTER TABLE platform_ui_settings_v79 RENAME TO platform_ui_settings");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (79, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(80)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS presence_entries (
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          client_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          username TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          avatar_url TEXT,
+          page_kind TEXT NOT NULL,
+          page_module TEXT,
+          page_resource_id TEXT,
+          last_seen_at TEXT NOT NULL,
+          PRIMARY KEY(work_id, client_id)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_entries_work ON presence_entries(work_id, last_seen_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_entries_last_seen ON presence_entries(last_seen_at)");
+        this.run(`CREATE TABLE IF NOT EXISTS presence_changes (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          page_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          actor_user_id TEXT NOT NULL,
+          actor_display_name TEXT NOT NULL,
+          saved_at TEXT NOT NULL,
+          recipient_client_ids_json TEXT NOT NULL DEFAULT '[]'
+            CHECK(json_valid(recipient_client_ids_json) AND json_type(recipient_client_ids_json) = 'array')
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_changes_work ON presence_changes(work_id, page_key, saved_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_presence_changes_saved_at ON presence_changes(saved_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (80, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

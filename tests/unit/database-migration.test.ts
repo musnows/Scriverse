@@ -199,6 +199,26 @@ describe("数据库版本化迁移", () => {
       "page_sizes_json",
       "galaxy_frame_rate"
     ]));
+    expect(first.all("PRAGMA table_info(presence_entries)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "work_id",
+      "client_id",
+      "page_kind",
+      "last_seen_at"
+    ]));
+    expect(first.all("PRAGMA index_list(presence_entries)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_presence_entries_work",
+      "idx_presence_entries_last_seen"
+    ]));
+    expect(first.all("PRAGMA table_info(presence_changes)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id",
+      "work_id",
+      "page_key",
+      "recipient_client_ids_json"
+    ]));
+    expect(first.all("PRAGMA index_list(presence_changes)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_presence_changes_work",
+      "idx_presence_changes_saved_at"
+    ]));
     expect(first.get("SELECT chapter_id, content FROM chapter_paragraph_search WHERE chapter_id = 'chapter-old'")).toEqual({ chapter_id: "chapter-old", content: "旧正文" });
     expect(first.all("PRAGMA index_list(chapter_paragraph_short_terms)").some(
       (index) => index.name === "idx_chapter_paragraph_short_terms_paragraph"

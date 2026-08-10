@@ -1,3 +1,12 @@
+import { randomUUID } from "node:crypto";
+import { logger, sanitizeError } from "./logger.js";
+
+/**
+ * 协作状态以内存作为单进程热路径，并按周期批量同步到 SQLite。
+ * SQLite 让计划内重启可以恢复状态，也让多进程在各自同步周期后最终可见；它不是实时消息总线，
+ * 因此跨进程可见性会有至多一个同步周期的延迟，异常退出也可能丢失尚未同步的瞬时状态。
+ * Scriverse 以本地优先、单实例部署为主，当前不为亚秒级跨实例一致性额外引入 Redis 基础设施。
+ */
 export const presencePageKinds = [
   "welcome",
   "editor",
@@ -44,9 +53,41 @@ export type PresenceHeartbeatResult = {
   recentChanges: CollaborativeChange[];
 };
 
+export type PersistedPresenceEntry = PresenceUser & {
+  workId: string;
+  clientId: string;
+  page: PresencePage;
+  lastSeenAt: string;
+};
+
+export type PersistedCollaborativeChange = CollaborativeChange & {
+  workId: string;
+  recipientClientIds: string[];
+};
+
+export type PresencePersistenceBatch = {
+  entries: PersistedPresenceEntry[];
+  changes: PersistedCollaborativeChange[];
+  entryExpiryCutoff?: string;
+  changeExpiryCutoff?: string;
+};
+
+export type CollaborationPresenceStore = {
+  loadEntries(activeSince: string): PersistedPresenceEntry[];
+  loadChanges(activeSince: string, limit: number): PersistedCollaborativeChange[];
+  flush(batch: PresencePersistenceBatch): void;
+};
+
+export type CollaborationPresencePersistenceOptions = {
+  store: CollaborationPresenceStore;
+  flushIntervalMs?: number;
+  cleanupIntervalMs?: number;
+};
+
 type PresenceEntry = PresenceParticipant & {
   workId: string;
   lastSeenMs: number;
+  persistedPage: PresencePage;
 };
 
 type ChangeEntry = CollaborativeChange & {
@@ -116,27 +157,52 @@ export function pageLabelForKey(pageKey: string): string {
 export class CollaborationPresence {
   private readonly entries = new Map<string, PresenceEntry>();
   private readonly changes: ChangeEntry[] = [];
-  private changeSequence = 0;
+  private readonly dirtyEntryKeys = new Set<string>();
+  private readonly pendingChanges = new Map<string, ChangeEntry>();
+  private readonly persistenceStore: CollaborationPresenceStore | null;
+  private readonly cleanupIntervalMs: number;
+  private maintenanceTimer: NodeJS.Timeout | null = null;
+  private lastCleanupAt: number;
+  private closed = false;
 
   constructor(
     private readonly timeoutMs = 45_000,
     private readonly now: () => number = Date.now,
     private readonly changeTtlMs = 120_000,
-    private readonly maxChanges = 50
-  ) {}
+    private readonly maxChanges = 50,
+    persistence?: CollaborationPresencePersistenceOptions
+  ) {
+    this.persistenceStore = persistence?.store ?? null;
+    this.cleanupIntervalMs = Math.max(1, persistence?.cleanupIntervalMs ?? 60_000);
+    this.lastCleanupAt = this.now();
+    if (!this.persistenceStore) return;
+    this.restoreFromStore(this.lastCleanupAt);
+    const flushIntervalMs = Math.max(1, persistence?.flushIntervalMs ?? 5_000);
+    this.maintenanceTimer = setInterval(() => {
+      try {
+        this.flush();
+      } catch (error) {
+        logger.warn("collaboration.presence_flush_failed", { error: sanitizeError(error) });
+      }
+    }, flushIntervalMs);
+    this.maintenanceTimer.unref();
+  }
 
   heartbeat(workId: string, clientId: string, user: PresenceUser, page: PresencePage): PresenceHeartbeatResult {
     const now = this.now();
     this.prune(now);
     const normalized = normalizedPage(page);
-    this.entries.set(`${workId}:${clientId}`, {
+    const entryKey = `${workId}:${clientId}`;
+    this.entries.set(entryKey, {
       workId,
       clientId,
       ...user,
       page: normalized,
       lastSeenAt: new Date(now).toISOString(),
-      lastSeenMs: now
+      lastSeenMs: now,
+      persistedPage: { ...page }
     });
+    this.dirtyEntryKeys.add(entryKey);
     return {
       participants: this.list(workId, now),
       recentChanges: this.listChanges(workId, normalized.key, clientId, now)
@@ -159,9 +225,8 @@ export class CollaborationPresence {
       ))
       .map((entry) => entry.clientId))];
     if (recipientClientIds.length === 0) return null;
-    this.changeSequence += 1;
     const change: ChangeEntry = {
-      id: `change-${now}-${this.changeSequence}`,
+      id: `change-${now}-${randomUUID()}`,
       workId,
       pageKey,
       label,
@@ -172,6 +237,7 @@ export class CollaborationPresence {
       recipientClientIds
     };
     this.changes.push(change);
+    this.pendingChanges.set(change.id, change);
     while (this.changes.length > this.maxChanges) this.changes.shift();
     return {
       id: change.id,
@@ -195,17 +261,57 @@ export class CollaborationPresence {
       .map(({ workId: _workId, savedAtMs: _savedAtMs, recipientClientIds: _recipientClientIds, ...change }) => change);
   }
 
+  flush(forceCleanup = false): void {
+    if (!this.persistenceStore) return;
+    const now = this.now();
+    this.prune(now);
+    const dirtyKeys = [...this.dirtyEntryKeys];
+    const pendingChangeIds = [...this.pendingChanges.keys()];
+    const shouldCleanup = forceCleanup || now - this.lastCleanupAt >= this.cleanupIntervalMs;
+    this.persistenceStore.flush({
+      entries: dirtyKeys.flatMap((key) => {
+        const entry = this.entries.get(key);
+        return entry ? [this.persistedEntry(entry)] : [];
+      }),
+      changes: pendingChangeIds.flatMap((id) => {
+        const change = this.pendingChanges.get(id);
+        return change ? [this.persistedChange(change)] : [];
+      }),
+      ...(shouldCleanup ? {
+        entryExpiryCutoff: new Date(now - this.timeoutMs).toISOString(),
+        changeExpiryCutoff: new Date(now - this.changeTtlMs).toISOString()
+      } : {})
+    });
+    for (const key of dirtyKeys) this.dirtyEntryKeys.delete(key);
+    for (const id of pendingChangeIds) this.pendingChanges.delete(id);
+    if (shouldCleanup) this.lastCleanupAt = now;
+    this.restoreFromStore(now);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = null;
+    }
+    this.flush(true);
+    this.closed = true;
+  }
+
   private list(workId: string, now: number): PresenceParticipant[] {
     this.prune(now);
     return [...this.entries.values()]
       .filter((entry) => entry.workId === workId)
       .sort((left, right) => right.lastSeenMs - left.lastSeenMs || left.displayName.localeCompare(right.displayName, "zh-CN"))
-      .map(({ workId: _workId, lastSeenMs: _lastSeenMs, ...participant }) => participant);
+      .map(({ workId: _workId, lastSeenMs: _lastSeenMs, persistedPage: _persistedPage, ...participant }) => participant);
   }
 
   private prune(now: number): void {
     for (const [key, entry] of this.entries) {
-      if (now - entry.lastSeenMs > this.timeoutMs) this.entries.delete(key);
+      if (now - entry.lastSeenMs > this.timeoutMs) {
+        this.entries.delete(key);
+        this.dirtyEntryKeys.delete(key);
+      }
     }
     this.pruneChanges(now);
   }
@@ -216,5 +322,72 @@ export class CollaborationPresence {
       if (!oldest || now - oldest.savedAtMs <= this.changeTtlMs) break;
       this.changes.shift();
     }
+  }
+
+  private persistedEntry(entry: PresenceEntry): PersistedPresenceEntry {
+    return {
+      workId: entry.workId,
+      clientId: entry.clientId,
+      userId: entry.userId,
+      username: entry.username,
+      displayName: entry.displayName,
+      avatarUrl: entry.avatarUrl,
+      page: { ...entry.persistedPage },
+      lastSeenAt: entry.lastSeenAt
+    };
+  }
+
+  private persistedChange(change: ChangeEntry): PersistedCollaborativeChange {
+    return {
+      id: change.id,
+      workId: change.workId,
+      pageKey: change.pageKey,
+      label: change.label,
+      actorUserId: change.actorUserId,
+      actorDisplayName: change.actorDisplayName,
+      savedAt: change.savedAt,
+      recipientClientIds: [...change.recipientClientIds]
+    };
+  }
+
+  private restoreFromStore(now: number): void {
+    if (!this.persistenceStore) return;
+    const activeEntries = this.persistenceStore.loadEntries(new Date(now - this.timeoutMs).toISOString());
+    for (const persisted of activeEntries) {
+      const lastSeenMs = Date.parse(persisted.lastSeenAt);
+      if (!Number.isFinite(lastSeenMs) || now - lastSeenMs > this.timeoutMs) continue;
+      const key = `${persisted.workId}:${persisted.clientId}`;
+      const current = this.entries.get(key);
+      if (current && current.lastSeenMs >= lastSeenMs) continue;
+      this.entries.set(key, {
+        workId: persisted.workId,
+        clientId: persisted.clientId,
+        userId: persisted.userId,
+        username: persisted.username,
+        displayName: persisted.displayName,
+        avatarUrl: persisted.avatarUrl,
+        page: normalizedPage(persisted.page),
+        lastSeenAt: persisted.lastSeenAt,
+        lastSeenMs,
+        persistedPage: { ...persisted.page }
+      });
+      this.dirtyEntryKeys.delete(key);
+    }
+
+    const knownChangeIds = new Set(this.changes.map((change) => change.id));
+    for (const persisted of this.persistenceStore.loadChanges(new Date(now - this.changeTtlMs).toISOString(), this.maxChanges)) {
+      if (knownChangeIds.has(persisted.id)) continue;
+      const savedAtMs = Date.parse(persisted.savedAt);
+      if (!Number.isFinite(savedAtMs) || now - savedAtMs > this.changeTtlMs) continue;
+      this.changes.push({
+        ...persisted,
+        savedAtMs,
+        recipientClientIds: [...new Set(persisted.recipientClientIds)]
+      });
+      knownChangeIds.add(persisted.id);
+    }
+    this.changes.sort((left, right) => left.savedAtMs - right.savedAtMs || left.id.localeCompare(right.id));
+    while (this.changes.length > this.maxChanges) this.changes.shift();
+    this.prune(now);
   }
 }

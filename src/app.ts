@@ -40,6 +40,7 @@ import {
   entityEditorPageKey,
   presencePageKinds
 } from "./collaboration-presence.js";
+import { PresenceStore } from "./presence-store.js";
 import {
   analysisTaskReadModules,
   clearSessionCookie,
@@ -1014,7 +1015,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
-  const collaborationPresence = new CollaborationPresence();
+  const collaborationPresence = new CollaborationPresence(
+    45_000,
+    Date.now,
+    120_000,
+    50,
+    { store: new PresenceStore(database) }
+  );
   const publishRelationshipChange = (workId: string, relationshipId: string): void => {
     const actor = currentRequestActor();
     if (!actor || !workId || !relationshipId) return;
@@ -2729,6 +2736,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     logger.info("runtime.closing");
     backups.dispose();
     ai.dispose();
+    collaborationPresence.close();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
     logger.info("runtime.closed");
