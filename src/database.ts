@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 79;
+export const DATABASE_SCHEMA_VERSION = 80;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3204,6 +3204,31 @@ export class Database {
         this.run("DROP TABLE platform_ui_settings");
         this.run("ALTER TABLE platform_ui_settings_v79 RENAME TO platform_ui_settings");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (79, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(80)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_encryption (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0, 1)),
+          kek_encrypted TEXT,
+          kek_iv TEXT,
+          kek_tag TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          CHECK(
+            (kek_encrypted IS NULL AND kek_iv IS NULL AND kek_tag IS NULL)
+            OR (kek_encrypted IS NOT NULL AND kek_iv IS NOT NULL AND kek_tag IS NOT NULL)
+          ),
+          CHECK(enabled = 0 OR kek_encrypted IS NOT NULL)
+        )`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (80, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

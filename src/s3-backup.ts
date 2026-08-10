@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   DeleteObjectsCommand,
   HeadObjectCommand,
@@ -106,6 +106,15 @@ export type S3BackupManagerOptions = {
 export type S3BackupQueueReceipt = {
   acceptedTargetIds: string[];
   skippedTargetIds: string[];
+};
+
+export type S3BackupEncryptionState = {
+  enabled: boolean;
+  keyConfiguredAt: string | null;
+};
+
+export type S3BackupEncryptionUpdate = S3BackupEncryptionState & {
+  key?: string;
 };
 
 type RuntimeTarget = S3BackupTarget & {
@@ -321,6 +330,96 @@ export class S3BackupManager {
 
   getTarget(targetId: string): S3BackupTarget {
     return this.mapTarget(this.requireTargetRow(targetId));
+  }
+
+  getEncryptionState(): S3BackupEncryptionState {
+    const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+    if (!row) return { enabled: false, keyConfiguredAt: null };
+    const keyConfigured = this.hasBackupEncryptionKey(row);
+    if (Number(row.enabled) === 1 && !keyConfigured) {
+      throw new AppError(500, "BACKUP_ENCRYPTION_STATE_INVALID", "S3 备份加密配置缺少密钥");
+    }
+    return {
+      enabled: Number(row.enabled) === 1,
+      keyConfiguredAt: keyConfigured ? requiredString(row, "created_at") : null
+    };
+  }
+
+  setEncryptionEnabled(enabled: boolean): S3BackupEncryptionUpdate {
+    return this.database.transaction(() => {
+      const row = this.database.get("SELECT * FROM s3_backup_encryption WHERE id = 1");
+      const currentEnabled = Number(row?.enabled ?? 0) === 1;
+      const keyConfigured = row ? this.hasBackupEncryptionKey(row) : false;
+      if (currentEnabled && !keyConfigured) {
+        throw new AppError(500, "BACKUP_ENCRYPTION_STATE_INVALID", "S3 备份加密配置缺少密钥");
+      }
+      if (currentEnabled === enabled) {
+        return {
+          enabled,
+          keyConfiguredAt: keyConfigured && row ? requiredString(row, "created_at") : null
+        };
+      }
+
+      const timestamp = this.now().toISOString();
+      if (!enabled) {
+        this.database.run("UPDATE s3_backup_encryption SET enabled = 0, updated_at = ? WHERE id = 1", timestamp);
+        this.store.audit(
+          PLATFORM_AI_WORK_ID,
+          "platform.backup-encryption.disabled",
+          "s3-backup-encryption",
+          "s3-backup-encryption"
+        );
+        return {
+          enabled: false,
+          keyConfiguredAt: keyConfigured && row ? requiredString(row, "created_at") : null
+        };
+      }
+
+      if (row && keyConfigured) {
+        this.database.run("UPDATE s3_backup_encryption SET enabled = 1, updated_at = ? WHERE id = 1", timestamp);
+        this.store.audit(
+          PLATFORM_AI_WORK_ID,
+          "platform.backup-encryption.enabled",
+          "s3-backup-encryption",
+          "s3-backup-encryption",
+          { keyGenerated: false }
+        );
+        return { enabled: true, keyConfiguredAt: requiredString(row, "created_at") };
+      }
+
+      const key = randomBytes(32).toString("base64url");
+      const encrypted = this.vault.encrypt(key);
+      if (row) {
+        this.database.run(
+          `UPDATE s3_backup_encryption SET enabled = 1, kek_encrypted = ?, kek_iv = ?, kek_tag = ?,
+           created_at = ?, updated_at = ? WHERE id = 1`,
+          encrypted.encrypted,
+          encrypted.iv,
+          encrypted.tag,
+          timestamp,
+          timestamp
+        );
+      } else {
+        this.database.run(
+          `INSERT INTO s3_backup_encryption (
+            id, enabled, kek_encrypted, kek_iv, kek_tag, created_at, updated_at
+          ) VALUES (1, 1, ?, ?, ?, ?, ?)`,
+          encrypted.encrypted,
+          encrypted.iv,
+          encrypted.tag,
+          timestamp,
+          timestamp
+        );
+      }
+      this.store.audit(
+        PLATFORM_AI_WORK_ID,
+        "platform.backup-encryption.enabled",
+        "s3-backup-encryption",
+        "s3-backup-encryption",
+        { keyGenerated: true }
+      );
+      return { enabled: true, keyConfiguredAt: timestamp, key };
+    });
   }
 
   createTarget(input: S3BackupTargetInput): S3BackupTarget {
@@ -699,6 +798,12 @@ export class S3BackupManager {
     const row = this.database.get("SELECT * FROM s3_backup_targets WHERE id = ?", targetId);
     if (!row) throw new AppError(404, "BACKUP_TARGET_NOT_FOUND", "S3 备份目标不存在");
     return row;
+  }
+
+  private hasBackupEncryptionKey(row: Row): boolean {
+    return typeof row.kek_encrypted === "string"
+      && typeof row.kek_iv === "string"
+      && typeof row.kek_tag === "string";
   }
 
   private runtimeTarget(row: Row): RuntimeTarget {
