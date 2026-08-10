@@ -11,7 +11,7 @@ describe("AI 分析任务重跑界面", () => {
     ]);
 
     expect(application).toContain("function canRerunAnalysisTask(task)");
-    expect(application).toContain('"review", "completed", "partial", "expired", "cancelled"');
+    expect(application).toContain('"review", "completed", "partial", "failed", "expired", "cancelled"');
     expect(application).not.toContain('data-rerun-task="${esc(item.id)}"');
     expect(application).toContain('data-rerun-task-detail="${esc(task.id)}"');
     expect(application).toContain('data-rerun-task-model="${esc(task.id)}"');

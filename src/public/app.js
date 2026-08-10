@@ -54,7 +54,7 @@ import {
   normalizeTimelineSortDirection,
   timelineTrackColorIndex
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
-import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import { collectS3BackupRunTransitions, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260804-s3-backup-v1";
@@ -248,18 +248,19 @@ function analysisTaskStatusLabel(status) {
     review: "已完成",
     completed: "已完成",
     partial: "部分失败",
+    failed: "失败",
     expired: "已过期",
     cancelled: "已取消"
   })[String(status)] ?? "未知状态";
 }
 
 function canRerunAnalysisTask(task) {
-  return ["review", "completed", "partial", "expired", "cancelled"].includes(String(task?.status ?? ""));
+  return ["review", "completed", "partial", "failed", "expired", "cancelled"].includes(String(task?.status ?? ""));
 }
 
 function normalizedAnalysisTaskStatus(status) {
   const value = String(status);
-  return ["pending", "running", "review", "completed", "partial", "expired", "cancelled"].includes(value)
+  return ["pending", "running", "review", "completed", "partial", "failed", "expired", "cancelled"].includes(value)
     ? value
     : "unknown";
 }
@@ -7576,6 +7577,7 @@ function backgroundProductUpdateMarkup() {
 
 function backgroundTaskTransitionMessage(transition) {
   const label = analysisTaskTypeLabel(transition.task.taskType);
+  if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };
   if (transition.status === "partial") return { message: `${label}部分失败，请打开任务详情查看`, type: "error" };
   if (transition.status === "expired") return { message: `${label}已过期，正文可能已发生变化`, type: "error" };
   if (transition.status === "cancelled") return { message: `${label}已取消`, type: "info" };

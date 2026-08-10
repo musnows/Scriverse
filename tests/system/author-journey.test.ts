@@ -321,9 +321,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260810-review-status-feedback-v1');
-    expect(page.text).toContain('/styles.css?v=20260810-relationship-preview-fullscreen-v1');
-    expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
+expect(page.text).toContain('/app.js?v=20260810-analysis-task-failed-review-status-v1');
+    expect(page.text).toContain('/styles.css?v=20260810-analysis-task-failed-v1');    expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
     expect(application.text).toContain('class="form-field model-multimodal-fields"');
@@ -430,10 +429,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".analysis-type-description");
     expect(page.text).toContain('id="setting-editor-confirm"');
     expect(application.text).toContain('review: "已完成"');
+    expect(application.text).toContain('failed: "失败"');
+    expect(application.text).toContain('/background-task-center.js?v=20260810-analysis-task-failed-v1');
+    expect(application.text).toContain('if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };');
     expect(application.text).not.toContain('review: "待审核"');
     expect(application.text).toContain('"分析已完成"');
     expect(application.text).not.toContain("结果进入审核状态");
     expect(styles.text).toContain("--toast-bg:");
+    expect(styles.text).toContain(".task-status-badge.is-partial, .task-status-badge.is-failed");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
     expect(styles.text).toContain("--relationship-network-surface: #eef2f7");
     expect(styles.text).toContain("--relationship-network-surface: #12121a");

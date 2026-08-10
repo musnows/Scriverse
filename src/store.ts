@@ -7375,7 +7375,7 @@ export class Store {
 
   updateTask(taskId: string, input: { status: string; progress?: number; result?: unknown; failures?: unknown[] }): Record<string, unknown> {
     const current = this.getTask(taskId);
-    const terminal = ["completed", "partial", "review", "expired", "cancelled"];
+    const terminal = ["completed", "partial", "failed", "review", "expired", "cancelled"];
     if (terminal.includes(String(current.status)) && input.status !== current.status) {
       throw new AppError(409, "INVALID_TASK_TRANSITION", "终态任务不能再变更状态");
     }

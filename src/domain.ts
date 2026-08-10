@@ -24,11 +24,28 @@ export const TASK_TYPES = [
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
 
+export const ANALYSIS_TASK_TYPES = [
+  "structure",
+  "chapter-analysis",
+  "character-extraction",
+  "character-summary",
+  "character-identity-audit",
+  "timeline-analysis",
+  "relationship-analysis",
+  "worldview-analysis",
+  "setting-extraction",
+  "consistency-check",
+  "report-update",
+  "book-analysis"
+] as const;
+export type AnalysisTaskType = (typeof ANALYSIS_TASK_TYPES)[number];
+
 export const ANALYSIS_STATUSES = [
   "pending",
   "running",
   "completed",
   "partial",
+  "failed",
   "review",
   "expired",
   "cancelled"

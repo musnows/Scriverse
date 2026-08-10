@@ -16,7 +16,7 @@ import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
-import { DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
@@ -581,7 +581,7 @@ const contextSchema = z.object({
   includeSettingInfo: z.boolean().optional()
 });
 
-const analysisTaskTypeSchema = z.enum(["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis"]);
+export const analysisTaskTypeSchema = z.enum(ANALYSIS_TASK_TYPES);
 const relationshipSourceRefSchema = z.object({
   sourceType: z.string().trim().min(1).max(50).regex(/^[a-z][a-z-]*$/u),
   sourceId: identifier,
