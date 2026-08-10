@@ -28,6 +28,7 @@ describe("实体存续状态界面", () => {
     expect(application.text).toContain('entityLifecycleBadge(item.isExtinct, "已灭绝")');
     expect(application.text).toContain('entityLifecycleBadge(item.isDissolved, "已解散")');
     expect(styles.text).toContain(".entity-lifecycle-badge");
-expect(page.text).toContain('/styles.css?v=20260810-analysis-task-failed-v1');
-    expect(page.text).toContain('/app.js?v=20260810-analysis-task-failed-review-status-v1');  });
+    expect(page.text).toContain('/styles.css?v=20260811-analysis-task-mention-a11y-v1');
+    expect(page.text).toContain('/app.js?v=20260811-analysis-task-mention-a11y-v1');
+  });
 });

@@ -954,6 +954,7 @@ let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 let aiMentionMatch = null;
 let aiMentionRange = null;
+let aiMentionActiveIndex = -1;
 let settingsReturnContext = null;
 let entityEditorType = null;
 let entityEditorDirty = false;
@@ -2064,7 +2065,46 @@ function aiPromptTextBeforeCursor() {
 function hideAiMentionMenu() {
   aiMentionMatch = null;
   aiMentionRange = null;
-  $("#ai-mention-menu").classList.add("hidden");
+  aiMentionActiveIndex = -1;
+  const prompt = $("#ai-prompt");
+  const menu = $("#ai-mention-menu");
+  prompt.setAttribute("aria-expanded", "false");
+  prompt.removeAttribute("aria-activedescendant");
+  menu.querySelectorAll("[role=option]").forEach((option) => {
+    option.classList.remove("is-active");
+    option.setAttribute("aria-selected", "false");
+  });
+  menu.classList.add("hidden");
+}
+
+function setAiMentionActiveOption(nextIndex) {
+  const prompt = $("#ai-prompt");
+  const options = [...$("#ai-mention-menu").querySelectorAll("[role=option]")];
+  if (!options.length) {
+    aiMentionActiveIndex = -1;
+    prompt.removeAttribute("aria-activedescendant");
+    return null;
+  }
+  aiMentionActiveIndex = (nextIndex + options.length) % options.length;
+  let activeOption = null;
+  options.forEach((option, index) => {
+    const active = index === aiMentionActiveIndex;
+    option.classList.toggle("is-active", active);
+    option.setAttribute("aria-selected", String(active));
+    if (active) activeOption = option;
+  });
+  prompt.setAttribute("aria-activedescendant", activeOption.id);
+  activeOption.scrollIntoView({ block: "nearest" });
+  return activeOption;
+}
+
+function moveAiMentionActiveOption(direction) {
+  const optionCount = $("#ai-mention-menu").querySelectorAll("[role=option]").length;
+  if (!optionCount) return null;
+  const nextIndex = aiMentionActiveIndex < 0
+    ? (direction > 0 ? 0 : optionCount - 1)
+    : aiMentionActiveIndex + direction;
+  return setAiMentionActiveOption(nextIndex);
 }
 
 function syncAiReferencesWithPrompt() {
@@ -2093,10 +2133,13 @@ function updateAiMentionMenu() {
   }))) ?? [];
   const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query)
     .filter((item) => item.kind !== "context-settings" || $("#ai-task").value !== "roleplay");
+  aiMentionActiveIndex = -1;
+  prompt.removeAttribute("aria-activedescendant");
   menu.innerHTML = options.length
-    ? options.map((item) => `<button class="ai-mention-option" type="button" role="option" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
+    ? options.map((item, index) => `<button id="ai-mention-option-${index}" class="ai-mention-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
     : '<p class="ai-mention-empty">没有匹配的角色、设定、章节或上下文能力</p>';
   menu.classList.remove("hidden");
+  prompt.setAttribute("aria-expanded", "true");
 }
 
 function selectAiMention(button) {
@@ -12790,10 +12833,25 @@ $("#ai-history-dialog").addEventListener("close", () => {
   $("#ai-history-toggle").setAttribute("aria-expanded", "false");
 });
 $("#ai-prompt").addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !$("#ai-mention-menu").classList.contains("hidden")) {
-    event.preventDefault();
-    hideAiMentionMenu();
-    return;
+  const mentionMenuVisible = !$("#ai-mention-menu").classList.contains("hidden");
+  if (mentionMenuVisible) {
+    if (!event.isComposing && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      if (moveAiMentionActiveOption(event.key === "ArrowDown" ? 1 : -1)) event.preventDefault();
+      return;
+    }
+    if (shouldSendAiPrompt(event)) {
+      const activeOption = $("#ai-mention-menu").querySelector('[role="option"][aria-selected="true"]');
+      if (activeOption) {
+        event.preventDefault();
+        selectAiMention(activeOption);
+        return;
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideAiMentionMenu();
+      return;
+    }
   }
   if (shouldSendAiPrompt(event)) {
     event.preventDefault();
