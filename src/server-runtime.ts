@@ -36,6 +36,7 @@ export const MIN_PRE_MIGRATION_BACKUP_RETENTION = 2;
 export const STARTUP_RETRY_LIMIT_ENV = "SCRIVERSE_STARTUP_RETRY_LIMIT";
 export const DEFAULT_STARTUP_RETRY_LIMIT = 2;
 export const STARTUP_RETRY_STATE_FILENAME = ".startup-retry.json";
+export const SERVER_SHUTDOWN_TIMEOUT_MS = 10_000;
 
 export function isDevelopmentServer(environment: NodeJS.ProcessEnv): boolean {
   return environment.NODE_ENV === "development" || environment.npm_lifecycle_event === "dev";
@@ -237,7 +238,9 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
     const server = runtime.app.listen(options.port, options.host);
     const handleStartupError = (error: Error): void => {
       logger.error("server.start_failed", { host: options.host, port: options.port, error: sanitizeError(error) });
-      runtime.close();
+      void runtime.close().catch((closeError: unknown) => {
+        logger.error("server.runtime_close_failed", { error: sanitizeError(closeError) });
+      });
       rejectStart(error);
     };
     server.once("error", handleStartupError);
@@ -246,27 +249,32 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       const address = server.address();
       if (!address || typeof address === "string") {
         server.close();
-        runtime.close();
+        void runtime.close().catch((closeError: unknown) => {
+          logger.error("server.runtime_close_failed", { error: sanitizeError(closeError) });
+        });
         rejectStart(new Error("Scriverse server did not expose a TCP port"));
         return;
       }
       const port = address.port;
       const displayHost = options.host.includes(":") ? `[${options.host}]` : options.host;
       clearStartupRetryState(options.dataDirectory);
-      let closed = false;
-      const close = async (): Promise<void> => {
-        if (closed) return;
-        closed = true;
-        logger.info("server.stopping", { host: options.host, port });
-        server.closeAllConnections();
-        try {
-          await new Promise<void>((resolveClose, rejectClose) => {
+      let closePromise: Promise<void> | null = null;
+      const close = (): Promise<void> => {
+        if (closePromise) return closePromise;
+        closePromise = (async () => {
+          logger.info("server.stopping", { host: options.host, port });
+          const serverClose = new Promise<void>((resolveClose, rejectClose) => {
             server.close((error) => error ? rejectClose(error) : resolveClose());
           });
-        } finally {
-          runtime.close();
-          logger.info("server.stopped", { host: options.host, port });
-        }
+          server.closeAllConnections();
+          try {
+            await serverClose;
+          } finally {
+            await runtime.close();
+            logger.info("server.stopped", { host: options.host, port });
+          }
+        })();
+        return closePromise;
       };
       resolveStart({
         server,
@@ -289,8 +297,16 @@ export function installServerShutdownHandlers(running: RunningLocalServer): void
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("server.shutdown_signal_received", { signal });
+    const forceExitTimer = setTimeout(() => {
+      logger.error("server.shutdown_timeout", { signal, timeoutMs: SERVER_SHUTDOWN_TIMEOUT_MS });
+      process.exit(1);
+    }, SERVER_SHUTDOWN_TIMEOUT_MS);
+    forceExitTimer.unref();
     void running.close().then(
-      () => { process.exitCode = 0; },
+      () => {
+        clearTimeout(forceExitTimer);
+        process.exitCode = 0;
+      },
       (error: unknown) => {
         logger.error("server.stop_failed", { signal, error: sanitizeError(error) });
         process.exitCode = 1;
