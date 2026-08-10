@@ -21,7 +21,7 @@ describe("设定筛选界面", () => {
     ]);
 
     expect(page.text).toContain('/styles.css?v=20260811-setting-inline-filters-v2');
-    expect(page.text).toContain('/app.js?v=20260810-setting-inline-filters-v1');
+    expect(page.text).toContain('/app.js?v=20260810-setting-filter-focus-v1');
     expect(application.text).toContain('/setting-filters.js?v=20260810-setting-inline-filters-v1');
     expect(application.text).toContain('const settingFilters = { keyword: "", category: "", lockState: "all" };');
     expect(application.text).toContain('aria-label="筛选设定" aria-controls="setting-filter-panel" aria-expanded="${settingFiltersPanelOpen}"');
@@ -34,6 +34,7 @@ describe("设定筛选界面", () => {
     expect(application.text).toContain('moduleListPages.settings = 1;');
     expect(application.text).toContain('filterSettings(state.settings, settingFilters)');
     expect(application.text).toContain('没有符合筛选条件的设定');
+    expect(application.text).toContain('$("#setting-lock-filter").value = "all";\n    settingFiltersPanelOpen = true;\n    moduleListPages.settings = 1;\n    renderSettingResults(1);\n    $("#setting-keyword-filter").focus();');
     expect(filters.text).toContain('export function filterSettings');
     expect(styles.text).toContain('.setting-filter-toolbar { grid-template-columns:');
     expect(styles.text).toContain('.setting-filter-field input, .setting-filter-field select { width: 100%;');

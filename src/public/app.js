@@ -6341,6 +6341,7 @@ async function renderSettings(page = moduleListPages.settings) {
     settingFiltersPanelOpen = true;
     moduleListPages.settings = 1;
     renderSettingResults(1);
+    $("#setting-keyword-filter").focus();
   });
   renderSettingResults(page);
 }
