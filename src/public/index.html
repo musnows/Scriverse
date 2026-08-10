@@ -513,6 +513,7 @@
           <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
           <div class="entity-editor-heading">
             <span id="setting-editor-eyebrow" class="eyebrow">新建设定</span>
+            <span id="setting-editor-version" class="character-version-badge">新档案</span>
             <span id="setting-editor-readonly-badge" class="entity-editor-readonly-badge hidden">只读模式</span>
             <input id="setting-editor-name" class="setting-editor-title-input" name="title" maxlength="200" placeholder="新建设定" aria-label="设定标题">
             <div class="setting-editor-header-fields">
@@ -595,7 +596,7 @@
           <main id="knowledge-editor-fields" class="character-editor-fields"></main>
         </div>
         <footer class="character-editor-actions knowledge-editor-actions">
-          <p id="knowledge-editor-footer-note">保存后返回当前列表。</p>
+          <p id="knowledge-editor-footer-note">保存后继续留在当前页面。</p>
           <div><button id="knowledge-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="knowledge-editor-submit" class="primary-button" type="submit">保存档案</button></div>
         </footer>
       </form>
@@ -1026,6 +1027,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260809-galaxy-size-threshold-v1"></script>
+    <script type="module" src="/app.js?v=20260810-entity-save-feedback-v1"></script>
   </body>
 </html>

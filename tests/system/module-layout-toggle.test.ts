@@ -24,8 +24,8 @@ describe("知识模块布局切换", () => {
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260810-relationship-preview-fullscreen-v1');
-    expect(page.text).toContain('/app.js?v=20260809-galaxy-size-threshold-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260809-galaxy-size-threshold-v1"></script>');
+    expect(page.text).toContain('/app.js?v=20260810-entity-save-feedback-v1');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260810-entity-save-feedback-v1"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -121,7 +121,7 @@ expect(application.text).toContain('/display-labels.js?v=20260809-global-replace
     expect(application.text).toContain('data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
-    expect(application.text).toContain('const changeNote = item ? await inputToast(');
+    expect(application.text).toContain('const changeNote = currentItem ? await inputToast(');
     expect(application.text).toContain('title: "填写版本说明"');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "设定列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "角色列表样式")');
