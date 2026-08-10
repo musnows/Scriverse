@@ -2437,7 +2437,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .prompt-composer { position: relative; }
 .ai-mention-menu { position: absolute; z-index: 20; left: 0; right: 0; bottom: calc(100% + 6px); max-height: 230px; overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 12px 34px rgba(49,42,32,.18); }
 .ai-mention-option { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
-.ai-mention-option:hover, .ai-mention-option:focus-visible { background: var(--paper-deep); }
+.ai-mention-option:hover, .ai-mention-option:focus-visible, .ai-mention-option.is-active { background: var(--paper-deep); }
 .ai-mention-option small { color: var(--accent); font-size: 8px; }
 .ai-mention-option strong { overflow: hidden; font-size: 10px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .ai-mention-empty { margin: 0; padding: 10px; color: var(--muted); font-size: 10px; text-align: center; }

@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260810-relationship-preview-fullscreen-v1">
+<link rel="stylesheet" href="/styles.css?v=20260810-ai-mention-keyboard-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -330,7 +330,7 @@
             <select id="ai-model" aria-label="实际使用模型"></select>
           </div>
           <div class="prompt-composer">
-            <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
+            <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-controls="ai-mention-menu" aria-haspopup="listbox" aria-expanded="false" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
             <div id="ai-mention-menu" class="ai-mention-menu hidden" role="listbox" aria-label="引用角色、设定、章节或上下文能力"></div>
             <div class="prompt-composer-actions">
               <button id="ai-context-meter" class="ai-context-meter is-empty" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="ai-context-popover" aria-live="polite" aria-label="当前上下文用量"><b>—</b></button>
@@ -1026,6 +1026,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260809-galaxy-size-threshold-v1"></script>
+    <script type="module" src="/app.js?v=20260810-ai-mention-keyboard-v1"></script>
   </body>
 </html>
