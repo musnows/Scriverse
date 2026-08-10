@@ -614,8 +614,29 @@ export class S3BackupManager {
     this.schedulerTimer.unref();
   }
 
-  async waitForIdle(): Promise<void> {
-    await this.executionChain;
+  async waitForIdle(timeoutMs?: number): Promise<void> {
+    const executionChain = this.executionChain;
+    if (timeoutMs === undefined) {
+      await executionChain;
+      return;
+    }
+    const normalizedTimeoutMs = Math.floor(timeoutMs);
+    if (!Number.isFinite(timeoutMs) || normalizedTimeoutMs < 1) {
+      throw new RangeError("S3 backup idle timeout must be a positive finite number");
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new AppError(
+        504,
+        "BACKUP_IDLE_TIMEOUT",
+        `等待 S3 备份执行链结束超时（${normalizedTimeoutMs} 毫秒）`
+      )), normalizedTimeoutMs);
+    });
+    try {
+      await Promise.race([executionChain, timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   dispose(): void {

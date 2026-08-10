@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 import { decryptObject, isEncryptedEnvelope } from "../../src/backup-encryption.js";
@@ -57,11 +61,12 @@ class FakeS3Client implements S3ObjectClient {
 
 function testRuntime(options: {
   clientFactory: (connection: S3BackupConnection) => S3ObjectClient;
+  databasePath?: string;
   loggerRecords?: LogRecord[];
   requestTimeoutMs?: number;
 }): Runtime {
   return createRuntime({
-    databasePath: ":memory:",
+    databasePath: options.databasePath ?? ":memory:",
     masterSecret: "s3-execution-test-master-secret-with-enough-length",
     disableUserAuth: true,
     serveUi: false,
@@ -81,9 +86,11 @@ function testRuntime(options: {
 
 describe("S3 数据库与图片备份执行", () => {
   const runtimes: Runtime[] = [];
+  const roots: string[] = [];
 
-  afterEach(() => {
-    for (const runtime of runtimes.splice(0)) runtime.close();
+  afterEach(async () => {
+    for (const runtime of runtimes.splice(0)) await runtime.close();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   });
 
   it("上传时间戳数据库、跳过已有图片并只清理最老数据库", async () => {
@@ -361,5 +368,75 @@ describe("S3 数据库与图片备份执行", () => {
     expect(run.status).toBe("failed");
     expect(run.errorMessage).toContain("上传 CredentialVault 恢复密钥超时");
     expect(closed).toBe(true);
+  });
+
+  it("关闭运行时前限时等待执行中的备份完成并落盘最终状态", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-backup-shutdown-"));
+    roots.push(root);
+    const databasePath = join(root, "novel.db");
+    let releaseUpload = (): void => {
+      throw new Error("Upload gate was not initialized");
+    };
+    const uploadGate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+    let notifyUploadStarted = (): void => {
+      throw new Error("Upload start notifier was not initialized");
+    };
+    const uploadStarted = new Promise<void>((resolve) => {
+      notifyUploadStarted = resolve;
+    });
+    let uploadCount = 0;
+    const client: S3ObjectClient = {
+      objectExists: async () => false,
+      putObject: async () => {
+        uploadCount += 1;
+        if (uploadCount !== 1) return;
+        notifyUploadStarted();
+        await uploadGate;
+      },
+      listObjects: async () => [],
+      deleteObjects: async () => undefined,
+      close: () => undefined
+    };
+    const runtime = testRuntime({ databasePath, clientFactory: () => client });
+    runtimes.push(runtime);
+    const target = runtime.backups.createTarget({
+      name: "关闭等待目标",
+      endpoint: "https://shutdown.example.com",
+      bucket: "backup-bucket",
+      accessKeyId: "access-shutdown",
+      secretAccessKey: "secret-shutdown",
+      enabled: true,
+      backupImages: false
+    });
+    runtime.backups.enqueueTargets([target.id], "manual");
+    await uploadStarted;
+
+    await expect(runtime.backups.waitForIdle(10)).rejects.toMatchObject({ code: "BACKUP_IDLE_TIMEOUT" });
+    expect(runtime.backups.listRuns().items).toEqual([
+      expect.objectContaining({ targetId: target.id, status: "running", finishedAt: null })
+    ]);
+
+    let closeSettled = false;
+    const closePromise = runtime.close().finally(() => {
+      closeSettled = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closeSettled).toBe(false);
+    expect(() => runtime.backups.enqueueTargets([target.id], "manual")).toThrow("S3 备份服务正在停止");
+
+    releaseUpload();
+    await closePromise;
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(database.prepare("SELECT COUNT(*) AS count FROM s3_backup_runs WHERE status = 'running'").get()).toEqual({ count: 0 });
+      expect(database.prepare("SELECT status, finished_at FROM s3_backup_runs WHERE target_id = ?").get(target.id)).toMatchObject({
+        status: "succeeded",
+        finished_at: expect.any(String)
+      });
+    } finally {
+      database.close();
+    }
   });
 });

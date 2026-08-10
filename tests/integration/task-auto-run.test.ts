@@ -89,8 +89,8 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
 describe("分析任务自动运行", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("校验自动运行设置并返回任务范围摘要", async () => {

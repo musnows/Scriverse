@@ -82,8 +82,8 @@ describe("智谱 Anthropic 多轮思考兼容", () => {
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
   });
 
-  afterEach(() => {
-    runtime.close();
+  afterEach(async () => {
+    await runtime.close();
   });
 
   it("在下一轮恢复流式响应中的 thinking 和 signature", async () => {

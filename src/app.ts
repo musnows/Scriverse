@@ -686,8 +686,10 @@ export type Runtime = {
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
-  close: () => void;
+  close: () => Promise<void>;
 };
+
+export const RUNTIME_BACKUP_IDLE_TIMEOUT_MS = 9_000;
 
 function data(response: Response, value: unknown, status = 200): void {
   response.status(status).json({ data: value });
@@ -2735,12 +2737,33 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   backups.startScheduler();
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close: () => {
-    logger.info("runtime.closing");
-    backups.dispose();
-    ai.dispose();
-    database.close();
-    if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
-    logger.info("runtime.closed");
-  } };
+  let closePromise: Promise<void> | null = null;
+  let stopping = false;
+  let closed = false;
+  const close = (): Promise<void> => {
+    if (closed) return Promise.resolve();
+    if (closePromise) return closePromise;
+    if (!stopping) {
+      stopping = true;
+      logger.info("runtime.closing");
+      backups.dispose();
+      ai.dispose();
+    }
+    closePromise = (async () => {
+      try {
+        await backups.waitForIdle(RUNTIME_BACKUP_IDLE_TIMEOUT_MS);
+        database.close();
+        if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
+        closed = true;
+        logger.info("runtime.closed");
+      } catch (error) {
+        logger.error("runtime.close_failed", { error: sanitizeError(error) });
+        throw error;
+      } finally {
+        if (!closed) closePromise = null;
+      }
+    })();
+    return closePromise;
+  };
+  return { app, database, store, ai, backups, auth, attachmentStorage, cleanupAttachments, close };
 }

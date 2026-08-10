@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("全书概要上下文引用", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("默认不引用上下文并保留显式的章节与全书范围", async () => {
