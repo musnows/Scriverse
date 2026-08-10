@@ -6,8 +6,8 @@ import { createTestRuntime } from "../helpers.js";
 describe("Agent 多模态图片工具", () => {
   let runtime: Runtime | undefined;
 
-  afterEach(() => {
-    runtime?.close();
+  afterEach(async () => {
+    await runtime?.close();
     runtime = undefined;
   });
 

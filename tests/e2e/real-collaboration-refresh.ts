@@ -205,7 +205,7 @@ try {
 
     server.closeAllConnections();
     server.close();
-    runtime.close();
+    await runtime.close();
     await rm(isolatedDirectory, { recursive: true, force: true });
     process.exit(0);
   }
@@ -215,7 +215,7 @@ try {
   console.error(error);
   server.closeAllConnections();
   server.close();
-  runtime.close();
+  await runtime.close();
   await rm(isolatedDirectory, { recursive: true, force: true });
   process.exit(1);
 }
@@ -223,7 +223,7 @@ try {
 async function shutdown(): Promise<void> {
   server.closeAllConnections();
   server.close();
-  runtime.close();
+  await runtime.close();
   await rm(isolatedDirectory, { recursive: true, force: true });
   process.exit(0);
 }

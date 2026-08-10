@@ -4,7 +4,9 @@ import { createTestRuntime, seedChapter } from "../helpers.js";
 
 describe("AI 关键词实体注入", () => {
   const runtimes: ReturnType<typeof createTestRuntime>[] = [];
-  afterEach(() => runtimes.splice(0).forEach((runtime) => runtime.close()));
+  afterEach(async () => {
+    for (const runtime of runtimes.splice(0)) await runtime.close();
+  });
 
   it("按主名与别名最长匹配角色，并匹配种族与组织名", async () => {
     const runtime = createTestRuntime();

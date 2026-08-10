@@ -139,8 +139,8 @@ describe("Anthropic Messages 供应商", () => {
     expect(tested.body.data).toMatchObject({ ok: true, availableModels: ["LongCat-2.0"] });
   });
 
-  afterEach(() => {
-    runtime.close();
+  afterEach(async () => {
+    await runtime.close();
   });
 
   it("通过 LongCat Messages 格式完成工具调用与普通响应", async () => {

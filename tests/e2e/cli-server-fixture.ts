@@ -19,13 +19,18 @@ const server = runtime.app.listen(0, "127.0.0.1", () => {
   console.log(JSON.stringify({ baseUrl: `http://127.0.0.1:${address.port}` }));
 });
 
-function shutdown(): void {
-  server.closeAllConnections();
-  server.close(() => {
-    runtime.close();
-    process.exit(0);
+let shuttingDown = false;
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const serverClose = new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
   });
+  server.closeAllConnections();
+  await serverClose;
+  await runtime.close();
+  process.exit(0);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => { void shutdown(); });
+process.on("SIGTERM", () => { void shutdown(); });

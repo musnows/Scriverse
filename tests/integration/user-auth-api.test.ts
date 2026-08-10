@@ -63,9 +63,9 @@ function createUserAuthTestRuntime(allowRegistration = true): Runtime {
   return {
     ...runtime,
     app: authTestServer as unknown as Runtime["app"],
-    close: () => {
+    close: async () => {
       if (activeRuntimeApp === runtime.app) activeRuntimeApp = null;
-      runtime.close();
+      await runtime.close();
     }
   };
 }
@@ -368,7 +368,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       });
       const user = await register(firstRuntime, "restart_user");
       await user.agent.get("/api/auth/session").expect(200);
-      firstRuntime.close();
+      await firstRuntime.close();
       firstRuntime = null;
 
       restartedRuntime = createRuntime({
@@ -392,8 +392,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
         ...captcha
       }).expect(200);
     } finally {
-      restartedRuntime?.close();
-      firstRuntime?.close();
+      await restartedRuntime?.close();
+      await firstRuntime?.close();
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -2252,7 +2252,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
   });
 
   it("未显式开启注册时连首位管理员注册也会被拒绝", async () => {
-    runtime.close();
+    await runtime.close();
     runtime = createUserAuthTestRuntime(false);
     const closedSession = await request(runtime.app).get("/api/auth/session").expect(200);
     expect(closedSession.body.data).toMatchObject({ setupRequired: true, registrationOpen: false });

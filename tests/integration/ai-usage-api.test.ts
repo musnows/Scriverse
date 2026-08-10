@@ -10,9 +10,9 @@ describe("AI Token 用量统计 API", () => {
     runtime = createTestRuntime();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllEnvs();
-    runtime.close();
+    await runtime.close();
   });
 
   it("按项目、作品和本地日期聚合 token 与缓存命中率", async () => {

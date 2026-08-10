@@ -62,7 +62,7 @@ describe("作者完整创作流程", () => {
   });
 
   afterAll(async () => {
-    runtime.close();
+    await runtime.close();
     mockServer.close();
     await once(mockServer, "close");
   });
