@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-size-threshold-v1";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
-import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
+import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
@@ -1994,7 +1994,10 @@ async function ensureAiConversationsLoaded() {
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   const parameters = new URLSearchParams({ page: "1", limit: "100" });
   if (focusMessageId) parameters.set("messageId", String(focusMessageId));
-  const conversation = await api(`/api/ai-conversations/${conversationId}?${parameters}`);
+  const [conversation] = await Promise.all([
+    api(`/api/ai-conversations/${conversationId}?${parameters}`),
+    ensureAiReferencesLoaded()
+  ]);
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
@@ -11483,7 +11486,7 @@ async function streamChat(body) {
           syncAiTaskOptions();
           renderAiRoleplayCharacterSelect();
           renderAiQuickActions();
-          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id);
           clearAiPromptComposer();
           mountAssistantMessage();
         }
@@ -11600,6 +11603,24 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.textContent = "失败";
     failureBadge.setAttribute("aria-label", "消息状态：失败");
     heading.firstElementChild?.append(failureBadge);
+  }
+  const mentionNames = role === "user"
+    ? userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)
+    : [];
+  if (mentionNames.length) {
+    const references = document.createElement("div");
+    references.className = "user-message-mentions";
+    const label = document.createElement("span");
+    label.className = "user-message-mentions-label";
+    label.textContent = "引用角色";
+    references.append(label);
+    for (const name of mentionNames) {
+      const reference = document.createElement("span");
+      reference.className = "user-message-mention";
+      reference.textContent = name;
+      references.append(reference);
+    }
+    message.append(references);
   }
   if (citations.length) {
     const references = document.createElement("div");
