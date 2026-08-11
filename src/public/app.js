@@ -1009,6 +1009,19 @@ const settingFilters = { keyword: "", category: "", lockState: "all" };
 let settingFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
+
+function createEditorDirtyTracker(initialSnapshot = "") {
+  let savedSnapshot = String(initialSnapshot);
+  return {
+    markSaved(snapshot) {
+      savedSnapshot = String(snapshot);
+    },
+    isDirty(snapshot) {
+      return String(snapshot) !== savedSnapshot;
+    }
+  };
+}
+
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -1027,6 +1040,8 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+const settingEditorDirtyTracker = createEditorDirtyTracker();
+const characterSectionEditorDirtyTracker = createEditorDirtyTracker();
 let formDialogVditors = [];
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
@@ -1089,7 +1104,15 @@ async function confirmEntityEditorDiscard(message) {
   });
 }
 
+function isEntityEditorSaving() {
+  return Boolean($("#entity-editor-view").querySelector('[aria-busy="true"]'));
+}
+
 async function closeEntityEditor({ force = false } = {}) {
+  if (isEntityEditorSaving()) {
+    toast("正在保存，请稍候");
+    return false;
+  }
   if (!$("#character-section-editor-view").classList.contains("hidden")) return closeCharacterSectionEditor({ force });
   if (!$("#knowledge-section-editor-view").classList.contains("hidden")) return closeKnowledgeSectionEditor({ force });
   if (!force && !(await confirmEntityEditorDiscard())) return false;
@@ -2690,6 +2713,8 @@ function optimisticVersionForPath(path) {
     if (resourceMatch[1] === "volumes") return find(state.work?.volumes ?? [], resourceId);
     if (resourceMatch[1] === "character-sections") return find(characterEditorSections, resourceId);
     if (resourceMatch[1] === "characters" && characterEditorItem?.id === resourceId) return characterEditorItem.versionNo;
+    if (resourceMatch[1] === "settings" && settingEditorItem?.id === resourceId) return settingEditorItem.versionNo;
+    if (["races", "organizations"].includes(resourceMatch[1]) && knowledgeEditorItem?.id === resourceId) return knowledgeEditorItem.versionNo;
     return find(collection, resourceId);
   }
   const outlineMatch = normalizedPath.match(/^\/api\/chapters\/([^/]+)\/outline$/u);
@@ -3265,6 +3290,51 @@ function toast(message, type = "info") {
       region.hidePopover();
     }
   }, 3600);
+}
+
+async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
+  if (button.disabled) return null;
+  const initialLabel = button.textContent;
+  const initialInert = busyTarget.inert;
+  const activeElement = document.activeElement;
+  let focusTarget = busyTarget.contains(activeElement) ? activeElement : null;
+  let finalLabel = initialLabel;
+  button.disabled = true;
+  try {
+    // prepare 会在首次 await 前同步采集快照；同一事件循环内随即锁定，避免新的输入插入。
+    const preparation = prepare();
+    if (busyTarget.contains(document.activeElement)) focusTarget = document.activeElement;
+    busyTarget.inert = true;
+    busyTarget.setAttribute("aria-busy", "true");
+    const prepared = await preparation;
+    if (prepared === null) return null;
+    button.textContent = "保存中…";
+    toast("正在保存…");
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const result = await save(prepared);
+    finalLabel = result?.buttonLabel ?? finalLabel;
+    toast(result?.message ?? "保存成功");
+    return result;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存失败，请重试", "error");
+    return null;
+  } finally {
+    busyTarget.removeAttribute("aria-busy");
+    busyTarget.inert = initialInert;
+    button.disabled = false;
+    button.textContent = finalLabel;
+    if (!busyTarget.contains(document.activeElement) && focusTarget?.isConnected) {
+      focusTarget.focus({ preventScroll: true });
+    }
+  }
+}
+
+function upsertEntityCollection(items, saved) {
+  const nextItems = Array.isArray(items) ? [...items] : [];
+  const index = nextItems.findIndex((item) => item.id === saved.id);
+  if (index >= 0) nextItems[index] = saved;
+  else nextItems.push(saved);
+  return nextItems;
 }
 
 function persistentToast(message, type = "info") {
@@ -9323,42 +9393,65 @@ async function deleteVolume(item) {
   }
 }
 
+function syncSettingEditorChrome(viewOnly) {
+  const item = settingEditorItem;
+  $("#setting-editor-eyebrow").textContent = viewOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
+  $("#setting-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
+  $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
+  $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
+  const showManagementActions = Boolean(item && !viewOnly);
+  $("#setting-editor-confirm").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
+  $("#setting-editor-deprecate").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
+  $("#setting-editor-history").classList.toggle("hidden", !showManagementActions);
+  $("#setting-editor-delete").classList.toggle("hidden", !showManagementActions);
+}
+
+function settingEditorSnapshot(markdown = null) {
+  const content = markdown ?? settingEditorVditor?.getValue() ?? $("#setting-editor-body").value;
+  return JSON.stringify({
+    title: $("#setting-editor-name").value,
+    category: $("#setting-editor-category").value,
+    content,
+    locked: $("#setting-editor-locked").checked
+  });
+}
+
+function syncSettingEditorDirty(markdown = null) {
+  const currentMarkdown = settingEditorVditor?.getValue() ?? markdown ?? $("#setting-editor-body").value;
+  $("#setting-editor-body").value = currentMarkdown;
+  entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
+}
+
 function openSettingEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   destroyVditorEditor(settingEditorVditor);
   settingEditorVditor = null;
   settingEditorItem = item;
-  $("#setting-editor-eyebrow").textContent = item ? "编辑设定" : "新建设定";
   $("#setting-editor-name").value = item?.title ?? "";
   $("#setting-editor-category").value = item?.category ?? "世界规则";
   $("#setting-editor-locked").checked = Boolean(item?.locked);
   $("#setting-editor-body").value = item?.content ?? "";
-  $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
   const viewOnly = readOnly || !canEditModule("settings");
   $("#setting-editor-form").classList.toggle("is-read-only", viewOnly);
-  $("#setting-editor-eyebrow").textContent = readOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
   $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
-  $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
-  editButton.onclick = () => openSettingEditor(item);
-  const showManagementActions = Boolean(item && !viewOnly);
+  editButton.onclick = () => openSettingEditor(settingEditorItem);
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
-  $("#setting-editor-confirm").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
-  $("#setting-editor-deprecate").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
-  $("#setting-editor-history").classList.toggle("hidden", !showManagementActions);
-  $("#setting-editor-delete").classList.toggle("hidden", !showManagementActions);
+  syncSettingEditorChrome(viewOnly);
   $("#setting-editor-history").onclick = async () => {
-    if (!item) return;
+    const currentItem = settingEditorItem;
+    if (!currentItem) return;
     if (!(await closeEntityEditor())) return;
-    openEntityHistory("setting", item.id, item.title, async () => { await renderSettings(); await loadAiReferences(); });
+    openEntityHistory("setting", currentItem.id, currentItem.title, async () => { await renderSettings(); await loadAiReferences(); });
   };
   $("#setting-editor-delete").onclick = () => {
-    if (!item) return;
+    const currentItem = settingEditorItem;
+    if (!currentItem) return;
     void deleteManagedEntity({
       typeLabel: "设定",
-      item,
+      item: currentItem,
       endpoint: (setting) => `/api/settings/${encodeURIComponent(setting.id)}`,
       refresh: () => closeEntityEditor({ force: true }),
       warning: "这条设定及其版本历史会被删除。"
@@ -9366,11 +9459,12 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   };
   statusButtons.forEach((button) => {
     button.onclick = async () => {
-      if (!item) return;
+      const currentItem = settingEditorItem;
+      if (!currentItem) return;
       button.disabled = true;
       const status = button.id === "setting-editor-confirm" ? "confirmed" : "deprecated";
       try {
-        await api(`/api/settings/${item.id}`, { method: "PATCH", body: { status, changeNote: status === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
+        await api(`/api/settings/${currentItem.id}`, { method: "PATCH", body: { status, changeNote: status === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
         await closeEntityEditor({ force: true });
         await loadAiReferences();
         toast(status === "confirmed" ? "设定候选已确认" : "设定候选已弃用");
@@ -9384,54 +9478,65 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-editor-form").onsubmit = async (event) => {
     event.preventDefault();
     if (readOnly || !canEditModule("settings")) return;
-    const form = new FormData(event.currentTarget);
     const submit = $("#setting-editor-submit");
-    submit.disabled = true;
-    try {
-      const title = String(form.get("title") ?? "").trim();
-      if (!title) {
-        toast("请填写设定标题", "error");
-        $("#setting-editor-name").focus();
-        return;
+    await runEntityEditorSave({
+      busyTarget: event.currentTarget,
+      button: submit,
+      prepare: async () => {
+        const form = new FormData(event.currentTarget);
+        const title = String(form.get("title") ?? "").trim();
+        if (!title) {
+          toast("请填写设定标题", "error");
+          $("#setting-editor-name").focus();
+          return null;
+        }
+        const content = String(form.get("content") ?? "");
+        if (!content.trim()) {
+          toast("请填写设定正文", "error");
+          $("#setting-editor-body").focus();
+          return null;
+        }
+        const currentItem = settingEditorItem;
+        const changeNote = currentItem ? await inputToast("简要说明这次修改，便于以后查看版本历史。可以留空。", {
+          title: "填写版本说明",
+          inputLabel: "版本说明",
+          placeholder: "例如：补充纪元历法限制",
+          confirmLabel: "保存新版本"
+        }) : "";
+        if (changeNote === null || !(await confirmConcurrentSave())) return null;
+        const locked = form.get("locked") === "on";
+        return {
+          currentItem,
+          body: {
+            title,
+            category: String(form.get("category") ?? "世界规则"),
+            content,
+            locked,
+            status: locked ? "confirmed" : (currentItem?.status ?? "draft"),
+            ...(currentItem ? { changeNote } : {})
+          }
+        };
+      },
+      save: async ({ currentItem, body }) => {
+        const saved = await api(currentItem ? `/api/settings/${currentItem.id}` : `/api/works/${state.work.id}/settings`, { method: currentItem ? "PATCH" : "POST", body });
+        await cleanupPendingMarkdownAttachments(body.content);
+        settingEditorItem = saved;
+        state.settings = upsertEntityCollection(state.settings, saved);
+        syncSettingEditorChrome(false);
+        settingEditorDirtyTracker.markSaved(settingEditorSnapshot(body.content));
+        entityEditorDirty = false;
+        replacePageRoute(currentPageRoute());
+        return {
+          buttonLabel: "保存新版本",
+          message: currentItem ? `设定已保存为 v${saved.versionNo}` : `设定已创建为 v${saved.versionNo}`
+        };
       }
-      const content = String(form.get("content") ?? "");
-      if (!content.trim()) {
-        toast("请填写设定正文", "error");
-        $("#setting-editor-body").focus();
-        return;
-      }
-      const changeNote = item ? await inputToast("简要说明这次修改，便于以后查看版本历史。可以留空。", {
-        title: "填写版本说明",
-        inputLabel: "版本说明",
-        placeholder: "例如：补充纪元历法限制",
-        confirmLabel: "保存新版本"
-      }) : "";
-      if (changeNote === null) return;
-      const locked = form.get("locked") === "on";
-      const body = {
-        title,
-        category: String(form.get("category") ?? "世界规则"),
-        content,
-        locked,
-        status: locked ? "confirmed" : (item?.status ?? "draft"),
-        ...(item ? { changeNote } : {})
-      };
-      if (!(await confirmConcurrentSave())) return;
-      await api(item ? `/api/settings/${item.id}` : `/api/works/${state.work.id}/settings`, { method: item ? "PATCH" : "POST", body });
-      await cleanupPendingMarkdownAttachments(body.content);
-      entityEditorDirty = false;
-      await loadAiReferences();
-      await closeEntityEditor({ force: true });
-      toast(item ? "设定新版本已保存" : "设定已创建");
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      submit.disabled = false;
-    }
+    });
   };
   showEntityEditorPage("setting", { readOnly });
+  settingEditorDirtyTracker.markSaved(settingEditorSnapshot(item?.content ?? ""));
   settingEditorVditor = createVditorEditor($("#setting-editor-markdown"), item?.content ?? "", {
-    onInput: (markdown) => { $("#setting-editor-body").value = markdown; markEntityEditorDirty(); },
+    onInput: (markdown) => syncSettingEditorDirty(markdown),
     readOnly: viewOnly
   });
   (readOnly ? $("#setting-editor-back") : $("#setting-editor-name")).focus();
@@ -9903,6 +10008,10 @@ async function uploadCharacterSectionAttachment(file) {
 }
 
 async function closeCharacterSectionEditor({ force = false } = {}) {
+  if (isEntityEditorSaving()) {
+    toast("正在保存，请稍候");
+    return false;
+  }
   if (!force && characterSectionEditorDirty && !(await confirmToast(
     "当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？",
     { title: "放弃未保存修改", confirmLabel: "放弃并继续", cancelLabel: "继续编辑" }
@@ -9935,6 +10044,10 @@ function knowledgeSectionEditorHtml(section = null) {
 }
 
 async function closeKnowledgeSectionEditor({ force = false } = {}) {
+  if (isEntityEditorSaving()) {
+    toast("正在保存，请稍候");
+    return false;
+  }
   if (!force && knowledgeSectionEditorDirty && !(await confirmToast(
     "当前 Markdown 设定有未保存修改，返回设定列表将丢弃这些修改。是否继续？",
     { title: "放弃未保存修改", confirmLabel: "放弃并继续", cancelLabel: "继续编辑" }
@@ -9953,6 +10066,7 @@ async function closeKnowledgeSectionEditor({ force = false } = {}) {
 
 async function openKnowledgeSectionEditor(index = null) {
   if (!canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations")) return;
+  const label = knowledgeEditorKind === "race" ? "种族" : "组织";
   destroyVditorEditor(knowledgeSectionVditor);
   knowledgeSectionVditor = null;
   const section = Number.isInteger(index) ? knowledgeEditorSections[index] : null;
@@ -9975,21 +10089,45 @@ async function openKnowledgeSectionEditor(index = null) {
   host.querySelector("[data-knowledge-section-edit-cancel]").addEventListener("click", () => void closeKnowledgeSectionEditor());
   host.querySelector("[data-knowledge-section-edit-save]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    const wasEditing = knowledgeSectionEditorIndex !== null;
-    const title = titleInput.value.trim();
-    if (!title) {
-      toast("请填写设定标题", "error");
-      titleInput.focus();
-      return;
-    }
-    button.disabled = true;
-    const nextSection = { title, contentMarkdown: knowledgeSectionVditor?.getValue() ?? "", summary: String(section?.summary ?? ""), sortOrder: knowledgeSectionEditorIndex ?? knowledgeEditorSections.length };
-    if (knowledgeSectionEditorIndex === null) knowledgeEditorSections.push(nextSection);
-    else knowledgeEditorSections[knowledgeSectionEditorIndex] = nextSection;
-    knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
-    markEntityEditorDirty();
-    await closeKnowledgeSectionEditor({ force: true });
-    toast(wasEditing ? "设定已更新" : "设定已添加");
+    await runEntityEditorSave({
+      busyTarget: $("#knowledge-section-editor-view"),
+      button,
+      prepare: async () => {
+        const title = titleInput.value.trim();
+        if (!title) {
+          toast("请填写设定标题", "error");
+          titleInput.focus();
+          return null;
+        }
+        return {
+          title,
+          contentMarkdown: knowledgeSectionVditor?.getValue() ?? "",
+          targetIndex: knowledgeSectionEditorIndex
+        };
+      },
+      save: async ({ title, contentMarkdown, targetIndex }) => {
+        const currentSection = targetIndex === null ? null : knowledgeEditorSections[targetIndex];
+        const nextSection = {
+          title,
+          contentMarkdown,
+          summary: String(currentSection?.summary ?? ""),
+          sortOrder: targetIndex ?? knowledgeEditorSections.length
+        };
+        if (targetIndex === null) {
+          knowledgeEditorSections.push(nextSection);
+          knowledgeSectionEditorIndex = knowledgeEditorSections.length - 1;
+        } else {
+          knowledgeEditorSections[targetIndex] = nextSection;
+        }
+        knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
+        knowledgeSectionEditorDirty = false;
+        markEntityEditorDirty();
+        return {
+          buttonLabel: "保存设定",
+          message: `Markdown 设定保存成功，保存${label}档案后生效`
+        };
+      }
+    });
   });
   titleInput.focus();
 }
@@ -9998,7 +10136,7 @@ function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
   return `<div class="character-section-editor-shell">
     <header class="character-section-editor-header">
-      <div><span class="eyebrow">人物 Markdown 档案</span><input id="character-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建档案章节" aria-label="章节标题" required></div>
+      <div><span id="character-section-editor-version" class="eyebrow">人物 Markdown 档案${section ? ` · v${esc(section.versionNo)}` : ""}</span><input id="character-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建档案章节" aria-label="章节标题" required></div>
       <button class="entity-editor-back" type="button" data-character-section-edit-close>返回人物档案</button>
     </header>
     <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
@@ -10015,19 +10153,45 @@ function characterSectionEditorHtml(section = null) {
   </div>`;
 }
 
+function upsertCharacterEditorSection(saved) {
+  const index = characterEditorSections.findIndex((item) => item.id === saved.id);
+  if (index >= 0) characterEditorSections[index] = saved;
+  else characterEditorSections.push(saved);
+  characterEditorSections.sort((left, right) => Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0));
+  renderCharacterMarkdownSections();
+}
+
+function characterSectionEditorSnapshot(markdown = null) {
+  const contentMarkdown = markdown ?? characterSectionVditor?.getValue() ?? "";
+  return JSON.stringify({
+    sectionType: $("#character-section-type").value,
+    title: $("#character-section-title").value,
+    summary: $("#character-section-summary").value,
+    contentMarkdown,
+    changeNote: $("#character-section-change-note").value
+  });
+}
+
+function syncCharacterSectionEditorDirty(markdown = null) {
+  const currentMarkdown = characterSectionVditor?.getValue() ?? markdown ?? "";
+  characterSectionEditorDirty = characterSectionEditorDirtyTracker.isDirty(characterSectionEditorSnapshot(currentMarkdown));
+}
+
 async function openCharacterSectionEditor(section = null) {
   await discardPendingCharacterAttachments();
   destroyVditorEditor(characterSectionVditor);
   characterSectionVditor = null;
+  let currentSection = section;
   const host = $("#character-section-editor-host");
-  host.innerHTML = characterSectionEditorHtml(section);
+  host.innerHTML = characterSectionEditorHtml(currentSection);
+  characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(currentSection?.contentMarkdown ?? ""));
   characterSectionEditorDirty = false;
   $("#character-editor-form").classList.add("hidden");
   $("#character-section-editor-view").classList.remove("hidden");
-  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
-  characterSectionVditor = createVditorEditor($("#character-section-markdown"), section?.contentMarkdown ?? "", {
+  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => syncCharacterSectionEditorDirty()));
+  characterSectionVditor = createVditorEditor($("#character-section-markdown"), currentSection?.contentMarkdown ?? "", {
     uploadAttachment: uploadCharacterSectionAttachment,
-    onInput: () => { characterSectionEditorDirty = true; },
+    onInput: (markdown) => syncCharacterSectionEditorDirty(markdown),
     placeholder: "从这里开始写人物章节…",
     width: "100%"
   });
@@ -10035,43 +10199,50 @@ async function openCharacterSectionEditor(section = null) {
   host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-save]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    const title = $("#character-section-title").value.trim();
-    if (!title) {
-      toast("请填写章节标题", "error");
-      $("#character-section-title").focus();
-      return;
-    }
-    button.disabled = true;
-    const contentMarkdown = characterSectionVditor?.getValue() ?? "";
-    try {
-      if (!(await confirmConcurrentSave())) {
-        button.disabled = false;
-        return;
-      }
-      const saved = await api(section ? `/api/character-sections/${section.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
-        method: section ? "PATCH" : "POST",
-        body: {
-          sectionType: $("#character-section-type").value,
-          title,
-          summary: $("#character-section-summary").value.trim(),
-          contentMarkdown,
-          ...(section ? { changeNote: $("#character-section-change-note").value.trim() } : {})
+    await runEntityEditorSave({
+      busyTarget: $("#character-section-editor-view"),
+      button,
+      prepare: async () => {
+        const title = $("#character-section-title").value.trim();
+        if (!title) {
+          toast("请填写章节标题", "error");
+          $("#character-section-title").focus();
+          return null;
         }
-      });
-      const referenced = new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]+)/gu)].map((match) => String(match[1])));
-      const unused = characterSectionPendingAttachments.filter((attachmentId) => !referenced.has(attachmentId));
-      characterSectionPendingAttachments = [];
-      await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
-      characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
-      renderCharacterMarkdownSections();
-      await Promise.all([renderCharacters(), loadAiReferences()]);
-      characterSectionEditorDirty = false;
-      await closeCharacterSectionEditor({ force: true });
-      toast(section ? `“${saved.title}”已保存为 v${saved.versionNo}` : `已创建“${saved.title}”`);
-    } catch (error) {
-      toast(error.message, "error");
-      button.disabled = false;
-    }
+        if (!(await confirmConcurrentSave())) return null;
+        return {
+          title,
+          contentMarkdown: characterSectionVditor?.getValue() ?? "",
+          editingSection: currentSection
+        };
+      },
+      save: async ({ title, contentMarkdown, editingSection }) => {
+        const saved = await api(editingSection ? `/api/character-sections/${editingSection.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
+          method: editingSection ? "PATCH" : "POST",
+          body: {
+            sectionType: $("#character-section-type").value,
+            title,
+            summary: $("#character-section-summary").value.trim(),
+            contentMarkdown,
+            ...(editingSection ? { changeNote: $("#character-section-change-note").value.trim() } : {})
+          }
+        });
+        const referenced = new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]+)/gu)].map((match) => String(match[1])));
+        const unused = characterSectionPendingAttachments.filter((attachmentId) => !referenced.has(attachmentId));
+        characterSectionPendingAttachments = [];
+        await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
+        currentSection = saved;
+        upsertCharacterEditorSection(saved);
+        $("#character-section-change-note").value = "";
+        $("#character-section-editor-version").textContent = `人物 Markdown 档案 · v${saved.versionNo}`;
+        characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(contentMarkdown));
+        characterSectionEditorDirty = false;
+        return {
+          buttonLabel: "保存章节版本",
+          message: editingSection ? `“${saved.title}”已保存为 v${saved.versionNo}` : `“${saved.title}”已创建为 v${saved.versionNo}`
+        };
+      }
+    });
   });
 }
 
@@ -10331,25 +10502,26 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   $("#character-history-button").title = item ? "查看、比较和回滚历史版本" : "创建人物档案后即可查看版本历史";
   const characterMergeButton = $("#character-merge-button");
   const characterDeleteButton = $("#character-delete-button");
-  const canManageCharacter = Boolean(item && !readOnly && canEditModule("characters"));
+  const canManageCharacter = Boolean(characterEditorItem && !readOnly && canEditModule("characters"));
   characterMergeButton.classList.toggle("hidden", !canManageCharacter);
   characterDeleteButton.classList.toggle("hidden", !canManageCharacter);
   characterMergeButton.onclick = async () => {
-    if (!item) return;
+    const currentItem = characterEditorItem;
+    if (!currentItem) return;
     const workId = state.work?.id;
     if (!workId) return;
     try {
       const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`);
-      if (state.work?.id !== workId || characterEditorItem?.id !== item.id) return;
+      if (state.work?.id !== workId || characterEditorItem?.id !== currentItem.id) return;
       state.characters = candidates;
       if (candidates.length < 2) return toast("至少需要两个角色才能合并", "error");
       await closeEntityEditor({ force: true });
       openEntityMergeDialog({
         typeLabel: "角色",
-        source: item,
+        source: currentItem,
         candidates,
         endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
-        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
+        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: currentItem.versionNo }),
         refresh: renderCharacters,
         impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
       });
@@ -10358,10 +10530,11 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
     }
   };
   characterDeleteButton.onclick = () => {
-    if (!item) return;
+    const currentItem = characterEditorItem;
+    if (!currentItem) return;
     void deleteManagedEntity({
       typeLabel: "角色",
-      item,
+      item: currentItem,
       endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}`,
       refresh: () => closeEntityEditor({ force: true }),
       warning: "相关人物关系会删除，时间线中的参与者引用会移除。"
@@ -10380,7 +10553,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   $("#character-editor-submit").classList.toggle("hidden", viewOnly);
   const editButton = $("#character-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("characters"));
-  editButton.onclick = () => void openCharacterEditor(item);
+  editButton.onclick = () => void openCharacterEditor(characterEditorItem);
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
@@ -10392,24 +10565,46 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
     event.preventDefault();
     if (readOnly || !canEditModule("characters")) return;
     const submit = $("#character-editor-submit");
-    submit.disabled = true;
-    try {
-      const body = collectCharacterBody(new FormData(form));
-      if (!body.name) throw new Error("请填写角色标准名");
-      const wasEditing = Boolean(characterEditorItem);
-      const previousVersion = characterEditorItem?.versionNo;
-      if (!wasEditing) delete body.changeNote;
-      if (!(await confirmConcurrentSave())) return;
-      const saved = await api(wasEditing ? `/api/characters/${characterEditorItem.id}` : `/api/works/${state.work.id}/characters`, { method: wasEditing ? "PATCH" : "POST", body });
-      entityEditorDirty = false;
-      await loadAiReferences();
-      await closeEntityEditor({ force: true });
-      toast(!wasEditing ? "人物档案已创建" : saved.versionNo === previousVersion ? "没有检测到人物档案变更" : `人物档案已保存为 v${saved.versionNo}`);
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      submit.disabled = false;
-    }
+    await runEntityEditorSave({
+      busyTarget: form,
+      button: submit,
+      prepare: async () => {
+        const body = collectCharacterBody(new FormData(form));
+        if (!body.name) {
+          toast("请填写角色标准名", "error");
+          form.querySelector("[name='name']")?.focus();
+          return null;
+        }
+        const currentItem = characterEditorItem;
+        if (!currentItem) delete body.changeNote;
+        if (!(await confirmConcurrentSave())) return null;
+        return { body, currentItem, previousVersion: currentItem?.versionNo };
+      },
+      save: async ({ body, currentItem, previousVersion }) => {
+        const saved = await api(currentItem ? `/api/characters/${currentItem.id}` : `/api/works/${state.work.id}/characters`, { method: currentItem ? "PATCH" : "POST", body });
+        characterEditorItem = saved;
+        state.characters = upsertEntityCollection(state.characters, saved);
+        entityEditorDirty = false;
+        $("#character-editor-title").textContent = saved.name;
+        $("#character-editor-version").textContent = `v${saved.versionNo}`;
+        $("#character-change-note").value = "";
+        $("#character-history-button").disabled = false;
+        $("#character-history-button").title = "查看、比较和回滚历史版本";
+        characterMergeButton.classList.remove("hidden");
+        characterDeleteButton.classList.remove("hidden");
+        relationshipTab.disabled = !canReadModule("relationships");
+        relationshipTab.title = canReadModule("relationships") ? "查看和编辑人物关系" : "当前账户没有关系模块读取权限";
+        renderCharacterMarkdownSections();
+        renderAiRoleplayCharacterSelect();
+        replacePageRoute(currentPageRoute());
+        const message = !currentItem
+          ? `人物档案已创建为 v${saved.versionNo}`
+          : saved.versionNo === previousVersion
+            ? `人物档案没有变更，当前为 v${saved.versionNo}`
+            : `人物档案已保存为 v${saved.versionNo}`;
+        return { buttonLabel: "保存新版本", message };
+      }
+    });
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
@@ -10444,7 +10639,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
-    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${readOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
+    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${entityEditorReadOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
     + knowledgeEditorSection("settings", title, "", '<div id="knowledge-markdown-sections" class="knowledge-markdown-sections"></div>')
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
@@ -10469,6 +10664,8 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   const isRace = kind === "race";
   const module = isRace ? "races" : "organizations";
   const label = isRace ? "种族" : "组织";
+  const viewOnly = readOnly || !canEditModule(module);
+  entityEditorReadOnly = viewOnly;
   const parentOptions = isRace
     ? [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
       .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
@@ -10479,32 +10676,39 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   knowledgeEditorSections = normalizeKnowledgeEditorSections(item);
   knowledgeSectionEditorIndex = null;
   knowledgeSectionEditorDirty = false;
-  $("#knowledge-editor-eyebrow").textContent = item ? `${label}档案` : `建立${label}档案`;
-  $("#knowledge-editor-title").textContent = item?.name || `新建${label}`;
-  $("#knowledge-editor-version").textContent = item ? `v${item.versionNo ?? 1}` : "新档案";
   $("#knowledge-editor-header-note").textContent = isRace ? "层级、共同设定与角色归属" : "简介、组织设定与成员归属";
-  $("#knowledge-editor-footer-note").textContent = `保存${label}档案后返回${isRace ? "种族" : "组织"}列表。`;
-  $("#knowledge-editor-submit").textContent = item ? `保存${label}档案` : `创建${label}档案`;
   const historyButton = $("#knowledge-editor-history");
   const mergeButton = $("#knowledge-editor-merge");
   const deleteButton = $("#knowledge-editor-delete");
   const refresh = isRace ? renderRaces : renderOrganizations;
   const candidates = isRace ? state.races : state.organizations;
   const typeLabel = label;
-  historyButton.classList.toggle("hidden", !item);
-  mergeButton.classList.toggle("hidden", !item || readOnly || !canEditModule(module) || candidates.length < 2);
-  deleteButton.classList.toggle("hidden", !item || readOnly || !canEditModule(module));
+  const syncKnowledgeEditorChrome = () => {
+    const currentItem = knowledgeEditorItem;
+    $("#knowledge-editor-eyebrow").textContent = viewOnly ? `阅读${label}档案` : currentItem ? `${label}档案` : `建立${label}档案`;
+    $("#knowledge-editor-title").textContent = currentItem?.name || `新建${label}`;
+    $("#knowledge-editor-version").textContent = currentItem ? `v${currentItem.versionNo ?? 1}` : "新档案";
+    $("#knowledge-editor-footer-note").textContent = `保存${label}档案后继续留在当前页面，可使用“返回列表”离开。`;
+    $("#knowledge-editor-submit").textContent = currentItem ? `保存${label}档案` : `创建${label}档案`;
+    $("#knowledge-editor-submit").classList.toggle("hidden", viewOnly);
+    const hasMergeCandidate = candidates.some((candidate) => candidate.id !== currentItem?.id);
+    historyButton.classList.toggle("hidden", !currentItem);
+    mergeButton.classList.toggle("hidden", !currentItem || viewOnly || !hasMergeCandidate);
+    deleteButton.classList.toggle("hidden", !currentItem || viewOnly);
+  };
   historyButton.onclick = async () => {
-    if (!item) return;
+    const currentItem = knowledgeEditorItem;
+    if (!currentItem) return;
     if (!(await closeEntityEditor())) return;
-    openEntityHistory(kind, item.id, item.name, async () => { await refresh(); await loadAiReferences(); });
+    openEntityHistory(kind, currentItem.id, currentItem.name, async () => { await refresh(); await loadAiReferences(); });
   };
   mergeButton.onclick = async () => {
-    if (!item) return;
+    const currentItem = knowledgeEditorItem;
+    if (!currentItem) return;
     await closeEntityEditor({ force: true });
     openEntityMergeDialog({
       typeLabel,
-      source: item,
+      source: currentItem,
       candidates,
       endpoint: (source) => `/api/${module}/${encodeURIComponent(source.id)}/merge`,
       body: (target) => isRace ? { targetRaceId: target.id } : { targetOrganizationId: target.id },
@@ -10513,61 +10717,73 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
     });
   };
   deleteButton.onclick = () => {
-    if (!item) return;
+    const currentItem = knowledgeEditorItem;
+    if (!currentItem) return;
     void deleteManagedEntity({
       typeLabel,
-      item,
+      item: currentItem,
       endpoint: (source) => `/api/${module}/${encodeURIComponent(source.id)}`,
       refresh: () => closeEntityEditor({ force: true }),
       warning: isRace ? "已绑定角色将变为未指定种族；有子种族时需先迁移或合并。" : "角色与该组织的成员关系会一并移除。"
     });
   };
   renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions);
-  const viewOnly = readOnly || !canEditModule(module);
   if (viewOnly) {
-    $("#knowledge-editor-eyebrow").textContent = readOnly ? `阅读${label}档案` : `${label}档案`;
     $("#knowledge-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
     $("#knowledge-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
     $("#knowledge-editor-fields").querySelectorAll("button").forEach((button) => { button.disabled = true; });
   }
-  $("#knowledge-editor-submit").classList.toggle("hidden", viewOnly);
+  syncKnowledgeEditorChrome();
   const editButton = $("#knowledge-editor-edit");
   editButton.textContent = `编辑${label}`;
   editButton.classList.toggle("hidden", !readOnly || !canEditModule(module));
-  editButton.onclick = () => void openKnowledgeEditor(kind, item);
+  editButton.onclick = () => void openKnowledgeEditor(kind, knowledgeEditorItem);
   const form = $("#knowledge-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
     if (readOnly || !canEditModule(module)) return;
     const submit = $("#knowledge-editor-submit");
-    submit.disabled = true;
-    try {
-      const data = new FormData(form);
-      const name = String(data.get("name") ?? "").trim();
-      if (!name) throw new Error(`请填写${label}名称`);
-      const settingsSections = knowledgeEditorSections
-        .map((section, index) => ({ title: String(section.title ?? "").trim(), contentMarkdown: String(section.contentMarkdown ?? ""), summary: String(section.summary ?? "").trim(), sortOrder: index }))
-        .filter((section) => section.title || section.contentMarkdown.trim());
-      const untitled = settingsSections.findIndex((section) => !section.title);
-      if (untitled >= 0) throw new Error(`请填写第 ${untitled + 1} 条 Markdown 设定的标题`);
-      const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
-      const body = isRace
-        ? { name, isExtinct: data.has("isExtinct"), parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
-        : { name, isDissolved: data.has("isDissolved"), description: data.get("description"), settingsMarkdown, settingsSections };
-      if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
-      const wasEditing = Boolean(knowledgeEditorItem);
-      if (!(await confirmConcurrentSave())) return;
-      await api(wasEditing ? `/api/${module}/${knowledgeEditorItem.id}` : `/api/works/${state.work.id}/${module}`, { method: wasEditing ? "PATCH" : "POST", body });
-      await cleanupPendingMarkdownAttachments(settingsMarkdown);
-      entityEditorDirty = false;
-      await loadAiReferences();
-      await closeEntityEditor({ force: true });
-      toast(wasEditing ? `${label}档案已保存` : `${label}档案已创建`);
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      submit.disabled = false;
-    }
+    await runEntityEditorSave({
+      busyTarget: form,
+      button: submit,
+      prepare: async () => {
+        const data = new FormData(form);
+        const name = String(data.get("name") ?? "").trim();
+        if (!name) {
+          toast(`请填写${label}名称`, "error");
+          form.querySelector("[name='name']")?.focus();
+          return null;
+        }
+        const settingsSections = knowledgeEditorSections
+          .map((section, index) => ({ title: String(section.title ?? "").trim(), contentMarkdown: String(section.contentMarkdown ?? ""), summary: String(section.summary ?? "").trim(), sortOrder: index }))
+          .filter((section) => section.title || section.contentMarkdown.trim());
+        const untitled = settingsSections.findIndex((section) => !section.title);
+        if (untitled >= 0) {
+          toast(`请填写第 ${untitled + 1} 条 Markdown 设定的标题`, "error");
+          return null;
+        }
+        const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
+        const body = isRace
+          ? { name, isExtinct: data.has("isExtinct"), parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
+          : { name, isDissolved: data.has("isDissolved"), description: data.get("description"), settingsMarkdown, settingsSections };
+        if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
+        const currentItem = knowledgeEditorItem;
+        if (!(await confirmConcurrentSave())) return null;
+        return { body, currentItem, settingsMarkdown };
+      },
+      save: async ({ body, currentItem, settingsMarkdown }) => {
+        const saved = await api(currentItem ? `/api/${module}/${currentItem.id}` : `/api/works/${state.work.id}/${module}`, { method: currentItem ? "PATCH" : "POST", body });
+        await cleanupPendingMarkdownAttachments(settingsMarkdown);
+        knowledgeEditorItem = saved;
+        entityEditorDirty = false;
+        syncKnowledgeEditorChrome();
+        replacePageRoute(currentPageRoute());
+        return {
+          buttonLabel: `保存${label}档案`,
+          message: currentItem ? `${label}档案已保存为 v${saved.versionNo}` : `${label}档案已创建为 v${saved.versionNo}`
+        };
+      }
+    });
   };
   showEntityEditorPage(kind, { readOnly });
   (readOnly ? $("#knowledge-editor-close") : $("#knowledge-editor-fields").querySelector("input:not([type='checkbox']), textarea"))?.focus();
@@ -12752,8 +12968,8 @@ $("#character-editor-close").addEventListener("click", () => { void closeEntityE
 $("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
 $("#knowledge-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
 $("#knowledge-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
-$("#setting-editor-form").addEventListener("input", markEntityEditorDirty);
-$("#setting-editor-form").addEventListener("change", markEntityEditorDirty);
+$("#setting-editor-form").addEventListener("input", () => syncSettingEditorDirty());
+$("#setting-editor-form").addEventListener("change", () => syncSettingEditorDirty());
 $("#character-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#character-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
