@@ -1126,7 +1126,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store,
     credentialVault,
     options.fetchImpl ?? fetch,
-    options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
+    options.developmentServer === true
+      ? undefined
+      : options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
       const requiredModules = analysisTaskReadModules(task.taskType, task.scope);
       const creator = actor ? null : database.get(
