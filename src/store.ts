@@ -428,6 +428,7 @@ type AiConversationMessageInput = {
   citations?: unknown[];
   requestId?: string;
   metadata?: {
+    mentionCharacterIds?: string[];
     modelDisplayName?: string;
     outputTokens?: number;
     cacheHitPercent?: number;
