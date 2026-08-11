@@ -98,6 +98,31 @@ describe("设定库实体编辑器保存体验", () => {
     expect(busyTarget.busy).toBe(false);
   });
 
+  it("保存成功后忽略已保存快照的延迟输入并保留后续修改提示", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const trackerSource = sourceBetween(application, "function createEditorDirtyTracker(", "\nlet settingEditorItem");
+    const createEditorDirtyTracker = vm.runInNewContext(`${trackerSource}\ncreateEditorDirtyTracker`) as (snapshot?: string) => {
+      markSaved: (snapshot: string) => void;
+      isDirty: (snapshot: string) => boolean;
+    };
+    const tracker = createEditorDirtyTracker("打开时快照");
+
+    expect(tracker.isDirty("提交快照")).toBe(true);
+    tracker.markSaved("提交快照");
+    const delayedInputDirty = await Promise.resolve().then(() => tracker.isDirty("提交快照"));
+    expect(delayedInputDirty).toBe(false);
+    expect(tracker.isDirty("保存后继续修改")).toBe(true);
+
+    const settingSave = sourceBetween(application, "function settingEditorSnapshot(", "\nfunction characterEditorSection");
+    expect(settingSave).toContain("settingEditorDirtyTracker.markSaved(settingEditorSnapshot(body.content))");
+    expect(settingSave).toContain("onInput: (markdown) => syncSettingEditorDirty(markdown)");
+    expect(application).toContain('$("#setting-editor-form").addEventListener("input", () => syncSettingEditorDirty())');
+
+    const characterSectionSave = sourceBetween(application, "function characterSectionEditorSnapshot(", "\nasync function showCharacterSectionVersions");
+    expect(characterSectionSave).toContain("characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(contentMarkdown))");
+    expect(characterSectionSave).toContain("onInput: (markdown) => syncCharacterSectionEditorDirty(markdown)");
+  });
+
   it("统一显示保存状态并在成功或失败后保持编辑器打开", async () => {
     const publicPath = join(process.cwd(), "src/public");
     const [application, page] = await Promise.all([

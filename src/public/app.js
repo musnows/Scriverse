@@ -1006,6 +1006,19 @@ const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
+
+function createEditorDirtyTracker(initialSnapshot = "") {
+  let savedSnapshot = String(initialSnapshot);
+  return {
+    markSaved(snapshot) {
+      savedSnapshot = String(snapshot);
+    },
+    isDirty(snapshot) {
+      return String(snapshot) !== savedSnapshot;
+    }
+  };
+}
+
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -1024,6 +1037,8 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+const settingEditorDirtyTracker = createEditorDirtyTracker();
+const characterSectionEditorDirtyTracker = createEditorDirtyTracker();
 let formDialogVditors = [];
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
@@ -9309,6 +9324,22 @@ function syncSettingEditorChrome(viewOnly) {
   $("#setting-editor-delete").classList.toggle("hidden", !showManagementActions);
 }
 
+function settingEditorSnapshot(markdown = null) {
+  const content = markdown ?? settingEditorVditor?.getValue() ?? $("#setting-editor-body").value;
+  return JSON.stringify({
+    title: $("#setting-editor-name").value,
+    category: $("#setting-editor-category").value,
+    content,
+    locked: $("#setting-editor-locked").checked
+  });
+}
+
+function syncSettingEditorDirty(markdown = null) {
+  const currentMarkdown = settingEditorVditor?.getValue() ?? markdown ?? $("#setting-editor-body").value;
+  $("#setting-editor-body").value = currentMarkdown;
+  entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
+}
+
 function openSettingEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   destroyVditorEditor(settingEditorVditor);
@@ -9409,8 +9440,9 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
         await cleanupPendingMarkdownAttachments(body.content);
         settingEditorItem = saved;
         state.settings = upsertEntityCollection(state.settings, saved);
-        entityEditorDirty = false;
         syncSettingEditorChrome(false);
+        settingEditorDirtyTracker.markSaved(settingEditorSnapshot(body.content));
+        entityEditorDirty = false;
         replacePageRoute(currentPageRoute());
         return {
           buttonLabel: "保存新版本",
@@ -9420,8 +9452,9 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
     });
   };
   showEntityEditorPage("setting", { readOnly });
+  settingEditorDirtyTracker.markSaved(settingEditorSnapshot(item?.content ?? ""));
   settingEditorVditor = createVditorEditor($("#setting-editor-markdown"), item?.content ?? "", {
-    onInput: (markdown) => { $("#setting-editor-body").value = markdown; markEntityEditorDirty(); },
+    onInput: (markdown) => syncSettingEditorDirty(markdown),
     readOnly: viewOnly
   });
   (readOnly ? $("#setting-editor-back") : $("#setting-editor-name")).focus();
@@ -10046,6 +10079,22 @@ function upsertCharacterEditorSection(saved) {
   renderCharacterMarkdownSections();
 }
 
+function characterSectionEditorSnapshot(markdown = null) {
+  const contentMarkdown = markdown ?? characterSectionVditor?.getValue() ?? "";
+  return JSON.stringify({
+    sectionType: $("#character-section-type").value,
+    title: $("#character-section-title").value,
+    summary: $("#character-section-summary").value,
+    contentMarkdown,
+    changeNote: $("#character-section-change-note").value
+  });
+}
+
+function syncCharacterSectionEditorDirty(markdown = null) {
+  const currentMarkdown = characterSectionVditor?.getValue() ?? markdown ?? "";
+  characterSectionEditorDirty = characterSectionEditorDirtyTracker.isDirty(characterSectionEditorSnapshot(currentMarkdown));
+}
+
 async function openCharacterSectionEditor(section = null) {
   await discardPendingCharacterAttachments();
   destroyVditorEditor(characterSectionVditor);
@@ -10053,13 +10102,14 @@ async function openCharacterSectionEditor(section = null) {
   let currentSection = section;
   const host = $("#character-section-editor-host");
   host.innerHTML = characterSectionEditorHtml(currentSection);
+  characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(currentSection?.contentMarkdown ?? ""));
   characterSectionEditorDirty = false;
   $("#character-editor-form").classList.add("hidden");
   $("#character-section-editor-view").classList.remove("hidden");
-  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
+  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => syncCharacterSectionEditorDirty()));
   characterSectionVditor = createVditorEditor($("#character-section-markdown"), currentSection?.contentMarkdown ?? "", {
     uploadAttachment: uploadCharacterSectionAttachment,
-    onInput: () => { characterSectionEditorDirty = true; },
+    onInput: (markdown) => syncCharacterSectionEditorDirty(markdown),
     placeholder: "从这里开始写人物章节…",
     width: "100%"
   });
@@ -10101,9 +10151,10 @@ async function openCharacterSectionEditor(section = null) {
         await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
         currentSection = saved;
         upsertCharacterEditorSection(saved);
-        characterSectionEditorDirty = false;
         $("#character-section-change-note").value = "";
         $("#character-section-editor-version").textContent = `人物 Markdown 档案 · v${saved.versionNo}`;
+        characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(contentMarkdown));
+        characterSectionEditorDirty = false;
         return {
           buttonLabel: "保存章节版本",
           message: editingSection ? `“${saved.title}”已保存为 v${saved.versionNo}` : `“${saved.title}”已创建为 v${saved.versionNo}`
@@ -12814,8 +12865,8 @@ $("#character-editor-close").addEventListener("click", () => { void closeEntityE
 $("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
 $("#knowledge-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
 $("#knowledge-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
-$("#setting-editor-form").addEventListener("input", markEntityEditorDirty);
-$("#setting-editor-form").addEventListener("change", markEntityEditorDirty);
+$("#setting-editor-form").addEventListener("input", () => syncSettingEditorDirty());
+$("#setting-editor-form").addEventListener("change", () => syncSettingEditorDirty());
 $("#character-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#character-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
