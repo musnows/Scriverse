@@ -1,7 +1,7 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-size-threshold-v1";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
-import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
+import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
@@ -12,7 +12,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260811-context-usage-monotonic-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
@@ -49,6 +49,7 @@ import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
   resolveTimelineActiveTrackId,
@@ -1004,6 +1005,8 @@ const moduleListPages = {
 };
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
+const settingFilters = { keyword: "", category: "", lockState: "all" };
+let settingFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
 
@@ -2014,7 +2017,10 @@ async function ensureAiConversationsLoaded() {
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   const parameters = new URLSearchParams({ page: "1", limit: "100" });
   if (focusMessageId) parameters.set("messageId", String(focusMessageId));
-  const conversation = await api(`/api/ai-conversations/${conversationId}?${parameters}`);
+  const [conversation] = await Promise.all([
+    api(`/api/ai-conversations/${conversationId}?${parameters}`),
+    ensureAiReferencesLoaded()
+  ]);
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
@@ -2137,7 +2143,6 @@ function applyAiRoleplayCharacter(character) {
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
   renderAiQuickActions();
-  resetAiContextMeter();
 }
 
 function refreshAiMessageRoleLabels() {
@@ -2155,6 +2160,7 @@ async function updateAiRoleplayCharacter(characterId) {
   upsertAiConversationSummary(conversation);
   applyAiConversationTaskType(conversation.taskType);
   applyAiRoleplayCharacter(conversation.roleplayCharacter);
+  resetAiContextMeter();
   if ($("#ai-feed").querySelector("[data-message-id]")) refreshAiMessageRoleLabels();
   else resetAiFeed();
   toast(conversation.roleplayCharacter
@@ -5079,6 +5085,10 @@ function resetWorkScopedUiCaches() {
   draftTypeFilter = "all";
   draftBindingFilters = [];
   draftFiltersPanelOpen = false;
+  settingFilters.keyword = "";
+  settingFilters.category = "";
+  settingFilters.lockState = "all";
+  settingFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -5973,6 +5983,17 @@ function bindRaceTreeExpandToggle() {
   });
 }
 
+function mountSettingFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="setting-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="setting-filter-toggle" aria-label="筛选设定" aria-controls="setting-filter-panel" aria-expanded="${settingFiltersPanelOpen}" title="筛选设定"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  const toggle = $("#module-header-actions").querySelector('[data-module-header-action="setting-filter-toggle"]');
+  toggle?.addEventListener("click", () => {
+    settingFiltersPanelOpen = !settingFiltersPanelOpen;
+    $("#setting-filter-panel")?.classList.toggle("hidden", !settingFiltersPanelOpen);
+    toggle.setAttribute("aria-expanded", String(settingFiltersPanelOpen));
+  });
+}
+
 function mountCharacterFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.remove();
   $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="character-filter-toggle" aria-label="筛选角色" aria-controls="character-filter-panel" aria-expanded="${characterFiltersPanelOpen}" title="筛选角色"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
@@ -6330,19 +6351,76 @@ function entityLifecycleBadge(active, label) {
 async function renderSettings(page = moduleListPages.settings) {
   const records = await moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`);
   state.settings = records;
-  mountModuleCount(records.length);
-  const pageResult = paginateModuleItems(records, page, "settings");
-  moduleListPages.settings = pageResult.page;
-  const layout = readModuleLayout();
-  if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
-  $("#module-content").innerHTML = records.length
-    ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
-    : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
-  bindModuleLayoutToggle(() => renderSettings(pageResult.page));
-  bindModulePagination("settings", renderSettings);
-  const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
-  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
-  bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
+  const categories = [...new Set([
+    ...records.map((item) => String(item.category ?? "").trim()).filter(Boolean),
+    ...(settingFilters.category ? [settingFilters.category] : [])
+  ])].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const hasSettingFilters = () => Boolean(settingFilters.keyword.trim() || settingFilters.category || settingFilters.lockState !== "all");
+  const filterToolbar = `<section id="setting-filter-panel" class="character-filter-toolbar setting-filter-toolbar${settingFiltersPanelOpen ? "" : " hidden"}" aria-label="设定筛选">
+    <label class="setting-filter-field" for="setting-keyword-filter"><span>按关键词搜索</span><input id="setting-keyword-filter" type="search" value="${esc(settingFilters.keyword)}" placeholder="搜索标题或内容" aria-label="按关键词搜索设定" autocomplete="off"></label>
+    <label class="setting-filter-field" for="setting-category-filter"><span>按分类筛选</span><select id="setting-category-filter" aria-label="按分类筛选设定"><option value="">全部分类</option>${categories.map((category) => `<option value="${esc(category)}" ${settingFilters.category === category ? "selected" : ""}>${esc(category)}</option>`).join("")}</select></label>
+    <label class="setting-filter-field" for="setting-lock-filter"><span>按锁定状态筛选</span><select id="setting-lock-filter" aria-label="按锁定状态筛选设定"><option value="all" ${settingFilters.lockState === "all" ? "selected" : ""}>全部锁定状态</option><option value="locked" ${settingFilters.lockState === "locked" ? "selected" : ""}>仅已锁定</option><option value="unlocked" ${settingFilters.lockState === "unlocked" ? "selected" : ""}>仅未锁定</option></select></label>
+    <div class="character-filter-toolbar-actions"><span id="setting-filter-result-count" class="character-filter-result-count${hasSettingFilters() ? "" : " hidden"}" role="status" aria-live="polite"></span><button id="clear-setting-filters" class="ghost-button" type="button" ${hasSettingFilters() ? "" : "disabled"}>重置筛选</button></div>
+  </section><div id="setting-filter-results"></div>`;
+  $("#module-content").innerHTML = filterToolbar;
+  mountSettingFilterToggle();
+
+  const renderSettingResults = (requestedPage = moduleListPages.settings) => {
+    const filteredRecords = filterSettings(state.settings, settingFilters);
+    const pageResult = paginateModuleItems(filteredRecords, requestedPage, "settings");
+    moduleListPages.settings = pageResult.page;
+    mountModuleCount(filteredRecords.length);
+    const layout = readModuleLayout();
+    if (filteredRecords.length) mountModuleLayoutToggle(layout, "设定列表样式");
+    else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+    $("#setting-filter-results").innerHTML = filteredRecords.length
+      ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
+      : records.length
+        ? emptyModule("没有符合筛选条件的设定", "可以调整关键词、分类、锁定状态或重置筛选。")
+        : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
+    const filtersActive = hasSettingFilters();
+    const resultCount = $("#setting-filter-result-count");
+    resultCount.textContent = filtersActive ? `筛选后剩余 ${filteredRecords.length} 条设定` : "";
+    resultCount.classList.toggle("hidden", !filtersActive);
+    $("#clear-setting-filters").disabled = !filtersActive;
+    bindModuleLayoutToggle(() => renderSettingResults(pageResult.page));
+    bindModulePagination("settings", renderSettingResults);
+    const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
+    $("#setting-filter-results").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
+    bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
+  };
+
+  $("#setting-keyword-filter").addEventListener("input", (event) => {
+    settingFilters.keyword = event.currentTarget.value;
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#setting-category-filter").addEventListener("change", (event) => {
+    settingFilters.category = event.currentTarget.value;
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#setting-lock-filter").addEventListener("change", (event) => {
+    settingFilters.lockState = ["locked", "unlocked"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#clear-setting-filters").addEventListener("click", () => {
+    settingFilters.keyword = "";
+    settingFilters.category = "";
+    settingFilters.lockState = "all";
+    $("#setting-keyword-filter").value = "";
+    $("#setting-category-filter").value = "";
+    $("#setting-lock-filter").value = "all";
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+    $("#setting-keyword-filter").focus();
+  });
+  renderSettingResults(page);
 }
 
 async function renderCharacters(page = characterListPage) {
@@ -8751,8 +8829,10 @@ function renderAiContextDistribution(usage) {
   popover.dataset.hasUsage = String(Boolean(usage));
 }
 
-function setAiContextMeter(usage) {
-  const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);
+function setAiContextMeter(usage, allowShrink = true) {
+  const displayUsage = allowShrink
+    ? resolveAiContextUsage(latestAiContextUsage, usage)
+    : mergeAiContextUsage(latestAiContextUsage, usage, false);
   latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
@@ -8772,7 +8852,9 @@ function setAiContextMeter(usage) {
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
-  value.textContent = `${percent}%`;
+  value.textContent = Number(displayUsage.inputTokens) > 0
+    ? formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)
+    : `${percent}%`;
   const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
@@ -11471,7 +11553,7 @@ async function sendAi() {
         || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
         || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
       if (suggestionFailed) setAiAssistantStatus("error");
-      setAiContextMeter(suggestion.contextUsage);
+      setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
@@ -11545,6 +11627,7 @@ async function streamChat(body) {
   let conversationTitle = null;
   let persistedUserMessage = null;
   let contextAction = "ready";
+  let streamContextCompacted = false;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -11596,7 +11679,7 @@ async function streamChat(body) {
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
-        setAiContextMeter(payload.usage);
+        if (!state.aiPromptSent) setAiContextMeter(payload.usage);
         if (payload.conversation?.id) {
           state.aiConversationId = payload.conversation.id;
           upsertAiConversationSummary(payload.conversation);
@@ -11619,7 +11702,7 @@ async function streamChat(body) {
           syncAiTaskOptions();
           renderAiRoleplayCharacterSelect();
           renderAiQuickActions();
-          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id);
           clearAiPromptComposer();
           mountAssistantMessage();
         }
@@ -11663,6 +11746,7 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "context_compacted") {
+        streamContextCompacted = true;
         setAiContextMeter(payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
@@ -11670,7 +11754,8 @@ async function streamChat(body) {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
-        setAiContextMeter(payload.contextUsage);
+        const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
+        setAiContextMeter(payload.contextUsage, announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -11734,6 +11819,24 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.textContent = "失败";
     failureBadge.setAttribute("aria-label", "消息状态：失败");
     heading.firstElementChild?.append(failureBadge);
+  }
+  const mentionNames = role === "user"
+    ? userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)
+    : [];
+  if (mentionNames.length) {
+    const references = document.createElement("div");
+    references.className = "user-message-mentions";
+    const label = document.createElement("span");
+    label.className = "user-message-mentions-label";
+    label.textContent = "引用角色";
+    references.append(label);
+    for (const name of mentionNames) {
+      const reference = document.createElement("span");
+      reference.className = "user-message-mention";
+      reference.textContent = name;
+      references.append(reference);
+    }
+    message.append(references);
   }
   if (citations.length) {
     const references = document.createElement("div");

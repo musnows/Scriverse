@@ -826,6 +826,25 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ title: "越权设定", category: "世界规则", content: "不应创建。" })
       .expect(403);
+    const chapterVersionsBeforeMissingScopeReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count);
+    const missingScopeReplace = await viewer.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ find: "只能阅读", replacement: "越权替换" })
+      .expect(400);
+    expect(missingScopeReplace.body.error.code).toBe("VALIDATION_ERROR");
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content).toBe("只能阅读的正文。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeMissingScopeReplace);
+    const replaceWrite = await viewer.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ find: "只能阅读", replacement: "越权替换", scope: "prose-and-settings" })
+      .expect(403);
+    expect(replaceWrite.body.error.code).toBe("WORK_EDIT_DENIED");
     const mergeBody = {
       targetCharacterId: firstCharacter.body.data.id,
       expectedTargetVersionNo: firstCharacter.body.data.versionNo,
@@ -855,6 +874,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ content: "获得编辑权限后的修改。" })
       .expect(200);
+    const editorReplace = await viewer.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ find: "获得编辑权限", replacement: "完整编辑权限", scope: "prose" })
+      .expect(200);
+    expect(editorReplace.body.data).toMatchObject({ scope: "prose", chapterCount: 1, totalMatches: 1 });
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
@@ -1050,28 +1074,21 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .send({ find: "允许", replacement: "已经", scope: "settings" })
       .expect(200);
     expect(settingsReplace.body.data).toMatchObject({ scope: "settings", settingCount: 1, totalMatches: 1 });
-    const chapterVersionsBeforeSkippedProseReplace = Number(runtime.database.get(
+    const chapterVersionsBeforeDeniedProseReplace = Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
       chapter.body.data.id
     )?.count);
-    const proseReplaceSkipped = await collaborator.agent.post(`/api/works/${workId}/replace`)
+    const proseReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "模块权限正文", replacement: "不应替换", scope: "prose" })
-      .expect(200);
-    expect(proseReplaceSkipped.body.data).toMatchObject({
-      scope: "prose",
-      processedModules: [],
-      skippedModules: ["prose"],
-      chapterCount: 0,
-      settingCount: 0,
-      totalMatches: 0
-    });
+      .expect(403);
+    expect(proseReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
       .toBe("模块权限正文，双向词。");
     expect(Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
       chapter.body.data.id
-    )?.count)).toBe(chapterVersionsBeforeSkippedProseReplace);
+    )?.count)).toBe(chapterVersionsBeforeDeniedProseReplace);
     const chapterVersionsBeforeSettingsOnlyReplace = Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
       chapter.body.data.id
@@ -1150,28 +1167,21 @@ describe("用户、作品权限与操作者追踪 API", () => {
       "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
       editableSettingId
     )?.count)).toBe(settingVersionsBeforeProseOnlyReplace);
-    const settingVersionsBeforeSkippedSettingsReplace = Number(runtime.database.get(
+    const settingVersionsBeforeDeniedSettingsReplace = Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
       editableSettingId
     )?.count);
-    const settingsReplaceSkipped = await collaborator.agent.post(`/api/works/${workId}/replace`)
+    const settingsReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "已经", replacement: "不应替换", scope: "settings" })
-      .expect(200);
-    expect(settingsReplaceSkipped.body.data).toMatchObject({
-      scope: "settings",
-      processedModules: [],
-      skippedModules: ["settings"],
-      chapterCount: 0,
-      settingCount: 0,
-      totalMatches: 0
-    });
+      .expect(403);
+    expect(settingsReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
     expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", editableSettingId)?.content)
       .toBe("设定侧替换设定，双向词，已经写入。");
     expect(Number(runtime.database.get(
       "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
       editableSettingId
-    )?.count)).toBe(settingVersionsBeforeSkippedSettingsReplace);
+    )?.count)).toBe(settingVersionsBeforeDeniedSettingsReplace);
     await collaborator.agent.post(`/api/works/${workId}/settings`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ title: "只读后越权", category: "世界规则", content: "不应写入。" })
@@ -1218,18 +1228,27 @@ describe("用户、作品权限与操作者追踪 API", () => {
       "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
       editableSettingId
     )?.count);
-    const combinedReplaceSkipped = await collaborator.agent.post(`/api/works/${workId}/replace`)
+    const missingScopeReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "正文侧替换", replacement: "不应替换" })
+      .expect(400);
+    expect(missingScopeReplace.body.error.code).toBe("VALIDATION_ERROR");
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("已批量替换正文编辑，正文侧替换。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeReadOnlyReplace);
+    const combinedReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "正文侧替换", replacement: "不应替换", scope: "prose-and-settings" })
-      .expect(200);
-    expect(combinedReplaceSkipped.body.data).toMatchObject({
-      scope: "prose-and-settings",
-      processedModules: [],
-      skippedModules: ["prose", "settings"],
-      chapterCount: 0,
-      settingCount: 0,
-      totalMatches: 0
-    });
+      .expect(403);
+    expect(combinedReplaceDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+    const invalidScopeReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "正文侧替换", replacement: "不应替换", scope: "unknown" })
+      .expect(400);
+    expect(invalidScopeReplace.body.error.code).toBe("VALIDATION_ERROR");
     expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
       .toBe("已批量替换正文编辑，正文侧替换。");
     expect(runtime.database.get("SELECT content FROM settings WHERE id = ?", editableSettingId)?.content)
@@ -2007,6 +2026,67 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(response.body.data)).not.toContain("chapter_secret");
     expect(JSON.stringify(response.body.data)).not.toContain("character_secret");
     expect(JSON.stringify(response.body.data)).not.toContain("setting_secret");
+  });
+
+  it("无角色读取权限时从对话消息 metadata 移除角色引用", async () => {
+    const owner = await register(runtime, "ai_message_mention_owner");
+    const collaborator = await register(runtime, "ai_message_mention_reader");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "AI 消息角色引用权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "机密角色" })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "read",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const conversation = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({})
+      .expect(201);
+    const conversationId = String(conversation.body.data.id);
+    runtime.store.addAiConversationMessage(conversationId, {
+      role: "user",
+      content: "可读取的对话正文",
+      metadata: {
+        mentionCharacterIds: [String(character.body.data.id)],
+        modelDisplayName: "保留的模型信息"
+      }
+    });
+
+    const ownerView = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(ownerView.body.data.messages[0].metadata.mentionCharacterIds).toEqual([character.body.data.id]);
+
+    const collaboratorView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(collaboratorView.body.data.messages[0]).toMatchObject({
+      content: "可读取的对话正文",
+      metadata: { modelDisplayName: "保留的模型信息" }
+    });
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionCharacterIds");
+
+    const pagedView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}?page=1&limit=20`).expect(200);
+    expect(pagedView.body.data.messagesPage.items[0].metadata).toEqual({ modelDisplayName: "保留的模型信息" });
   });
 
   it("AI 建议与对话按成员正文权限脱敏", async () => {

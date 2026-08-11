@@ -3916,6 +3916,20 @@ export class AiManager {
     return { action: "compacted", usage: compactedUsage, compaction };
   }
 
+  /** 解析本轮消息中的自动角色提及；不使用会话累计排除集，也不改写累计注入状态。 */
+  resolveInstructionMentions(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId">
+  ): ContextScope {
+    if (input.taskType !== "chat" || this.roleplayCharacterId(input.workId, input.conversationId)) return input.scope;
+    const matches = this.matchInstructionEntities(
+      input.workId,
+      input.instruction,
+      input.scope,
+      { characters: [], races: [], organizations: [] }
+    );
+    return this.mergeInstructionEntityMatches(input.scope, matches);
+  }
+
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
     const { model } = this.resolveModel(input.workId, "chat", input.modelId);
@@ -4151,21 +4165,17 @@ export class AiManager {
     return this.contextBuilder.buildPlan(input.workId, scope, workContextBudgetTokens, bookSummaryMaximumTokens, input.instruction);
   }
 
-  private applyKeywordEntityMentions(
+  private matchInstructionEntities(
     workId: string,
     instruction: string,
     scope: ContextScope,
-    conversationId: string | undefined,
-    persist: boolean
-  ): ContextScope {
-    const injected = conversationId
-      ? this.store.getAiConversationInjectedEntities(conversationId, workId)
-      : { characters: [], races: [], organizations: [] } satisfies AiInjectedEntities;
+    injected: AiInjectedEntities
+  ): KeywordEntityMatches {
     const proseSettingInfoOn = scope.suppressAutomaticContext !== true && (scope.includeSettingInfo === true || (
       PROSE_CONTEXT_SCOPE_TYPES.has(scope.type)
       && scope.includeSettingInfo !== false
     ));
-    const matches = matchKeywordEntities(this.store, workId, instruction, {
+    return matchKeywordEntities(this.store, workId, instruction, {
       excludeCharacterIds: [
         ...(scope.characterIds ?? []),
         ...(scope.mentionCharacterIds ?? []),
@@ -4176,9 +4186,31 @@ export class AiManager {
       // 正文范围已整表注入组织/种族时，关键词不再重复塞提及卡
       skipRacesAndOrganizations: proseSettingInfoOn
     });
+  }
+
+  private mergeInstructionEntityMatches(scope: ContextScope, matches: KeywordEntityMatches): ContextScope {
     const mentionCharacterIds = [...new Set([...(scope.mentionCharacterIds ?? []), ...matches.characterIds])];
     const raceIds = [...new Set([...(scope.raceIds ?? []), ...matches.raceIds])];
     const organizationIds = [...new Set([...(scope.organizationIds ?? []), ...matches.organizationIds])];
+    return {
+      ...scope,
+      ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
+      ...(raceIds.length ? { raceIds } : {}),
+      ...(organizationIds.length ? { organizationIds } : {})
+    };
+  }
+
+  private applyKeywordEntityMentions(
+    workId: string,
+    instruction: string,
+    scope: ContextScope,
+    conversationId: string | undefined,
+    persist: boolean
+  ): ContextScope {
+    const injected = conversationId
+      ? this.store.getAiConversationInjectedEntities(conversationId, workId)
+      : { characters: [], races: [], organizations: [] } satisfies AiInjectedEntities;
+    const matches = this.matchInstructionEntities(workId, instruction, scope, injected);
     if (persist && conversationId && (matches.characterIds.length || matches.raceIds.length || matches.organizationIds.length)) {
       this.store.mergeAiConversationInjectedEntities(conversationId, workId, {
         characters: matches.characterIds,
@@ -4186,12 +4218,7 @@ export class AiManager {
         organizations: matches.organizationIds
       });
     }
-    return {
-      ...scope,
-      ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
-      ...(raceIds.length ? { raceIds } : {}),
-      ...(organizationIds.length ? { organizationIds } : {})
-    };
+    return this.mergeInstructionEntityMatches(scope, matches);
   }
 
   private buildContext(

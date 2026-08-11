@@ -178,7 +178,7 @@ const settingSchema = z.object({
 const globalReplaceSchema = z.object({
   find: z.string().min(1).max(500),
   replacement: z.string().max(200_000),
-  scope: z.enum(["prose", "settings", "prose-and-settings"]).default("prose")
+  scope: z.enum(["prose", "settings", "prose-and-settings"])
 }).strict();
 
 const draftSchema = z.object({
@@ -917,9 +917,15 @@ function redactSuggestion(record: Record<string, unknown>, permissions: WorkModu
 }
 
 function redactAiConversationMessage(item: unknown, permissions: WorkModulePermissions): unknown {
-  if (permissions.prose !== "none") return item;
   const message = recordValue(item);
   if (!message) return item;
+  if (permissions.prose !== "none") {
+    if (permissions.characters !== "none") return item;
+    const metadata = recordValue(message.metadata);
+    if (!metadata || !("mentionCharacterIds" in metadata)) return item;
+    const { mentionCharacterIds: _mentionCharacterIds, ...readableMetadata } = metadata;
+    return { ...message, metadata: readableMetadata };
+  }
   return {
     ...message,
     content: proseRestrictedPlaceholder,
@@ -933,23 +939,23 @@ function redactAiConversationMessage(item: unknown, permissions: WorkModulePermi
 function redactAiConversation(record: Record<string, unknown>, permissions: WorkModulePermissions): Record<string, unknown> {
   const readableRecord = permissions.characters === "none" ? { ...record, roleplayCharacter: null } : record;
   const scopedRecord = redactAiCallContext(readableRecord, permissions);
-  if (permissions.prose !== "none") return scopedRecord;
   const result: Record<string, unknown> = {
-    ...scopedRecord,
-    title: proseRestrictedPlaceholder
+    ...scopedRecord
   };
-  if (typeof result.preview === "string" && result.preview.length > 0) {
-    result.preview = proseRestrictedPlaceholder;
-  }
-  if (Array.isArray(result.messages)) {
+  if ((permissions.prose === "none" || permissions.characters === "none") && Array.isArray(result.messages)) {
     result.messages = result.messages.map((item) => redactAiConversationMessage(item, permissions));
   }
   const messagesPage = recordValue(result.messagesPage);
-  if (messagesPage && Array.isArray(messagesPage.items)) {
+  if ((permissions.prose === "none" || permissions.characters === "none") && messagesPage && Array.isArray(messagesPage.items)) {
     result.messagesPage = {
       ...messagesPage,
       items: messagesPage.items.map((item) => redactAiConversationMessage(item, permissions))
     };
+  }
+  if (permissions.prose !== "none") return result;
+  result.title = proseRestrictedPlaceholder;
+  if (typeof result.preview === "string" && result.preview.length > 0) {
+    result.preview = proseRestrictedPlaceholder;
   }
   return { ...result, restricted: true };
 }
@@ -2512,6 +2518,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
+    const resolvedInstruction = instructionWithCitations(input.instruction, citations);
     const controller = new AbortController();
     response.on("close", () => {
       if (!response.writableEnded) controller.abort(new Error("浏览器已中断流式请求"));
@@ -2540,7 +2547,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         workId: request.params.workId,
         modelId: input.modelId,
         scope: input.scope as ContextScope,
-        instruction: instructionWithCitations(input.instruction, citations),
+        instruction: resolvedInstruction,
         excludeConversationMessageId: input.currentMessageId
       });
       sendEvent("context", {
@@ -2551,18 +2558,33 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }, permissions)
       });
       if (prepared.action === "warn") return;
+      const resolvedScope = input.currentMessageId
+        ? input.scope as ContextScope
+        : ai.resolveInstructionMentions({
+          workId: request.params.workId,
+          taskType: "chat",
+          instruction: resolvedInstruction,
+          scope: input.scope as ContextScope,
+          conversationId
+        });
+      const mentionCharacterIds = [...new Set([
+        ...(resolvedScope.characterIds ?? []),
+        ...(resolvedScope.mentionCharacterIds ?? [])
+      ])];
       const userMessage = input.currentMessageId
         ? null
         : store.addAiConversationMessage(conversationId, {
           role: "user",
           content: input.instruction,
-          citations
+          citations,
+          ...(mentionCharacterIds.length ? { metadata: { mentionCharacterIds } } : {})
         });
       const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
       if (userMessage) sendEvent("user_message", { message: redactAiConversationMessage(userMessage, permissions) });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
-        instruction: instructionWithCitations(input.instruction, citations),
+        instruction: resolvedInstruction,
+        // 仍由生成路径基于原始范围持久化累计注入，保证预解析不会吞掉本轮自动命中。
         scope: input.scope as ContextScope,
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),

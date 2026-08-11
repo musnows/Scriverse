@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildAiReferenceScope, listAiMentionOptions, mergeAiReferenceScope } from "../../src/public/ai-mentions.js";
+import { buildAiReferenceScope, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "../../src/public/ai-mentions.js";
 
 describe("AI @ 引用", () => {
   const characters = [{ id: "character-1", name: "哥斯拉" }];
@@ -43,5 +43,23 @@ describe("AI @ 引用", () => {
     expect(mergeAiReferenceScope({ type: "none", includeSettingInfo: false }, [
       { kind: "context-settings", id: "include-setting-info" }
     ])).toEqual({ type: "none", includeSettingInfo: true });
+  });
+
+  it("按消息引用顺序解析角色名并跳过重复或已删除角色", () => {
+    expect(userMessageMentionNames([
+      "character-2",
+      "character-1",
+      "character-2",
+      "character-deleted"
+    ], [
+      { id: "character-1", name: "哥斯拉" },
+      { id: "character-2", name: "魔斯拉" }
+    ])).toEqual(["魔斯拉", "哥斯拉"]);
+  });
+
+  it("没有有效角色引用时返回空列表", () => {
+    expect(userMessageMentionNames([], characters)).toEqual([]);
+    expect(userMessageMentionNames(["character-deleted"], characters)).toEqual([]);
+    expect(userMessageMentionNames(null, characters)).toEqual([]);
   });
 });

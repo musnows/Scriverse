@@ -1432,6 +1432,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .draft-type-filter-field { display: grid; min-width: 0; }
 .draft-type-filter-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .draft-type-filter-field select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.setting-filter-toolbar { grid-template-columns: minmax(0, 1.2fr) repeat(2, minmax(0, .8fr)) auto; }
+.setting-filter-field { display: grid; min-width: 0; }
+.setting-filter-field > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.setting-filter-field input, .setting-filter-field select { width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; background: var(--surface); color: var(--ink); font-size: 11px; }
 .draft-binding-field { min-width: 0; }
 .draft-binding-field > label { display: grid; gap: 7px; }
 .character-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2504,6 +2508,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-citation-card pre { display: none; grid-column: 1 / -1; max-height: 160px; overflow: auto; margin: 0; padding: 9px; border-top: 1px solid var(--line); background: var(--surface); font: 10px/1.55 var(--font-cjk), sans-serif; white-space: pre-wrap; }
 .ai-citation-card.is-expanded pre { display: block; }
 .message-citations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }.message-citations span { padding: 3px 6px; border: 1px solid currentColor; border-radius: 10px; font-size: 8px; opacity: .75; }
+.user-message-mentions { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; margin-top: 8px; padding-top: 7px; border-top: 1px solid color-mix(in srgb, currentColor 28%, transparent); font-size: 8px; line-height: 1.4; }
+.user-message-mentions-label { flex: 0 0 auto; opacity: .72; letter-spacing: .08em; }
+.user-message-mention { min-width: 0; max-width: 100%; padding: 2px 6px; overflow-wrap: anywhere; border: 1px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 999px; background: color-mix(in srgb, currentColor 12%, transparent); }
 
 /* Toast 使用 Popover Top Layer；必须覆盖 UA 默认居中/系统边框/Canvas 背景 */
 .toast-region,
@@ -2878,6 +2885,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .character-filter-toolbar { grid-template-columns: minmax(0, 1fr); }
   .character-filter-toolbar-actions { justify-content: flex-start; }
   .draft-filter-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .setting-filter-toolbar { grid-template-columns: minmax(0, 1fr); }
 }
 .entity-editor-open { overflow: hidden; }
 .preview-record-card { cursor: pointer; }
@@ -3545,7 +3553,7 @@ body { font-size: var(--ui-font-size); }
 .ai-context-distribution-label small, .ai-context-distribution-label strong { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-send-button { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-citation-main strong { font-size: calc(10px * var(--ai-font-scale)); }
-.ai-citation-main small, .ai-citation-main span, .message-citations span { font-size: calc(9px * var(--ai-font-scale)); }
+.ai-citation-main small, .ai-citation-main span, .message-citations span, .user-message-mentions { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-history-item strong { font-size: calc(14px * var(--ai-font-scale)); }
 .ai-history-item small { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
