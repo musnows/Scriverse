@@ -6,8 +6,8 @@ import { createTestRuntime } from "../helpers.js";
 describe("分析任务创建 API 类型白名单", () => {
   let runtime: Runtime | null = null;
 
-  afterEach(() => {
-    runtime?.close();
+  afterEach(async () => {
+    await runtime?.close();
     runtime = null;
   });
 
