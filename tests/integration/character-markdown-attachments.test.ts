@@ -41,6 +41,19 @@ describe("人物 Markdown 章节与附件", () => {
     expect(runtime.store.listAttachments(String(work.id))).toHaveLength(1);
   });
 
+  it("超出图片附件大小时返回明确的大小错误", async () => {
+    const work = await createWork(runtime);
+    const oversized = await request(runtime.app)
+      .post("/api/works/" + String(work.id) + "/attachments")
+      .attach("file", Buffer.alloc(30 * 1024 * 1024 + 1), { filename: "超大图片.gif", contentType: "image/gif" });
+    expect(oversized.status).toBe(413);
+    expect(oversized.body.error).toEqual({
+      code: "ATTACHMENT_TOO_LARGE",
+      message: "图片附件不能超过 30 MB"
+    });
+    expect(runtime.store.listAttachments(String(work.id))).toEqual([]);
+  });
+
   it("删除作品时清理不再被其他作品使用的附件文件", async () => {
     const work = await createWork(runtime);
     const png = await sharp({

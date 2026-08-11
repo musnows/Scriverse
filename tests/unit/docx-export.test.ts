@@ -5,6 +5,7 @@ import { exportWorkDocx } from "../../src/docx-export.js";
 
 let validPng: Buffer;
 let validWebp: Buffer;
+const validGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
 
 async function loadDocumentXml(buffer: Buffer): Promise<{ archive: JSZip; documentXml: string }> {
   const archive = await JSZip.loadAsync(buffer);
@@ -77,5 +78,20 @@ describe("exportWorkDocx", () => {
     const media = await mediaEntry![1].async("nodebuffer");
     expect(media.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true);
     expect(documentXml).toContain("WebP 封面书");
+  });
+
+  it("GIF 封面转码为 PNG 后可嵌入", async () => {
+    const buffer = await exportWorkDocx({
+      title: "GIF 封面书",
+      volumes: [{ title: "卷一", chapters: [{ title: "章一", content: "正文。" }] }],
+      cover: { mimeType: "image/gif", content: validGif }
+    });
+
+    const { archive, documentXml } = await loadDocumentXml(buffer);
+    const mediaEntry = Object.entries(archive.files).find(([name, file]) => /^word\/media\/[^/]+$/u.test(name) && !file.dir);
+    expect(mediaEntry).toBeTruthy();
+    const media = await mediaEntry![1].async("nodebuffer");
+    expect(media.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true);
+    expect(documentXml).toContain("GIF 封面书");
   });
 });

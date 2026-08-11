@@ -20,6 +20,16 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
   "base64"
 );
+const onePixelGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+const maximumAvatarImageUploadBytes = 2 * 1024 * 1024;
+
+function gifOfSize(size: number): Buffer {
+  return Buffer.concat([onePixelGif.subarray(0, -1), Buffer.alloc(size - onePixelGif.length), onePixelGif.subarray(-1)]);
+}
+
+function pngOfSize(size: number): Buffer {
+  return Buffer.concat([onePixelPng, Buffer.alloc(size - onePixelPng.length)]);
+}
 let authTestServer: Server;
 let activeRuntimeApp: Runtime["app"] | null = null;
 
@@ -2529,6 +2539,24 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(415);
     expect(invalid.body.error.code).toBe("INVALID_AVATAR");
 
+    const gifUploaded = await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", onePixelGif, "avatar.gif")
+      .expect(200);
+    const gifAvatar = await viewer.agent.get(String(gifUploaded.body.data.avatarUrl)).expect(200);
+    expect(gifAvatar.headers["content-type"]).toBe("image/gif");
+    expect(Buffer.from(gifAvatar.body)).toEqual(onePixelGif);
+    expect(runtime.database.get("SELECT mime_type, width, height FROM user_avatars WHERE user_id = ?", user.user.userId)).toEqual({
+      mime_type: "image/gif",
+      width: 1,
+      height: 1
+    });
+    await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", gifOfSize(maximumAvatarImageUploadBytes), "large.gif")
+      .expect(200);
+    expect(runtime.database.get("SELECT byte_length FROM user_avatars WHERE user_id = ?", user.user.userId)?.byte_length).toBe(maximumAvatarImageUploadBytes);
+
     const uploaded = await user.agent.put("/api/auth/avatar")
       .set("X-CSRF-Token", user.csrfToken)
       .attach("file", onePixelPng, "avatar.png")
@@ -2555,11 +2583,18 @@ describe("用户、作品权限与操作者追踪 API", () => {
       action: "user.avatar-updated"
     });
 
-    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1, 0);
-    await user.agent.put("/api/auth/avatar")
+    const oversizedGif = await user.agent.put("/api/auth/avatar")
       .set("X-CSRF-Token", user.csrfToken)
-      .attach("file", oversized, "too-large.png")
-      .expect(400);
+      .attach("file", gifOfSize(maximumAvatarImageUploadBytes + 1), "too-large.gif")
+      .expect(413);
+    expect(oversizedGif.body.error.code).toBe("IMAGE_TOO_LARGE");
+    expect(oversizedGif.body.error.message).toBe("头像图片不能超过 2 MB");
+    const oversized = await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", pngOfSize(maximumAvatarImageUploadBytes + 1), "too-large.png")
+      .expect(413);
+    expect(oversized.body.error.code).toBe("IMAGE_TOO_LARGE");
+    expect(oversized.body.error.message).toBe("头像图片不能超过 2 MB");
     expect(runtime.database.get("SELECT byte_length FROM user_avatars WHERE user_id = ?", user.user.userId)?.byte_length).toBe(onePixelPng.byteLength);
 
     const removed = await user.agent.delete("/api/auth/avatar").set("X-CSRF-Token", user.csrfToken).expect(200);

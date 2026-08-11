@@ -12,7 +12,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260811-context-usage-monotonic-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
@@ -381,7 +381,26 @@ function applyWorkAccessMode() {
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
-const maximumAvatarFileSize = 5 * 1024 * 1024;
+const maximumAvatarFileSize = 2 * 1024 * 1024;
+const maximumStandardImageFileSize = 5 * 1024 * 1024;
+const maximumGifImageFileSize = 20 * 1024 * 1024;
+const maximumAttachmentFileSize = 30 * 1024 * 1024;
+
+function isGifImageFile(file) {
+  return file.type === "image/gif" || /\.gif$/iu.test(file.name ?? "");
+}
+
+function maximumCoverFileSize(file) {
+  return isGifImageFile(file) ? maximumGifImageFileSize : maximumStandardImageFileSize;
+}
+
+function coverFileSizeMessage(file) {
+  return isGifImageFile(file) ? "GIF 封面不能超过 20 MB" : "PNG、JPEG 和 WebP 封面不能超过 5 MB";
+}
+
+function assertAttachmentFileSize(file) {
+  if (file.size > maximumAttachmentFileSize) throw new Error("图片附件不能超过 30 MB");
+}
 
 function setAiAssistantStatus(status) {
   const failed = status === "error";
@@ -9189,7 +9208,7 @@ function workCoverFieldHtml(work) {
   return `<section class="work-cover-field" aria-labelledby="work-cover-title">
     <div class="work-cover-copy">
       <strong id="work-cover-title">封面</strong>
-      <small>用于书架展示。支持 PNG、JPEG、WebP。</small>
+      <small>用于书架展示。支持 PNG、JPEG、WebP、GIF；普通图片不超过 5 MB，GIF 不超过 20 MB。</small>
     </div>
     <div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" aria-hidden="${work.coverUrl ? "false" : "true"}">
       ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}
@@ -9690,6 +9709,7 @@ function markdownImageLabel(file, fallback = "图片附件") {
 }
 
 async function uploadMarkdownAttachment(file, module = "settings") {
+  assertAttachmentFileSize(file);
   const body = new FormData();
   body.append("file", file);
   const attachment = await api(`/api/works/${state.work.id}/attachments?module=${encodeURIComponent(module)}`, { method: "POST", body });
@@ -9997,6 +10017,7 @@ function characterSectionImageLabel(file, fallback = "图片附件") {
 }
 
 async function uploadCharacterSectionAttachment(file) {
+  assertAttachmentFileSize(file);
   const body = new FormData();
   body.append("file", file);
   const attachment = await api(`/api/works/${state.work.id}/attachments?module=characters`, { method: "POST", body });
@@ -12478,7 +12499,7 @@ $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
   if (file.size > maximumAvatarFileSize) {
-    toast("头像文件不能超过 5 MB", "error");
+    toast("头像图片不能超过 2 MB", "error");
     event.target.value = "";
     return;
   }
@@ -13247,6 +13268,12 @@ $("#cover-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   const workId = state.pendingCoverWorkId;
   if (!file || !workId) return;
+  if (file.size > maximumCoverFileSize(file)) {
+    toast(coverFileSizeMessage(file), "error");
+    state.pendingCoverWorkId = null;
+    event.target.value = "";
+    return;
+  }
   const body = new FormData();
   body.append("file", file);
   try {

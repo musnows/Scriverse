@@ -15,6 +15,17 @@ const validWebp = Buffer.from([
   0x56, 0x50, 0x38, 0x4c, 0x05, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00
 ]);
+const validGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+const maximumStandardImageUploadBytes = 5 * 1024 * 1024;
+const maximumGifImageUploadBytes = 20 * 1024 * 1024;
+
+function gifOfSize(size: number): Buffer {
+  return Buffer.concat([validGif.subarray(0, -1), Buffer.alloc(size - validGif.length), validGif.subarray(-1)]);
+}
+
+function pngOfSize(size: number): Buffer {
+  return Buffer.concat([validPng, Buffer.alloc(size - validPng.length)]);
+}
 
 async function seedWork(runtime: Runtime, title = "功能测试作品") {
   const work = await request(runtime.app).post("/api/works").send({ title }).expect(201);
@@ -623,12 +634,27 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/jpeg/u);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validWebp, "cover.webp").expect(200);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/webp/u);
+    const gifCover = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validGif, "cover.gif").expect(200);
+    expect(gifCover.body.data.coverUrl).toContain(`/api/works/${workId}/cover?v=`);
+    const gifResponse = await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/gif/u);
+    expect(gifResponse.body).toEqual(validGif);
+    await request(runtime.app).put("/api/works/" + workId + "/cover").attach("file", gifOfSize(maximumGifImageUploadBytes), "large.gif").expect(200);
+    expect(runtime.database.get("SELECT byte_length FROM work_covers WHERE work_id = ?", workId)?.byte_length).toBe(maximumGifImageUploadBytes);
     const oversizedPng = Buffer.from(validPng);
     oversizedPng.writeUInt32BE(5_000, 16);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", oversizedPng, "oversized.png").expect(415);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng.subarray(0, 16), "truncated.png").expect(415);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", Buffer.from("<svg></svg>"), "cover.svg").expect(415);
-    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", Buffer.alloc(5 * 1024 * 1024 + 1), "too-large.png").expect(400);
+    const oversizedPngUpload = await request(runtime.app).put("/api/works/" + workId + "/cover")
+      .attach("file", pngOfSize(maximumStandardImageUploadBytes + 1), "too-large.png")
+      .expect(413);
+    expect(oversizedPngUpload.body.error.code).toBe("IMAGE_TOO_LARGE");
+    expect(oversizedPngUpload.body.error.message).toBe("PNG、JPEG 和 WebP 封面不能超过 5 MB");
+    const oversizedGifUpload = await request(runtime.app).put("/api/works/" + workId + "/cover")
+      .attach("file", gifOfSize(maximumGifImageUploadBytes + 1), "too-large.gif")
+      .expect(413);
+    expect(oversizedGifUpload.body.error.code).toBe("IMAGE_TOO_LARGE");
+    expect(oversizedGifUpload.body.error.message).toBe("GIF 封面不能超过 20 MB，PNG、JPEG 和 WebP 封面不能超过 5 MB");
     await request(runtime.app).delete(`/api/works/${workId}/cover`).expect(204);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(404);
   });
@@ -988,6 +1014,31 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       unsupported: true
     }).expect(400);
     expect(invalidBody.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it.each(["structure", "report-update"])("拒绝重跑已经不支持的历史分析类型 %s", async (taskType) => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "历史分析重跑测试" });
+    const original = runtime.store.createTask(String(work.id), {
+      taskType,
+      scope: { type: "book" }
+    });
+    runtime.store.updateTask(String(original.id), { status: "completed", progress: 100, result: {} });
+    const beforeCount = runtime.database.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM analysis_tasks WHERE work_id = ?",
+      String(work.id)
+    )?.count;
+
+    const response = await request(runtime.app).post(`/api/tasks/${original.id}/rerun`).send({}).expect(409);
+
+    expect(response.body.error).toMatchObject({
+      code: "TASK_NOT_RERUNNABLE",
+      message: `任务类型“${taskType}”已经不支持重跑`
+    });
+    expect(runtime.database.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM analysis_tasks WHERE work_id = ?",
+      String(work.id)
+    )?.count).toBe(beforeCount);
   });
 
   it("重跑关系任务时重新筛选已经变化的预检来源", async () => {

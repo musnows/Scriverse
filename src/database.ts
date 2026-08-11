@@ -6,9 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 85;
+export const DATABASE_SCHEMA_VERSION = 86;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -636,7 +636,7 @@ export class Database {
 
       CREATE TABLE IF NOT EXISTS work_covers (
         work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
-        mime_type TEXT NOT NULL CHECK(mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
+        mime_type TEXT NOT NULL CHECK(mime_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/gif')),
         content BLOB NOT NULL,
         byte_length INTEGER NOT NULL,
         sha256 TEXT NOT NULL,
@@ -1309,7 +1309,7 @@ export class Database {
         }
         this.run(`CREATE TABLE IF NOT EXISTS user_avatars (
           user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg', 'image/webp')),
+          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg', 'image/webp', 'image/gif')),
           content BLOB NOT NULL,
           byte_length INTEGER NOT NULL,
           sha256 TEXT NOT NULL,
@@ -3328,6 +3328,41 @@ export class Database {
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (85, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(86)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE work_covers_v86 (
+          work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/gif')),
+          content BLOB NOT NULL,
+          byte_length INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("INSERT INTO work_covers_v86 SELECT work_id, mime_type, content, byte_length, sha256, updated_at FROM work_covers");
+        this.run("DROP TABLE work_covers");
+        this.run("ALTER TABLE work_covers_v86 RENAME TO work_covers");
+        this.run(`CREATE TABLE user_avatars_v86 (
+          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg', 'image/webp', 'image/gif')),
+          content BLOB NOT NULL,
+          byte_length INTEGER NOT NULL,
+          sha256 TEXT NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run("INSERT INTO user_avatars_v86 SELECT user_id, mime_type, content, byte_length, sha256, width, height, updated_at FROM user_avatars");
+        this.run("DROP TABLE user_avatars");
+        this.run("ALTER TABLE user_avatars_v86 RENAME TO user_avatars");
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (86, ?)", new Date().toISOString());
       });
     }
   }

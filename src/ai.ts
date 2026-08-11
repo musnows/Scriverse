@@ -1,5 +1,6 @@
 import {
   ANALYSIS_TASK_TYPES,
+  HISTORICAL_ANALYSIS_TASK_TYPES,
   type AiInjectedEntities,
   type AiMessage,
   type AnalysisTaskType,
@@ -3208,6 +3209,10 @@ export class AiManager {
 
   rerunTask(taskId: string, modelOverrideId?: string): Record<string, unknown> {
     const original = this.store.getTask(taskId);
+    const originalTaskType = String(original.taskType);
+    if (HISTORICAL_ANALYSIS_TASK_TYPES.some((taskType) => taskType === originalTaskType)) {
+      throw new AppError(409, "TASK_NOT_RERUNNABLE", `任务类型“${originalTaskType}”已经不支持重跑`);
+    }
     const rerunnableStatuses = new Set(["review", "completed", "partial", "failed", "expired", "cancelled"]);
     if (!rerunnableStatuses.has(String(original.status))) {
       throw new AppError(409, "TASK_NOT_RERUNNABLE", "只有已结束的分析任务可以按原配置重跑");
@@ -3227,7 +3232,7 @@ export class AiManager {
     const modelId = modelOverrideId ?? originalModelId;
     if (modelId) this.resolveModel(String(original.workId), this.analysisTaskModelPurpose(String(original.taskType)), modelId);
     const rerun = this.store.createTask(String(original.workId), {
-      taskType: String(original.taskType),
+      taskType: originalTaskType,
       scope,
       ...(modelId ? { modelId } : {}),
       rerunOfTaskId: taskId

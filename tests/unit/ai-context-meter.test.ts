@@ -73,7 +73,7 @@ describe("AI 上下文用量提示", () => {
       inputTokens: 20_000,
       contextTokens: 12_000,
       conversationTokens: 6_000,
-      remainingTokens: 108_000,
+      remainingTokens: 90_000,
       usagePercent: 15.6,
       conversationUsagePercent: 20
     });

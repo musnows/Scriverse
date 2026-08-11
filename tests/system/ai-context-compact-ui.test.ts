@@ -59,7 +59,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain("normalizeAiContextTokenDistribution");
     expect(application).toContain("formatAiContextUsagePercent");
     expect(application).toContain("formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)");
-    expect(application).toContain('/ai-context-meter.js?v=20260811-context-usage-monotonic-v1');
+    expect(application).toContain('/ai-context-meter.js?v=20260812-context-usage-remaining-v2');
     expect(application).toContain("setAiContextDistributionVisible");
     expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 71px;");
     expect(styles).toContain(".ai-context-popover.hidden { display: none; }");

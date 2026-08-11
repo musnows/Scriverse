@@ -22,7 +22,7 @@ export type DocxExportVolume = {
 };
 
 export type DocxExportCover = {
-  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
   content: Buffer;
 };
 
@@ -54,7 +54,7 @@ function scaleCoverDimensions(width: number, height: number): { width: number; h
 }
 
 async function prepareCoverImage(cover: DocxExportCover): Promise<EmbeddedCoverImage> {
-  if (cover.mimeType === "image/webp") {
+  if (cover.mimeType === "image/webp" || cover.mimeType === "image/gif") {
     const png = await sharp(cover.content, { limitInputPixels: 16_777_216 }).png().toBuffer();
     const metadata = await sharp(png, { limitInputPixels: 16_777_216 }).metadata();
     const width = metadata.width ?? 1;
