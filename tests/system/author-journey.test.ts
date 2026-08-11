@@ -327,7 +327,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260812-agent-chat-font-size-v1');
+    expect(page.text).toContain('/app.js?v=20260812-image-upload-limit-v2');
     expect(page.text).toContain('/styles.css?v=20260812-agent-chat-font-size-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -415,6 +415,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-galaxy-icon {");
     expect(styles.text).toContain(".relationship-table .relationship-actions button");
     expect(page.text).toContain('id="avatar-file"');
+    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp,image/gif"');
+    expect(page.text).toContain("文件不超过 2 MB");
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
     expect(page.text).toContain('id="avatar-remove-button"');
@@ -423,6 +425,11 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain("选择后可框选正方形选区再裁剪上传");
     expect(application.text).toContain('/avatar-crop.js?v=20260725-avatar-crop');
     expect(application.text).toContain("async function openAvatarCropDialog(file)");
+    expect(application.text).toContain("const maximumAvatarFileSize = 2 * 1024 * 1024;");
+    expect(application.text).toContain("const maximumGifImageFileSize = 20 * 1024 * 1024;");
+    expect(application.text).toContain("const maximumAttachmentFileSize = 30 * 1024 * 1024;");
+    expect(application.text).toContain("图片附件不能超过 30 MB");
+    expect(application.text).toContain("普通图片不超过 5 MB，GIF 不超过 20 MB");
     expect(application.text).toContain('api("/api/auth/avatar", { method: "PUT", body })');
     expect(application.text).toContain('api("/api/auth/avatar", { method: "DELETE" })');
     expect(application.text).toContain("function renderUserAvatar(element, user)");

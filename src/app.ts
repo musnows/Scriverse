@@ -66,6 +66,31 @@ const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
 const maximumKnowledgeSectionsLength = 4_000_000;
+const maximumStandardImageUploadBytes = 5 * 1024 * 1024;
+const maximumGifImageUploadBytes = 20 * 1024 * 1024;
+const maximumAvatarImageUploadBytes = 2 * 1024 * 1024;
+const maximumMultipartCoverUploadBytes = maximumGifImageUploadBytes + 1;
+const maximumMultipartAvatarUploadBytes = maximumAvatarImageUploadBytes + 1;
+
+function assertImageUploadSize(byteLength: number, maximumBytes: number, message: string): void {
+  if (byteLength <= maximumBytes) return;
+  throw new AppError(413, "IMAGE_TOO_LARGE", message);
+}
+
+function isGifImageBuffer(bytes: Buffer): boolean {
+  return bytes.length >= 6 && (bytes.subarray(0, 6).toString("ascii") === "GIF87a" || bytes.subarray(0, 6).toString("ascii") === "GIF89a");
+}
+
+function uploadSizeError(pathname: string): { code: string; message: string } | null {
+  if (pathname === "/api/auth/avatar") return { code: "IMAGE_TOO_LARGE", message: "头像图片不能超过 2 MB" };
+  if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) {
+    return { code: "IMAGE_TOO_LARGE", message: "GIF 封面不能超过 20 MB，PNG、JPEG 和 WebP 封面不能超过 5 MB" };
+  }
+  if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
+    return { code: "ATTACHMENT_TOO_LARGE", message: "图片附件不能超过 30 MB" };
+  }
+  return null;
+}
 
 const captchaFields = {
   captchaId: z.string().trim().min(1).max(200),
@@ -1154,11 +1179,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   const coverUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
+    limits: { fileSize: maximumMultipartCoverUploadBytes, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
   const avatarUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
+    limits: { fileSize: maximumMultipartAvatarUploadBytes, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
   });
   const attachmentUpload = multer({
     storage: multer.diskStorage({
@@ -1272,6 +1297,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/auth/avatar", avatarUpload.single("file"), (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 头像");
+    assertImageUploadSize(request.file.buffer.byteLength, maximumAvatarImageUploadBytes, "头像图片不能超过 2 MB");
     try {
       const metadata = readRasterImageMetadata(request.file.buffer);
       const updated = database.transaction(() => {
@@ -1448,6 +1474,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/works/:workId/cover", coverUpload.single("file"), (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 封面");
     const bytes = request.file.buffer;
+    const isGif = isGifImageBuffer(bytes);
+    assertImageUploadSize(
+      bytes.byteLength,
+      isGif ? maximumGifImageUploadBytes : maximumStandardImageUploadBytes,
+      isGif ? "GIF 封面不能超过 20 MB" : "PNG、JPEG 和 WebP 封面不能超过 5 MB"
+    );
     try {
       const metadata = readRasterImageMetadata(bytes);
       const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
@@ -2791,6 +2823,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     if (error instanceof multer.MulterError) {
       logger.warn("http.request.upload_rejected", { ...commonFields, uploadCode: error.code });
+      if (error.code === "LIMIT_FILE_SIZE") {
+        const sizeError = uploadSizeError(request.path);
+        if (sizeError) {
+          response.status(413).json({ error: sizeError });
+          return;
+        }
+      }
       response.status(400).json({ error: { code: "UPLOAD_ERROR", message: error.message } });
       return;
     }
