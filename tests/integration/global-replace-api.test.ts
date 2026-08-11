@@ -30,10 +30,10 @@ describe("全局替换 API", () => {
 
   afterEach(() => runtime.close());
 
-  it("默认只替换正文并创建章节版本", async () => {
+  it("只替换正文并创建章节版本", async () => {
     const response = await request(runtime.app)
       .post(`/api/works/${workId}/replace`)
-      .send({ find: "共同词", replacement: "正文词" })
+      .send({ find: "共同词", replacement: "正文词", scope: "prose" })
       .expect(200);
 
     expect(response.body.data).toMatchObject({
@@ -105,13 +105,20 @@ describe("全局替换 API", () => {
     )?.count;
     const response = await request(runtime.app)
       .post(`/api/works/${workId}/replace`)
-      .send({ find: "不存在的文字", replacement: "替换" })
+      .send({ find: "不存在的文字", replacement: "替换", scope: "prose" })
       .expect(200);
     expect(response.body.data).toMatchObject({ chapterCount: 0, settingCount: 0, totalMatches: 0 });
     expect(runtime.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?", chapterId)?.count).toBe(beforeChapterVersions);
     expect(runtime.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?", settingId)?.count).toBe(beforeSettingVersions);
 
+    const missingScope = await request(runtime.app)
+      .post(`/api/works/${workId}/replace`)
+      .send({ find: "共同词", replacement: "不应替换" })
+      .expect(400);
+    expect(missingScope.body.error.code).toBe("VALIDATION_ERROR");
     await request(runtime.app).post(`/api/works/${workId}/replace`).send({ find: "共同词", replacement: "替换", scope: "unknown" }).expect(400);
     await request(runtime.app).post(`/api/works/${workId}/replace`).send({ find: "", replacement: "替换" }).expect(400);
+    expect(runtime.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?", chapterId)?.count).toBe(beforeChapterVersions);
+    expect(runtime.database.get<{ count: number }>("SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?", settingId)?.count).toBe(beforeSettingVersions);
   });
 });

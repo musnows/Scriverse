@@ -826,6 +826,20 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ title: "越权设定", category: "世界规则", content: "不应创建。" })
       .expect(403);
+    const chapterVersionsBeforeMissingScopeReplace = Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count);
+    const missingScopeReplace = await viewer.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", viewer.csrfToken)
+      .send({ find: "只能阅读", replacement: "越权替换" })
+      .expect(400);
+    expect(missingScopeReplace.body.error.code).toBe("VALIDATION_ERROR");
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content).toBe("只能阅读的正文。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeMissingScopeReplace);
     const replaceWrite = await viewer.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", viewer.csrfToken)
       .send({ find: "只能阅读", replacement: "越权替换", scope: "prose-and-settings" })
@@ -1214,6 +1228,17 @@ describe("用户、作品权限与操作者追踪 API", () => {
       "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'setting' AND entity_id = ?",
       editableSettingId
     )?.count);
+    const missingScopeReplace = await collaborator.agent.post(`/api/works/${workId}/replace`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ find: "正文侧替换", replacement: "不应替换" })
+      .expect(400);
+    expect(missingScopeReplace.body.error.code).toBe("VALIDATION_ERROR");
+    expect(runtime.database.get("SELECT content FROM chapters WHERE id = ?", chapter.body.data.id)?.content)
+      .toBe("已批量替换正文编辑，正文侧替换。");
+    expect(Number(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM chapter_versions WHERE chapter_id = ?",
+      chapter.body.data.id
+    )?.count)).toBe(chapterVersionsBeforeReadOnlyReplace);
     const combinedReplaceDenied = await collaborator.agent.post(`/api/works/${workId}/replace`)
       .set("X-CSRF-Token", collaborator.csrfToken)
       .send({ find: "正文侧替换", replacement: "不应替换", scope: "prose-and-settings" })
