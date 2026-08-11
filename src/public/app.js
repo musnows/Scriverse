@@ -12,7 +12,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260811-context-usage-monotonic-v1";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
@@ -2114,7 +2114,6 @@ function applyAiRoleplayCharacter(character) {
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
   renderAiQuickActions();
-  resetAiContextMeter();
 }
 
 function refreshAiMessageRoleLabels() {
@@ -2132,6 +2131,7 @@ async function updateAiRoleplayCharacter(characterId) {
   upsertAiConversationSummary(conversation);
   applyAiConversationTaskType(conversation.taskType);
   applyAiRoleplayCharacter(conversation.roleplayCharacter);
+  resetAiContextMeter();
   if ($("#ai-feed").querySelector("[data-message-id]")) refreshAiMessageRoleLabels();
   else resetAiFeed();
   toast(conversation.roleplayCharacter
@@ -8681,8 +8681,10 @@ function renderAiContextDistribution(usage) {
   popover.dataset.hasUsage = String(Boolean(usage));
 }
 
-function setAiContextMeter(usage) {
-  const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);
+function setAiContextMeter(usage, allowShrink = true) {
+  const displayUsage = allowShrink
+    ? resolveAiContextUsage(latestAiContextUsage, usage)
+    : mergeAiContextUsage(latestAiContextUsage, usage, false);
   latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
@@ -8702,7 +8704,9 @@ function setAiContextMeter(usage) {
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
-  value.textContent = `${percent}%`;
+  value.textContent = Number(displayUsage.inputTokens) > 0
+    ? formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)
+    : `${percent}%`;
   const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
@@ -11255,7 +11259,7 @@ async function sendAi() {
         || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
         || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
       if (suggestionFailed) setAiAssistantStatus("error");
-      setAiContextMeter(suggestion.contextUsage);
+      setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
@@ -11329,6 +11333,7 @@ async function streamChat(body) {
   let conversationTitle = null;
   let persistedUserMessage = null;
   let contextAction = "ready";
+  let streamContextCompacted = false;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -11380,7 +11385,7 @@ async function streamChat(body) {
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
-        setAiContextMeter(payload.usage);
+        if (!state.aiPromptSent) setAiContextMeter(payload.usage);
         if (payload.conversation?.id) {
           state.aiConversationId = payload.conversation.id;
           upsertAiConversationSummary(payload.conversation);
@@ -11447,6 +11452,7 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "context_compacted") {
+        streamContextCompacted = true;
         setAiContextMeter(payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
@@ -11454,7 +11460,8 @@ async function streamChat(body) {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
-        setAiContextMeter(payload.contextUsage);
+        const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
+        setAiContextMeter(payload.contextUsage, announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
