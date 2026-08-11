@@ -1653,6 +1653,67 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(runtime.store.getAiConversationInjectedEntities(roleplayConversationId, workId).characters).toEqual([]);
   });
 
+  it("同一角色跨消息再次出现时仍写入本条用户消息 metadata", async () => {
+    const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    const sentContexts: string[] = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+      sentContexts.push(body.messages?.find((message) => message.content?.startsWith("<story_context>"))?.content ?? "");
+      return new Response('data: {"choices":[{"delta":{"content":"已确认。"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+
+    const first = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "林舟第一次出场。",
+      scope: { type: "none" },
+      modelId,
+      conversationId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const firstUserMessage = JSON.parse(first.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      message?: { metadata?: { mentionCharacterIds?: string[] } };
+    };
+    expect(firstUserMessage.message?.metadata?.mentionCharacterIds).toEqual([automaticCharacter.body.data.id]);
+    expect(sentContexts[0]).toContain("<mentioned_characters>");
+
+    const second = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "请让沈星与林舟再次会面。",
+      scope: { type: "none", mentionCharacterIds: [manualCharacter.body.data.id] },
+      modelId,
+      conversationId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const secondUserMessage = JSON.parse(second.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as {
+      message?: { metadata?: { mentionCharacterIds?: string[] } };
+    };
+    expect(secondUserMessage.message?.metadata?.mentionCharacterIds).toEqual([
+      manualCharacter.body.data.id,
+      automaticCharacter.body.data.id
+    ]);
+    expect(sentContexts[1]).toContain("<mentioned_characters>");
+    expect(sentContexts[1]).toContain("沈星");
+    expect(sentContexts[1]).not.toContain("林舟");
+    expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).characters).toEqual([
+      automaticCharacter.body.data.id
+    ]);
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    const userMessages = reloaded.body.data.messages.filter((message: { role: string }) => message.role === "user");
+    expect(userMessages.map((message: { metadata: { mentionCharacterIds?: string[] } }) => message.metadata.mentionCharacterIds)).toEqual([
+      [automaticCharacter.body.data.id],
+      [manualCharacter.body.data.id, automaticCharacter.body.data.id]
+    ]);
+  });
+
   it("工具定义开启时在上游响应结束前推送首个正文 delta", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
