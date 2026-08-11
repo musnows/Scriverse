@@ -20,6 +20,11 @@ import {
 import { APP_VERSION } from "../../src/version.js";
 import { loadMasterSecret } from "../../src/credential-vault.js";
 import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
+import {
+  ATTACHMENT_IMAGE_MAX_BYTES_ENV,
+  AVATAR_IMAGE_MAX_BYTES_ENV,
+  COVER_IMAGE_MAX_BYTES_ENV
+} from "../../src/upload-limits.js";
 
 const roots: string[] = [];
 const runningServers: RunningLocalServer[] = [];
@@ -74,6 +79,29 @@ describe("本地服务运行时", () => {
     expect(isDevelopmentServer({ NODE_ENV: "production", npm_lifecycle_event: "start" })).toBe(false);
     expect(isDevelopmentServer({ NODE_ENV: "development" })).toBe(true);
     expect(isDevelopmentServer({ npm_lifecycle_event: "dev" })).toBe(true);
+  });
+
+  it("通过环境变量将图片上传限制传入运行时健康接口", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-upload-limits-"));
+    roots.push(root);
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: {
+        NODE_ENV: "test",
+        [AVATAR_IMAGE_MAX_BYTES_ENV]: "1024",
+        [COVER_IMAGE_MAX_BYTES_ENV]: "2048",
+        [ATTACHMENT_IMAGE_MAX_BYTES_ENV]: "4096"
+      }
+    });
+    runningServers.push(running);
+
+    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as {
+      data: { uploadLimits: { avatarBytes: number; coverBytes: number; attachmentBytes: number } };
+    };
+    expect(health.data.uploadLimits).toEqual({ avatarBytes: 1024, coverBytes: 2048, attachmentBytes: 4096 });
   });
 
   it("解析迁移备份保留数量并限制最低值", () => {

@@ -381,25 +381,42 @@ function applyWorkAccessMode() {
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
-const maximumAvatarFileSize = 2 * 1024 * 1024;
-const maximumStandardImageFileSize = 5 * 1024 * 1024;
-const maximumGifImageFileSize = 20 * 1024 * 1024;
-const maximumAttachmentFileSize = 30 * 1024 * 1024;
+const defaultImageUploadLimits = {
+  avatarBytes: 2 * 1024 * 1024,
+  coverBytes: 5 * 1024 * 1024,
+  attachmentBytes: 30 * 1024 * 1024
+};
+let imageUploadLimits = { ...defaultImageUploadLimits };
+
+function formatUploadLimit(bytes) {
+  if (bytes < 1024 * 1024) return `${bytes} B`;
+  const megabytes = bytes / (1024 * 1024);
+  return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(2)} MB`;
+}
+
+function applyImageUploadLimits(nextLimits) {
+  if (!nextLimits || typeof nextLimits !== "object") return;
+  const next = {
+    avatarBytes: Number(nextLimits.avatarBytes),
+    coverBytes: Number(nextLimits.coverBytes),
+    attachmentBytes: Number(nextLimits.attachmentBytes)
+  };
+  if (![next.avatarBytes, next.coverBytes, next.attachmentBytes].every((value) => Number.isSafeInteger(value) && value > 0)) return;
+  imageUploadLimits = next;
+  const avatarCopy = document.querySelector(".avatar-settings-copy small");
+  if (avatarCopy) avatarCopy.textContent = `支持 PNG、JPEG、WebP、GIF，文件不超过 ${formatUploadLimit(next.avatarBytes)}。选择后可框选正方形选区再裁剪上传。`;
+}
 
 function isGifImageFile(file) {
   return file.type === "image/gif" || /\.gif$/iu.test(file.name ?? "");
 }
 
-function maximumCoverFileSize(file) {
-  return isGifImageFile(file) ? maximumGifImageFileSize : maximumStandardImageFileSize;
-}
-
 function coverFileSizeMessage(file) {
-  return isGifImageFile(file) ? "GIF 封面不能超过 20 MB" : "PNG、JPEG 和 WebP 封面不能超过 5 MB";
+  return isGifImageFile(file) ? "封面不支持 GIF 图片" : `封面图片不能超过 ${formatUploadLimit(imageUploadLimits.coverBytes)}`;
 }
 
 function assertAttachmentFileSize(file) {
-  if (file.size > maximumAttachmentFileSize) throw new Error("图片附件不能超过 30 MB");
+  if (file.size > imageUploadLimits.attachmentBytes) throw new Error(`图片附件不能超过 ${formatUploadLimit(imageUploadLimits.attachmentBytes)}`);
 }
 
 function setAiAssistantStatus(status) {
@@ -2806,6 +2823,7 @@ async function api(path, options = {}) {
   }
   const payload = await response.json();
   if (path === "/api/health") {
+    applyImageUploadLimits(payload.data?.uploadLimits);
     updateSystemHealth({
       status: payload.data?.status === "ok" ? "ready" : "degraded",
       version: payload.data?.version
@@ -9208,7 +9226,7 @@ function workCoverFieldHtml(work) {
   return `<section class="work-cover-field" aria-labelledby="work-cover-title">
     <div class="work-cover-copy">
       <strong id="work-cover-title">封面</strong>
-      <small>用于书架展示。支持 PNG、JPEG、WebP、GIF；普通图片不超过 5 MB，GIF 不超过 20 MB。</small>
+      <small>用于书架展示。支持 PNG、JPEG、WebP；文件不超过 ${formatUploadLimit(imageUploadLimits.coverBytes)}。</small>
     </div>
     <div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" aria-hidden="${work.coverUrl ? "false" : "true"}">
       ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}
@@ -12498,8 +12516,8 @@ function exportAvatarCropBlob() {
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  if (file.size > maximumAvatarFileSize) {
-    toast("头像图片不能超过 2 MB", "error");
+  if (file.size > imageUploadLimits.avatarBytes) {
+    toast(`头像图片不能超过 ${formatUploadLimit(imageUploadLimits.avatarBytes)}`, "error");
     event.target.value = "";
     return;
   }
@@ -13268,7 +13286,13 @@ $("#cover-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   const workId = state.pendingCoverWorkId;
   if (!file || !workId) return;
-  if (file.size > maximumCoverFileSize(file)) {
+  if (isGifImageFile(file)) {
+    toast("封面不支持 GIF 图片", "error");
+    state.pendingCoverWorkId = null;
+    event.target.value = "";
+    return;
+  }
+  if (file.size > imageUploadLimits.coverBytes) {
     toast(coverFileSizeMessage(file), "error");
     state.pendingCoverWorkId = null;
     event.target.value = "";
