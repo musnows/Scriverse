@@ -2543,7 +2543,7 @@ function clearChapterLineSelection() {
 }
 
 const typographyStorageKey = "ai-novel-typography-v1";
-const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, uiFontSize: 14, aiFontSize: 14, density: "balanced" });
+const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, uiFontSize: 14, aiFontSize: 12, density: "balanced" });
 const cjkFontStacks = {
   system: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC"',
   pingfang: '"PingFang SC", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC"',
