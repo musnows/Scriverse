@@ -20,6 +20,7 @@ const onePixelPng = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
   "base64"
 );
+const onePixelGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
 let authTestServer: Server;
 let activeRuntimeApp: Runtime["app"] | null = null;
 
@@ -2528,6 +2529,19 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .attach("file", Buffer.from("not an image"), "avatar.png")
       .expect(415);
     expect(invalid.body.error.code).toBe("INVALID_AVATAR");
+
+    const gifUploaded = await user.agent.put("/api/auth/avatar")
+      .set("X-CSRF-Token", user.csrfToken)
+      .attach("file", onePixelGif, "avatar.gif")
+      .expect(200);
+    const gifAvatar = await viewer.agent.get(String(gifUploaded.body.data.avatarUrl)).expect(200);
+    expect(gifAvatar.headers["content-type"]).toBe("image/gif");
+    expect(Buffer.from(gifAvatar.body)).toEqual(onePixelGif);
+    expect(runtime.database.get("SELECT mime_type, width, height FROM user_avatars WHERE user_id = ?", user.user.userId)).toEqual({
+      mime_type: "image/gif",
+      width: 1,
+      height: 1
+    });
 
     const uploaded = await user.agent.put("/api/auth/avatar")
       .set("X-CSRF-Token", user.csrfToken)

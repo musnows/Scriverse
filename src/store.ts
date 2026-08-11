@@ -1491,7 +1491,7 @@ export class Store {
     return storageKeys.filter((storageKey) => !this.attachmentStorageKeyInUse(storageKey));
   }
 
-  setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
+  setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
     const sha256 = createHash("sha256").update(content).digest("hex");
     this.db.transaction(() => {
       const current = this.getWork(workId);
@@ -1522,12 +1522,12 @@ export class Store {
     return cover;
   }
 
-  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
+  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_covers WHERE work_id = ?", workId);
     if (!row) return null;
     const mimeType = requiredString(row, "mime_type");
-    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp") {
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp" && mimeType !== "image/gif") {
       throw new AppError(500, "INVALID_COVER_MIME", "作品封面类型无效");
     }
     return {

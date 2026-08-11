@@ -9189,7 +9189,7 @@ function workCoverFieldHtml(work) {
   return `<section class="work-cover-field" aria-labelledby="work-cover-title">
     <div class="work-cover-copy">
       <strong id="work-cover-title">封面</strong>
-      <small>用于书架展示。支持 PNG、JPEG、WebP。</small>
+      <small>用于书架展示。支持 PNG、JPEG、WebP、GIF。</small>
     </div>
     <div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" aria-hidden="${work.coverUrl ? "false" : "true"}">
       ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}

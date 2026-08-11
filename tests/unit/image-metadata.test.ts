@@ -39,11 +39,19 @@ function webpLossless(width: number, height: number): Buffer {
   return bytes;
 }
 
+function gif(width: number, height: number): Buffer {
+  const bytes = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+  bytes.writeUInt16LE(width, 6);
+  bytes.writeUInt16LE(height, 8);
+  return bytes;
+}
+
 describe("图片元数据校验", () => {
-  it("读取 PNG、JPEG 和 WebP 的真实格式与尺寸", () => {
+  it("读取 PNG、JPEG、WebP 和 GIF 的真实格式与尺寸", () => {
     expect(readRasterImageMetadata(png(640, 480))).toEqual({ mimeType: "image/png", width: 640, height: 480 });
     expect(readRasterImageMetadata(jpeg(320, 240))).toEqual({ mimeType: "image/jpeg", width: 320, height: 240 });
     expect(readRasterImageMetadata(webpLossless(1024, 768))).toEqual({ mimeType: "image/webp", width: 1024, height: 768 });
+    expect(readRasterImageMetadata(gif(160, 120))).toEqual({ mimeType: "image/gif", width: 160, height: 120 });
   });
 
   it("拒绝伪造扩展名、截断文件和超限尺寸", () => {
@@ -51,5 +59,6 @@ describe("图片元数据校验", () => {
     expect(() => readRasterImageMetadata(png(200, 200).subarray(0, 33))).toThrow(/缺少结束标记/u);
     expect(() => readRasterImageMetadata(png(4097, 100))).toThrow(/4096/u);
     expect(() => readRasterImageMetadata(jpeg(100, 100).subarray(0, -2))).toThrow(/不完整/u);
+    expect(() => readRasterImageMetadata(gif(100, 100).subarray(0, -1))).toThrow(/结束标记/u);
   });
 });

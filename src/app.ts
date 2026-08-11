@@ -1271,7 +1271,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.put("/api/auth/avatar", avatarUpload.single("file"), (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
-    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 头像");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 头像");
     try {
       const metadata = readRasterImageMetadata(request.file.buffer);
       const updated = database.transaction(() => {
@@ -1446,7 +1446,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.send(cover.content);
   });
   app.put("/api/works/:workId/cover", coverUpload.single("file"), (request, response) => {
-    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 封面");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 封面");
     const bytes = request.file.buffer;
     try {
       const metadata = readRasterImageMetadata(bytes);

@@ -1164,4 +1164,99 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
+
+  it("迁移 86 扩展封面和头像图片格式并保留已有数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-image-format-"));
+    roots.push(root);
+    const filename = join(root, "image-format.db");
+    const current = new Database(filename);
+    const work = new Store(current).createWork({ title: "图片格式迁移作品" });
+    const timestamp = "2026-08-12T00:00:00.000Z";
+    current.run(
+      "INSERT INTO work_covers (work_id, mime_type, content, byte_length, sha256, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      String(work.id),
+      "image/png",
+      Buffer.from("legacy-cover"),
+      12,
+      "legacy-cover-sha",
+      timestamp
+    );
+    current.run(
+      `INSERT INTO users (id, username, normalized_username, display_name, password_hash, password_salt, role, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'user', 'active', ?, ?)`,
+      "image-format-user",
+      "image-format-user",
+      "image-format-user",
+      "图片用户",
+      "hash",
+      "salt",
+      timestamp,
+      timestamp
+    );
+    current.run(
+      "INSERT INTO user_avatars (user_id, mime_type, content, byte_length, sha256, width, height, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "image-format-user",
+      "image/png",
+      Buffer.from("legacy-avatar"),
+      13,
+      "legacy-avatar-sha",
+      1,
+      1,
+      timestamp
+    );
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec(`
+      PRAGMA foreign_keys = OFF;
+      CREATE TABLE work_covers_v85 (
+        work_id TEXT PRIMARY KEY REFERENCES works(id) ON DELETE CASCADE,
+        mime_type TEXT NOT NULL CHECK(mime_type IN ('image/jpeg', 'image/png', 'image/webp')),
+        content BLOB NOT NULL,
+        byte_length INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO work_covers_v85 SELECT work_id, mime_type, content, byte_length, sha256, updated_at FROM work_covers;
+      DROP TABLE work_covers;
+      ALTER TABLE work_covers_v85 RENAME TO work_covers;
+      CREATE TABLE user_avatars_v85 (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        mime_type TEXT NOT NULL CHECK(mime_type IN ('image/png', 'image/jpeg', 'image/webp')),
+        content BLOB NOT NULL,
+        byte_length INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        width INTEGER NOT NULL,
+        height INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO user_avatars_v85 SELECT user_id, mime_type, content, byte_length, sha256, width, height, updated_at FROM user_avatars;
+      DROP TABLE user_avatars;
+      ALTER TABLE user_avatars_v85 RENAME TO user_avatars;
+      DELETE FROM schema_migrations WHERE version = 86;
+    `);
+    legacy.close();
+
+    const migrated = new Database(filename);
+    const migratedCover = migrated.get<{ mime_type: string; content: Uint8Array }>(
+      "SELECT mime_type, content FROM work_covers WHERE work_id = ?",
+      String(work.id)
+    );
+    expect(migratedCover?.mime_type).toBe("image/png");
+    expect(Buffer.from(migratedCover?.content ?? new Uint8Array())).toEqual(Buffer.from("legacy-cover"));
+    const migratedAvatar = migrated.get<{ mime_type: string; content: Uint8Array }>(
+      "SELECT mime_type, content FROM user_avatars WHERE user_id = ?",
+      "image-format-user"
+    );
+    expect(migratedAvatar?.mime_type).toBe("image/png");
+    expect(Buffer.from(migratedAvatar?.content ?? new Uint8Array())).toEqual(Buffer.from("legacy-avatar"));
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE name = 'work_covers'")?.sql)).toContain("image/gif");
+    expect(String(migrated.get("SELECT sql FROM sqlite_master WHERE name = 'user_avatars'")?.sql)).toContain("image/gif");
+    expect(() => migrated.run("UPDATE work_covers SET mime_type = 'image/gif' WHERE work_id = ?", String(work.id))).not.toThrow();
+    expect(() => migrated.run("UPDATE user_avatars SET mime_type = 'image/gif' WHERE user_id = ?", "image-format-user")).not.toThrow();
+    expect(migrated.get("SELECT MAX(version) AS version FROM schema_migrations")).toEqual({ version: DATABASE_SCHEMA_VERSION });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
 });

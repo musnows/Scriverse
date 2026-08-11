@@ -508,7 +508,7 @@ export class UserAuthService {
     return this.getUser(userId);
   }
 
-  setAvatar(userId: string, input: { mimeType: "image/png" | "image/jpeg" | "image/webp"; content: Buffer; width: number; height: number }): AuthUser {
+  setAvatar(userId: string, input: { mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif"; content: Buffer; width: number; height: number }): AuthUser {
     this.getUser(userId);
     const timestamp = new Date().toISOString();
     const digest = createHash("sha256").update(input.content).digest("hex");

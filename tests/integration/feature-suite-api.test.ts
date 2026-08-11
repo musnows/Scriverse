@@ -15,6 +15,7 @@ const validWebp = Buffer.from([
   0x56, 0x50, 0x38, 0x4c, 0x05, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00
 ]);
+const validGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
 
 async function seedWork(runtime: Runtime, title = "功能测试作品") {
   const work = await request(runtime.app).post("/api/works").send({ title }).expect(201);
@@ -623,6 +624,10 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/jpeg/u);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validWebp, "cover.webp").expect(200);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/webp/u);
+    const gifCover = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validGif, "cover.gif").expect(200);
+    expect(gifCover.body.data.coverUrl).toContain(`/api/works/${workId}/cover?v=`);
+    const gifResponse = await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/gif/u);
+    expect(gifResponse.body).toEqual(validGif);
     const oversizedPng = Buffer.from(validPng);
     oversizedPng.writeUInt32BE(5_000, 16);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", oversizedPng, "oversized.png").expect(415);

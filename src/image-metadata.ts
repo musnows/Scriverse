@@ -1,5 +1,5 @@
 export type RasterImageMetadata = {
-  mimeType: "image/png" | "image/jpeg" | "image/webp";
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif";
   width: number;
   height: number;
 };
@@ -113,8 +113,20 @@ function readWebp(bytes: Buffer): RasterImageMetadata | null {
   return { mimeType: "image/webp", width, height };
 }
 
+function readGif(bytes: Buffer): RasterImageMetadata | null {
+  if (bytes.length < 6) return null;
+  const signature = bytes.subarray(0, 6).toString("ascii");
+  if (signature !== "GIF87a" && signature !== "GIF89a") return null;
+  if (bytes.length < 14) throw new InvalidRasterImageError("GIF 文件结构不完整");
+  if (bytes[bytes.length - 1] !== 0x3b) throw new InvalidRasterImageError("GIF 文件缺少结束标记");
+  const width = bytes.readUInt16LE(6);
+  const height = bytes.readUInt16LE(8);
+  assertDimensions(width, height);
+  return { mimeType: "image/gif", width, height };
+}
+
 export function readRasterImageMetadata(bytes: Buffer): RasterImageMetadata {
-  const metadata = readPng(bytes) ?? readJpeg(bytes) ?? readWebp(bytes);
-  if (!metadata) throw new InvalidRasterImageError("仅支持 PNG、JPEG 或 WebP 图片");
+  const metadata = readPng(bytes) ?? readJpeg(bytes) ?? readWebp(bytes) ?? readGif(bytes);
+  if (!metadata) throw new InvalidRasterImageError("仅支持 PNG、JPEG、WebP 或 GIF 图片");
   return metadata;
 }
