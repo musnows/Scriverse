@@ -225,6 +225,8 @@ describe("数据库版本化迁移", () => {
       "id",
       "work_id",
       "page_key",
+      "action",
+      "page_deleted",
       "recipient_client_ids_json"
     ]));
     expect(first.all("PRAGMA index_list(presence_changes)").map((index) => index.name)).toEqual(expect.arrayContaining([
@@ -352,7 +354,7 @@ describe("数据库版本化迁移", () => {
       VALUES ('conversation-migration-74', 'work-migration-74', '旧对话', '重复重复', '2025-01-01', '2025-01-01');
       DROP TABLE s3_backup_runs;
       DROP TABLE s3_backup_targets;
-      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79, 80, 81, 82, 83, 84);
+      DELETE FROM schema_migrations WHERE version IN (75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85);
     `);
     const searchRow = legacy.prepare(
       "SELECT id FROM ai_history_search WHERE source_type = 'conversation' AND source_id = 'conversation-migration-74'"
@@ -399,7 +401,7 @@ describe("数据库版本化迁移", () => {
       );
       INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
       VALUES (1, 'top-right', '{"characters":25}', 60, '2026-08-09T00:00:00.000Z');
-      DELETE FROM schema_migrations WHERE version IN (78, 79, 80, 81, 82, 83, 84);
+      DELETE FROM schema_migrations WHERE version IN (78, 79, 80, 81, 82, 83, 84, 85);
     `);
     legacy.close();
 
@@ -436,7 +438,7 @@ describe("数据库版本化迁移", () => {
       );
       INSERT INTO platform_ui_settings (id, toast_position, page_sizes_json, galaxy_frame_rate, updated_at)
       VALUES (1, 'top-right', '{"characters":25}', 120, '2026-08-09T00:00:00.000Z');
-      DELETE FROM schema_migrations WHERE version IN (79, 80, 81, 82, 83, 84);
+      DELETE FROM schema_migrations WHERE version IN (79, 80, 81, 82, 83, 84, 85);
     `);
     legacy.close();
 
@@ -670,13 +672,14 @@ describe("数据库版本化迁移", () => {
       DROP TABLE s3_backup_encryption;
       DROP TABLE presence_changes;
       DROP TABLE presence_entries;
-      DELETE FROM schema_migrations WHERE version IN (83, 84);
+      DELETE FROM schema_migrations WHERE version IN (83, 84, 85);
     `);
     legacy.close();
 
     const migrated = new Database(filename);
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 83")).toEqual({ count: 1 });
     expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 84")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 85")).toEqual({ count: 1 });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'presence_entries'")).toEqual({ name: "presence_entries" });
     expect(migrated.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'presence_changes'")).toEqual({ name: "presence_changes" });
     expect(migrated.all("PRAGMA index_list(presence_entries)").map((index) => index.name)).toEqual(expect.arrayContaining([
@@ -686,6 +689,10 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA index_list(presence_changes)").map((index) => index.name)).toEqual(expect.arrayContaining([
       "idx_presence_changes_work",
       "idx_presence_changes_saved_at"
+    ]));
+    expect(migrated.all("PRAGMA table_info(presence_changes)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "action",
+      "page_deleted"
     ]));
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
@@ -706,7 +713,7 @@ describe("数据库版本化迁移", () => {
       DROP TABLE s3_backup_encryption;
       DROP TABLE presence_changes;
       DROP TABLE presence_entries;
-      DELETE FROM schema_migrations WHERE version IN (83, 84);
+      DELETE FROM schema_migrations WHERE version IN (83, 84, 85);
       INSERT INTO file_versions (id, work_id, file_name, file_type, word_count, paragraph_count, snapshot_json, created_at)
       VALUES ('presence-migration-invalid-work', 'work-missing', 'invalid.txt', 'txt', 0, 0, '{}', '2026-08-10T00:00:00.000Z');
     `);
@@ -716,6 +723,7 @@ describe("数据库版本化迁移", () => {
     const inspected = new DatabaseSync(filename);
     expect(inspected.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 83").get()?.count).toBe(0);
     expect(inspected.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 84").get()?.count).toBe(0);
+    expect(inspected.prepare("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 85").get()?.count).toBe(0);
     expect(inspected.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name IN ('presence_entries', 'presence_changes')").get()?.count).toBe(0);
     expect(inspected.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_encryption'").get()?.count).toBe(0);
     expect(inspected.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
@@ -752,6 +760,51 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA index_list(ai_suggestions)").some((index) => index.name === "idx_ai_suggestions_work")).toBe(true);
     expect(migrated.all("PRAGMA index_list(file_versions)").some((index) => index.name === "idx_file_versions_work")).toBe(true);
     expect(migrated.all("PRAGMA index_list(chapter_insights)").some((index) => index.name === "idx_chapter_insights_chapter")).toBe(true);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 85 为既有协作变更补充动作字段并保留旧记录", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-presence-action-"));
+    roots.push(root);
+    const filename = join(root, "presence-action.db");
+    const current = new Database(filename);
+    current.run(
+      "INSERT INTO works (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      "work-presence-action",
+      "协作动作迁移作品",
+      "2026-08-11T00:00:00.000Z",
+      "2026-08-11T00:00:00.000Z"
+    );
+    current.run(
+      `INSERT INTO presence_changes (
+         id, work_id, page_key, label, actor_user_id, actor_display_name, saved_at, recipient_client_ids_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      "change-legacy-save",
+      "work-presence-action",
+      "editor:chapter-1",
+      "正文编辑",
+      "owner",
+      "作者",
+      "2026-08-11T00:00:01.000Z",
+      "[]"
+    );
+    current.run("ALTER TABLE presence_changes DROP COLUMN page_deleted");
+    current.run("ALTER TABLE presence_changes DROP COLUMN action");
+    current.run("DELETE FROM schema_migrations WHERE version = 85");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 85")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA table_info(presence_changes)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "action",
+      "page_deleted"
+    ]));
+    expect(migrated.get("SELECT action, page_deleted FROM presence_changes WHERE id = ?", "change-legacy-save")).toEqual({
+      action: "save",
+      page_deleted: 0
+    });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
