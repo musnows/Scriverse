@@ -17,7 +17,6 @@ const validWebp = Buffer.from([
 ]);
 const validGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
 const maximumStandardImageUploadBytes = 5 * 1024 * 1024;
-const maximumGifImageUploadBytes = 20 * 1024 * 1024;
 
 function gifOfSize(size: number): Buffer {
   return Buffer.concat([validGif.subarray(0, -1), Buffer.alloc(size - validGif.length), validGif.subarray(-1)]);
@@ -634,12 +633,11 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/jpeg/u);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validWebp, "cover.webp").expect(200);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/webp/u);
-    const gifCover = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validGif, "cover.gif").expect(200);
-    expect(gifCover.body.data.coverUrl).toContain(`/api/works/${workId}/cover?v=`);
-    const gifResponse = await request(runtime.app).get(`/api/works/${workId}/cover`).expect(200).expect("Content-Type", /image\/gif/u);
-    expect(gifResponse.body).toEqual(validGif);
-    await request(runtime.app).put("/api/works/" + workId + "/cover").attach("file", gifOfSize(maximumGifImageUploadBytes), "large.gif").expect(200);
-    expect(runtime.database.get("SELECT byte_length FROM work_covers WHERE work_id = ?", workId)?.byte_length).toBe(maximumGifImageUploadBytes);
+    const gifCover = await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validGif, "cover.gif").expect(415);
+    expect(gifCover.body.error).toEqual({
+      code: "UNSUPPORTED_COVER_FORMAT",
+      message: "封面不支持 GIF 图片"
+    });
     const oversizedPng = Buffer.from(validPng);
     oversizedPng.writeUInt32BE(5_000, 16);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", oversizedPng, "oversized.png").expect(415);
@@ -649,12 +647,12 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       .attach("file", pngOfSize(maximumStandardImageUploadBytes + 1), "too-large.png")
       .expect(413);
     expect(oversizedPngUpload.body.error.code).toBe("IMAGE_TOO_LARGE");
-    expect(oversizedPngUpload.body.error.message).toBe("PNG、JPEG 和 WebP 封面不能超过 5 MB");
+    expect(oversizedPngUpload.body.error.message).toBe("封面图片不能超过 5 MB");
     const oversizedGifUpload = await request(runtime.app).put("/api/works/" + workId + "/cover")
-      .attach("file", gifOfSize(maximumGifImageUploadBytes + 1), "too-large.gif")
+      .attach("file", gifOfSize(maximumStandardImageUploadBytes + 1), "too-large.gif")
       .expect(413);
     expect(oversizedGifUpload.body.error.code).toBe("IMAGE_TOO_LARGE");
-    expect(oversizedGifUpload.body.error.message).toBe("GIF 封面不能超过 20 MB，PNG、JPEG 和 WebP 封面不能超过 5 MB");
+    expect(oversizedGifUpload.body.error.message).toBe("封面图片不能超过 5 MB");
     await request(runtime.app).delete(`/api/works/${workId}/cover`).expect(204);
     await request(runtime.app).get(`/api/works/${workId}/cover`).expect(404);
   });

@@ -8,6 +8,7 @@ import { loadMasterSecret } from "./credential-vault.js";
 import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSecurityOptions } from "./security.js";
 import { logger, sanitizeError } from "./logger.js";
 import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
+import { resolveImageUploadLimits } from "./upload-limits.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -226,7 +227,8 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       developmentServer: isDevelopmentServer(options.env),
       releaseCheckIntervalMs: resolveReleaseCheckIntervalMs(options.env.APP_UPDATE_CHECK_INTERVAL_MINUTES),
       releaseCheckTimeoutMs: resolveReleaseCheckTimeoutMs(options.env.APP_UPDATE_CHECK_TIMEOUT_SECONDS),
-      releaseCheckRetries: resolveReleaseCheckRetries(options.env.APP_UPDATE_CHECK_RETRIES)
+      releaseCheckRetries: resolveReleaseCheckRetries(options.env.APP_UPDATE_CHECK_RETRIES),
+      uploadLimits: resolveImageUploadLimits(options.env)
     });
     await runtime.cleanupAttachments();
   } catch (error) {

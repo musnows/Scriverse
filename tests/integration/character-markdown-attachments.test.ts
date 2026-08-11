@@ -2,7 +2,15 @@ import { existsSync } from "node:fs";
 import request from "supertest";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntime } from "../../src/app.js";
 import { createTestRuntime, createWork } from "../helpers.js";
+
+const onePixelGif = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+
+function animatedGif(frameCount: number): Buffer {
+  const frame = onePixelGif.subarray(19, 33);
+  return Buffer.concat([onePixelGif.subarray(0, 19), ...Array.from({ length: frameCount }, () => frame), onePixelGif.subarray(33)]);
+}
 
 describe("人物 Markdown 章节与附件", () => {
   let runtime: ReturnType<typeof createTestRuntime>;
@@ -52,6 +60,51 @@ describe("人物 Markdown 章节与附件", () => {
       message: "图片附件不能超过 30 MB"
     });
     expect(runtime.store.listAttachments(String(work.id))).toEqual([]);
+  });
+
+  it("使用运行时配置的附件限制并拒绝 GIF 封面", async () => {
+    const limitedRuntime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "test-master-secret-with-at-least-32-characters",
+      disableUserAuth: true,
+      serveUi: false,
+      uploadLimits: { avatarBytes: 100, coverBytes: 100, attachmentBytes: 100 }
+    });
+    try {
+      const work = await createWork(limitedRuntime);
+      const oversized = await request(limitedRuntime.app)
+        .post(`/api/works/${String(work.id)}/attachments`)
+        .attach("file", Buffer.alloc(101), { filename: "超大图片.png", contentType: "image/png" })
+        .expect(413);
+      expect(oversized.body.error).toEqual({
+        code: "ATTACHMENT_TOO_LARGE",
+        message: "图片附件不能超过 100 B"
+      });
+
+      const gifCover = await request(limitedRuntime.app)
+        .put(`/api/works/${String(work.id)}/cover`)
+        .attach("file", onePixelGif, { filename: "封面.gif", contentType: "image/gif" })
+        .expect(415);
+      expect(gifCover.body.error).toEqual({
+        code: "UNSUPPORTED_COVER_FORMAT",
+        message: "封面不支持 GIF 图片"
+      });
+    } finally {
+      await limitedRuntime.close();
+    }
+  });
+
+  it("GIF 附件只按文件大小限制，不因动画帧数拦截", async () => {
+    const work = await createWork(runtime);
+    const upload = await request(runtime.app)
+      .post("/api/works/" + String(work.id) + "/attachments")
+      .attach("file", animatedGif(154), { filename: "多帧动画.gif", contentType: "image/gif" })
+      .expect(201);
+    expect(upload.body.data).toMatchObject({
+      originalMimeType: "image/gif",
+      pageCount: 154,
+      animated: true
+    });
   });
 
   it("删除作品时清理不再被其他作品使用的附件文件", async () => {

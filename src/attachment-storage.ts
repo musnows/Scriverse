@@ -4,6 +4,7 @@ import { copyFile, mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import sharp, { type Metadata } from "sharp";
 import { AppError } from "./errors.js";
+import { DEFAULT_ATTACHMENT_IMAGE_MAX_BYTES, formatUploadLimit } from "./upload-limits.js";
 
 const maximumPixels = 25_000_000;
 const maximumAnimationFrames = 100;
@@ -55,10 +56,26 @@ async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
+async function hasGifSignature(path: string): Promise<boolean> {
+  const handle = await open(path, "r");
+  const header = Buffer.alloc(6);
+  try {
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead !== header.length) return false;
+    const signature = header.toString("ascii");
+    return signature === "GIF87a" || signature === "GIF89a";
+  } finally {
+    await handle.close();
+  }
+}
+
 export class AttachmentStorage {
   readonly temporaryDirectory: string;
 
-  constructor(readonly rootDirectory: string) {
+  constructor(
+    readonly rootDirectory: string,
+    readonly maximumUploadBytes = DEFAULT_ATTACHMENT_IMAGE_MAX_BYTES
+  ) {
     this.temporaryDirectory = join(rootDirectory, ".tmp");
   }
 
@@ -100,10 +117,14 @@ export class AttachmentStorage {
   async ingest(sourcePath: string): Promise<StoredAttachmentFile> {
     await this.prepare();
     const originalStats = await stat(sourcePath);
+    if (originalStats.size > this.maximumUploadBytes) {
+      throw new AppError(413, "ATTACHMENT_TOO_LARGE", `图片附件不能超过 ${formatUploadLimit(this.maximumUploadBytes)}`);
+    }
     const originalSha256 = await sha256File(sourcePath);
+    const isGif = await hasGifSignature(sourcePath);
     let metadata: Metadata;
     try {
-      metadata = await sharp(sourcePath, { animated: true, limitInputPixels: maximumPixels, sequentialRead: true }).metadata();
+      metadata = await sharp(sourcePath, { animated: true, limitInputPixels: isGif ? false : maximumPixels, sequentialRead: true }).metadata();
     } catch {
       throw new AppError(415, "INVALID_ATTACHMENT_IMAGE", "附件不是有效的图片文件");
     }
@@ -115,11 +136,11 @@ export class AttachmentStorage {
     if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(pageHeight) || pageHeight <= 0) {
       throw new AppError(415, "INVALID_ATTACHMENT_IMAGE", "无法读取附件图片尺寸");
     }
-    if (width * pageHeight > maximumPixels) throw new AppError(413, "ATTACHMENT_IMAGE_TOO_LARGE", "附件图片像素尺寸过大");
-    if (!Number.isInteger(pageCount) || pageCount > maximumAnimationFrames) {
+    if (!isGif && width * pageHeight > maximumPixels) throw new AppError(413, "ATTACHMENT_IMAGE_TOO_LARGE", "附件图片像素尺寸过大");
+    if (!isGif && (!Number.isInteger(pageCount) || pageCount > maximumAnimationFrames)) {
       throw new AppError(413, "ATTACHMENT_ANIMATION_TOO_LARGE", "附件动画帧数过多");
     }
-    if (width * pageHeight * pageCount > maximumAnimationPixels) {
+    if (!isGif && width * pageHeight * pageCount > maximumAnimationPixels) {
       throw new AppError(413, "ATTACHMENT_ANIMATION_TOO_LARGE", "附件动画总像素量过大");
     }
 
@@ -127,7 +148,7 @@ export class AttachmentStorage {
     const candidatePath = join(this.temporaryDirectory, `${originalSha256}-${Date.now()}.webp`);
     let selectedPath = sourcePath;
     let storedMimeType = originalMimeType;
-    if (format !== "webp") {
+    if (format !== "webp" && !isGif) {
       try {
         await sharp(sourcePath, { animated: true, limitInputPixels: maximumPixels, sequentialRead: true })
           .webp({ lossless: true, effort: 6 })
@@ -141,12 +162,8 @@ export class AttachmentStorage {
           selectedPath = candidatePath;
           storedMimeType = "image/webp";
         }
-      } catch (error) {
+      } catch {
         await rm(candidatePath, { force: true });
-        if (format === "gif") {
-          if (error instanceof AppError) throw error;
-          throw new AppError(422, "ATTACHMENT_ANIMATION_CONVERSION_FAILED", "GIF 附件无法安全转换为动画 WebP");
-        }
       }
     }
 

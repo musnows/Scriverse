@@ -34,6 +34,7 @@ import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { S3BackupManager, type S3BackupManagerOptions } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
+import { DEFAULT_IMAGE_UPLOAD_LIMITS, formatUploadLimit, type ImageUploadLimits } from "./upload-limits.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
@@ -66,28 +67,19 @@ const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
 const maximumKnowledgeSectionsLength = 4_000_000;
-const maximumStandardImageUploadBytes = 5 * 1024 * 1024;
-const maximumGifImageUploadBytes = 20 * 1024 * 1024;
-const maximumAvatarImageUploadBytes = 2 * 1024 * 1024;
-const maximumMultipartCoverUploadBytes = maximumGifImageUploadBytes + 1;
-const maximumMultipartAvatarUploadBytes = maximumAvatarImageUploadBytes + 1;
 
 function assertImageUploadSize(byteLength: number, maximumBytes: number, message: string): void {
   if (byteLength <= maximumBytes) return;
   throw new AppError(413, "IMAGE_TOO_LARGE", message);
 }
 
-function isGifImageBuffer(bytes: Buffer): boolean {
-  return bytes.length >= 6 && (bytes.subarray(0, 6).toString("ascii") === "GIF87a" || bytes.subarray(0, 6).toString("ascii") === "GIF89a");
-}
-
-function uploadSizeError(pathname: string): { code: string; message: string } | null {
-  if (pathname === "/api/auth/avatar") return { code: "IMAGE_TOO_LARGE", message: "头像图片不能超过 2 MB" };
+function uploadSizeError(pathname: string, limits: ImageUploadLimits): { code: string; message: string } | null {
+  if (pathname === "/api/auth/avatar") return { code: "IMAGE_TOO_LARGE", message: `头像图片不能超过 ${formatUploadLimit(limits.avatarBytes)}` };
   if (/^\/api\/works\/[^/]+\/cover$/u.test(pathname)) {
-    return { code: "IMAGE_TOO_LARGE", message: "GIF 封面不能超过 20 MB，PNG、JPEG 和 WebP 封面不能超过 5 MB" };
+    return { code: "IMAGE_TOO_LARGE", message: `封面图片不能超过 ${formatUploadLimit(limits.coverBytes)}` };
   }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
-    return { code: "ATTACHMENT_TOO_LARGE", message: "图片附件不能超过 30 MB" };
+    return { code: "ATTACHMENT_TOO_LARGE", message: `图片附件不能超过 ${formatUploadLimit(limits.attachmentBytes)}` };
   }
   return null;
 }
@@ -706,6 +698,8 @@ export type RuntimeOptions = {
   revealCaptchaAnswer?: boolean;
   /** 当前服务是否由开发模式启动。 */
   developmentServer?: boolean;
+  /** 图片上传大小限制；未指定时使用默认值。 */
+  uploadLimits?: ImageUploadLimits;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
   backupOptions?: S3BackupManagerOptions;
 };
@@ -1040,6 +1034,7 @@ function redactVersionSnapshots(
 }
 
 export function createRuntime(options: RuntimeOptions): Runtime {
+  const uploadLimits = options.uploadLimits ?? DEFAULT_IMAGE_UPLOAD_LIMITS;
   logger.info("runtime.initializing", {
     databasePath: options.databasePath,
     serveUi: options.serveUi ?? true,
@@ -1054,7 +1049,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? mkdtempSync(join(tmpdir(), "scriverse-attachments-"))
     : null;
   const attachmentStorage = new AttachmentStorage(
-    options.attachmentDirectory ?? temporaryAttachmentRoot ?? join(dirname(options.databasePath), "attachments")
+    options.attachmentDirectory ?? temporaryAttachmentRoot ?? join(dirname(options.databasePath), "attachments"),
+    uploadLimits.attachmentBytes
   );
   mkdirSync(attachmentStorage.temporaryDirectory, { recursive: true, mode: 0o700 });
   const auth = new UserAuthService(database);
@@ -1179,18 +1175,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   const coverUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: maximumMultipartCoverUploadBytes, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
+    limits: { fileSize: uploadLimits.coverBytes + 1, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
   const avatarUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: maximumMultipartAvatarUploadBytes, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
+    limits: { fileSize: uploadLimits.avatarBytes + 1, files: 1, fields: 1, fieldSize: 1024, parts: 2, headerPairs: 50 }
   });
   const attachmentUpload = multer({
     storage: multer.diskStorage({
       destination: attachmentStorage.temporaryDirectory,
       filename: (_request, _file, callback) => callback(null, randomUUID())
     }),
-    limits: { fileSize: 30 * 1024 * 1024, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
+    limits: { fileSize: uploadLimits.attachmentBytes + 1, files: 1, fields: 4, fieldSize: 16 * 1024, parts: 5, headerPairs: 100 }
   });
 
   app.disable("x-powered-by");
@@ -1209,7 +1205,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       version: APP_VERSION,
       protocol: "openai-chat-completions",
       protocols: [...AI_PROVIDER_PROTOCOLS],
-      development: options.developmentServer === true
+      development: options.developmentServer === true,
+      uploadLimits
     });
   });
   app.get("/api/update-check", async (_request, response) => {
@@ -1297,7 +1294,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.put("/api/auth/avatar", avatarUpload.single("file"), (request, response) => {
     if (!request.authUser) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 头像");
-    assertImageUploadSize(request.file.buffer.byteLength, maximumAvatarImageUploadBytes, "头像图片不能超过 2 MB");
+    assertImageUploadSize(request.file.buffer.byteLength, uploadLimits.avatarBytes, `头像图片不能超过 ${formatUploadLimit(uploadLimits.avatarBytes)}`);
     try {
       const metadata = readRasterImageMetadata(request.file.buffer);
       const updated = database.transaction(() => {
@@ -1472,16 +1469,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.send(cover.content);
   });
   app.put("/api/works/:workId/cover", coverUpload.single("file"), (request, response) => {
-    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG、WebP 或 GIF 封面");
+    if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择 PNG、JPEG 或 WebP 封面");
     const bytes = request.file.buffer;
-    const isGif = isGifImageBuffer(bytes);
     assertImageUploadSize(
       bytes.byteLength,
-      isGif ? maximumGifImageUploadBytes : maximumStandardImageUploadBytes,
-      isGif ? "GIF 封面不能超过 20 MB" : "PNG、JPEG 和 WebP 封面不能超过 5 MB"
+      uploadLimits.coverBytes,
+      `封面图片不能超过 ${formatUploadLimit(uploadLimits.coverBytes)}`
     );
     try {
       const metadata = readRasterImageMetadata(bytes);
+      if (metadata.mimeType === "image/gif") throw new AppError(415, "UNSUPPORTED_COVER_FORMAT", "封面不支持 GIF 图片");
       const expectedVersionNo = parse(expectedVersionNoSchema, request.body.expectedVersionNo);
       data(response, store.setWorkCover(String(request.params.workId), metadata.mimeType, bytes, expectedVersionNo));
     } catch (error) {
@@ -2824,7 +2821,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (error instanceof multer.MulterError) {
       logger.warn("http.request.upload_rejected", { ...commonFields, uploadCode: error.code });
       if (error.code === "LIMIT_FILE_SIZE") {
-        const sizeError = uploadSizeError(request.path);
+        const sizeError = uploadSizeError(request.path, uploadLimits);
         if (sizeError) {
           response.status(413).json({ error: sizeError });
           return;
