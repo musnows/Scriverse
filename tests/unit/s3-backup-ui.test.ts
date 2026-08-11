@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   collectS3BackupRunTransitions,
+  s3BackupEncryptionKeyFile,
+  s3BackupEncryptionPresentation,
   s3BackupFailureToast,
   s3BackupRootPrefix,
   s3BackupStatusLabel
@@ -33,5 +35,22 @@ describe("S3 备份前端状态", () => {
   it("生成状态标签和失败 Toast 文案", () => {
     expect(["running", "succeeded", "failed"].map(s3BackupStatusLabel)).toEqual(["执行中", "成功", "失败"]);
     expect(s3BackupFailureToast({ targetName: "主备份", errorMessage: "AccessDenied" })).toBe("S3 备份目标“主备份”失败：AccessDenied");
+  });
+
+  it("区分加密开启、关闭与从未配置状态", () => {
+    expect(s3BackupEncryptionPresentation({ enabled: true, keyConfiguredAt: "2026-08-10T00:00:00.000Z" })).toMatchObject({
+      label: "已开启",
+      statusClass: "is-enabled",
+      showPrivateBucketWarning: false
+    });
+    expect(s3BackupEncryptionPresentation({ enabled: false, keyConfiguredAt: "2026-08-10T00:00:00.000Z" })).toMatchObject({
+      label: "已关闭",
+      showPrivateBucketWarning: true
+    });
+    expect(s3BackupEncryptionPresentation({ enabled: false, keyConfiguredAt: null })).toMatchObject({
+      label: "未开启",
+      showPrivateBucketWarning: true
+    });
+    expect(s3BackupEncryptionKeyFile("backup-key")).toBe("backup-key\n");
   });
 });

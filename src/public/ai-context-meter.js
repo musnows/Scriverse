@@ -17,6 +17,33 @@ export function resolveAiContextUsage(previousUsage, nextUsage) {
   return nextUsage && typeof nextUsage === "object" ? nextUsage : previousUsage ?? null;
 }
 
+const maximumAiContextUsageFields = [
+  "inputTokens",
+  "contextTokens",
+  "conversationTokens",
+  "usagePercent",
+  "conversationUsagePercent"
+];
+const minimumAiContextUsageFields = ["remainingTokens"];
+
+export function mergeAiContextUsage(previousUsage, nextUsage, allowShrink = false) {
+  if (!nextUsage || typeof nextUsage !== "object" || Array.isArray(nextUsage)) return previousUsage ?? null;
+  if (!previousUsage || typeof previousUsage !== "object" || Array.isArray(previousUsage) || allowShrink) return nextUsage;
+  const mergedUsage = { ...nextUsage };
+  for (const field of [...maximumAiContextUsageFields, ...minimumAiContextUsageFields]) {
+    const previousValue = Number(previousUsage[field]);
+    const nextValue = Number(nextUsage[field]);
+    if (Number.isFinite(previousValue) && Number.isFinite(nextValue)) {
+      mergedUsage[field] = minimumAiContextUsageFields.includes(field)
+        ? Math.min(previousValue, nextValue)
+        : Math.max(previousValue, nextValue);
+    }
+    else if (Number.isFinite(previousValue)) mergedUsage[field] = previousValue;
+    else if (Number.isFinite(nextValue)) mergedUsage[field] = nextValue;
+  }
+  return mergedUsage;
+}
+
 export function formatAiContextUsagePercent(occupiedTokens, contextWindow) {
   const occupied = tokenCount(occupiedTokens);
   const window = tokenCount(contextWindow);

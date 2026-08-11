@@ -1,9 +1,10 @@
 import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-size-threshold-v1";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
-import { findAiMention, listAiMentionOptions, mergeAiReferenceScope } from "/ai-mentions.js?v=20260801-context-setting-mention-v1";
+import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
-import { calculateLineNumberRowHeight, calculateLineNumberRowTop, calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
+import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
@@ -11,7 +12,7 @@ import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.j
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
-import { formatAiContextUsagePercent, formatAiContextUsageTooltip, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260801-retain-usage-v1";
+import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
@@ -48,16 +49,18 @@ import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
   resolveTimelineActiveTrackId,
   normalizeTimelineSortDirection,
   timelineTrackColorIndex
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
-import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
-import { collectS3BackupRunTransitions, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260804-s3-backup-v1";
+import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
+import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -153,16 +156,9 @@ const cachedWorkModules = new Set([
   "ai-settings"
 ]);
 
-function createPresenceClientId() {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const value = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
-}
-
-const presenceClientId = createPresenceClientId();
+let presenceSessionStorage = null;
+try { presenceSessionStorage = window.sessionStorage; } catch { /* 浏览器禁用存储时使用页面级新标识 */ }
+const presenceClientId = createPresenceClientId(presenceSessionStorage);
 const presenceHeartbeatInterval = 12_000;
 const systemBootCheckInterval = 8_000;
 let presenceParticipants = [];
@@ -198,6 +194,8 @@ let backgroundTaskCenterTaskSnapshots = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 let s3BackupTargets = [];
 let s3BackupRuns = [];
+let s3BackupEncryption = { enabled: false, keyConfiguredAt: null };
+let s3BackupEncryptionConfirmationToken = null;
 let editingS3BackupTargetId = null;
 let s3BackupPollTimer = null;
 let s3BackupPollRequest = 0;
@@ -248,18 +246,19 @@ function analysisTaskStatusLabel(status) {
     review: "已完成",
     completed: "已完成",
     partial: "部分失败",
+    failed: "失败",
     expired: "已过期",
     cancelled: "已取消"
   })[String(status)] ?? "未知状态";
 }
 
 function canRerunAnalysisTask(task) {
-  return ["review", "completed", "partial", "expired", "cancelled"].includes(String(task?.status ?? ""));
+  return ["review", "completed", "partial", "failed", "expired", "cancelled"].includes(String(task?.status ?? ""));
 }
 
 function normalizedAnalysisTaskStatus(status) {
   const value = String(status);
-  return ["pending", "running", "review", "completed", "partial", "expired", "cancelled"].includes(value)
+  return ["pending", "running", "review", "completed", "partial", "failed", "expired", "cancelled"].includes(value)
     ? value
     : "unknown";
 }
@@ -382,7 +381,43 @@ function applyWorkAccessMode() {
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
-const maximumAvatarFileSize = 5 * 1024 * 1024;
+const defaultImageUploadLimits = {
+  avatarBytes: 2 * 1024 * 1024,
+  coverBytes: 5 * 1024 * 1024,
+  attachmentBytes: 30 * 1024 * 1024
+};
+let imageUploadLimits = { ...defaultImageUploadLimits };
+
+function formatUploadLimit(bytes) {
+  if (bytes < 1024 * 1024) return `${bytes} B`;
+  const megabytes = bytes / (1024 * 1024);
+  return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(2)} MB`;
+}
+
+function applyImageUploadLimits(nextLimits) {
+  if (!nextLimits || typeof nextLimits !== "object") return;
+  const next = {
+    avatarBytes: Number(nextLimits.avatarBytes),
+    coverBytes: Number(nextLimits.coverBytes),
+    attachmentBytes: Number(nextLimits.attachmentBytes)
+  };
+  if (![next.avatarBytes, next.coverBytes, next.attachmentBytes].every((value) => Number.isSafeInteger(value) && value > 0)) return;
+  imageUploadLimits = next;
+  const avatarCopy = document.querySelector(".avatar-settings-copy small");
+  if (avatarCopy) avatarCopy.textContent = `支持 PNG、JPEG、WebP、GIF，文件不超过 ${formatUploadLimit(next.avatarBytes)}。选择后可框选正方形选区再裁剪上传。`;
+}
+
+function isGifImageFile(file) {
+  return file.type === "image/gif" || /\.gif$/iu.test(file.name ?? "");
+}
+
+function coverFileSizeMessage(file) {
+  return isGifImageFile(file) ? "封面不支持 GIF 图片" : `封面图片不能超过 ${formatUploadLimit(imageUploadLimits.coverBytes)}`;
+}
+
+function assertAttachmentFileSize(file) {
+  if (file.size > imageUploadLimits.attachmentBytes) throw new Error(`图片附件不能超过 ${formatUploadLimit(imageUploadLimits.attachmentBytes)}`);
+}
 
 function setAiAssistantStatus(status) {
   const failed = status === "error";
@@ -756,7 +791,7 @@ async function refreshPresence() {
       presenceParticipants = Array.isArray(payload) ? payload : (payload?.participants ?? []);
       renderPresence();
       const recentChanges = Array.isArray(payload) ? [] : (payload?.recentChanges ?? []);
-      void handleRelationshipCollaborativeChanges(recentChanges);
+      void handleCollaborativeChanges(recentChanges);
     }
   } catch {
     if (state.work?.id === workId) renderPresence();
@@ -766,10 +801,9 @@ async function refreshPresence() {
   return presenceParticipants;
 }
 
-async function handleRelationshipCollaborativeChanges(recentChanges) {
+async function handleCollaborativeChanges(recentChanges) {
   if (!Array.isArray(recentChanges) || !recentChanges.length || collaborativeChangePromptOpen) return;
   const localKey = presencePageKey(presencePageForRoute());
-  if (!localKey.startsWith("entity-editor:relationship:")) return;
   const selfId = state.user?.userId;
   const incoming = recentChanges.filter((change) => (
     change
@@ -788,15 +822,41 @@ async function handleRelationshipCollaborativeChanges(recentChanges) {
   }
   collaborativeChangePromptOpen = true;
   try {
-    const shouldReload = await confirmToast(`${latest.actorDisplayName || "协作者"}已更新当前人物关系。请先确认本地没有需要保留的修改，再刷新页面继续查看。`, {
-      title: "人物关系已更新",
-      confirmLabel: "刷新页面",
+    const changeLabel = latest.label || "当前页面";
+    const deleted = latest.action === "delete";
+    const targetLabel = deleted ? changeLabel.replace(/编辑$/u, "") : changeLabel;
+    const message = deleted
+      ? `${latest.actorDisplayName || "协作者"}已删除当前${targetLabel}。请先确认本地没有需要保留的修改，${latest.pageDeleted ? "确认后返回对应列表。" : "再刷新页面查看最新状态。"}`
+      : `${latest.actorDisplayName || "协作者"}已在“${changeLabel}”保存新内容。请先确认本地没有需要保留的修改，再刷新页面继续查看。`;
+    const shouldReload = await confirmToast(message, {
+      title: deleted ? `${targetLabel}已删除` : `${changeLabel}已更新`,
+      confirmLabel: deleted && latest.pageDeleted ? (latest.pageKey.startsWith("editor:") ? "返回正文" : "返回列表") : "刷新页面",
       cancelLabel: "稍后处理"
     });
-    if (shouldReload) window.location.reload();
+    if (shouldReload) reloadAfterCollaborativeChange(latest);
   } finally {
     collaborativeChangePromptOpen = false;
   }
+}
+
+function reloadAfterCollaborativeChange(change) {
+  const workId = state.work?.id;
+  if (change?.action === "delete" && change.pageDeleted && workId) {
+    const entityModule = {
+      setting: "settings",
+      character: "characters",
+      race: "races",
+      organization: "organizations",
+      relationship: "relationships"
+    }[String(change.pageKey ?? "").split(":")[1] ?? ""];
+    const safeRoute = change.pageKey.startsWith("editor:")
+      ? { view: "editor", workId }
+      : entityModule
+        ? { view: "module", workId, module: entityModule }
+        : { view: "welcome", workId };
+    window.history.replaceState(null, "", serializePageRoute(safeRoute));
+  }
+  window.location.reload();
 }
 
 function schedulePresenceHeartbeat() {
@@ -942,6 +1002,9 @@ function setupPanelResize(handle, side) {
 }
 
 let chapterLineNumberFrame = null;
+let chapterLineNumberTimer = null;
+let chapterLineLayout = null;
+let chapterLineVirtualWindow = null;
 let chapterLineSelection = null;
 let chapterLineDrag = null;
 let chapterWhitespaceVisible = true;
@@ -951,8 +1014,10 @@ let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
+const chapterLineInputRenderDelay = 32;
 let aiMentionMatch = null;
 let aiMentionRange = null;
+let aiMentionActiveIndex = -1;
 let settingsReturnContext = null;
 let entityEditorType = null;
 let entityEditorDirty = false;
@@ -976,8 +1041,23 @@ const moduleListPages = {
 };
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
+const settingFilters = { keyword: "", category: "", lockState: "all" };
+let settingFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
+
+function createEditorDirtyTracker(initialSnapshot = "") {
+  let savedSnapshot = String(initialSnapshot);
+  return {
+    markSaved(snapshot) {
+      savedSnapshot = String(snapshot);
+    },
+    isDirty(snapshot) {
+      return String(snapshot) !== savedSnapshot;
+    }
+  };
+}
+
 let settingEditorItem = null;
 let characterEditorItem = null;
 let knowledgeEditorItem = null;
@@ -996,6 +1076,8 @@ let characterSectionEditorDirty = false;
 let settingEditorVditor = null;
 let knowledgeSectionVditor = null;
 let characterSectionVditor = null;
+const settingEditorDirtyTracker = createEditorDirtyTracker();
+const characterSectionEditorDirtyTracker = createEditorDirtyTracker();
 let formDialogVditors = [];
 let entityHistoryContext = null;
 let moduleContentInteractionsBound = false;
@@ -1058,7 +1140,15 @@ async function confirmEntityEditorDiscard(message) {
   });
 }
 
+function isEntityEditorSaving() {
+  return Boolean($("#entity-editor-view").querySelector('[aria-busy="true"]'));
+}
+
 async function closeEntityEditor({ force = false } = {}) {
+  if (isEntityEditorSaving()) {
+    toast("正在保存，请稍候");
+    return false;
+  }
   if (!$("#character-section-editor-view").classList.contains("hidden")) return closeCharacterSectionEditor({ force });
   if (!$("#knowledge-section-editor-view").classList.contains("hidden")) return closeKnowledgeSectionEditor({ force });
   if (!force && !(await confirmEntityEditorDiscard())) return false;
@@ -1106,6 +1196,13 @@ function syncChapterLineNumberScroll() {
     whitespace.style.transform = `translate(${-input.scrollLeft}px, ${-input.scrollTop}px)`;
     whitespace.dataset.scrollTop = String(input.scrollTop);
   }
+  if (!chapterLineVirtualWindow) return;
+  const buffer = input.clientHeight * 0.35;
+  const viewportBottom = input.scrollTop + input.clientHeight;
+  const needsPreviousLines = chapterLineVirtualWindow.start > 0 && input.scrollTop < chapterLineVirtualWindow.top + buffer;
+  const needsNextLines = chapterLineVirtualWindow.end < chapterLineVirtualWindow.lineCount
+    && viewportBottom > chapterLineVirtualWindow.bottom - buffer;
+  if (needsPreviousLines || needsNextLines) scheduleChapterLineNumbers();
 }
 
 function syncChapterWhitespaceControls() {
@@ -1121,7 +1218,7 @@ function toggleChapterWhitespaceVisibility() {
   scheduleChapterLineNumbers();
 }
 
-function renderChapterWhitespaceMarkers(input, style) {
+function renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, totalHeight) {
   const overlay = $("#chapter-whitespace-overlay");
   const inner = $("#chapter-whitespace-inner");
   syncChapterWhitespaceControls();
@@ -1129,10 +1226,17 @@ function renderChapterWhitespaceMarkers(input, style) {
   overlay.classList.toggle("is-visible", chapterWhitespaceVisible);
   if (!chapterWhitespaceVisible) {
     inner.replaceChildren();
+    delete inner.dataset.virtualStart;
+    delete inner.dataset.virtualEnd;
+    delete inner.dataset.renderedLineCount;
     return;
   }
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  const firstLineTop = getLineBounds(lineWindow.start).top;
   Object.assign(inner.style, {
     width: `${input.clientWidth}px`,
+    height: `${Math.max(input.clientHeight, totalHeight + paddingTop + paddingBottom)}px`,
     fontFamily: style.fontFamily,
     fontSize: style.fontSize,
     fontWeight: style.fontWeight,
@@ -1141,11 +1245,14 @@ function renderChapterWhitespaceMarkers(input, style) {
     letterSpacing: style.letterSpacing,
     tabSize: style.tabSize,
     padding: style.padding,
+    paddingTop: `${paddingTop + firstLineTop}px`,
+    whiteSpace: style.whiteSpace,
     overflowWrap: style.overflowWrap,
     wordBreak: style.wordBreak
   });
   const fragment = document.createDocumentFragment();
-  for (const token of tokenizeVisibleSpaces(input.value.replace(/\r\n?/gu, "\n"))) {
+  const visibleText = layout.lines.slice(lineWindow.start, lineWindow.end).join("\n");
+  for (const token of tokenizeVisibleSpaces(visibleText)) {
     if (token.type === "text") {
       fragment.append(document.createTextNode(token.text));
       continue;
@@ -1157,9 +1264,93 @@ function renderChapterWhitespaceMarkers(input, style) {
     fragment.append(marker);
   }
   inner.replaceChildren(fragment);
+  inner.dataset.virtualStart = String(lineWindow.start);
+  inner.dataset.virtualEnd = String(lineWindow.end - 1);
+  inner.dataset.renderedLineCount = String(lineWindow.end - lineWindow.start);
 }
 
-function renderChapterLineNumbers() {
+function prepareChapterLineLayout(input, measure, style, contentWidth) {
+  Object.assign(measure.style, {
+    width: `${contentWidth}px`,
+    fontFamily: style.fontFamily,
+    fontSize: style.fontSize,
+    fontWeight: style.fontWeight,
+    fontStyle: style.fontStyle,
+    lineHeight: style.lineHeight,
+    letterSpacing: style.letterSpacing,
+    tabSize: style.tabSize,
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak
+  });
+  const value = input.value.replace(/\r\n?/gu, "\n");
+  const styleKey = JSON.stringify([
+    contentWidth,
+    style.fontFamily,
+    style.fontSize,
+    style.fontWeight,
+    style.fontStyle,
+    style.lineHeight,
+    style.letterSpacing,
+    style.tabSize,
+    style.overflowWrap,
+    style.wordBreak
+  ]);
+  if (!chapterLineLayout || chapterLineLayout.value !== value) {
+    const mirror = buildChapterLineMirror(value);
+    measure.textContent = mirror.text;
+    chapterLineLayout = { ...mirror, value, styleKey, bounds: new Map() };
+  } else if (chapterLineLayout.styleKey !== styleKey) {
+    chapterLineLayout.styleKey = styleKey;
+    chapterLineLayout.bounds.clear();
+  }
+  return chapterLineLayout;
+}
+
+function createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight = null) {
+  const textNode = measure.firstChild;
+  const measureRect = measure.getBoundingClientRect();
+  const contentHeight = Number.isFinite(targetHeight) && targetHeight > 0 ? targetHeight : measureRect.height;
+  const geometryScale = measureRect.height > 0 ? contentHeight / measureRect.height : 1;
+  const geometryKey = `${measureRect.height}:${contentHeight}:${lineHeight}`;
+  if (layout.geometryKey !== geometryKey) {
+    layout.geometryKey = geometryKey;
+    layout.bounds.clear();
+  }
+  return {
+    measureHeight: contentHeight,
+    getLineBounds(index) {
+      const cached = layout.bounds.get(index);
+      if (cached) return cached;
+      const range = document.createRange();
+      const start = layout.offsets[index];
+      range.setStart(textNode, start);
+      range.setEnd(textNode, start + layout.lines[index].length + 1);
+      const rects = [...range.getClientRects()].filter((rect) => rect.height > 0);
+      let top;
+      let bottom;
+      if (rects.length > 0) {
+        const lineBoxes = rects.map((rect) => {
+          const height = Math.max(lineHeight, rect.height);
+          const leading = Math.max(0, (lineHeight - rect.height) / 2);
+          const boxTop = (rect.top - measureRect.top - leading) * geometryScale;
+          return { top: boxTop, bottom: boxTop + height * geometryScale };
+        });
+        top = Math.max(0, Math.min(...lineBoxes.map((box) => box.top)));
+        bottom = Math.max(...lineBoxes.map((box) => box.bottom));
+      } else {
+        const scaledLineHeight = lineHeight * geometryScale;
+        const availableHeight = Math.max(0, contentHeight - scaledLineHeight);
+        top = layout.lines.length > 1 ? availableHeight * index / (layout.lines.length - 1) : 0;
+        bottom = top + scaledLineHeight;
+      }
+      const bounds = { top, bottom: Math.max(top + lineHeight * geometryScale, bottom) };
+      layout.bounds.set(index, bounds);
+      return bounds;
+    }
+  };
+}
+
+function renderChapterLineNumbers({ targetLineIndex = null } = {}) {
   const input = $("#chapter-content");
   const inner = $("#chapter-line-numbers-inner");
   const measure = $("#chapter-line-measure");
@@ -1169,28 +1360,28 @@ function renderChapterLineNumbers() {
   const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.55;
   const numberStyle = getComputedStyle($("#chapter-line-numbers"));
   const numberLineHeight = parseFloat(numberStyle.lineHeight) || parseFloat(numberStyle.fontSize) * 1.2;
-  inner.style.top = `${calculateLineNumberTop(parseFloat(style.paddingTop), lineHeight, numberLineHeight)}px`;
+  const paddingTop = parseFloat(style.paddingTop) || 0;
+  inner.style.top = `${calculateLineNumberTop(paddingTop, lineHeight, numberLineHeight)}px`;
   const numberTextOffset = calculateLineNumberTextOffset(lineHeight, numberLineHeight);
-  Object.assign(measure.style, {
-    width: `${contentWidth}px`,
-    fontFamily: style.fontFamily,
-    fontSize: style.fontSize,
-    fontWeight: style.fontWeight,
-    fontStyle: style.fontStyle,
-    lineHeight: style.lineHeight,
-    letterSpacing: style.letterSpacing,
-    tabSize: style.tabSize
-  });
-  const lines = input.value.replace(/\r\n?/gu, "\n").split("\n");
-  const measureRows = lines.map((line) => {
-    const row = document.createElement("div");
-    row.textContent = line || "\u200b";
-    return row;
-  });
-  measure.replaceChildren(...measureRows);
-  const measureRect = measure.getBoundingClientRect();
+  const layout = prepareChapterLineLayout(input, measure, style, contentWidth);
+  const paddingBottom = parseFloat(style.paddingBottom) || 0;
+  const scrollContentHeight = input.scrollHeight - paddingTop - paddingBottom;
+  const targetHeight = input.scrollHeight > input.clientHeight + 1 ? scrollContentHeight : null;
+  const { getLineBounds, measureHeight } = createChapterLineBoundsGetter(layout, measure, lineHeight, targetHeight);
+  if (Number.isInteger(targetLineIndex)) {
+    const safeTarget = Math.max(0, Math.min(targetLineIndex, layout.lines.length - 1));
+    input.scrollTop = Math.max(0, getLineBounds(safeTarget).top + paddingTop - input.clientHeight / 3);
+  }
+  const viewportTop = Math.max(0, input.scrollTop - paddingTop);
+  const overscan = Math.max(input.clientHeight, lineHeight * 8);
+  const lineWindow = findChapterLineWindow(
+    layout.lines.length,
+    getLineBounds,
+    viewportTop - overscan,
+    viewportTop + input.clientHeight + overscan
+  );
   const numbers = document.createDocumentFragment();
-  measureRows.forEach((row, index) => {
+  for (let index = lineWindow.start; index < lineWindow.end; index += 1) {
     const number = document.createElement("button");
     number.type = "button";
     number.className = "chapter-line-number";
@@ -1203,27 +1394,54 @@ function renderChapterLineNumbers() {
       number.classList.add("is-line-selected");
       number.setAttribute("aria-pressed", "true");
     }
-    const rowRect = row.getBoundingClientRect();
-    const rowHeight = calculateLineNumberRowHeight(lineHeight, rowRect.height);
-    number.style.top = `${calculateLineNumberRowTop(measureRect.top, rowRect.top)}px`;
-    number.style.height = `${rowHeight}px`;
+    const bounds = getLineBounds(index);
+    number.style.top = `${bounds.top}px`;
+    number.style.height = `${bounds.bottom - bounds.top}px`;
     number.style.paddingTop = `${numberTextOffset}px`;
     numbers.append(number);
-  });
+  }
   inner.replaceChildren(numbers);
-  inner.style.height = `${measureRect.height}px`;
-  inner.dataset.lineCount = String(lines.length);
-  measure.replaceChildren();
-  renderChapterWhitespaceMarkers(input, style);
+  inner.style.height = `${measureHeight}px`;
+  inner.dataset.lineCount = String(layout.lines.length);
+  inner.dataset.virtualStart = String(lineWindow.start);
+  inner.dataset.virtualEnd = String(lineWindow.end - 1);
+  inner.dataset.renderedLineCount = String(lineWindow.end - lineWindow.start);
+  const firstBounds = getLineBounds(lineWindow.start);
+  const lastBounds = getLineBounds(lineWindow.end - 1);
+  chapterLineVirtualWindow = {
+    start: lineWindow.start,
+    end: lineWindow.end,
+    lineCount: layout.lines.length,
+    top: firstBounds.top + paddingTop,
+    bottom: lastBounds.bottom + paddingTop
+  };
+  renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, measureHeight);
   syncChapterLineNumberScroll();
 }
 
-function scheduleChapterLineNumbers() {
+function requestChapterLineNumberFrame() {
   if (chapterLineNumberFrame !== null) return;
   chapterLineNumberFrame = requestAnimationFrame(() => {
     chapterLineNumberFrame = null;
     renderChapterLineNumbers();
   });
+}
+
+function scheduleChapterLineNumbers(delay = 0) {
+  const wait = typeof delay === "number" && Number.isFinite(delay) ? Math.max(0, delay) : 0;
+  if (wait === 0) {
+    if (chapterLineNumberTimer !== null) {
+      clearTimeout(chapterLineNumberTimer);
+      chapterLineNumberTimer = null;
+    }
+    requestChapterLineNumberFrame();
+    return;
+  }
+  if (chapterLineNumberFrame !== null || chapterLineNumberTimer !== null) return;
+  chapterLineNumberTimer = setTimeout(() => {
+    chapterLineNumberTimer = null;
+    requestChapterLineNumberFrame();
+  }, wait);
 }
 
 function collapseChapterInputBlankLines(input) {
@@ -1242,10 +1460,10 @@ function collapseChapterInputBlankLines(input) {
 function lineIndexAtPointer(clientY) {
   const rows = [...$("#chapter-line-numbers-inner").querySelectorAll(".chapter-line-number")];
   if (!rows.length) return 0;
-  for (let index = 0; index < rows.length; index += 1) {
-    if (clientY < rows[index].getBoundingClientRect().bottom) return index;
+  for (const row of rows) {
+    if (clientY < row.getBoundingClientRect().bottom) return Number(row.dataset.lineIndex);
   }
-  return rows.length - 1;
+  return Number(rows[rows.length - 1].dataset.lineIndex);
 }
 
 function paintChapterLineSelection(anchor, focus) {
@@ -1835,7 +2053,10 @@ async function ensureAiConversationsLoaded() {
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   const parameters = new URLSearchParams({ page: "1", limit: "100" });
   if (focusMessageId) parameters.set("messageId", String(focusMessageId));
-  const conversation = await api(`/api/ai-conversations/${conversationId}?${parameters}`);
+  const [conversation] = await Promise.all([
+    api(`/api/ai-conversations/${conversationId}?${parameters}`),
+    ensureAiReferencesLoaded()
+  ]);
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
@@ -1958,7 +2179,6 @@ function applyAiRoleplayCharacter(character) {
   renderAiRoleplayCharacterSelect();
   syncAiTaskOptions();
   renderAiQuickActions();
-  resetAiContextMeter();
 }
 
 function refreshAiMessageRoleLabels() {
@@ -1976,6 +2196,7 @@ async function updateAiRoleplayCharacter(characterId) {
   upsertAiConversationSummary(conversation);
   applyAiConversationTaskType(conversation.taskType);
   applyAiRoleplayCharacter(conversation.roleplayCharacter);
+  resetAiContextMeter();
   if ($("#ai-feed").querySelector("[data-message-id]")) refreshAiMessageRoleLabels();
   else resetAiFeed();
   toast(conversation.roleplayCharacter
@@ -2063,7 +2284,46 @@ function aiPromptTextBeforeCursor() {
 function hideAiMentionMenu() {
   aiMentionMatch = null;
   aiMentionRange = null;
-  $("#ai-mention-menu").classList.add("hidden");
+  aiMentionActiveIndex = -1;
+  const prompt = $("#ai-prompt");
+  const menu = $("#ai-mention-menu");
+  prompt.setAttribute("aria-expanded", "false");
+  prompt.removeAttribute("aria-activedescendant");
+  menu.querySelectorAll("[role=option]").forEach((option) => {
+    option.classList.remove("is-active");
+    option.setAttribute("aria-selected", "false");
+  });
+  menu.classList.add("hidden");
+}
+
+function setAiMentionActiveOption(nextIndex) {
+  const prompt = $("#ai-prompt");
+  const options = [...$("#ai-mention-menu").querySelectorAll("[role=option]")];
+  if (!options.length) {
+    aiMentionActiveIndex = -1;
+    prompt.removeAttribute("aria-activedescendant");
+    return null;
+  }
+  aiMentionActiveIndex = (nextIndex + options.length) % options.length;
+  let activeOption = null;
+  options.forEach((option, index) => {
+    const active = index === aiMentionActiveIndex;
+    option.classList.toggle("is-active", active);
+    option.setAttribute("aria-selected", String(active));
+    if (active) activeOption = option;
+  });
+  prompt.setAttribute("aria-activedescendant", activeOption.id);
+  activeOption.scrollIntoView({ block: "nearest" });
+  return activeOption;
+}
+
+function moveAiMentionActiveOption(direction) {
+  const optionCount = $("#ai-mention-menu").querySelectorAll("[role=option]").length;
+  if (!optionCount) return null;
+  const nextIndex = aiMentionActiveIndex < 0
+    ? (direction > 0 ? 0 : optionCount - 1)
+    : aiMentionActiveIndex + direction;
+  return setAiMentionActiveOption(nextIndex);
 }
 
 function syncAiReferencesWithPrompt() {
@@ -2092,10 +2352,13 @@ function updateAiMentionMenu() {
   }))) ?? [];
   const options = listAiMentionOptions(state.characters, state.settings, chapters, match.query)
     .filter((item) => item.kind !== "context-settings" || $("#ai-task").value !== "roleplay");
+  aiMentionActiveIndex = -1;
+  prompt.removeAttribute("aria-activedescendant");
   menu.innerHTML = options.length
-    ? options.map((item) => `<button class="ai-mention-option" type="button" role="option" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
+    ? options.map((item, index) => `<button id="ai-mention-option-${index}" class="ai-mention-option" type="button" role="option" aria-selected="false" tabindex="-1" data-ai-reference-kind="${esc(item.kind)}" data-ai-reference-id="${esc(item.id)}" data-ai-reference-name="${esc(item.name)}"><small>${esc(item.kindLabel)}</small><strong>${esc(item.name)}</strong></button>`).join("")
     : '<p class="ai-mention-empty">没有匹配的角色、设定、章节或上下文能力</p>';
   menu.classList.remove("hidden");
+  prompt.setAttribute("aria-expanded", "true");
 }
 
 function selectAiMention(button) {
@@ -2316,7 +2579,7 @@ function clearChapterLineSelection() {
 }
 
 const typographyStorageKey = "ai-novel-typography-v1";
-const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, uiFontSize: 14, aiFontSize: 14, density: "balanced" });
+const typographyDefaults = Object.freeze({ cjkFont: "system", latinFont: "system", fontSize: 17, uiFontSize: 14, aiFontSize: 12, density: "balanced" });
 const cjkFontStacks = {
   system: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Heiti SC"',
   pingfang: '"PingFang SC", "Heiti SC", "Microsoft YaHei", "Noto Sans CJK SC"',
@@ -2486,6 +2749,8 @@ function optimisticVersionForPath(path) {
     if (resourceMatch[1] === "volumes") return find(state.work?.volumes ?? [], resourceId);
     if (resourceMatch[1] === "character-sections") return find(characterEditorSections, resourceId);
     if (resourceMatch[1] === "characters" && characterEditorItem?.id === resourceId) return characterEditorItem.versionNo;
+    if (resourceMatch[1] === "settings" && settingEditorItem?.id === resourceId) return settingEditorItem.versionNo;
+    if (["races", "organizations"].includes(resourceMatch[1]) && knowledgeEditorItem?.id === resourceId) return knowledgeEditorItem.versionNo;
     return find(collection, resourceId);
   }
   const outlineMatch = normalizedPath.match(/^\/api\/chapters\/([^/]+)\/outline$/u);
@@ -2558,6 +2823,7 @@ async function api(path, options = {}) {
   }
   const payload = await response.json();
   if (path === "/api/health") {
+    applyImageUploadLimits(payload.data?.uploadLimits);
     updateSystemHealth({
       status: payload.data?.status === "ok" ? "ready" : "degraded",
       version: payload.data?.version
@@ -3063,6 +3329,51 @@ function toast(message, type = "info") {
   }, 3600);
 }
 
+async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
+  if (button.disabled) return null;
+  const initialLabel = button.textContent;
+  const initialInert = busyTarget.inert;
+  const activeElement = document.activeElement;
+  let focusTarget = busyTarget.contains(activeElement) ? activeElement : null;
+  let finalLabel = initialLabel;
+  button.disabled = true;
+  try {
+    // prepare 会在首次 await 前同步采集快照；同一事件循环内随即锁定，避免新的输入插入。
+    const preparation = prepare();
+    if (busyTarget.contains(document.activeElement)) focusTarget = document.activeElement;
+    busyTarget.inert = true;
+    busyTarget.setAttribute("aria-busy", "true");
+    const prepared = await preparation;
+    if (prepared === null) return null;
+    button.textContent = "保存中…";
+    toast("正在保存…");
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    const result = await save(prepared);
+    finalLabel = result?.buttonLabel ?? finalLabel;
+    toast(result?.message ?? "保存成功");
+    return result;
+  } catch (error) {
+    toast(error instanceof Error ? error.message : "保存失败，请重试", "error");
+    return null;
+  } finally {
+    busyTarget.removeAttribute("aria-busy");
+    busyTarget.inert = initialInert;
+    button.disabled = false;
+    button.textContent = finalLabel;
+    if (!busyTarget.contains(document.activeElement) && focusTarget?.isConnected) {
+      focusTarget.focus({ preventScroll: true });
+    }
+  }
+}
+
+function upsertEntityCollection(items, saved) {
+  const nextItems = Array.isArray(items) ? [...items] : [];
+  const index = nextItems.findIndex((item) => item.id === saved.id);
+  if (index >= 0) nextItems[index] = saved;
+  else nextItems.push(saved);
+  return nextItems;
+}
+
 function persistentToast(message, type = "info") {
   const region = $("#toast-region");
   const element = document.createElement("div");
@@ -3079,7 +3390,26 @@ function persistentToast(message, type = "info") {
   };
 }
 
+function restoreToastFocus(previousFocus) {
+  if (
+    previousFocus instanceof HTMLElement
+    && previousFocus.isConnected
+    && !previousFocus.matches(":disabled")
+    && previousFocus.getClientRects().length > 0
+  ) {
+    previousFocus.focus({ preventScroll: true });
+    if (document.activeElement === previousFocus) return;
+  }
+  const body = document.body;
+  const previousTabIndex = body.getAttribute("tabindex");
+  body.setAttribute("tabindex", "-1");
+  body.focus({ preventScroll: true });
+  if (previousTabIndex === null) body.removeAttribute("tabindex");
+  else body.setAttribute("tabindex", previousTabIndex);
+}
+
 function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
+  const previousFocus = document.activeElement;
   const region = $("#toast-region");
   const element = document.createElement("section");
   element.className = "toast toast-confirmation";
@@ -3108,6 +3438,7 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
     const finish = (confirmed) => {
       element.remove();
       if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+      restoreToastFocus(previousFocus);
       resolve(confirmed);
     };
     cancel.addEventListener("click", () => finish(false), { once: true });
@@ -3911,6 +4242,17 @@ function s3BackupTargetFailed(target) {
   return Number.isFinite(failedAt) && (!Number.isFinite(succeededAt) || failedAt > succeededAt);
 }
 
+function renderS3BackupEncryption() {
+  const presentation = s3BackupEncryptionPresentation(s3BackupEncryption);
+  const toggle = $("#s3-backup-encryption-toggle");
+  toggle.checked = s3BackupEncryption.enabled;
+  $("#s3-backup-encryption-description").textContent = presentation.description;
+  const status = $("#s3-backup-encryption-status");
+  status.className = `s3-backup-status ${presentation.statusClass}`.trim();
+  status.textContent = presentation.label;
+  $("#s3-backup-encryption-warning").classList.toggle("hidden", !presentation.showPrivateBucketWarning);
+}
+
 function renderS3BackupTargets() {
   const enabledCount = s3BackupTargets.filter((target) => target.enabled).length;
   $("#s3-backup-summary").textContent = s3BackupTargets.length
@@ -3983,12 +4325,15 @@ async function loadS3BackupData({ loading = false } = {}) {
     $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">正在读取备份目标……</p>';
     $("#s3-backup-runs").innerHTML = '<p class="s3-backup-empty">正在读取运行记录……</p>';
   }
-  const [targets, runs] = await Promise.all([
+  const [targets, runs, encryption] = await Promise.all([
     api("/api/platform/backups/targets"),
-    api("/api/platform/backups/runs?limit=30")
+    api("/api/platform/backups/runs?limit=30"),
+    api("/api/platform/backups/encryption")
   ]);
   s3BackupTargets = targets;
   s3BackupRuns = runs.items;
+  s3BackupEncryption = encryption;
+  renderS3BackupEncryption();
   renderS3BackupTargets();
   renderS3BackupRuns();
 }
@@ -3999,9 +4344,103 @@ async function openS3BackupDialog() {
   if (!dialog.open) dialog.showModal();
   try {
     await loadS3BackupData({ loading: true });
+    if (!s3BackupEncryption.enabled) {
+      toast("未开启备份加密，请将 S3 桶设置为私有桶，避免数据泄露", "warning");
+    }
   } catch (error) {
     $("#s3-backup-targets").innerHTML = '<p class="s3-backup-empty">备份配置加载失败，请稍后刷新。</p>';
     toast(error.message, "error");
+  }
+}
+
+function showS3BackupEncryptionKey(key, confirmationToken) {
+  s3BackupEncryptionConfirmationToken = confirmationToken;
+  $("#s3-backup-key-value").value = key;
+  const dialog = $("#s3-backup-key-dialog");
+  if (!dialog.open) dialog.showModal();
+  queueMicrotask(() => $("#s3-backup-key-copy").focus());
+}
+
+async function changeS3BackupEncryption(event) {
+  const toggle = event.currentTarget;
+  const enabled = toggle.checked;
+  const restoreToggleFocus = document.activeElement === toggle;
+  toggle.disabled = true;
+  try {
+    const result = await api("/api/platform/backups/encryption", {
+      method: "POST",
+      body: { enabled }
+    });
+    s3BackupEncryption = {
+      enabled: result.enabled === true,
+      keyConfiguredAt: result.keyConfiguredAt ?? s3BackupEncryption.keyConfiguredAt
+    };
+    renderS3BackupEncryption();
+    if (typeof result.key === "string" && result.key && typeof result.confirmationToken === "string" && result.confirmationToken) {
+      showS3BackupEncryptionKey(result.key, result.confirmationToken);
+    } else {
+      toast(enabled ? "S3 备份加密已开启" : "S3 备份加密已关闭；历史加密备份仍可使用原密钥恢复");
+    }
+  } catch (error) {
+    renderS3BackupEncryption();
+    toast(error.message, "error");
+  } finally {
+    toggle.disabled = false;
+    if (restoreToggleFocus && !$("#s3-backup-key-dialog").open) toggle.focus();
+  }
+}
+
+async function copyS3BackupEncryptionKey() {
+  const field = $("#s3-backup-key-value");
+  try {
+    await navigator.clipboard.writeText(field.value);
+    toast("备份加密密钥已复制");
+  } catch {
+    field.focus();
+    field.select();
+    toast("无法自动复制，请手动复制密钥", "error");
+  }
+}
+
+function downloadS3BackupEncryptionKey() {
+  const value = $("#s3-backup-key-value").value;
+  const url = URL.createObjectURL(new Blob([s3BackupEncryptionKeyFile(value)], { type: "text/plain;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = "scriverse-s3-backup-key.txt";
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  toast("备份加密密钥文件已下载");
+}
+
+async function confirmS3BackupEncryptionKeySaved() {
+  const confirmationToken = s3BackupEncryptionConfirmationToken;
+  if (!confirmationToken) return toast("备份加密确认已失效，请刷新后重新开启", "error");
+  const button = $("#s3-backup-key-confirm");
+  button.disabled = true;
+  button.textContent = "正在开启";
+  try {
+    const result = await api("/api/platform/backups/encryption/confirm", {
+      method: "POST",
+      body: { confirmationToken }
+    });
+    s3BackupEncryption = {
+      enabled: result.enabled === true,
+      keyConfiguredAt: result.keyConfiguredAt ?? null
+    };
+    renderS3BackupEncryption();
+    s3BackupEncryptionConfirmationToken = null;
+    $("#s3-backup-key-value").value = "";
+    $("#s3-backup-key-dialog").close();
+    $("#s3-backup-encryption-toggle").focus();
+    toast("S3 备份加密已开启，请妥善保管密钥");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = "我已保存";
   }
 }
 
@@ -4476,10 +4915,8 @@ function revealChapterSearchLines(startLine, endLine) {
   input.setSelectionRange(selection.startOffset, selection.startOffset + selection.text.length);
   scheduleChapterLineNumbers();
   requestAnimationFrame(() => {
+    renderChapterLineNumbers({ targetLineIndex: selection.safeStart });
     paintChapterLineSelection(selection.safeStart, selection.safeEnd);
-    const row = $("#chapter-line-numbers-inner").querySelector(`[data-line-index="${selection.safeStart}"]`);
-    if (row) input.scrollTop = Math.max(0, row.offsetTop - input.clientHeight / 3);
-    syncChapterLineNumberScroll();
   });
 }
 
@@ -4685,6 +5122,10 @@ function resetWorkScopedUiCaches() {
   draftTypeFilter = "all";
   draftBindingFilters = [];
   draftFiltersPanelOpen = false;
+  settingFilters.keyword = "";
+  settingFilters.category = "";
+  settingFilters.lockState = "all";
+  settingFiltersPanelOpen = false;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -5579,6 +6020,17 @@ function bindRaceTreeExpandToggle() {
   });
 }
 
+function mountSettingFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="setting-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="setting-filter-toggle" aria-label="筛选设定" aria-controls="setting-filter-panel" aria-expanded="${settingFiltersPanelOpen}" title="筛选设定"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  const toggle = $("#module-header-actions").querySelector('[data-module-header-action="setting-filter-toggle"]');
+  toggle?.addEventListener("click", () => {
+    settingFiltersPanelOpen = !settingFiltersPanelOpen;
+    $("#setting-filter-panel")?.classList.toggle("hidden", !settingFiltersPanelOpen);
+    toggle.setAttribute("aria-expanded", String(settingFiltersPanelOpen));
+  });
+}
+
 function mountCharacterFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="character-filter-toggle"]')?.remove();
   $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="character-filter-toggle" aria-label="筛选角色" aria-controls="character-filter-panel" aria-expanded="${characterFiltersPanelOpen}" title="筛选角色"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
@@ -5936,19 +6388,76 @@ function entityLifecycleBadge(active, label) {
 async function renderSettings(page = moduleListPages.settings) {
   const records = await moduleApiAllPages("settings", `/api/works/${state.work.id}/settings`);
   state.settings = records;
-  mountModuleCount(records.length);
-  const pageResult = paginateModuleItems(records, page, "settings");
-  moduleListPages.settings = pageResult.page;
-  const layout = readModuleLayout();
-  if (records.length) mountModuleLayoutToggle(layout, "设定列表样式");
-  $("#module-content").innerHTML = records.length
-    ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
-    : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
-  bindModuleLayoutToggle(() => renderSettings(pageResult.page));
-  bindModulePagination("settings", renderSettings);
-  const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
-  $("#module-content").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
-  bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
+  const categories = [...new Set([
+    ...records.map((item) => String(item.category ?? "").trim()).filter(Boolean),
+    ...(settingFilters.category ? [settingFilters.category] : [])
+  ])].sort((left, right) => left.localeCompare(right, "zh-CN"));
+  const hasSettingFilters = () => Boolean(settingFilters.keyword.trim() || settingFilters.category || settingFilters.lockState !== "all");
+  const filterToolbar = `<section id="setting-filter-panel" class="character-filter-toolbar setting-filter-toolbar${settingFiltersPanelOpen ? "" : " hidden"}" aria-label="设定筛选">
+    <label class="setting-filter-field" for="setting-keyword-filter"><span>按关键词搜索</span><input id="setting-keyword-filter" type="search" value="${esc(settingFilters.keyword)}" placeholder="搜索标题或内容" aria-label="按关键词搜索设定" autocomplete="off"></label>
+    <label class="setting-filter-field" for="setting-category-filter"><span>按分类筛选</span><select id="setting-category-filter" aria-label="按分类筛选设定"><option value="">全部分类</option>${categories.map((category) => `<option value="${esc(category)}" ${settingFilters.category === category ? "selected" : ""}>${esc(category)}</option>`).join("")}</select></label>
+    <label class="setting-filter-field" for="setting-lock-filter"><span>按锁定状态筛选</span><select id="setting-lock-filter" aria-label="按锁定状态筛选设定"><option value="all" ${settingFilters.lockState === "all" ? "selected" : ""}>全部锁定状态</option><option value="locked" ${settingFilters.lockState === "locked" ? "selected" : ""}>仅已锁定</option><option value="unlocked" ${settingFilters.lockState === "unlocked" ? "selected" : ""}>仅未锁定</option></select></label>
+    <div class="character-filter-toolbar-actions"><span id="setting-filter-result-count" class="character-filter-result-count${hasSettingFilters() ? "" : " hidden"}" role="status" aria-live="polite"></span><button id="clear-setting-filters" class="ghost-button" type="button" ${hasSettingFilters() ? "" : "disabled"}>重置筛选</button></div>
+  </section><div id="setting-filter-results"></div>`;
+  $("#module-content").innerHTML = filterToolbar;
+  mountSettingFilterToggle();
+
+  const renderSettingResults = (requestedPage = moduleListPages.settings) => {
+    const filteredRecords = filterSettings(state.settings, settingFilters);
+    const pageResult = paginateModuleItems(filteredRecords, requestedPage, "settings");
+    moduleListPages.settings = pageResult.page;
+    mountModuleCount(filteredRecords.length);
+    const layout = readModuleLayout();
+    if (filteredRecords.length) mountModuleLayoutToggle(layout, "设定列表样式");
+    else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+    $("#setting-filter-results").innerHTML = filteredRecords.length
+      ? `${layout === "rows" ? renderSettingRows(pageResult.items) : renderSettingCards(pageResult.items)}${renderModulePagination(pageResult, "settings", "设定库")}`
+      : records.length
+        ? emptyModule("没有符合筛选条件的设定", "可以调整关键词、分类、锁定状态或重置筛选。")
+        : emptyModule("还没有世界观设定", "新建规则、地点、组织、科技或创作约束。AI 提取的候选也会进入这里。");
+    const filtersActive = hasSettingFilters();
+    const resultCount = $("#setting-filter-result-count");
+    resultCount.textContent = filtersActive ? `筛选后剩余 ${filteredRecords.length} 条设定` : "";
+    resultCount.classList.toggle("hidden", !filtersActive);
+    $("#clear-setting-filters").disabled = !filtersActive;
+    bindModuleLayoutToggle(() => renderSettingResults(pageResult.page));
+    bindModulePagination("settings", renderSettingResults);
+    const openSetting = async (id, readOnly) => openSettingEditor(await api(`/api/settings/${encodeURIComponent(id)}`), { readOnly });
+    $("#setting-filter-results").querySelectorAll("[data-edit-setting]").forEach((button) => button.addEventListener("click", () => { void openSetting(button.dataset.editSetting, false); }));
+    bindEntityHistoryButtons(async () => { await renderSettings(pageResult.page); await loadAiReferences(); });
+  };
+
+  $("#setting-keyword-filter").addEventListener("input", (event) => {
+    settingFilters.keyword = event.currentTarget.value;
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#setting-category-filter").addEventListener("change", (event) => {
+    settingFilters.category = event.currentTarget.value;
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#setting-lock-filter").addEventListener("change", (event) => {
+    settingFilters.lockState = ["locked", "unlocked"].includes(event.currentTarget.value) ? event.currentTarget.value : "all";
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+  });
+  $("#clear-setting-filters").addEventListener("click", () => {
+    settingFilters.keyword = "";
+    settingFilters.category = "";
+    settingFilters.lockState = "all";
+    $("#setting-keyword-filter").value = "";
+    $("#setting-category-filter").value = "";
+    $("#setting-lock-filter").value = "all";
+    settingFiltersPanelOpen = true;
+    moduleListPages.settings = 1;
+    renderSettingResults(1);
+    $("#setting-keyword-filter").focus();
+  });
+  renderSettingResults(page);
 }
 
 async function renderCharacters(page = characterListPage) {
@@ -6530,8 +7039,14 @@ async function renderReviews(page = moduleListPages.reviews) {
   bindModulePagination("reviews", renderReviews);
   bindRecordPreview("[data-open-review]", (id) => openReviewDetailDialog(reviews.find((item) => item.id === id)));
   $("#module-content").querySelectorAll("[data-review-id]").forEach((button) => button.addEventListener("click", async () => {
-    await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
-    await renderReviews(pageResult.page);
+    button.disabled = true;
+    try {
+      await api(`/api/reviews/${button.dataset.reviewId}`, { method: "PATCH", body: { status: button.dataset.reviewStatus } });
+      await renderReviews(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
   }));
   $("#module-content").querySelectorAll("[data-merge-review]").forEach((button) => button.addEventListener("click", async () => {
     const target = characterById.get(button.dataset.mergeTarget);
@@ -7570,6 +8085,7 @@ function backgroundProductUpdateMarkup() {
 
 function backgroundTaskTransitionMessage(transition) {
   const label = analysisTaskTypeLabel(transition.task.taskType);
+  if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };
   if (transition.status === "partial") return { message: `${label}部分失败，请打开任务详情查看`, type: "error" };
   if (transition.status === "expired") return { message: `${label}已过期，正文可能已发生变化`, type: "error" };
   if (transition.status === "cancelled") return { message: `${label}已取消`, type: "info" };
@@ -8350,8 +8866,10 @@ function renderAiContextDistribution(usage) {
   popover.dataset.hasUsage = String(Boolean(usage));
 }
 
-function setAiContextMeter(usage) {
-  const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);
+function setAiContextMeter(usage, allowShrink = true) {
+  const displayUsage = allowShrink
+    ? resolveAiContextUsage(latestAiContextUsage, usage)
+    : mergeAiContextUsage(latestAiContextUsage, usage, false);
   latestAiContextUsage = displayUsage;
   const meter = $("#ai-context-meter");
   const value = meter.querySelector("b");
@@ -8371,7 +8889,9 @@ function setAiContextMeter(usage) {
   meter.classList.toggle("is-warning", percent >= 70 && percent < 90);
   meter.classList.toggle("is-danger", percent >= 90);
   meter.style.setProperty("--context-usage", String(percent));
-  value.textContent = `${percent}%`;
+  value.textContent = Number(displayUsage.inputTokens) > 0
+    ? formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)
+    : `${percent}%`;
   const tooltip = formatAiContextUsageTooltip(displayUsage);
   meter.dataset.tooltip = tooltip;
   meter.setAttribute("aria-label", `当前上下文用量：${tooltip}`);
@@ -8706,7 +9226,7 @@ function workCoverFieldHtml(work) {
   return `<section class="work-cover-field" aria-labelledby="work-cover-title">
     <div class="work-cover-copy">
       <strong id="work-cover-title">封面</strong>
-      <small>用于书架展示。支持 PNG、JPEG、WebP。</small>
+      <small>用于书架展示。支持 PNG、JPEG、WebP；文件不超过 ${formatUploadLimit(imageUploadLimits.coverBytes)}。</small>
     </div>
     <div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" aria-hidden="${work.coverUrl ? "false" : "true"}">
       ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}
@@ -8910,42 +9430,65 @@ async function deleteVolume(item) {
   }
 }
 
+function syncSettingEditorChrome(viewOnly) {
+  const item = settingEditorItem;
+  $("#setting-editor-eyebrow").textContent = viewOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
+  $("#setting-editor-version").textContent = item ? `v${item.versionNo}` : "新档案";
+  $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
+  $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
+  const showManagementActions = Boolean(item && !viewOnly);
+  $("#setting-editor-confirm").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
+  $("#setting-editor-deprecate").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
+  $("#setting-editor-history").classList.toggle("hidden", !showManagementActions);
+  $("#setting-editor-delete").classList.toggle("hidden", !showManagementActions);
+}
+
+function settingEditorSnapshot(markdown = null) {
+  const content = markdown ?? settingEditorVditor?.getValue() ?? $("#setting-editor-body").value;
+  return JSON.stringify({
+    title: $("#setting-editor-name").value,
+    category: $("#setting-editor-category").value,
+    content,
+    locked: $("#setting-editor-locked").checked
+  });
+}
+
+function syncSettingEditorDirty(markdown = null) {
+  const currentMarkdown = settingEditorVditor?.getValue() ?? markdown ?? $("#setting-editor-body").value;
+  $("#setting-editor-body").value = currentMarkdown;
+  entityEditorDirty = settingEditorDirtyTracker.isDirty(settingEditorSnapshot(currentMarkdown));
+}
+
 function openSettingEditor(item = null, { readOnly = false } = {}) {
   entityEditorReadOnly = readOnly;
   destroyVditorEditor(settingEditorVditor);
   settingEditorVditor = null;
   settingEditorItem = item;
-  $("#setting-editor-eyebrow").textContent = item ? "编辑设定" : "新建设定";
   $("#setting-editor-name").value = item?.title ?? "";
   $("#setting-editor-category").value = item?.category ?? "世界规则";
   $("#setting-editor-locked").checked = Boolean(item?.locked);
   $("#setting-editor-body").value = item?.content ?? "";
-  $("#setting-editor-submit").textContent = item ? "保存新版本" : "创建设定";
   const viewOnly = readOnly || !canEditModule("settings");
   $("#setting-editor-form").classList.toggle("is-read-only", viewOnly);
-  $("#setting-editor-eyebrow").textContent = readOnly ? "阅读设定" : item ? "编辑设定" : "新建设定";
   $("#setting-editor-form").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = viewOnly; });
   $("#setting-editor-form").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = viewOnly; });
-  $("#setting-editor-submit").classList.toggle("hidden", viewOnly);
   const editButton = $("#setting-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("settings"));
-  editButton.onclick = () => openSettingEditor(item);
-  const showManagementActions = Boolean(item && !viewOnly);
+  editButton.onclick = () => openSettingEditor(settingEditorItem);
   const statusButtons = [$("#setting-editor-confirm"), $("#setting-editor-deprecate")];
-  $("#setting-editor-confirm").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
-  $("#setting-editor-deprecate").classList.toggle("hidden", !showManagementActions || item?.status !== "pending");
-  $("#setting-editor-history").classList.toggle("hidden", !showManagementActions);
-  $("#setting-editor-delete").classList.toggle("hidden", !showManagementActions);
+  syncSettingEditorChrome(viewOnly);
   $("#setting-editor-history").onclick = async () => {
-    if (!item) return;
+    const currentItem = settingEditorItem;
+    if (!currentItem) return;
     if (!(await closeEntityEditor())) return;
-    openEntityHistory("setting", item.id, item.title, async () => { await renderSettings(); await loadAiReferences(); });
+    openEntityHistory("setting", currentItem.id, currentItem.title, async () => { await renderSettings(); await loadAiReferences(); });
   };
   $("#setting-editor-delete").onclick = () => {
-    if (!item) return;
+    const currentItem = settingEditorItem;
+    if (!currentItem) return;
     void deleteManagedEntity({
       typeLabel: "设定",
-      item,
+      item: currentItem,
       endpoint: (setting) => `/api/settings/${encodeURIComponent(setting.id)}`,
       refresh: () => closeEntityEditor({ force: true }),
       warning: "这条设定及其版本历史会被删除。"
@@ -8953,11 +9496,12 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   };
   statusButtons.forEach((button) => {
     button.onclick = async () => {
-      if (!item) return;
+      const currentItem = settingEditorItem;
+      if (!currentItem) return;
       button.disabled = true;
       const status = button.id === "setting-editor-confirm" ? "confirmed" : "deprecated";
       try {
-        await api(`/api/settings/${item.id}`, { method: "PATCH", body: { status, changeNote: status === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
+        await api(`/api/settings/${currentItem.id}`, { method: "PATCH", body: { status, changeNote: status === "confirmed" ? "确认 AI 设定候选" : "弃用 AI 设定候选" } });
         await closeEntityEditor({ force: true });
         await loadAiReferences();
         toast(status === "confirmed" ? "设定候选已确认" : "设定候选已弃用");
@@ -8971,54 +9515,65 @@ function openSettingEditor(item = null, { readOnly = false } = {}) {
   $("#setting-editor-form").onsubmit = async (event) => {
     event.preventDefault();
     if (readOnly || !canEditModule("settings")) return;
-    const form = new FormData(event.currentTarget);
     const submit = $("#setting-editor-submit");
-    submit.disabled = true;
-    try {
-      const title = String(form.get("title") ?? "").trim();
-      if (!title) {
-        toast("请填写设定标题", "error");
-        $("#setting-editor-name").focus();
-        return;
+    await runEntityEditorSave({
+      busyTarget: event.currentTarget,
+      button: submit,
+      prepare: async () => {
+        const form = new FormData(event.currentTarget);
+        const title = String(form.get("title") ?? "").trim();
+        if (!title) {
+          toast("请填写设定标题", "error");
+          $("#setting-editor-name").focus();
+          return null;
+        }
+        const content = String(form.get("content") ?? "");
+        if (!content.trim()) {
+          toast("请填写设定正文", "error");
+          $("#setting-editor-body").focus();
+          return null;
+        }
+        const currentItem = settingEditorItem;
+        const changeNote = currentItem ? await inputToast("简要说明这次修改，便于以后查看版本历史。可以留空。", {
+          title: "填写版本说明",
+          inputLabel: "版本说明",
+          placeholder: "例如：补充纪元历法限制",
+          confirmLabel: "保存新版本"
+        }) : "";
+        if (changeNote === null || !(await confirmConcurrentSave())) return null;
+        const locked = form.get("locked") === "on";
+        return {
+          currentItem,
+          body: {
+            title,
+            category: String(form.get("category") ?? "世界规则"),
+            content,
+            locked,
+            status: locked ? "confirmed" : (currentItem?.status ?? "draft"),
+            ...(currentItem ? { changeNote } : {})
+          }
+        };
+      },
+      save: async ({ currentItem, body }) => {
+        const saved = await api(currentItem ? `/api/settings/${currentItem.id}` : `/api/works/${state.work.id}/settings`, { method: currentItem ? "PATCH" : "POST", body });
+        await cleanupPendingMarkdownAttachments(body.content);
+        settingEditorItem = saved;
+        state.settings = upsertEntityCollection(state.settings, saved);
+        syncSettingEditorChrome(false);
+        settingEditorDirtyTracker.markSaved(settingEditorSnapshot(body.content));
+        entityEditorDirty = false;
+        replacePageRoute(currentPageRoute());
+        return {
+          buttonLabel: "保存新版本",
+          message: currentItem ? `设定已保存为 v${saved.versionNo}` : `设定已创建为 v${saved.versionNo}`
+        };
       }
-      const content = String(form.get("content") ?? "");
-      if (!content.trim()) {
-        toast("请填写设定正文", "error");
-        $("#setting-editor-body").focus();
-        return;
-      }
-      const changeNote = item ? await inputToast("简要说明这次修改，便于以后查看版本历史。可以留空。", {
-        title: "填写版本说明",
-        inputLabel: "版本说明",
-        placeholder: "例如：补充纪元历法限制",
-        confirmLabel: "保存新版本"
-      }) : "";
-      if (changeNote === null) return;
-      const locked = form.get("locked") === "on";
-      const body = {
-        title,
-        category: String(form.get("category") ?? "世界规则"),
-        content,
-        locked,
-        status: locked ? "confirmed" : (item?.status ?? "draft"),
-        ...(item ? { changeNote } : {})
-      };
-      if (!(await confirmConcurrentSave())) return;
-      await api(item ? `/api/settings/${item.id}` : `/api/works/${state.work.id}/settings`, { method: item ? "PATCH" : "POST", body });
-      await cleanupPendingMarkdownAttachments(body.content);
-      entityEditorDirty = false;
-      await loadAiReferences();
-      await closeEntityEditor({ force: true });
-      toast(item ? "设定新版本已保存" : "设定已创建");
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      submit.disabled = false;
-    }
+    });
   };
   showEntityEditorPage("setting", { readOnly });
+  settingEditorDirtyTracker.markSaved(settingEditorSnapshot(item?.content ?? ""));
   settingEditorVditor = createVditorEditor($("#setting-editor-markdown"), item?.content ?? "", {
-    onInput: (markdown) => { $("#setting-editor-body").value = markdown; markEntityEditorDirty(); },
+    onInput: (markdown) => syncSettingEditorDirty(markdown),
     readOnly: viewOnly
   });
   (readOnly ? $("#setting-editor-back") : $("#setting-editor-name")).focus();
@@ -9172,6 +9727,7 @@ function markdownImageLabel(file, fallback = "图片附件") {
 }
 
 async function uploadMarkdownAttachment(file, module = "settings") {
+  assertAttachmentFileSize(file);
   const body = new FormData();
   body.append("file", file);
   const attachment = await api(`/api/works/${state.work.id}/attachments?module=${encodeURIComponent(module)}`, { method: "POST", body });
@@ -9479,6 +10035,7 @@ function characterSectionImageLabel(file, fallback = "图片附件") {
 }
 
 async function uploadCharacterSectionAttachment(file) {
+  assertAttachmentFileSize(file);
   const body = new FormData();
   body.append("file", file);
   const attachment = await api(`/api/works/${state.work.id}/attachments?module=characters`, { method: "POST", body });
@@ -9490,6 +10047,10 @@ async function uploadCharacterSectionAttachment(file) {
 }
 
 async function closeCharacterSectionEditor({ force = false } = {}) {
+  if (isEntityEditorSaving()) {
+    toast("正在保存，请稍候");
+    return false;
+  }
   if (!force && characterSectionEditorDirty && !(await confirmToast(
     "当前 Markdown 章节有未保存修改，返回人物档案将丢弃这些修改。是否继续？",
     { title: "放弃未保存修改", confirmLabel: "放弃并继续", cancelLabel: "继续编辑" }
@@ -9522,6 +10083,10 @@ function knowledgeSectionEditorHtml(section = null) {
 }
 
 async function closeKnowledgeSectionEditor({ force = false } = {}) {
+  if (isEntityEditorSaving()) {
+    toast("正在保存，请稍候");
+    return false;
+  }
   if (!force && knowledgeSectionEditorDirty && !(await confirmToast(
     "当前 Markdown 设定有未保存修改，返回设定列表将丢弃这些修改。是否继续？",
     { title: "放弃未保存修改", confirmLabel: "放弃并继续", cancelLabel: "继续编辑" }
@@ -9540,6 +10105,7 @@ async function closeKnowledgeSectionEditor({ force = false } = {}) {
 
 async function openKnowledgeSectionEditor(index = null) {
   if (!canEditModule(knowledgeEditorKind === "race" ? "races" : "organizations")) return;
+  const label = knowledgeEditorKind === "race" ? "种族" : "组织";
   destroyVditorEditor(knowledgeSectionVditor);
   knowledgeSectionVditor = null;
   const section = Number.isInteger(index) ? knowledgeEditorSections[index] : null;
@@ -9562,21 +10128,45 @@ async function openKnowledgeSectionEditor(index = null) {
   host.querySelector("[data-knowledge-section-edit-cancel]").addEventListener("click", () => void closeKnowledgeSectionEditor());
   host.querySelector("[data-knowledge-section-edit-save]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    const wasEditing = knowledgeSectionEditorIndex !== null;
-    const title = titleInput.value.trim();
-    if (!title) {
-      toast("请填写设定标题", "error");
-      titleInput.focus();
-      return;
-    }
-    button.disabled = true;
-    const nextSection = { title, contentMarkdown: knowledgeSectionVditor?.getValue() ?? "", summary: String(section?.summary ?? ""), sortOrder: knowledgeSectionEditorIndex ?? knowledgeEditorSections.length };
-    if (knowledgeSectionEditorIndex === null) knowledgeEditorSections.push(nextSection);
-    else knowledgeEditorSections[knowledgeSectionEditorIndex] = nextSection;
-    knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
-    markEntityEditorDirty();
-    await closeKnowledgeSectionEditor({ force: true });
-    toast(wasEditing ? "设定已更新" : "设定已添加");
+    await runEntityEditorSave({
+      busyTarget: $("#knowledge-section-editor-view"),
+      button,
+      prepare: async () => {
+        const title = titleInput.value.trim();
+        if (!title) {
+          toast("请填写设定标题", "error");
+          titleInput.focus();
+          return null;
+        }
+        return {
+          title,
+          contentMarkdown: knowledgeSectionVditor?.getValue() ?? "",
+          targetIndex: knowledgeSectionEditorIndex
+        };
+      },
+      save: async ({ title, contentMarkdown, targetIndex }) => {
+        const currentSection = targetIndex === null ? null : knowledgeEditorSections[targetIndex];
+        const nextSection = {
+          title,
+          contentMarkdown,
+          summary: String(currentSection?.summary ?? ""),
+          sortOrder: targetIndex ?? knowledgeEditorSections.length
+        };
+        if (targetIndex === null) {
+          knowledgeEditorSections.push(nextSection);
+          knowledgeSectionEditorIndex = knowledgeEditorSections.length - 1;
+        } else {
+          knowledgeEditorSections[targetIndex] = nextSection;
+        }
+        knowledgeEditorSections.forEach((item, sortOrder) => { item.sortOrder = sortOrder; });
+        knowledgeSectionEditorDirty = false;
+        markEntityEditorDirty();
+        return {
+          buttonLabel: "保存设定",
+          message: `Markdown 设定保存成功，保存${label}档案后生效`
+        };
+      }
+    });
   });
   titleInput.focus();
 }
@@ -9585,7 +10175,7 @@ function characterSectionEditorHtml(section = null) {
   const options = Object.entries(characterSectionTypeLabels).map(([value, label]) => `<option value="${value}" ${section?.sectionType === value ? "selected" : ""}>${esc(label)}</option>`).join("");
   return `<div class="character-section-editor-shell">
     <header class="character-section-editor-header">
-      <div><span class="eyebrow">人物 Markdown 档案</span><input id="character-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建档案章节" aria-label="章节标题" required></div>
+      <div><span id="character-section-editor-version" class="eyebrow">人物 Markdown 档案${section ? ` · v${esc(section.versionNo)}` : ""}</span><input id="character-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建档案章节" aria-label="章节标题" required></div>
       <button class="entity-editor-back" type="button" data-character-section-edit-close>返回人物档案</button>
     </header>
     <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}人物 Markdown 章节">
@@ -9602,19 +10192,45 @@ function characterSectionEditorHtml(section = null) {
   </div>`;
 }
 
+function upsertCharacterEditorSection(saved) {
+  const index = characterEditorSections.findIndex((item) => item.id === saved.id);
+  if (index >= 0) characterEditorSections[index] = saved;
+  else characterEditorSections.push(saved);
+  characterEditorSections.sort((left, right) => Number(left.sortOrder ?? 0) - Number(right.sortOrder ?? 0));
+  renderCharacterMarkdownSections();
+}
+
+function characterSectionEditorSnapshot(markdown = null) {
+  const contentMarkdown = markdown ?? characterSectionVditor?.getValue() ?? "";
+  return JSON.stringify({
+    sectionType: $("#character-section-type").value,
+    title: $("#character-section-title").value,
+    summary: $("#character-section-summary").value,
+    contentMarkdown,
+    changeNote: $("#character-section-change-note").value
+  });
+}
+
+function syncCharacterSectionEditorDirty(markdown = null) {
+  const currentMarkdown = characterSectionVditor?.getValue() ?? markdown ?? "";
+  characterSectionEditorDirty = characterSectionEditorDirtyTracker.isDirty(characterSectionEditorSnapshot(currentMarkdown));
+}
+
 async function openCharacterSectionEditor(section = null) {
   await discardPendingCharacterAttachments();
   destroyVditorEditor(characterSectionVditor);
   characterSectionVditor = null;
+  let currentSection = section;
   const host = $("#character-section-editor-host");
-  host.innerHTML = characterSectionEditorHtml(section);
+  host.innerHTML = characterSectionEditorHtml(currentSection);
+  characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(currentSection?.contentMarkdown ?? ""));
   characterSectionEditorDirty = false;
   $("#character-editor-form").classList.add("hidden");
   $("#character-section-editor-view").classList.remove("hidden");
-  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => { characterSectionEditorDirty = true; }));
-  characterSectionVditor = createVditorEditor($("#character-section-markdown"), section?.contentMarkdown ?? "", {
+  host.querySelectorAll("input, textarea, select").forEach((control) => control.addEventListener("input", () => syncCharacterSectionEditorDirty()));
+  characterSectionVditor = createVditorEditor($("#character-section-markdown"), currentSection?.contentMarkdown ?? "", {
     uploadAttachment: uploadCharacterSectionAttachment,
-    onInput: () => { characterSectionEditorDirty = true; },
+    onInput: (markdown) => syncCharacterSectionEditorDirty(markdown),
     placeholder: "从这里开始写人物章节…",
     width: "100%"
   });
@@ -9622,43 +10238,50 @@ async function openCharacterSectionEditor(section = null) {
   host.querySelector("[data-character-section-edit-cancel]").addEventListener("click", () => void closeCharacterSectionEditor());
   host.querySelector("[data-character-section-edit-save]").addEventListener("click", async (event) => {
     const button = event.currentTarget;
-    const title = $("#character-section-title").value.trim();
-    if (!title) {
-      toast("请填写章节标题", "error");
-      $("#character-section-title").focus();
-      return;
-    }
-    button.disabled = true;
-    const contentMarkdown = characterSectionVditor?.getValue() ?? "";
-    try {
-      if (!(await confirmConcurrentSave())) {
-        button.disabled = false;
-        return;
-      }
-      const saved = await api(section ? `/api/character-sections/${section.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
-        method: section ? "PATCH" : "POST",
-        body: {
-          sectionType: $("#character-section-type").value,
-          title,
-          summary: $("#character-section-summary").value.trim(),
-          contentMarkdown,
-          ...(section ? { changeNote: $("#character-section-change-note").value.trim() } : {})
+    await runEntityEditorSave({
+      busyTarget: $("#character-section-editor-view"),
+      button,
+      prepare: async () => {
+        const title = $("#character-section-title").value.trim();
+        if (!title) {
+          toast("请填写章节标题", "error");
+          $("#character-section-title").focus();
+          return null;
         }
-      });
-      const referenced = new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]+)/gu)].map((match) => String(match[1])));
-      const unused = characterSectionPendingAttachments.filter((attachmentId) => !referenced.has(attachmentId));
-      characterSectionPendingAttachments = [];
-      await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
-      characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
-      renderCharacterMarkdownSections();
-      await Promise.all([renderCharacters(), loadAiReferences()]);
-      characterSectionEditorDirty = false;
-      await closeCharacterSectionEditor({ force: true });
-      toast(section ? `“${saved.title}”已保存为 v${saved.versionNo}` : `已创建“${saved.title}”`);
-    } catch (error) {
-      toast(error.message, "error");
-      button.disabled = false;
-    }
+        if (!(await confirmConcurrentSave())) return null;
+        return {
+          title,
+          contentMarkdown: characterSectionVditor?.getValue() ?? "",
+          editingSection: currentSection
+        };
+      },
+      save: async ({ title, contentMarkdown, editingSection }) => {
+        const saved = await api(editingSection ? `/api/character-sections/${editingSection.id}` : `/api/characters/${characterEditorItem.id}/sections`, {
+          method: editingSection ? "PATCH" : "POST",
+          body: {
+            sectionType: $("#character-section-type").value,
+            title,
+            summary: $("#character-section-summary").value.trim(),
+            contentMarkdown,
+            ...(editingSection ? { changeNote: $("#character-section-change-note").value.trim() } : {})
+          }
+        });
+        const referenced = new Set([...contentMarkdown.matchAll(/attachment:\/\/([A-Za-z0-9_-]+)/gu)].map((match) => String(match[1])));
+        const unused = characterSectionPendingAttachments.filter((attachmentId) => !referenced.has(attachmentId));
+        characterSectionPendingAttachments = [];
+        await Promise.all(unused.map((attachmentId) => api(`/api/attachments/${attachmentId}`, { method: "DELETE" }).catch(() => null)));
+        currentSection = saved;
+        upsertCharacterEditorSection(saved);
+        $("#character-section-change-note").value = "";
+        $("#character-section-editor-version").textContent = `人物 Markdown 档案 · v${saved.versionNo}`;
+        characterSectionEditorDirtyTracker.markSaved(characterSectionEditorSnapshot(contentMarkdown));
+        characterSectionEditorDirty = false;
+        return {
+          buttonLabel: "保存章节版本",
+          message: editingSection ? `“${saved.title}”已保存为 v${saved.versionNo}` : `“${saved.title}”已创建为 v${saved.versionNo}`
+        };
+      }
+    });
   });
 }
 
@@ -9918,25 +10541,26 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   $("#character-history-button").title = item ? "查看、比较和回滚历史版本" : "创建人物档案后即可查看版本历史";
   const characterMergeButton = $("#character-merge-button");
   const characterDeleteButton = $("#character-delete-button");
-  const canManageCharacter = Boolean(item && !readOnly && canEditModule("characters"));
+  const canManageCharacter = Boolean(characterEditorItem && !readOnly && canEditModule("characters"));
   characterMergeButton.classList.toggle("hidden", !canManageCharacter);
   characterDeleteButton.classList.toggle("hidden", !canManageCharacter);
   characterMergeButton.onclick = async () => {
-    if (!item) return;
+    const currentItem = characterEditorItem;
+    if (!currentItem) return;
     const workId = state.work?.id;
     if (!workId) return;
     try {
       const candidates = await moduleApiAllPages("characters", `/api/works/${workId}/characters`);
-      if (state.work?.id !== workId || characterEditorItem?.id !== item.id) return;
+      if (state.work?.id !== workId || characterEditorItem?.id !== currentItem.id) return;
       state.characters = candidates;
       if (candidates.length < 2) return toast("至少需要两个角色才能合并", "error");
       await closeEntityEditor({ force: true });
       openEntityMergeDialog({
         typeLabel: "角色",
-        source: item,
+        source: currentItem,
         candidates,
         endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}/merge`,
-        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: item.versionNo }),
+        body: (target) => ({ targetCharacterId: target.id, expectedTargetVersionNo: target.versionNo, expectedSourceVersionNo: currentItem.versionNo }),
         refresh: renderCharacters,
         impact: "来源角色的别名、组织、档案章节、时间线与人物关系会迁移到目标角色。"
       });
@@ -9945,10 +10569,11 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
     }
   };
   characterDeleteButton.onclick = () => {
-    if (!item) return;
+    const currentItem = characterEditorItem;
+    if (!currentItem) return;
     void deleteManagedEntity({
       typeLabel: "角色",
-      item,
+      item: currentItem,
       endpoint: (character) => `/api/characters/${encodeURIComponent(character.id)}`,
       refresh: () => closeEntityEditor({ force: true }),
       warning: "相关人物关系会删除，时间线中的参与者引用会移除。"
@@ -9967,7 +10592,7 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
   $("#character-editor-submit").classList.toggle("hidden", viewOnly);
   const editButton = $("#character-editor-edit");
   editButton.classList.toggle("hidden", !readOnly || !canEditModule("characters"));
-  editButton.onclick = () => void openCharacterEditor(item);
+  editButton.onclick = () => void openCharacterEditor(characterEditorItem);
   document.querySelectorAll("[data-character-editor-tab]").forEach((button) => {
     button.onclick = () => activateCharacterEditorTab(button.dataset.characterEditorTab);
   });
@@ -9979,24 +10604,46 @@ async function openCharacterEditor(item = null, { readOnly = false } = {}) {
     event.preventDefault();
     if (readOnly || !canEditModule("characters")) return;
     const submit = $("#character-editor-submit");
-    submit.disabled = true;
-    try {
-      const body = collectCharacterBody(new FormData(form));
-      if (!body.name) throw new Error("请填写角色标准名");
-      const wasEditing = Boolean(characterEditorItem);
-      const previousVersion = characterEditorItem?.versionNo;
-      if (!wasEditing) delete body.changeNote;
-      if (!(await confirmConcurrentSave())) return;
-      const saved = await api(wasEditing ? `/api/characters/${characterEditorItem.id}` : `/api/works/${state.work.id}/characters`, { method: wasEditing ? "PATCH" : "POST", body });
-      entityEditorDirty = false;
-      await loadAiReferences();
-      await closeEntityEditor({ force: true });
-      toast(!wasEditing ? "人物档案已创建" : saved.versionNo === previousVersion ? "没有检测到人物档案变更" : `人物档案已保存为 v${saved.versionNo}`);
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      submit.disabled = false;
-    }
+    await runEntityEditorSave({
+      busyTarget: form,
+      button: submit,
+      prepare: async () => {
+        const body = collectCharacterBody(new FormData(form));
+        if (!body.name) {
+          toast("请填写角色标准名", "error");
+          form.querySelector("[name='name']")?.focus();
+          return null;
+        }
+        const currentItem = characterEditorItem;
+        if (!currentItem) delete body.changeNote;
+        if (!(await confirmConcurrentSave())) return null;
+        return { body, currentItem, previousVersion: currentItem?.versionNo };
+      },
+      save: async ({ body, currentItem, previousVersion }) => {
+        const saved = await api(currentItem ? `/api/characters/${currentItem.id}` : `/api/works/${state.work.id}/characters`, { method: currentItem ? "PATCH" : "POST", body });
+        characterEditorItem = saved;
+        state.characters = upsertEntityCollection(state.characters, saved);
+        entityEditorDirty = false;
+        $("#character-editor-title").textContent = saved.name;
+        $("#character-editor-version").textContent = `v${saved.versionNo}`;
+        $("#character-change-note").value = "";
+        $("#character-history-button").disabled = false;
+        $("#character-history-button").title = "查看、比较和回滚历史版本";
+        characterMergeButton.classList.remove("hidden");
+        characterDeleteButton.classList.remove("hidden");
+        relationshipTab.disabled = !canReadModule("relationships");
+        relationshipTab.title = canReadModule("relationships") ? "查看和编辑人物关系" : "当前账户没有关系模块读取权限";
+        renderCharacterMarkdownSections();
+        renderAiRoleplayCharacterSelect();
+        replacePageRoute(currentPageRoute());
+        const message = !currentItem
+          ? `人物档案已创建为 v${saved.versionNo}`
+          : saved.versionNo === previousVersion
+            ? `人物档案没有变更，当前为 v${saved.versionNo}`
+            : `人物档案已保存为 v${saved.versionNo}`;
+        return { buttonLabel: "保存新版本", message };
+      }
+    });
   };
   showEntityEditorPage("character", { readOnly });
   if (item) {
@@ -10031,7 +10678,7 @@ function renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions) {
     + field("description", `${label}简介`, "textarea", item?.description, []);
   const memberField = memberOptions.length
     ? field("memberIds", isRace ? "属于该种族的角色（可多选）" : "组织成员（可多选）", "chips", item?.memberIds ?? [], memberOptions)
-    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${readOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
+    : `<div class="character-editor-empty-field"><strong>${isRace ? "种族成员" : "组织成员"}</strong><span>${entityEditorReadOnly ? "该档案尚未绑定角色。" : "当前还没有可绑定的角色。"}</span></div>`;
   $("#knowledge-editor-fields").innerHTML = knowledgeEditorSection("basic", "基础资料", isRace ? "先定义名称、层级和简介，再补充共同设定。" : "先定义组织名称和简介，再补充完整的组织设定。", basicFields)
     + knowledgeEditorSection("settings", title, "", '<div id="knowledge-markdown-sections" class="knowledge-markdown-sections"></div>')
     + knowledgeEditorSection("members", isRace ? "种族成员" : "组织成员", "成员关系会同步到角色档案中。", memberField);
@@ -10056,6 +10703,8 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   const isRace = kind === "race";
   const module = isRace ? "races" : "organizations";
   const label = isRace ? "种族" : "组织";
+  const viewOnly = readOnly || !canEditModule(module);
+  entityEditorReadOnly = viewOnly;
   const parentOptions = isRace
     ? [["", "无（根种族）"], ...eligibleRaceParents(state.races, item?.id)
       .sort((left, right) => racePathLabel(left).localeCompare(racePathLabel(right), "zh-CN"))
@@ -10066,32 +10715,39 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
   knowledgeEditorSections = normalizeKnowledgeEditorSections(item);
   knowledgeSectionEditorIndex = null;
   knowledgeSectionEditorDirty = false;
-  $("#knowledge-editor-eyebrow").textContent = item ? `${label}档案` : `建立${label}档案`;
-  $("#knowledge-editor-title").textContent = item?.name || `新建${label}`;
-  $("#knowledge-editor-version").textContent = item ? `v${item.versionNo ?? 1}` : "新档案";
   $("#knowledge-editor-header-note").textContent = isRace ? "层级、共同设定与角色归属" : "简介、组织设定与成员归属";
-  $("#knowledge-editor-footer-note").textContent = `保存${label}档案后返回${isRace ? "种族" : "组织"}列表。`;
-  $("#knowledge-editor-submit").textContent = item ? `保存${label}档案` : `创建${label}档案`;
   const historyButton = $("#knowledge-editor-history");
   const mergeButton = $("#knowledge-editor-merge");
   const deleteButton = $("#knowledge-editor-delete");
   const refresh = isRace ? renderRaces : renderOrganizations;
   const candidates = isRace ? state.races : state.organizations;
   const typeLabel = label;
-  historyButton.classList.toggle("hidden", !item);
-  mergeButton.classList.toggle("hidden", !item || readOnly || !canEditModule(module) || candidates.length < 2);
-  deleteButton.classList.toggle("hidden", !item || readOnly || !canEditModule(module));
+  const syncKnowledgeEditorChrome = () => {
+    const currentItem = knowledgeEditorItem;
+    $("#knowledge-editor-eyebrow").textContent = viewOnly ? `阅读${label}档案` : currentItem ? `${label}档案` : `建立${label}档案`;
+    $("#knowledge-editor-title").textContent = currentItem?.name || `新建${label}`;
+    $("#knowledge-editor-version").textContent = currentItem ? `v${currentItem.versionNo ?? 1}` : "新档案";
+    $("#knowledge-editor-footer-note").textContent = `保存${label}档案后继续留在当前页面，可使用“返回列表”离开。`;
+    $("#knowledge-editor-submit").textContent = currentItem ? `保存${label}档案` : `创建${label}档案`;
+    $("#knowledge-editor-submit").classList.toggle("hidden", viewOnly);
+    const hasMergeCandidate = candidates.some((candidate) => candidate.id !== currentItem?.id);
+    historyButton.classList.toggle("hidden", !currentItem);
+    mergeButton.classList.toggle("hidden", !currentItem || viewOnly || !hasMergeCandidate);
+    deleteButton.classList.toggle("hidden", !currentItem || viewOnly);
+  };
   historyButton.onclick = async () => {
-    if (!item) return;
+    const currentItem = knowledgeEditorItem;
+    if (!currentItem) return;
     if (!(await closeEntityEditor())) return;
-    openEntityHistory(kind, item.id, item.name, async () => { await refresh(); await loadAiReferences(); });
+    openEntityHistory(kind, currentItem.id, currentItem.name, async () => { await refresh(); await loadAiReferences(); });
   };
   mergeButton.onclick = async () => {
-    if (!item) return;
+    const currentItem = knowledgeEditorItem;
+    if (!currentItem) return;
     await closeEntityEditor({ force: true });
     openEntityMergeDialog({
       typeLabel,
-      source: item,
+      source: currentItem,
       candidates,
       endpoint: (source) => `/api/${module}/${encodeURIComponent(source.id)}/merge`,
       body: (target) => isRace ? { targetRaceId: target.id } : { targetOrganizationId: target.id },
@@ -10100,61 +10756,73 @@ async function openKnowledgeEditor(kind, item, { readOnly = false } = {}) {
     });
   };
   deleteButton.onclick = () => {
-    if (!item) return;
+    const currentItem = knowledgeEditorItem;
+    if (!currentItem) return;
     void deleteManagedEntity({
       typeLabel,
-      item,
+      item: currentItem,
       endpoint: (source) => `/api/${module}/${encodeURIComponent(source.id)}`,
       refresh: () => closeEntityEditor({ force: true }),
       warning: isRace ? "已绑定角色将变为未指定种族；有子种族时需先迁移或合并。" : "角色与该组织的成员关系会一并移除。"
     });
   };
   renderKnowledgeEditorFields(kind, item, memberOptions, parentOptions);
-  const viewOnly = readOnly || !canEditModule(module);
   if (viewOnly) {
-    $("#knowledge-editor-eyebrow").textContent = readOnly ? `阅读${label}档案` : `${label}档案`;
     $("#knowledge-editor-fields").querySelectorAll("input, textarea").forEach((control) => { control.readOnly = true; });
     $("#knowledge-editor-fields").querySelectorAll("select, input[type='checkbox']").forEach((control) => { control.disabled = true; });
     $("#knowledge-editor-fields").querySelectorAll("button").forEach((button) => { button.disabled = true; });
   }
-  $("#knowledge-editor-submit").classList.toggle("hidden", viewOnly);
+  syncKnowledgeEditorChrome();
   const editButton = $("#knowledge-editor-edit");
   editButton.textContent = `编辑${label}`;
   editButton.classList.toggle("hidden", !readOnly || !canEditModule(module));
-  editButton.onclick = () => void openKnowledgeEditor(kind, item);
+  editButton.onclick = () => void openKnowledgeEditor(kind, knowledgeEditorItem);
   const form = $("#knowledge-editor-form");
   form.onsubmit = async (event) => {
     event.preventDefault();
     if (readOnly || !canEditModule(module)) return;
     const submit = $("#knowledge-editor-submit");
-    submit.disabled = true;
-    try {
-      const data = new FormData(form);
-      const name = String(data.get("name") ?? "").trim();
-      if (!name) throw new Error(`请填写${label}名称`);
-      const settingsSections = knowledgeEditorSections
-        .map((section, index) => ({ title: String(section.title ?? "").trim(), contentMarkdown: String(section.contentMarkdown ?? ""), summary: String(section.summary ?? "").trim(), sortOrder: index }))
-        .filter((section) => section.title || section.contentMarkdown.trim());
-      const untitled = settingsSections.findIndex((section) => !section.title);
-      if (untitled >= 0) throw new Error(`请填写第 ${untitled + 1} 条 Markdown 设定的标题`);
-      const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
-      const body = isRace
-        ? { name, isExtinct: data.has("isExtinct"), parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
-        : { name, isDissolved: data.has("isDissolved"), description: data.get("description"), settingsMarkdown, settingsSections };
-      if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
-      const wasEditing = Boolean(knowledgeEditorItem);
-      if (!(await confirmConcurrentSave())) return;
-      await api(wasEditing ? `/api/${module}/${knowledgeEditorItem.id}` : `/api/works/${state.work.id}/${module}`, { method: wasEditing ? "PATCH" : "POST", body });
-      await cleanupPendingMarkdownAttachments(settingsMarkdown);
-      entityEditorDirty = false;
-      await loadAiReferences();
-      await closeEntityEditor({ force: true });
-      toast(wasEditing ? `${label}档案已保存` : `${label}档案已创建`);
-    } catch (error) {
-      toast(error.message, "error");
-    } finally {
-      submit.disabled = false;
-    }
+    await runEntityEditorSave({
+      busyTarget: form,
+      button: submit,
+      prepare: async () => {
+        const data = new FormData(form);
+        const name = String(data.get("name") ?? "").trim();
+        if (!name) {
+          toast(`请填写${label}名称`, "error");
+          form.querySelector("[name='name']")?.focus();
+          return null;
+        }
+        const settingsSections = knowledgeEditorSections
+          .map((section, index) => ({ title: String(section.title ?? "").trim(), contentMarkdown: String(section.contentMarkdown ?? ""), summary: String(section.summary ?? "").trim(), sortOrder: index }))
+          .filter((section) => section.title || section.contentMarkdown.trim());
+        const untitled = settingsSections.findIndex((section) => !section.title);
+        if (untitled >= 0) {
+          toast(`请填写第 ${untitled + 1} 条 Markdown 设定的标题`, "error");
+          return null;
+        }
+        const settingsMarkdown = settingsSections.map((section) => section.contentMarkdown).join("\n\n");
+        const body = isRace
+          ? { name, isExtinct: data.has("isExtinct"), parentRaceId: data.get("parentRaceId") || null, description: data.get("description"), settingsMarkdown, settingsSections }
+          : { name, isDissolved: data.has("isDissolved"), description: data.get("description"), settingsMarkdown, settingsSections };
+        if (canReadModule("characters")) body.memberIds = data.getAll("memberIds").map(String);
+        const currentItem = knowledgeEditorItem;
+        if (!(await confirmConcurrentSave())) return null;
+        return { body, currentItem, settingsMarkdown };
+      },
+      save: async ({ body, currentItem, settingsMarkdown }) => {
+        const saved = await api(currentItem ? `/api/${module}/${currentItem.id}` : `/api/works/${state.work.id}/${module}`, { method: currentItem ? "PATCH" : "POST", body });
+        await cleanupPendingMarkdownAttachments(settingsMarkdown);
+        knowledgeEditorItem = saved;
+        entityEditorDirty = false;
+        syncKnowledgeEditorChrome();
+        replacePageRoute(currentPageRoute());
+        return {
+          buttonLabel: `保存${label}档案`,
+          message: currentItem ? `${label}档案已保存为 v${saved.versionNo}` : `${label}档案已创建为 v${saved.versionNo}`
+        };
+      }
+    });
   };
   showEntityEditorPage(kind, { readOnly });
   (readOnly ? $("#knowledge-editor-close") : $("#knowledge-editor-fields").querySelector("input:not([type='checkbox']), textarea"))?.focus();
@@ -10924,7 +11592,7 @@ async function sendAi() {
         || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
         || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
       if (suggestionFailed) setAiAssistantStatus("error");
-      setAiContextMeter(suggestion.contextUsage);
+      setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
@@ -10998,6 +11666,7 @@ async function streamChat(body) {
   let conversationTitle = null;
   let persistedUserMessage = null;
   let contextAction = "ready";
+  let streamContextCompacted = false;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
@@ -11049,7 +11718,7 @@ async function streamChat(body) {
       const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
-        setAiContextMeter(payload.usage);
+        if (!state.aiPromptSent) setAiContextMeter(payload.usage);
         if (payload.conversation?.id) {
           state.aiConversationId = payload.conversation.id;
           upsertAiConversationSummary(payload.conversation);
@@ -11072,7 +11741,7 @@ async function streamChat(body) {
           syncAiTaskOptions();
           renderAiRoleplayCharacterSelect();
           renderAiQuickActions();
-          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id);
           clearAiPromptComposer();
           mountAssistantMessage();
         }
@@ -11116,6 +11785,7 @@ async function streamChat(body) {
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
       } else if (eventName === "context_compacted") {
+        streamContextCompacted = true;
         setAiContextMeter(payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
@@ -11123,7 +11793,8 @@ async function streamChat(body) {
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
-        setAiContextMeter(payload.contextUsage);
+        const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
+        setAiContextMeter(payload.contextUsage, announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
@@ -11187,6 +11858,24 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.textContent = "失败";
     failureBadge.setAttribute("aria-label", "消息状态：失败");
     heading.firstElementChild?.append(failureBadge);
+  }
+  const mentionNames = role === "user"
+    ? userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)
+    : [];
+  if (mentionNames.length) {
+    const references = document.createElement("div");
+    references.className = "user-message-mentions";
+    const label = document.createElement("span");
+    label.className = "user-message-mentions-label";
+    label.textContent = "引用角色";
+    references.append(label);
+    for (const name of mentionNames) {
+      const reference = document.createElement("span");
+      reference.className = "user-message-mention";
+      reference.textContent = name;
+      references.append(reference);
+    }
+    message.append(references);
   }
   if (citations.length) {
     const references = document.createElement("div");
@@ -11827,8 +12516,8 @@ function exportAvatarCropBlob() {
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
-  if (file.size > maximumAvatarFileSize) {
-    toast("头像文件不能超过 5 MB", "error");
+  if (file.size > imageUploadLimits.avatarBytes) {
+    toast(`头像图片不能超过 ${formatUploadLimit(imageUploadLimits.avatarBytes)}`, "error");
     event.target.value = "";
     return;
   }
@@ -12081,6 +12770,7 @@ $("#login-form").addEventListener("submit", async (event) => {
         captchaAnswer: form.get("captchaAnswer")
       }
     });
+    if (systemRestartDetected) stagePresenceClientIdForRelogin(presenceSessionStorage, presenceClientId);
     window.history.replaceState(null, "", serializePageRoute({ view: "shelf" }));
     window.location.reload();
   } catch (error) {
@@ -12171,6 +12861,15 @@ $("#platform-ui-settings-return").addEventListener("click", () => returnToSettin
 $("#platform-ui-settings-cancel").addEventListener("click", () => $("#platform-ui-settings-dialog").close());
 $("#s3-backup-close").addEventListener("click", () => $("#s3-backup-dialog").close());
 $("#s3-backup-settings-return").addEventListener("click", () => returnToSettingsHub("#s3-backup-button", "#s3-backup-dialog").catch((error) => toast(error.message, "error")));
+$("#s3-backup-encryption-toggle").addEventListener("change", (event) => void changeS3BackupEncryption(event));
+$("#s3-backup-key-copy").addEventListener("click", () => void copyS3BackupEncryptionKey());
+$("#s3-backup-key-download").addEventListener("click", downloadS3BackupEncryptionKey);
+$("#s3-backup-key-confirm").addEventListener("click", () => void confirmS3BackupEncryptionKeySaved());
+$("#s3-backup-key-dialog").addEventListener("cancel", (event) => event.preventDefault());
+$("#s3-backup-key-dialog").addEventListener("close", () => {
+  s3BackupEncryptionConfirmationToken = null;
+  $("#s3-backup-key-value").value = "";
+});
 $("#s3-backup-add").addEventListener("click", () => openS3BackupTargetDialog());
 $("#s3-backup-run-all").addEventListener("click", (event) => void queueS3BackupRuns(null, event.currentTarget));
 $("#s3-backup-refresh").addEventListener("click", async (event) => {
@@ -12308,8 +13007,8 @@ $("#character-editor-close").addEventListener("click", () => { void closeEntityE
 $("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
 $("#knowledge-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
 $("#knowledge-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
-$("#setting-editor-form").addEventListener("input", markEntityEditorDirty);
-$("#setting-editor-form").addEventListener("change", markEntityEditorDirty);
+$("#setting-editor-form").addEventListener("input", () => syncSettingEditorDirty());
+$("#setting-editor-form").addEventListener("change", () => syncSettingEditorDirty());
 $("#character-editor-form").addEventListener("input", markEntityEditorDirty);
 $("#character-editor-form").addEventListener("change", markEntityEditorDirty);
 $("#knowledge-editor-form").addEventListener("input", markEntityEditorDirty);
@@ -12357,7 +13056,7 @@ $("#chapter-content").addEventListener("input", (event) => {
   updateChapterStats();
   scheduleChapterAutoSave();
   clearChapterLineSelection();
-  scheduleChapterLineNumbers();
+  scheduleChapterLineNumbers(chapterLineInputRenderDelay);
   setAiContextMeter(null);
 });
 $("#chapter-content").addEventListener("select", () => setAiContextMeter(null));
@@ -12587,6 +13286,18 @@ $("#cover-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   const workId = state.pendingCoverWorkId;
   if (!file || !workId) return;
+  if (isGifImageFile(file)) {
+    toast("封面不支持 GIF 图片", "error");
+    state.pendingCoverWorkId = null;
+    event.target.value = "";
+    return;
+  }
+  if (file.size > imageUploadLimits.coverBytes) {
+    toast(coverFileSizeMessage(file), "error");
+    state.pendingCoverWorkId = null;
+    event.target.value = "";
+    return;
+  }
   const body = new FormData();
   body.append("file", file);
   try {
@@ -12782,10 +13493,25 @@ $("#ai-history-dialog").addEventListener("close", () => {
   $("#ai-history-toggle").setAttribute("aria-expanded", "false");
 });
 $("#ai-prompt").addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !$("#ai-mention-menu").classList.contains("hidden")) {
-    event.preventDefault();
-    hideAiMentionMenu();
-    return;
+  const mentionMenuVisible = !$("#ai-mention-menu").classList.contains("hidden");
+  if (mentionMenuVisible) {
+    if (!event.isComposing && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      if (moveAiMentionActiveOption(event.key === "ArrowDown" ? 1 : -1)) event.preventDefault();
+      return;
+    }
+    if (shouldSendAiPrompt(event)) {
+      const activeOption = $("#ai-mention-menu").querySelector('[role="option"][aria-selected="true"]');
+      if (activeOption) {
+        event.preventDefault();
+        selectAiMention(activeOption);
+        return;
+      }
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      hideAiMentionMenu();
+      return;
+    }
   }
   if (shouldSendAiPrompt(event)) {
     event.preventDefault();

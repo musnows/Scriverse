@@ -1,4 +1,12 @@
-import type { AiInjectedEntities, AiMessage, ContextScope, TaskType } from "./domain.js";
+import {
+  ANALYSIS_TASK_TYPES,
+  HISTORICAL_ANALYSIS_TASK_TYPES,
+  type AiInjectedEntities,
+  type AiMessage,
+  type AnalysisTaskType,
+  type ContextScope,
+  type TaskType
+} from "./domain.js";
 import {
   buildCompletionRequestBody,
   isAiProviderProtocol,
@@ -112,6 +120,16 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
+const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
+
+function isAnalysisTaskType(value: string): value is AnalysisTaskType {
+  return analysisTaskTypes.has(value);
+}
+
+function unsupportedTaskType(taskType: string): AppError {
+  return new AppError(400, "UNSUPPORTED_TASK_TYPE", `不支持的任务类型：${taskType}`);
+}
+
 // A small but non-transparent 128x128 PNG. The model test must exercise an actual image_url
 // payload, while keeping the request cheap and avoiding any user data in the probe.
 const MULTIMODAL_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAACXBIWXMAAAPoAAAD6AG1e1JrAAACfklEQVR4nO2cwY3EQBACJ8LOglRJyw4DJOpR/xOUuF17Zp91H9xsBi/9B8AhABIcC4AEx78AJDg+AyDB8SEQCY5vAUhwfA1EguM5ABIcD4KQ4HgSiATHo2AkON4FIMHxMggJjreBSHC8DkaC4zwAEhwHQpDgOBGEBMeRMCQ4zgQiwXEoFAmOU8FIcBwLR4LjXgASHBdDkOC4GYQEx9UwJDjuBiLBcTkUCY7bwUhwXA8319P5fQCPS8APRChfAgIUBOFRWADlS0CAgiA8CgugfAkIUBCER2EBlC8BAQqC8CgsgPIlIEBBEB6FBVC+BAQoCMKjsADKl4AABUF4FBZA+RIQoCAIj8ICKF8CAhQE4VFYAOVLQICCIDwKC6B8CQhQEIRHYQGULwEBCoLwKCyA8iUgQEEQHoUFUL4EBCgIwqOwAMqXgAAFQXgUFkD5EhCgIAiPwgIoXwICFAThUVgA5UtAgIIgPAoLoHwJCFAQhEdhAZQvAQEKgvAoLIDyJSBAQRAehQVQvgQEKAjCo7AAypeAAAVBeBQWQPkSEKAgCI/CAihfAgIUBOFRWADlS0CAgiA8CgugfAkIUBCER2EBlC8BAQqC8CgsgPIlIEBBEB6FBVC+BAQoCMKjsADKl4AABUF4FBZA+RIQoCAIj8ICKF8CAhQE4VFYAOVLQICCIDwKC6B8CQhQEIRHYQGULwEBCoLwKCyA8iUgQEEQHoUFUL4EBCgIwqOwAMqXgAAFQXgUFkD5EhCgIAiPwgIoXwICFAThUVgA5UtAgIIgPAoLoHwJCFAQhEdhAZQvAQEKgvAoLIDyJSBAQRAehQVQvgQEKAjCo7AAypeAAAVBeJQfFY4JQ620WGEAAAAASUVORK5CYII=";
@@ -2426,7 +2444,7 @@ export class AiManager {
         failures: [{ message, ...(error instanceof AppError ? { code: error.code } : {}) }]
       });
     }
-    if (current.status !== "partial") return;
+    if (current.status !== "partial" && current.status !== "failed") return;
     const disposition = autoRunFailureDisposition(error, Number(current.attemptCount));
     const settings = this.store.recordAutoRunFailure(workId, message, disposition.pauseImmediately);
     logger.warn("ai.auto_run.task_failed", {
@@ -3191,7 +3209,11 @@ export class AiManager {
 
   rerunTask(taskId: string, modelOverrideId?: string): Record<string, unknown> {
     const original = this.store.getTask(taskId);
-    const rerunnableStatuses = new Set(["review", "completed", "partial", "expired", "cancelled"]);
+    const originalTaskType = String(original.taskType);
+    if (HISTORICAL_ANALYSIS_TASK_TYPES.some((taskType) => taskType === originalTaskType)) {
+      throw new AppError(409, "TASK_NOT_RERUNNABLE", `任务类型“${originalTaskType}”已经不支持重跑`);
+    }
+    const rerunnableStatuses = new Set(["review", "completed", "partial", "failed", "expired", "cancelled"]);
     if (!rerunnableStatuses.has(String(original.status))) {
       throw new AppError(409, "TASK_NOT_RERUNNABLE", "只有已结束的分析任务可以按原配置重跑");
     }
@@ -3210,7 +3232,7 @@ export class AiManager {
     const modelId = modelOverrideId ?? originalModelId;
     if (modelId) this.resolveModel(String(original.workId), this.analysisTaskModelPurpose(String(original.taskType)), modelId);
     const rerun = this.store.createTask(String(original.workId), {
-      taskType: String(original.taskType),
+      taskType: originalTaskType,
       scope,
       ...(modelId ? { modelId } : {}),
       rerunOfTaskId: taskId
@@ -3283,11 +3305,7 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
-    const chatTools = this.enabledAgentTools(input.workId, "chat", input.agentToolIds, input.conversationId);
-    const generated = chatTools.length
-      ? await this.generate({ ...input, taskType: "chat" })
-      : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
-    if (chatTools.length) onDelta(generated.content);
+    const generated = await this.generate({ ...input, taskType: "chat" }, onDelta);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3686,7 +3704,9 @@ export class AiManager {
     const taskController = new AbortController();
     this.taskControllers.set(taskId, taskController);
     try {
-      const taskType = String(task.taskType);
+      const taskTypeValue = String(task.taskType);
+      if (!isAnalysisTaskType(taskTypeValue)) throw unsupportedTaskType(taskTypeValue);
+      const taskType = taskTypeValue;
       const scope = task.scope as ContextScope;
       let result: Record<string, unknown>;
       if (taskType === "chapter-analysis") {
@@ -3705,17 +3725,19 @@ export class AiManager {
         result = await this.runSettingExtraction(workId, scope, selectedModelId, taskId);
       } else if (taskType === "consistency-check") {
         result = await this.runConsistencyCheck(workId, scope, selectedModelId, taskId);
-      } else {
+      } else if (taskType === "book-analysis") {
         const generated = await this.generate({
           workId,
           taskId,
-          taskType: taskType === "book-analysis" ? "book-analysis" : "chapter-analysis",
+          taskType: "book-analysis",
           instruction: "请基于上下文完成分析，给出有原文依据的中文结论。",
           scope,
           signal: taskController.signal,
           ...(selectedModelId ? { modelId: selectedModelId } : {})
         });
         result = { content: generated.content, callId: generated.callId };
+      } else {
+        throw unsupportedTaskType(taskType);
       }
       if (!this.taskCanCommit(taskId)) {
         logger.warn("ai.task.result_discarded", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000 });
@@ -3746,7 +3768,8 @@ export class AiManager {
           throw error;
         }
       }
-      this.store.updateTask(taskId, { status: "partial", progress: 100, failures: [failure] });
+      const failedStatus = error instanceof AppError && error.code === "UNSUPPORTED_TASK_TYPE" ? "failed" : "partial";
+      this.store.updateTask(taskId, { status: failedStatus, progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
     } finally {
@@ -3896,6 +3919,20 @@ export class AiManager {
     const compaction = await this.compactConversation(input);
     const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
     return { action: "compacted", usage: compactedUsage, compaction };
+  }
+
+  /** 解析本轮消息中的自动角色提及；不使用会话累计排除集，也不改写累计注入状态。 */
+  resolveInstructionMentions(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId">
+  ): ContextScope {
+    if (input.taskType !== "chat" || this.roleplayCharacterId(input.workId, input.conversationId)) return input.scope;
+    const matches = this.matchInstructionEntities(
+      input.workId,
+      input.instruction,
+      input.scope,
+      { characters: [], races: [], organizations: [] }
+    );
+    return this.mergeInstructionEntityMatches(input.scope, matches);
   }
 
   async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
@@ -4133,21 +4170,17 @@ export class AiManager {
     return this.contextBuilder.buildPlan(input.workId, scope, workContextBudgetTokens, bookSummaryMaximumTokens, input.instruction);
   }
 
-  private applyKeywordEntityMentions(
+  private matchInstructionEntities(
     workId: string,
     instruction: string,
     scope: ContextScope,
-    conversationId: string | undefined,
-    persist: boolean
-  ): ContextScope {
-    const injected = conversationId
-      ? this.store.getAiConversationInjectedEntities(conversationId, workId)
-      : { characters: [], races: [], organizations: [] } satisfies AiInjectedEntities;
+    injected: AiInjectedEntities
+  ): KeywordEntityMatches {
     const proseSettingInfoOn = scope.suppressAutomaticContext !== true && (scope.includeSettingInfo === true || (
       PROSE_CONTEXT_SCOPE_TYPES.has(scope.type)
       && scope.includeSettingInfo !== false
     ));
-    const matches = matchKeywordEntities(this.store, workId, instruction, {
+    return matchKeywordEntities(this.store, workId, instruction, {
       excludeCharacterIds: [
         ...(scope.characterIds ?? []),
         ...(scope.mentionCharacterIds ?? []),
@@ -4158,9 +4191,31 @@ export class AiManager {
       // 正文范围已整表注入组织/种族时，关键词不再重复塞提及卡
       skipRacesAndOrganizations: proseSettingInfoOn
     });
+  }
+
+  private mergeInstructionEntityMatches(scope: ContextScope, matches: KeywordEntityMatches): ContextScope {
     const mentionCharacterIds = [...new Set([...(scope.mentionCharacterIds ?? []), ...matches.characterIds])];
     const raceIds = [...new Set([...(scope.raceIds ?? []), ...matches.raceIds])];
     const organizationIds = [...new Set([...(scope.organizationIds ?? []), ...matches.organizationIds])];
+    return {
+      ...scope,
+      ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
+      ...(raceIds.length ? { raceIds } : {}),
+      ...(organizationIds.length ? { organizationIds } : {})
+    };
+  }
+
+  private applyKeywordEntityMentions(
+    workId: string,
+    instruction: string,
+    scope: ContextScope,
+    conversationId: string | undefined,
+    persist: boolean
+  ): ContextScope {
+    const injected = conversationId
+      ? this.store.getAiConversationInjectedEntities(conversationId, workId)
+      : { characters: [], races: [], organizations: [] } satisfies AiInjectedEntities;
+    const matches = this.matchInstructionEntities(workId, instruction, scope, injected);
     if (persist && conversationId && (matches.characterIds.length || matches.raceIds.length || matches.organizationIds.length)) {
       this.store.mergeAiConversationInjectedEntities(conversationId, workId, {
         characters: matches.characterIds,
@@ -4168,12 +4223,7 @@ export class AiManager {
         organizations: matches.organizationIds
       });
     }
-    return {
-      ...scope,
-      ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
-      ...(raceIds.length ? { raceIds } : {}),
-      ...(organizationIds.length ? { organizationIds } : {})
-    };
+    return this.mergeInstructionEntityMatches(scope, matches);
   }
 
   private buildContext(
@@ -4948,7 +4998,7 @@ export class AiManager {
     });
   }
 
-  async generate(input: GenerateInput): Promise<GenerateResult> {
+  async generate(input: GenerateInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
     const generationRoleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
@@ -5041,7 +5091,7 @@ export class AiManager {
       providerId: stringValue(provider, "id"),
       modelId: stringValue(model, "id"),
       protocol,
-      streaming: false,
+      streaming: Boolean(onDelta),
       contextChars: context.length,
       instructionChars: input.instruction.length,
       toolCount: tools.length
@@ -5072,11 +5122,14 @@ export class AiManager {
         ? AI_LONG_RUNNING_TIMEOUT_MS
         : AI_INTERACTIVE_TIMEOUT_MS;
       const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      type CompletionChoice = NonNullable<CompletionPayload["choices"]>[number];
       let completionRequestCount = 0;
       let cacheUsageComplete = true;
       let totalInputTokens = 0;
       let totalCachedInputTokens = 0;
+      const processSteps: AiProcessStep[] = [];
+      const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
+      let streamedContent = "";
+      let streamingGenerationRound = 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
         parameters?: Record<string, unknown>;
@@ -5090,6 +5143,9 @@ export class AiManager {
         const requestParameters = options.parameters ?? parameters;
         const purpose = options.purpose ?? "generation";
         const requestTools = toolChoice === "auto" ? tools : [];
+        const streamResponse = Boolean(onDelta) && purpose === "generation";
+        const processRound = streamResponse ? streamingGenerationRound + 1 : 0;
+        if (streamResponse) streamingGenerationRound = processRound;
         const roundParameters = this.constrainParametersForDailyTokenQuota(
           input.workId,
           requestMessages,
@@ -5113,9 +5169,17 @@ export class AiManager {
         };
         traceRounds.push(traceRound);
         saveTrace();
+        let streamedThinkingStep: {
+          id: string;
+          type: "thinking";
+          round: number;
+          content: string;
+          createdAt: string;
+        } | null = null;
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           let retryable = true;
+          let attemptEmitted = false;
           const attemptStartedAt = process.hrtime.bigint();
           const traceAttempt: AiCallTraceAttempt = {
             attempt,
@@ -5135,18 +5199,62 @@ export class AiManager {
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
-                  headers: providerRequestHeaders(protocol, accessToken, "application/json"),
+                  headers: providerRequestHeaders(protocol, accessToken, streamResponse ? "text/event-stream" : "application/json"),
                   body: JSON.stringify(buildCompletionRequestBody({
-                  protocol,
-                  model: stringValue(model, "model_id"),
-                  messages: requestMessages,
-                  parameters: roundParameters,
-                  tools: requestTools,
-                  toolChoice
-                })),
+                    protocol,
+                    model: stringValue(model, "model_id"),
+                    messages: requestMessages,
+                    parameters: roundParameters,
+                    tools: requestTools,
+                    toolChoice,
+                    ...(streamResponse ? { stream: true } : {})
+                  })),
                   signal: controller.signal
                 });
-                return { ok: response.ok, status: response.status, body: await readResponseTextLimited(response) };
+                if (!response.ok) {
+                  return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
+                }
+                const isEventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") ?? false;
+                if (!streamResponse || !isEventStream) {
+                  const body = await readResponseTextLimited(response);
+                  try {
+                    const payload = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(body), activeSecrets));
+                    return { ok: true as const, status: response.status, payload, delivery: "json" as const };
+                  } catch {
+                    throw new Error(`${providerProtocolLabelText(protocol)} returned invalid JSON: ${body.slice(0, 500)}`);
+                  }
+                }
+                const payload = await this.readCompletionStream(
+                  response,
+                  protocol,
+                  activeSecrets,
+                  (delta) => {
+                    attemptEmitted = true;
+                    streamedContent += delta;
+                    onDelta?.(delta);
+                  },
+                  (delta) => {
+                    attemptEmitted = true;
+                    if (!streamedThinkingStep) {
+                      streamedThinkingStep = {
+                        id: id("process"),
+                        type: "thinking",
+                        round: processRound,
+                        content: "",
+                        createdAt: now()
+                      };
+                      processSteps.push(streamedThinkingStep);
+                    }
+                    streamedThinkingStep.content += delta;
+                    input.onProcessStep?.({ ...streamedThinkingStep, content: delta, append: true });
+                  }
+                );
+                return {
+                  ok: true as const,
+                  status: response.status,
+                  payload: redactProviderSecrets(payload, activeSecrets) as CompletionPayload,
+                  delivery: "sse" as const
+                };
               } finally {
                 clearTimeout(timeout);
                 input.signal?.removeEventListener("abort", forwardAbort);
@@ -5157,33 +5265,31 @@ export class AiManager {
               attempt,
               status: candidate.status,
               ok: candidate.ok,
-              durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000
+              durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
+              streaming: streamResponse
             });
             if (candidate.ok) {
-              try {
-                const parsed = parseCompletionPayload(protocol, redactProviderSecrets(JSON.parse(candidate.body), activeSecrets));
-                traceAttempt.completedAt = now();
-                traceAttempt.status = "completed";
-                traceAttempt.httpStatus = candidate.status;
-                traceAttempt.response = sanitizeCompletionTraceResponse(parsed);
-                saveTrace();
-                completionRequestCount += 1;
-                const cacheUsage = resolveInputCacheUsage(parsed.usage);
-                if (!cacheUsage) cacheUsageComplete = false;
-                else {
-                  totalInputTokens += cacheUsage.inputTokens;
-                  totalCachedInputTokens += cacheUsage.cachedInputTokens;
-                }
-                const outputText = completionPayloadOutputText(parsed);
-                trackUsage(resolveAiTokenUsage(
-                  parsed.usage,
-                  estimateAiTokens(JSON.stringify(requestMessages)),
-                  outputText ? estimateAiTokens(outputText) : 0
-                ));
-                return parsed;
-              } catch {
-                throw new Error(`${providerProtocolLabelText(protocol)} returned invalid JSON: ${candidate.body.slice(0, 500)}`);
+              const parsed = candidate.payload;
+              completionDelivery.set(parsed, candidate.delivery);
+              traceAttempt.completedAt = now();
+              traceAttempt.status = "completed";
+              traceAttempt.httpStatus = candidate.status;
+              traceAttempt.response = sanitizeCompletionTraceResponse(parsed);
+              saveTrace();
+              completionRequestCount += 1;
+              const cacheUsage = resolveInputCacheUsage(parsed.usage);
+              if (!cacheUsage) cacheUsageComplete = false;
+              else {
+                totalInputTokens += cacheUsage.inputTokens;
+                totalCachedInputTokens += cacheUsage.cachedInputTokens;
               }
+              const outputText = completionPayloadOutputText(parsed);
+              trackUsage(resolveAiTokenUsage(
+                parsed.usage,
+                estimateAiTokens(JSON.stringify(requestMessages)),
+                outputText ? estimateAiTokens(outputText) : 0
+              ));
+              return parsed;
             }
             lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
             traceAttempt.completedAt = now();
@@ -5208,18 +5314,18 @@ export class AiManager {
             logger.warn("ai.call.attempt_failed", {
               callId,
               attempt,
-              retryable: retryable && attempt < maximumAttempts && !input.signal?.aborted,
+              retryable: retryable && !attemptEmitted && attempt < maximumAttempts && !input.signal?.aborted,
               durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
+              streaming: streamResponse,
               error: aiErrorForLog(error)
             });
-            if (input.signal?.aborted) throw error;
+            if (input.signal?.aborted || attemptEmitted) throw error;
             if (!retryable || attempt >= maximumAttempts) throw error;
           }
           if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
         }
         throw lastFailure instanceof Error ? lastFailure : new Error("AI request failed after all retries.");
       };
-      const processSteps: AiProcessStep[] = [];
       const baseMessageCount = messages.length;
       const firstUserMessageIndex = messages.findIndex((message) => message.role !== "system");
       const compactedMessageIndex = firstUserMessageIndex < 0 ? messages.length : firstUserMessageIndex;
@@ -5351,15 +5457,17 @@ export class AiManager {
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
       const executedToolCalls: AgentToolCallResult[] = [];
-      const recordChoiceProcess = (currentChoice: CompletionChoice | undefined, round: number, includeIntermediate: boolean): void => {
+      const recordChoiceProcess = (currentPayload: CompletionPayload, round: number, includeIntermediate: boolean): void => {
+        const currentChoice = currentPayload.choices?.[0];
+        const deliveredAsSse = completionDelivery.get(currentPayload) === "sse";
         const reasoning = currentChoice?.message?.reasoning_content;
-        if (reasoning?.trim()) {
+        if (!deliveredAsSse && reasoning?.trim()) {
           const step: AiProcessStep = { id: id("process"), type: "thinking", round, content: reasoning, createdAt: now() };
           processSteps.push(step);
           input.onProcessStep?.(step);
         }
         const intermediate = currentChoice?.message?.content;
-        if (includeIntermediate && intermediate?.trim()) {
+        if (!deliveredAsSse && includeIntermediate && intermediate?.trim()) {
           const step: AiProcessStep = { id: id("process"), type: "intermediate", round, content: intermediate, createdAt: now() };
           processSteps.push(step);
           input.onProcessStep?.(step);
@@ -5368,7 +5476,7 @@ export class AiManager {
       let toolRound = 0;
       while (choice?.message?.tool_calls?.length) {
         const round = toolRound + 1;
-        recordChoiceProcess(choice, round, true);
+        recordChoiceProcess(payload, round, true);
         const toolCalls = choice.message.tool_calls;
         if (shouldRejectGlobalToolCalls(globalToolCallUsed, toolCalls.length, globalToolCallLimit)) {
           logger.warn("ai.tool_call.global_limit_reached", {
@@ -5447,16 +5555,21 @@ export class AiManager {
         payload = await requestCompletion("auto");
         choice = payload.choices?.[0];
       }
-      recordChoiceProcess(choice, toolRound + 1, false);
-      const content = choice?.message?.content;
-      if (!content?.trim()) {
+      recordChoiceProcess(payload, toolRound + 1, false);
+      const finalContent = choice?.message?.content;
+      if (!finalContent?.trim()) {
         const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
         const suffix = choice?.finish_reason === "length" || reasoningLength > 0
           ? `；模型已生成 ${reasoningLength} 个推理字符，请提高 max_tokens 输出预算`
           : "";
         throw new Error(`${providerProtocolLabelText(protocol)} 响应缺少可用正文，finish_reason=${choice?.finish_reason ?? "unknown"}${suffix}`);
       }
-      const outputTokens = resolveOutputTokens(payload.usage, content);
+      if (onDelta && completionDelivery.get(payload) !== "sse") {
+        streamedContent += finalContent;
+        onDelta(finalContent);
+      }
+      const content = onDelta ? streamedContent : finalContent;
+      const outputTokens = resolveOutputTokens(payload.usage, finalContent);
       const cacheHitPercent = cacheUsageComplete && completionRequestCount > 0 && totalInputTokens > 0
         ? Math.round(totalCachedInputTokens / totalInputTokens * 1_000) / 10
         : undefined;
@@ -5480,12 +5593,19 @@ export class AiManager {
         callId,
         workId: input.workId,
         taskType: input.taskType,
-        streaming: false,
+        streaming: Boolean(onDelta),
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         outputChars: content.length,
         outputTokens,
         toolCallCount: executedToolCalls.length
       });
+      const finalAnthropicContent = choice?.message?.anthropic_content;
+      const replayAnthropicContent = onDelta && finalAnthropicContent?.length && content !== finalContent
+        ? [
+          ...finalAnthropicContent.filter((block) => block.type !== "text" && block.type !== "tool_use"),
+          { type: "text", text: content }
+        ]
+        : finalAnthropicContent;
       return {
         callId,
         content,
@@ -5494,7 +5614,7 @@ export class AiManager {
           ? { reasoningContent: choice.message.reasoning_content }
           : {}),
         ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
-        ...(choice?.message?.anthropic_content?.length ? { anthropicContent: choice.message.anthropic_content } : {}),
+        ...(replayAnthropicContent?.length ? { anthropicContent: replayAnthropicContent } : {}),
         provider: this.mapProvider(provider),
         model: this.mapModel(model),
         context,
@@ -5525,7 +5645,7 @@ export class AiManager {
         callId,
         workId: input.workId,
         taskType: input.taskType,
-        streaming: false,
+        streaming: Boolean(onDelta),
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
@@ -5540,215 +5660,13 @@ export class AiManager {
     }
   }
 
-  private async generateStream(input: GenerateInput, onDelta: (delta: string) => void): Promise<GenerateResult> {
-    const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
-    const context = this.buildContext(input, model);
-    const preset = safeJsonObject(stringValue(model, "preset_json"));
-    const messages = this.buildMessages(input, context);
-    let parameters: Record<string, unknown>;
-    try {
-      parameters = this.constrainParametersForContext(model, messages, {
-        ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
-        ...thinkingParameters(provider, model)
-      });
-    } catch (error) {
-      if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
-      throw initialContextWindowError(error, provider, model);
-    }
-    parameters = this.constrainParametersForDailyTokenQuota(input.workId, messages, parameters);
-    const callId = id("call");
-    this.store.db.run(
-      `INSERT INTO ai_calls (id, work_id, task_type, provider_id, model_id, context_scope_json, parameters_json,
-       status, input_chars, created_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
-      callId,
-      input.workId,
-      input.taskType,
-      stringValue(provider, "id"),
-      stringValue(model, "id"),
-      JSON.stringify(input.scope),
-      JSON.stringify(parameters),
-      context.length + input.instruction.length,
-      now(),
-      currentRequestActor()?.userId ?? null
-    );
-    const callStartedAt = process.hrtime.bigint();
-    const protocol = providerProtocol(provider);
-    logger.info("ai.call.started", {
-      callId,
-      workId: input.workId,
-      taskType: input.taskType,
-      providerId: stringValue(provider, "id"),
-      modelId: stringValue(model, "id"),
-      protocol,
-      streaming: true,
-      contextChars: context.length,
-      instructionChars: input.instruction.length
-    });
-    let activeSecrets: string[] = [];
-    try {
-      const { accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider);
-      activeSecrets = [credentialSecret, accessToken];
-      const endpoint = providerCompletionEndpoint(stringValue(provider, "base_url"), protocol);
-      const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
-      let streamedResult: {
-        content: string;
-        reasoning: string;
-        outputTokens: number;
-        cacheHitPercent?: number;
-        anthropicContent?: Record<string, unknown>[];
-        tokenUsage: ResolvedAiTokenUsage;
-      } | null = null;
-      let lastFailure: unknown = null;
-      let emitted = false;
-      const thinkingStepId = id("process");
-      const thinkingCreatedAt = now();
-      for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
-        const attemptStartedAt = process.hrtime.bigint();
-        logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, streaming: true });
-        try {
-          const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
-            const controller = new AbortController();
-            const forwardAbort = (): void => controller.abort(input.signal?.reason);
-            if (input.signal?.aborted) forwardAbort();
-            else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-            const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(AI_INTERACTIVE_TIMEOUT_MS / 1_000)} 秒）`)), AI_INTERACTIVE_TIMEOUT_MS);
-            try {
-              const response = await this.outboundFetch(endpoint, {
-                method: "POST",
-                headers: providerRequestHeaders(protocol, accessToken, "text/event-stream"),
-                body: JSON.stringify(buildCompletionRequestBody({
-                  protocol,
-                  model: stringValue(model, "model_id"),
-                  messages,
-                  parameters,
-                  stream: true
-                })),
-                signal: controller.signal
-              });
-              if (!response.ok) return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
-              const streamed = await this.readCompletionStream(
-                response,
-                protocol,
-                estimateAiTokens(JSON.stringify(messages)),
-                activeSecrets,
-                (delta) => {
-                  emitted = true;
-                  onDelta(delta);
-                },
-                (delta) => {
-                  emitted = true;
-                  input.onProcessStep?.({ id: thinkingStepId, type: "thinking", round: 1, content: delta, createdAt: thinkingCreatedAt, append: true });
-                }
-              );
-              return { ok: true as const, status: response.status, result: streamed };
-            } finally {
-              clearTimeout(timeout);
-              input.signal?.removeEventListener("abort", forwardAbort);
-            }
-          });
-          logger.info("ai.call.attempt_completed", {
-            callId,
-            attempt,
-            status: candidate.status,
-            ok: candidate.ok,
-            durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
-            streaming: true
-          });
-          if (candidate.ok) {
-            streamedResult = candidate.result;
-            break;
-          }
-          lastFailure = new Error(`HTTP ${candidate.status}: ${candidate.body.slice(0, 500)}`);
-          if (candidate.status !== 429 && candidate.status < 500) attempt = maximumAttempts;
-        } catch (error) {
-          lastFailure = error;
-          logger.warn("ai.call.attempt_failed", {
-            callId,
-            attempt,
-            retryable: !input.signal?.aborted && !emitted && attempt < maximumAttempts,
-            durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
-            streaming: true,
-            error: aiErrorForLog(error)
-          });
-          if (input.signal?.aborted || emitted || attempt >= maximumAttempts) throw error;
-        }
-        if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
-      }
-      if (streamedResult === null) throw lastFailure instanceof Error ? lastFailure : new Error("AI 流式请求重试后仍未返回响应");
-      const { content, reasoning, outputTokens, cacheHitPercent, anthropicContent, tokenUsage } = streamedResult;
-      const processSteps: AiProcessStep[] = reasoning.trim()
-        ? [{ id: thinkingStepId, type: "thinking", round: 1, content: reasoning, createdAt: thinkingCreatedAt }]
-        : [];
-      this.store.db.run(
-        `UPDATE ai_calls
-         SET status = 'completed', output_chars = ?, input_tokens = ?, output_tokens = ?,
-             cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
-             token_usage_source = ?, completed_at = ?
-         WHERE id = ?`,
-        content.length,
-        tokenUsage.inputTokens,
-        tokenUsage.outputTokens,
-        tokenUsage.cachedInputTokens,
-        tokenUsage.cacheEligibleInputTokens,
-        tokenUsage.cacheEligibleInputTokens > 0 ? 1 : 0,
-        tokenUsage.source,
-        now(),
-        callId
-      );
-      logger.info("ai.call.completed", {
-        callId,
-        workId: input.workId,
-        taskType: input.taskType,
-        streaming: true,
-        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
-        outputChars: content.length,
-        outputTokens
-      });
-      return {
-        callId,
-        content,
-        outputTokens,
-        ...(reasoning.length > 0 ? { reasoningContent: reasoning } : {}),
-        ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
-        ...(anthropicContent?.length ? { anthropicContent } : {}),
-        provider: this.mapProvider(provider),
-        model: this.mapModel(model),
-        context,
-        toolCalls: [],
-        processSteps,
-        contextUsage: this.completionContextUsage(input, model, messages, [])
-      };
-    } catch (error) {
-      const message = error instanceof Error ? redactProviderSecretsText(error.message, ...activeSecrets) : "AI 流式调用失败";
-      const failureTarget = aiFailureTargetDetails(provider, model);
-      this.store.db.run("UPDATE ai_calls SET status = 'failed', failure = ?, completed_at = ? WHERE id = ?", message, now(), callId);
-      logger.error("ai.call.failed", {
-        callId,
-        workId: input.workId,
-        taskType: input.taskType,
-        streaming: true,
-        durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
-        error: aiErrorForLog(error)
-      });
-      throw new AppError(502, "AI_CALL_FAILED", "AI 调用失败", { callId, failure: message, ...failureTarget });
-    }
-  }
-
   private async readCompletionStream(
     response: Response,
     protocol: AiProviderProtocol,
-    estimatedInputTokens: number,
     apiKey: string | string[],
     onDelta: (delta: string) => void,
     onThinkingDelta: (delta: string) => void
-  ): Promise<{
-    content: string;
-    reasoning: string;
-    outputTokens: number;
-    cacheHitPercent?: number;
-    anthropicContent?: Record<string, unknown>[];
-    tokenUsage: ResolvedAiTokenUsage;
-  }> {
+  ): Promise<CompletionPayload> {
     const protocolLabel = providerProtocolLabelText(protocol);
     if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
     const reader = response.body.getReader();
@@ -5775,6 +5693,9 @@ export class AiManager {
     };
     const anthropicBlocks = new Map<number, Record<string, unknown>>();
     const anthropicToolInputJson = new Map<number, string>();
+    const finalizedAnthropicToolInputs = new Map<number, string>();
+    const openAiToolCalls = new Map<number, CompletionToolCall>();
+    let openAiToolCallsFinalized = false;
     const eventIndex = (payload: Record<string, unknown>): number | null => {
       const index = payload.index;
       return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : null;
@@ -5791,13 +5712,15 @@ export class AiManager {
     const finalizeAnthropicToolInput = (index: number): void => {
       const block = anthropicBlocks.get(index);
       const inputJson = anthropicToolInputJson.get(index);
-      if (!block || block.type !== "tool_use" || inputJson === undefined) return;
+      if (!block || block.type !== "tool_use") return;
+      const completeInputJson = inputJson ?? JSON.stringify(block.input ?? {});
       try {
-        const parsed = JSON.parse(inputJson) as unknown;
+        const parsed = JSON.parse(completeInputJson) as unknown;
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) block.input = parsed;
       } catch {
         block.input = {};
       }
+      finalizedAnthropicToolInputs.set(index, completeInputJson);
       anthropicToolInputJson.delete(index);
     };
     const consumeEvent = (eventText: string): void => {
@@ -5828,6 +5751,12 @@ export class AiManager {
             if (contentBlock.type === "thinking" && typeof contentBlock.thinking !== "string") contentBlock.thinking = "";
             if (contentBlock.type === "tool_use" && !contentBlock.input) contentBlock.input = {};
             anthropicBlocks.set(index, contentBlock);
+            if (contentBlock.type === "text" && typeof contentBlock.text === "string" && contentBlock.text.length > 0) {
+              appendContent(contentBlock.text);
+            }
+            if (contentBlock.type === "thinking" && typeof contentBlock.thinking === "string" && contentBlock.thinking.length > 0) {
+              appendReasoning(contentBlock.thinking);
+            }
           }
         }
         const eventUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
@@ -5869,6 +5798,7 @@ export class AiManager {
         if (eventDelta.type === "text_delta" && typeof eventDelta.text === "string" && eventDelta.text.length > 0) {
           appendContent(eventDelta.text);
         }
+        if (type === "message_stop") upstreamDone = true;
         return;
       }
       const streamUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
@@ -5879,10 +5809,34 @@ export class AiManager {
       const choice = choices[0] && typeof choices[0] === "object" && !Array.isArray(choices[0])
         ? choices[0] as Record<string, unknown>
         : null;
-      if (typeof choice?.finish_reason === "string") finishReason = choice.finish_reason;
+      if (typeof choice?.finish_reason === "string") {
+        finishReason = choice.finish_reason;
+        if (finishReason === "tool_calls") openAiToolCallsFinalized = true;
+      }
       const deltaRecord = choice?.delta && typeof choice.delta === "object" && !Array.isArray(choice.delta)
         ? choice.delta as Record<string, unknown>
         : {};
+      const toolCallDeltas = Array.isArray(deltaRecord.tool_calls) ? deltaRecord.tool_calls : [];
+      for (const [position, value] of toolCallDeltas.entries()) {
+        const toolCallDelta = value && typeof value === "object" && !Array.isArray(value)
+          ? value as Record<string, unknown>
+          : {};
+        const index = typeof toolCallDelta.index === "number" && Number.isInteger(toolCallDelta.index) && toolCallDelta.index >= 0
+          ? toolCallDelta.index
+          : position;
+        const current = openAiToolCalls.get(index) ?? {
+          id: "",
+          type: "function" as const,
+          function: { name: "", arguments: "" }
+        };
+        if (!current.id && typeof toolCallDelta.id === "string") current.id = toolCallDelta.id;
+        const fn = toolCallDelta.function && typeof toolCallDelta.function === "object" && !Array.isArray(toolCallDelta.function)
+          ? toolCallDelta.function as Record<string, unknown>
+          : {};
+        if (typeof fn.name === "string") current.function.name += fn.name;
+        if (typeof fn.arguments === "string") current.function.arguments = `${String(current.function.arguments)}${fn.arguments}`;
+        openAiToolCalls.set(index, current);
+      }
       const thinkingDelta = deltaRecord.reasoning_content;
       if (typeof thinkingDelta === "string" && thinkingDelta.length > 0) {
         appendReasoning(thinkingDelta);
@@ -5927,24 +5881,66 @@ export class AiManager {
       reasoning += finalReasoning;
       onThinkingDelta(finalReasoning);
     }
-    if (!content.trim()) throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
-    const cacheHitPercent = resolveCacheHitPercent(usage);
-    const outputTokens = resolveOutputTokens(usage, content);
+    const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
+    const openAiToolCallsComplete = openAiToolCallsFinalized
+      && sortedOpenAiToolCalls.length > 0
+      && sortedOpenAiToolCalls.every(([, toolCall]) => Boolean(toolCall.id && toolCall.function.name));
+    const anthropicToolBlocks = [...anthropicBlocks.entries()]
+      .filter(([, block]) => block.type === "tool_use")
+      .sort(([left], [right]) => left - right);
+    const anthropicToolCallsComplete = finishReason === "tool_use"
+      && anthropicToolBlocks.length > 0
+      && anthropicToolBlocks.every(([index, block]) => (
+        finalizedAnthropicToolInputs.has(index)
+        && typeof block.id === "string"
+        && block.id.length > 0
+        && typeof block.name === "string"
+        && block.name.length > 0
+      ));
+    const toolCalls: CompletionToolCall[] = protocol === "anthropic-messages"
+      ? anthropicToolCallsComplete
+        ? anthropicToolBlocks.map(([index, block]) => ({
+          id: String(block.id),
+          type: "function" as const,
+          function: {
+            name: String(block.name),
+            arguments: finalizedAnthropicToolInputs.get(index) ?? "{}"
+          }
+        }))
+        : []
+      : openAiToolCallsComplete
+        ? sortedOpenAiToolCalls.map(([, toolCall]) => toolCall)
+        : [];
+    if ((finishReason === "tool_calls" || finishReason === "tool_use") && toolCalls.length === 0) {
+      throw new Error(`${protocolLabel} 流式工具调用不完整，finish_reason=${finishReason}`);
+    }
+    if (!content.trim() && toolCalls.length === 0) {
+      throw new Error(`${protocolLabel} 流式响应缺少可用正文，finish_reason=${finishReason}`);
+    }
     const anthropicContent = protocol === "anthropic-messages"
       ? [...anthropicBlocks.entries()]
         .sort(([left], [right]) => left - right)
-        .map(([index, block]) => {
-          finalizeAnthropicToolInput(index);
-          return redactProviderSecrets(block, apiKey) as Record<string, unknown>;
-        })
+        .map(([, block]) => redactProviderSecrets(block, apiKey) as Record<string, unknown>)
       : undefined;
+    const usageRecord = usage && typeof usage === "object" && !Array.isArray(usage)
+      ? usage as Record<string, unknown>
+      : undefined;
+    const normalizedFinishReason = finishReason === "unknown"
+      ? null
+      : protocol === "anthropic-messages" && finishReason === "max_tokens"
+        ? "length"
+        : finishReason;
     return {
-      content,
-      reasoning,
-      outputTokens,
-      ...(cacheHitPercent === undefined ? {} : { cacheHitPercent }),
-      ...(anthropicContent?.length ? { anthropicContent } : {}),
-      tokenUsage: resolveAiTokenUsage(usage, estimatedInputTokens, outputTokens)
+      ...(usageRecord ? { usage: usageRecord } : {}),
+      choices: [{
+        finish_reason: normalizedFinishReason,
+        message: {
+          content: content || null,
+          reasoning_content: reasoning || null,
+          ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+          ...(anthropicContent?.length ? { anthropic_content: anthropicContent } : {})
+        }
+      }]
     };
   }
 

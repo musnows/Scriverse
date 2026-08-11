@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("全局替换界面", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("提供正文默认范围、设定库范围和正文加设定库范围", async () => {
@@ -29,7 +29,7 @@ describe("全局替换界面", () => {
     expect(page.text).toContain('name="replaceScope" value="prose" checked');
     expect(page.text).toContain('name="replaceScope" value="settings"');
     expect(page.text).toContain('name="replaceScope" value="prose-and-settings"');
-    expect(page.text).toContain('/app.js?v=20260809-galaxy-size-threshold-v1');
+    expect(page.text).toContain('/app.js?v=20260812-image-upload-limit-v3');
     expect(application.text).toContain("function submitGlobalReplace(");
     expect(application.text).toContain("function syncGlobalReplaceScopeOptions(");
     expect(application.text).toContain('/replace`');

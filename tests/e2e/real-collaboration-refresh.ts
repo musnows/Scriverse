@@ -34,8 +34,24 @@ const fixture = runWithRequestActor(owner.session.user, () => {
     title: "第一章",
     content: "原始协作正文。"
   });
+  const deletedChapter = runtime.store.createChapter(workId, {
+    volumeId: String(volume.id),
+    title: "待删除章节",
+    content: "等待协作者删除。"
+  });
+  const deletedSetting = runtime.store.createSetting(workId, {
+    title: "待删除设定",
+    category: "世界规则",
+    content: "等待协作者删除。"
+  });
+  const focusSetting = runtime.store.createSetting(workId, {
+    title: "焦点恢复设定",
+    category: "世界规则",
+    content: "等待协作者保存。"
+  });
   const firstCharacter = runtime.store.createCharacter(workId, { name: "林舟" });
   const secondCharacter = runtime.store.createCharacter(workId, { name: "沈星" });
+  const deletedCharacter = runtime.store.createCharacter(workId, { name: "待删除角色" });
   const relationship = runtime.store.createRelationship(workId, {
     fromCharacterId: String(firstCharacter.id),
     toCharacterId: String(secondCharacter.id),
@@ -47,22 +63,50 @@ const fixture = runWithRequestActor(owner.session.user, () => {
     workId,
     chapterId: String(chapter.id),
     chapterVersionNo: Number(chapter.versionNo),
+    deletedChapterId: String(deletedChapter.id),
+    deletedChapterVersionNo: Number(deletedChapter.versionNo),
+    deletedSettingId: String(deletedSetting.id),
+    deletedSettingVersionNo: Number(deletedSetting.versionNo),
+    focusSettingId: String(focusSetting.id),
+    focusSettingVersionNo: Number(focusSetting.versionNo),
+    characterId: String(firstCharacter.id),
+    characterVersionNo: Number(firstCharacter.versionNo),
+    deletedCharacterId: String(deletedCharacter.id),
+    deletedCharacterVersionNo: Number(deletedCharacter.versionNo),
     relationshipId: String(relationship.id),
     relationshipVersionNo: Number(relationship.versionNo)
   };
 });
 
+function ownerDeleteTarget(target: string | null): { path: string; versionNo: number } | null {
+  if (target === "chapter") return { path: `/api/chapters/${fixture.deletedChapterId}`, versionNo: fixture.deletedChapterVersionNo };
+  if (target === "setting") return { path: `/api/settings/${fixture.deletedSettingId}`, versionNo: fixture.deletedSettingVersionNo };
+  if (target === "character") return { path: `/api/characters/${fixture.deletedCharacterId}`, versionNo: fixture.deletedCharacterVersionNo };
+  return null;
+}
+
+function writerLocation(target: string | null): string {
+  if (target === "focus-chapter") return `/#view=editor&work=${fixture.workId}&chapter=${fixture.chapterId}`;
+  if (target === "focus-setting") return `/#view=entity-editor&work=${fixture.workId}&entity=setting&id=${fixture.focusSettingId}`;
+  if (target === "focus-character") return `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}`;
+  if (target === "delete-chapter") return `/#view=editor&work=${fixture.workId}&chapter=${fixture.deletedChapterId}`;
+  if (target === "delete-setting") return `/#view=entity-editor&work=${fixture.workId}&entity=setting&id=${fixture.deletedSettingId}`;
+  if (target === "delete-character") return `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.deletedCharacterId}`;
+  return `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}`;
+}
+
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (requestUrl.pathname === "/__e2e/login-writer") {
+    const location = writerLocation(requestUrl.searchParams.get("target"));
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(writer.token)}; Path=/; HttpOnly; SameSite=Lax`);
-    response.writeHead(302, { Location: `/#view=module&work=${fixture.workId}&module=relationships` });
+    response.writeHead(302, { Location: location });
     response.end();
     return;
   }
   if (requestUrl.pathname === "/__e2e/login-owner") {
     response.setHeader("Set-Cookie", `scriverse_session=${encodeURIComponent(owner.token)}; Path=/; HttpOnly; SameSite=Lax`);
-    response.writeHead(302, { Location: `/#view=module&work=${fixture.workId}&module=relationships` });
+    response.writeHead(302, { Location: `/#view=entity-editor&work=${fixture.workId}&entity=character&id=${fixture.characterId}` });
     response.end();
     return;
   }
@@ -90,6 +134,101 @@ const server = createServer((request, response) => {
         fixture.chapterVersionNo = Number(payload.data?.versionNo ?? fixture.chapterVersionNo);
         response.writeHead(200, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ ok: true, versionNo: fixture.chapterVersionNo }));
+      } catch (error) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/__e2e/owner-delete" && request.method === "POST") {
+    const target = ownerDeleteTarget(requestUrl.searchParams.get("target"));
+    if (!target) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: "Unknown delete target" }));
+      return;
+    }
+    void (async () => {
+      try {
+        const deleted = await fetch(`http://127.0.0.1:${port}${target.path}`, {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `scriverse_session=${encodeURIComponent(owner.token)}`,
+            "X-CSRF-Token": owner.session.csrfToken
+          },
+          body: JSON.stringify({ expectedVersionNo: target.versionNo })
+        });
+        if (!deleted.ok) {
+          const payload = await deleted.json() as Json;
+          response.writeHead(deleted.status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(payload));
+          return;
+        }
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+      } catch (error) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/__e2e/owner-save-setting" && request.method === "POST") {
+    void (async () => {
+      try {
+        const setting = await fetch(`http://127.0.0.1:${port}/api/settings/${fixture.focusSettingId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `scriverse_session=${encodeURIComponent(owner.token)}`,
+            "X-CSRF-Token": owner.session.csrfToken
+          },
+          body: JSON.stringify({
+            content: `作者已更新协作设定 ${Date.now()}`,
+            expectedVersionNo: fixture.focusSettingVersionNo
+          })
+        });
+        const payload = await setting.json() as { data?: Json; error?: Json };
+        if (!setting.ok) {
+          response.writeHead(setting.status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(payload));
+          return;
+        }
+        fixture.focusSettingVersionNo = Number(payload.data?.versionNo ?? fixture.focusSettingVersionNo);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, versionNo: fixture.focusSettingVersionNo }));
+      } catch (error) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: String(error) }));
+      }
+    })();
+    return;
+  }
+  if (requestUrl.pathname === "/__e2e/owner-save-character" && request.method === "POST") {
+    void (async () => {
+      try {
+        const character = await fetch(`http://127.0.0.1:${port}/api/characters/${fixture.characterId}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `scriverse_session=${encodeURIComponent(owner.token)}`,
+            "X-CSRF-Token": owner.session.csrfToken
+          },
+          body: JSON.stringify({
+            aliases: [`协作更新 ${Date.now()}`],
+            expectedVersionNo: fixture.characterVersionNo
+          })
+        });
+        const payload = await character.json() as { data?: Json; error?: Json };
+        if (!character.ok) {
+          response.writeHead(character.status, { "Content-Type": "application/json" });
+          response.end(JSON.stringify(payload));
+          return;
+        }
+        fixture.characterVersionNo = Number(payload.data?.versionNo ?? fixture.characterVersionNo);
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true, versionNo: fixture.characterVersionNo }));
       } catch (error) {
         response.writeHead(500, { "Content-Type": "application/json" });
         response.end(JSON.stringify({ error: String(error) }));
@@ -142,9 +281,17 @@ console.log(JSON.stringify({
   baseUrl,
   workId: fixture.workId,
   chapterId: fixture.chapterId,
+  deletedChapterId: fixture.deletedChapterId,
+  deletedSettingId: fixture.deletedSettingId,
+  focusSettingId: fixture.focusSettingId,
+  characterId: fixture.characterId,
+  deletedCharacterId: fixture.deletedCharacterId,
   relationshipId: fixture.relationshipId,
   writerLogin: `${baseUrl}/__e2e/login-writer`,
-  ownerSave: `${baseUrl}/__e2e/owner-save-relationship`
+  ownerLogin: `${baseUrl}/__e2e/login-owner`,
+  ownerSave: `${baseUrl}/__e2e/owner-save-character`,
+  ownerSaveSetting: `${baseUrl}/__e2e/owner-save-setting`,
+  ownerDelete: `${baseUrl}/__e2e/owner-delete`
 }));
 
 async function presence(cookieToken: string, csrf: string, clientId: string, page: Json): Promise<Json> {
@@ -179,7 +326,46 @@ try {
 
     const afterChapterSave = await presence(writer.token, writer.session.csrfToken, writerClientId, { kind: "editor", resourceId: fixture.chapterId });
     const chapterChanges = Array.isArray(afterChapterSave.recentChanges) ? afterChapterSave.recentChanges as Json[] : [];
-    assert.deepEqual(chapterChanges, []);
+    assert.ok(chapterChanges.some((change) => (
+      change.pageKey === `editor:${fixture.chapterId}`
+      && change.label === "正文编辑"
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted chapter change, got ${JSON.stringify(chapterChanges)}`);
+
+    const settingPage = { kind: "entity-editor", module: "setting", resourceId: fixture.focusSettingId };
+    await presence(writer.token, writer.session.csrfToken, writerClientId, settingPage);
+    await presence(owner.token, owner.session.csrfToken, ownerClientId, settingPage);
+    const settingSaveResponse = await fetch(`${baseUrl}/__e2e/owner-save-setting`, { method: "POST" });
+    const settingSavePayload = await settingSaveResponse.json() as Json;
+    assert.equal(settingSaveResponse.status, 200, JSON.stringify(settingSavePayload));
+    assert.equal(settingSavePayload.ok, true);
+
+    const afterSettingSave = await presence(writer.token, writer.session.csrfToken, writerClientId, settingPage);
+    const settingChanges = Array.isArray(afterSettingSave.recentChanges) ? afterSettingSave.recentChanges as Json[] : [];
+    assert.ok(settingChanges.some((change) => (
+      change.pageKey === `entity-editor:setting:${fixture.focusSettingId}`
+      && change.label === "设定编辑"
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted setting change, got ${JSON.stringify(settingChanges)}`);
+
+    const characterPage = { kind: "entity-editor", module: "character", resourceId: fixture.characterId };
+    await presence(writer.token, writer.session.csrfToken, writerClientId, characterPage);
+    await presence(owner.token, owner.session.csrfToken, ownerClientId, characterPage);
+    const characterSaveResponse = await fetch(`${baseUrl}/__e2e/owner-save-character`, { method: "POST" });
+    const characterSavePayload = await characterSaveResponse.json() as Json;
+    assert.equal(characterSaveResponse.status, 200, JSON.stringify(characterSavePayload));
+    assert.equal(characterSavePayload.ok, true);
+
+    const afterCharacterSave = await presence(writer.token, writer.session.csrfToken, writerClientId, characterPage);
+    const characterChanges = Array.isArray(afterCharacterSave.recentChanges) ? afterCharacterSave.recentChanges as Json[] : [];
+    assert.ok(characterChanges.some((change) => (
+      change.pageKey === `entity-editor:character:${fixture.characterId}`
+      && change.label === "角色编辑"
+      && change.actorUserId === owner.session.user.userId
+      && change.actorDisplayName === "collab_owner"
+    )), `expected targeted character change, got ${JSON.stringify(characterChanges)}`);
 
     const relationshipPage = { kind: "entity-editor", module: "relationship", resourceId: fixture.relationshipId };
     await presence(writer.token, writer.session.csrfToken, writerClientId, relationshipPage);
@@ -201,11 +387,49 @@ try {
     const globalChanges = Array.isArray(globalList.recentChanges) ? globalList.recentChanges as Json[] : [];
     assert.deepEqual(globalChanges, []);
 
-    console.log("[e2e] collaboration-refresh: targeted relationship changes OK");
+    const deletionCases = [
+      {
+        target: "chapter",
+        page: { kind: "editor", resourceId: fixture.deletedChapterId },
+        pageKey: `editor:${fixture.deletedChapterId}`,
+        label: "正文编辑"
+      },
+      {
+        target: "setting",
+        page: { kind: "entity-editor", module: "setting", resourceId: fixture.deletedSettingId },
+        pageKey: `entity-editor:setting:${fixture.deletedSettingId}`,
+        label: "设定编辑"
+      },
+      {
+        target: "character",
+        page: { kind: "entity-editor", module: "character", resourceId: fixture.deletedCharacterId },
+        pageKey: `entity-editor:character:${fixture.deletedCharacterId}`,
+        label: "角色编辑"
+      }
+    ];
+    for (const deletion of deletionCases) {
+      await presence(writer.token, writer.session.csrfToken, writerClientId, deletion.page);
+      await presence(owner.token, owner.session.csrfToken, ownerClientId, deletion.page);
+      const deleteResponse = await fetch(`${baseUrl}/__e2e/owner-delete?target=${deletion.target}`, { method: "POST" });
+      const deletePayload = await deleteResponse.json() as Json;
+      assert.equal(deleteResponse.status, 200, JSON.stringify(deletePayload));
+      assert.equal(deletePayload.ok, true);
+      const afterDelete = await presence(writer.token, writer.session.csrfToken, writerClientId, deletion.page);
+      const deleteChanges = Array.isArray(afterDelete.recentChanges) ? afterDelete.recentChanges as Json[] : [];
+      assert.ok(deleteChanges.some((change) => (
+        change.pageKey === deletion.pageKey
+        && change.label === deletion.label
+        && change.action === "delete"
+        && change.pageDeleted === true
+        && change.actorUserId === owner.session.user.userId
+      )), `expected targeted ${deletion.target} deletion, got ${JSON.stringify(deleteChanges)}`);
+    }
+
+    console.log("[e2e] collaboration-refresh: targeted saves and page deletions OK");
 
     server.closeAllConnections();
     server.close();
-    runtime.close();
+    await runtime.close();
     await rm(isolatedDirectory, { recursive: true, force: true });
     process.exit(0);
   }
@@ -215,7 +439,7 @@ try {
   console.error(error);
   server.closeAllConnections();
   server.close();
-  runtime.close();
+  await runtime.close();
   await rm(isolatedDirectory, { recursive: true, force: true });
   process.exit(1);
 }
@@ -223,7 +447,7 @@ try {
 async function shutdown(): Promise<void> {
   server.closeAllConnections();
   server.close();
-  runtime.close();
+  await runtime.close();
   await rm(isolatedDirectory, { recursive: true, force: true });
   process.exit(0);
 }

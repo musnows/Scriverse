@@ -1,6 +1,11 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
-import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
+import {
+  Database,
+  ENTITY_VERSION_BASELINE_MIGRATION_VERSION,
+  PLATFORM_AI_WORK_ID,
+  type Row
+} from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
@@ -36,6 +41,14 @@ type WorkInput = {
   coverUrl?: string | null;
   tags?: string[];
 };
+
+type WorkListBatch = {
+  memberships: Map<string, Row>;
+  counts: Map<string, Row>;
+  covers: Map<string, Row>;
+};
+
+const WORK_LIST_BATCH_SIZE = 500;
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
@@ -415,6 +428,7 @@ type AiConversationMessageInput = {
   citations?: unknown[];
   requestId?: string;
   metadata?: {
+    mentionCharacterIds?: string[];
     modelDisplayName?: string;
     outputTokens?: number;
     cacheHitPercent?: number;
@@ -580,7 +594,7 @@ function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInje
 
 export class Store {
   constructor(readonly db: Database) {
-    this.backfillEntityVersionBaselines();
+    this.migrateEntityVersionBaselines();
   }
 
   private currentEntityVersionNo(type: VersionedEntityType, entityId: string): number {
@@ -832,6 +846,28 @@ export class Store {
     });
   }
 
+  private migrateEntityVersionBaselines(): void {
+    const migrationSql = "SELECT 1 AS present FROM schema_migrations WHERE version = ?";
+    if (this.db.get(migrationSql, ENTITY_VERSION_BASELINE_MIGRATION_VERSION)) return;
+    this.db.transaction(() => {
+      if (this.db.get(migrationSql, ENTITY_VERSION_BASELINE_MIGRATION_VERSION)) return;
+      if (!this.db.get("SELECT 1 AS present FROM entity_versions LIMIT 1")) {
+        this.backfillEntityVersionBaselines();
+      }
+      const integrity = this.db.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.db.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+      this.db.run(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+        ENTITY_VERSION_BASELINE_MIGRATION_VERSION,
+        now()
+      );
+    });
+  }
+
   listEntityVersions(type: VersionedEntityType, entityId: string): Record<string, unknown>[] {
     const rows = this.db.all(
       `SELECT version.*, user.display_name AS actor_display_name, user.username AS actor_username
@@ -1066,15 +1102,15 @@ export class Store {
   listWorks(): Record<string, unknown>[] {
     const actor = currentRequestActor();
     if (!actor || (actor.role === "admin" && actor.authentication !== "api-key")) {
-      return this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC").map((row) => this.mapWork(row));
+      return this.mapWorks(this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC"));
     }
-    return this.db.all(
+    return this.mapWorks(this.db.all(
       `SELECT DISTINCT work.* FROM works work LEFT JOIN work_memberships membership ON membership.work_id = work.id
        WHERE COALESCE(work.is_internal, 0) = 0 AND (work.owner_user_id = ? OR membership.user_id = ?)
        ORDER BY work.updated_at DESC`,
       actor.userId,
       actor.userId
-    ).map((row) => this.mapWork(row));
+    ));
   }
 
   listWorksPage(pagination: Pagination): PaginatedResult<Record<string, unknown>> {
@@ -1090,7 +1126,7 @@ export class Store {
         actor.userId,
         ...page.params
       );
-    return paginated(rows.map((row) => this.mapWork(row)), pagination);
+    return paginated(this.mapWorks(rows), pagination);
   }
 
   getWork(workId: string): Record<string, unknown> {
@@ -1455,7 +1491,7 @@ export class Store {
     return storageKeys.filter((storageKey) => !this.attachmentStorageKeyInUse(storageKey));
   }
 
-  setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
+  setWorkCover(workId: string, mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif", content: Buffer, expectedVersionNo?: number): Record<string, unknown> {
     const sha256 = createHash("sha256").update(content).digest("hex");
     this.db.transaction(() => {
       const current = this.getWork(workId);
@@ -1486,12 +1522,12 @@ export class Store {
     return cover;
   }
 
-  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
+  findWorkCover(workId: string): { mimeType: "image/jpeg" | "image/png" | "image/webp" | "image/gif"; content: Buffer; byteLength: number; sha256: string; updatedAt: string } | null {
     this.getWork(workId);
     const row = this.db.get("SELECT * FROM work_covers WHERE work_id = ?", workId);
     if (!row) return null;
     const mimeType = requiredString(row, "mime_type");
-    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp") {
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png" && mimeType !== "image/webp" && mimeType !== "image/gif") {
       throw new AppError(500, "INVALID_COVER_MIME", "作品封面类型无效");
     }
     return {
@@ -3028,12 +3064,53 @@ export class Store {
     this.notifyAnalysisTaskQueued(workId);
   }
 
-  private mapWork(row: Row): Record<string, unknown> {
+  private mapWorks(rows: Row[]): Record<string, unknown>[] {
+    if (rows.length === 0) return [];
     const actor = currentRequestActor();
+    const workIds = [...new Set(rows.map((row) => requiredString(row, "id")))];
+    const batch: WorkListBatch = {
+      memberships: new Map(),
+      counts: new Map(),
+      covers: new Map()
+    };
+    for (let offset = 0; offset < workIds.length; offset += WORK_LIST_BATCH_SIZE) {
+      const batchIds = workIds.slice(offset, offset + WORK_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      if (actor) {
+        const memberships = this.db.all(
+          `SELECT work_id, role, permissions_json FROM work_memberships
+           WHERE user_id = ? AND work_id IN (${placeholders})`,
+          actor.userId,
+          ...batchIds
+        );
+        for (const membership of memberships) {
+          batch.memberships.set(requiredString(membership, "work_id"), membership);
+        }
+      }
+      const counts = this.db.all(
+        `SELECT work_id, COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count
+         FROM chapters WHERE work_id IN (${placeholders}) AND deleted_at IS NULL GROUP BY work_id`,
+        ...batchIds
+      );
+      for (const count of counts) batch.counts.set(requiredString(count, "work_id"), count);
+      const covers = this.db.all(
+        `SELECT work_id, updated_at FROM work_covers WHERE work_id IN (${placeholders})`,
+        ...batchIds
+      );
+      for (const cover of covers) batch.covers.set(requiredString(cover, "work_id"), cover);
+    }
+    return rows.map((row) => this.mapWork(row, batch));
+  }
+
+  private mapWork(row: Row, batch?: WorkListBatch): Record<string, unknown> {
+    const actor = currentRequestActor();
+    const workId = requiredString(row, "id");
     const ownerUserId = optionalString(row, "owner_user_id");
-    const membership = actor
-      ? this.db.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", requiredString(row, "id"), actor.userId)
-      : undefined;
+    const membership = batch
+      ? batch.memberships.get(workId)
+      : actor
+        ? this.db.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, actor.userId)
+        : undefined;
     const membershipRole = String(membership?.role ?? "");
     const ownerAccess = ownerUserId === actor?.userId;
     const adminAccess = actor?.role === "admin" && actor.authentication !== "api-key";
@@ -3047,22 +3124,26 @@ export class Store {
       : adminAccess
         ? "admin"
         : membershipRole ? classifyWorkModulePermissions(modulePermissions) : null;
-    const count = this.db.get(
-      "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ? AND deleted_at IS NULL",
-      requiredString(row, "id")
-    );
-    const cover = this.db.get("SELECT updated_at FROM work_covers WHERE work_id = ?", requiredString(row, "id"));
+    const count = batch
+      ? batch.counts.get(workId)
+      : this.db.get(
+        "SELECT COUNT(*) AS chapter_count, COALESCE(SUM(word_count), 0) AS word_count FROM chapters WHERE work_id = ? AND deleted_at IS NULL",
+        workId
+      );
+    const cover = batch
+      ? batch.covers.get(workId)
+      : this.db.get("SELECT updated_at FROM work_covers WHERE work_id = ?", workId);
     return {
-      id: requiredString(row, "id"),
+      id: workId,
       title: requiredString(row, "title"),
       author: requiredString(row, "author"),
       description: requiredString(row, "description"),
       language: requiredString(row, "language"),
       coverUrl: cover
-        ? `/api/works/${encodeURIComponent(requiredString(row, "id"))}/cover?v=${encodeURIComponent(requiredString(cover, "updated_at"))}`
+        ? `/api/works/${encodeURIComponent(workId)}/cover?v=${encodeURIComponent(requiredString(cover, "updated_at"))}`
         : optionalString(row, "cover_url"),
       tags: json(requiredString(row, "tags_json"), []),
-      versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", requiredString(row, "id")),
+      versionNo: numberValue(row, "version_no") || this.currentEntityVersionNo("work", workId),
       ownerUserId,
       accessRole,
       modulePermissions,
@@ -7375,7 +7456,7 @@ export class Store {
 
   updateTask(taskId: string, input: { status: string; progress?: number; result?: unknown; failures?: unknown[] }): Record<string, unknown> {
     const current = this.getTask(taskId);
-    const terminal = ["completed", "partial", "review", "expired", "cancelled"];
+    const terminal = ["completed", "partial", "failed", "review", "expired", "cancelled"];
     if (terminal.includes(String(current.status)) && input.status !== current.status) {
       throw new AppError(409, "INVALID_TASK_TRANSITION", "终态任务不能再变更状态");
     }

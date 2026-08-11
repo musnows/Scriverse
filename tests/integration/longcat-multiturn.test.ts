@@ -73,8 +73,8 @@ describe("LongCat OpenAI 多轮推理兼容", () => {
     await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
   });
 
-  afterEach(() => {
-    runtime.close();
+  afterEach(async () => {
+    await runtime.close();
   });
 
   it("在下一轮恢复流式响应中的 reasoning_content", async () => {
@@ -193,8 +193,8 @@ describe("LongCat Anthropic 多轮思考兼容", () => {
     await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
   });
 
-  afterEach(() => {
-    runtime.close();
+  afterEach(async () => {
+    await runtime.close();
   });
 
   it("在下一轮恢复流式响应中的 thinking 和 signature", async () => {

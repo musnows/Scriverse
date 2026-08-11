@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("编辑器工具栏布局", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("让章节路径独占首行，并统一侧栏工具按钮尺寸", async () => {

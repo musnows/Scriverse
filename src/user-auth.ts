@@ -508,7 +508,7 @@ export class UserAuthService {
     return this.getUser(userId);
   }
 
-  setAvatar(userId: string, input: { mimeType: "image/png" | "image/jpeg" | "image/webp"; content: Buffer; width: number; height: number }): AuthUser {
+  setAvatar(userId: string, input: { mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif"; content: Buffer; width: number; height: number }): AuthUser {
     this.getUser(userId);
     const timestamp = new Date().toISOString();
     const digest = createHash("sha256").update(input.content).digest("hex");
@@ -898,6 +898,14 @@ function aiContextReadModules(request: Request): WorkPermissionModule[] {
   return [...modules];
 }
 
+function globalReplaceWriteModules(request: Request): WorkPermissionModule[] {
+  const scope = requestBodyRecord(request).scope;
+  if (scope === "prose") return ["prose"];
+  if (scope === "settings") return ["settings"];
+  if (scope === "prose-and-settings") return ["prose", "settings"];
+  return [];
+}
+
 function workModuleRequirements(request: Request, write: boolean): WorkAuthorizationRequirements {
   const pathname = normalizeApiPath(request.path);
   const direct = (module: WorkPermissionModule, extraWrite: WorkPermissionModule[] = []): WorkAuthorizationRequirements => (
@@ -924,7 +932,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     return write ? { write: [...proseReplacementPermissionModules] } : { read: ["prose"] };
   }
   if (write && /^\/api\/works\/[^/]+\/replace$/u.test(pathname)) {
-    return {};
+    return { anyWrite: globalReplaceWriteModules(request) };
   }
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
   if (/^\/api\/(?:chapters\/[^/]+\/annotations|chapter-annotations\/[^/]+)$/u.test(pathname)) return direct("prose");

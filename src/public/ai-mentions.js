@@ -67,3 +67,17 @@ export function mergeAiReferenceScope(scope, references) {
   if (referenceScope.includeSettingInfo === true) merged.includeSettingInfo = true;
   return merged;
 }
+
+export function userMessageMentionNames(mentionCharacterIds, characters) {
+  if (!Array.isArray(mentionCharacterIds) || !Array.isArray(characters)) return [];
+  const characterNames = new Map(characters.map((item) => [String(item?.id ?? ""), String(item?.name ?? "").trim()]));
+  const seen = new Set();
+  const names = [];
+  for (const characterId of mentionCharacterIds) {
+    if (typeof characterId !== "string" || seen.has(characterId)) continue;
+    seen.add(characterId);
+    const name = characterNames.get(characterId);
+    if (name) names.push(name);
+  }
+  return names;
+}

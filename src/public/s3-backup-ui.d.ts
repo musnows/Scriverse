@@ -15,3 +15,13 @@ export function collectS3BackupRunTransitions<T extends S3BackupRunSnapshot>(
   maximumSnapshots?: number
 ): { snapshots: Map<string, string>; failures: T[] };
 export function s3BackupFailureToast(run: Pick<S3BackupRunSnapshot, "targetName" | "errorMessage">): string;
+export function s3BackupEncryptionPresentation(state?: {
+  enabled?: boolean;
+  keyConfiguredAt?: string | null;
+} | null): {
+  label: string;
+  statusClass: string;
+  description: string;
+  showPrivateBucketWarning: boolean;
+};
+export function s3BackupEncryptionKeyFile(key: unknown): string;

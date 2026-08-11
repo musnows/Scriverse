@@ -62,7 +62,7 @@ describe("作者完整创作流程", () => {
   });
 
   afterAll(async () => {
-    runtime.close();
+    await runtime.close();
     mockServer.close();
     await once(mockServer, "close");
   });
@@ -71,6 +71,7 @@ describe("作者完整创作流程", () => {
     const page = await request(runtime.app).get("/").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
     const application = await request(runtime.app).get("/app.js").expect(200);
+    const chapterVirtualization = await request(runtime.app).get("/chapter-editor-virtualization.js").expect(200);
     expect(page.text).toContain('<div class="editor-body">');
     expect(page.text).not.toContain('id="chapter-insight"');
     expect(page.text).toContain('id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false"');
@@ -93,9 +94,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".chapter-stats { display: none; }");
     expect(styles.text).toContain(".editor-body { display: flex; min-height: 0; flex-direction: column; }");
     expect(styles.text).toContain(".chapter-editor-frame { position: relative; display: grid;");
-    expect(application.text).toContain("function renderChapterLineNumbers()");
+    expect(application.text).toContain("function renderChapterLineNumbers({ targetLineIndex = null } = {})");
     expect(application.text).toContain("syncChapterLineNumberScroll");
-    expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style)");
+    expect(application.text).toContain("function renderChapterWhitespaceMarkers(input, style, layout, lineWindow, getLineBounds, totalHeight)");
+    expect(application.text).toContain('/chapter-editor-virtualization.js?v=20260810-visible-lines-v1');
+    expect(application.text).toContain("scheduleChapterLineNumbers(chapterLineInputRenderDelay)");
+    expect(application.text).toContain("inner.dataset.renderedLineCount");
+    expect(chapterVirtualization.text).toContain("export function buildChapterLineMirror(value)");
+    expect(chapterVirtualization.text).toContain("export function findChapterLineWindow(lineCount, getBounds, viewportStart, viewportEnd)");
     expect(application.text).toContain('element.className = "toast chapter-insight-toast"');
     expect(application.text).toContain('element.id = "chapter-insight-toast"');
     expect(application.text).toContain('chapterName.className = "chapter-insight-toast-chapter-title"');
@@ -321,8 +327,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260809-galaxy-size-threshold-v1');
-    expect(page.text).toContain('/styles.css?v=20260809-galaxy-label-stability-v1');
+    expect(page.text).toContain('/app.js?v=20260812-image-upload-limit-v3');
+    expect(page.text).toContain('/styles.css?v=20260812-agent-chat-font-size-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -352,9 +358,13 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<span id="presence-count">1 人</span>');
     expect(page.text).not.toContain('id="presence-count">1 人在线</span>');
     expect(page.text).toContain('id="presence-list"');
-    expect(application.text).toContain("function handleRelationshipCollaborativeChanges(recentChanges)");
-    expect(application.text).toContain("人物关系已更新");
-    expect(application.text).toContain('localKey.startsWith("entity-editor:relationship:")');
+    expect(application.text).toContain("function handleCollaborativeChanges(recentChanges)");
+    expect(application.text).toContain('const changeLabel = latest.label || "当前页面"');
+    expect(application.text).toContain('const deleted = latest.action === "delete"');
+    expect(application.text).toContain('title: deleted ? `${targetLabel}已删除` : `${changeLabel}已更新`');
+    expect(application.text).toContain("function reloadAfterCollaborativeChange(change)");
+    expect(application.text).toContain('change?.action === "delete" && change.pageDeleted && workId');
+    expect(application.text).not.toContain('localKey.startsWith("entity-editor:relationship:")');
     expect(application.text).not.toContain("peerPageStale");
     expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
@@ -405,6 +415,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-galaxy-icon {");
     expect(styles.text).toContain(".relationship-table .relationship-actions button");
     expect(page.text).toContain('id="avatar-file"');
+    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp,image/gif"');
+    expect(page.text).toContain("文件不超过 2 MB");
     expect(page.text).toContain('id="profile-avatar-preview"');
     expect(page.text).toContain('id="avatar-upload-button"');
     expect(page.text).toContain('id="avatar-remove-button"');
@@ -413,6 +425,12 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain("选择后可框选正方形选区再裁剪上传");
     expect(application.text).toContain('/avatar-crop.js?v=20260725-avatar-crop');
     expect(application.text).toContain("async function openAvatarCropDialog(file)");
+    expect(application.text).toContain("const defaultImageUploadLimits = {");
+    expect(application.text).toContain("imageUploadLimits.attachmentBytes");
+    expect(application.text).toContain("封面不支持 GIF 图片");
+    expect(application.text).toContain("支持 PNG、JPEG、WebP；文件不超过");
+    expect(page.text).toContain('id="cover-file"');
+    expect(page.text).toContain('accept="image/png,image/jpeg,image/webp"');
     expect(application.text).toContain('api("/api/auth/avatar", { method: "PUT", body })');
     expect(application.text).toContain('api("/api/auth/avatar", { method: "DELETE" })');
     expect(application.text).toContain("function renderUserAvatar(element, user)");
@@ -430,10 +448,14 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".analysis-type-description");
     expect(page.text).toContain('id="setting-editor-confirm"');
     expect(application.text).toContain('review: "已完成"');
+    expect(application.text).toContain('failed: "失败"');
+    expect(application.text).toContain('/background-task-center.js?v=20260810-analysis-task-failed-v1');
+    expect(application.text).toContain('if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };');
     expect(application.text).not.toContain('review: "待审核"');
     expect(application.text).toContain('"分析已完成"');
     expect(application.text).not.toContain("结果进入审核状态");
     expect(styles.text).toContain("--toast-bg:");
+    expect(styles.text).toContain(".task-status-badge.is-partial, .task-status-badge.is-failed");
     expect(styles.text).toContain(":root[data-theme=\"dark\"]");
     expect(styles.text).toContain("--relationship-network-surface: #eef2f7");
     expect(styles.text).toContain("--relationship-network-surface: #12121a");
@@ -686,6 +708,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("updateDocumentTitle(state.work)");
     expect(page.text).toContain('data-module="races"');
     expect(page.text).toContain('</svg>种族</button>');
+    expect(page.text).toContain('data-module="settings">');
+    expect(page.text).toContain('</svg>设定</button>');
+    expect(page.text).not.toContain('</svg>设定库</button>');
     expect(page.text).toContain('data-module="outlines"');
     expect(page.text).toContain('<span class="nav-label">大纲/伏笔</span>');
     expect(page.text).toMatch(/data-module="races"[\s\S]*id="module-more-button"[\s\S]*class="module-nav-secondary hidden"[^>]*data-module="outlines"/u);
@@ -1005,7 +1030,9 @@ describe("作者完整创作流程", () => {
       scope: { type: "chapter", chapterId },
       modelId: model.body.data.id
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，林舟望向逐渐远去的北港。"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"舱门关闭，"}');
+    expect(streamed.text).toContain('event: delta\ndata: {"delta":"飞船离开北港。"}');
+    expect(streamed.text.indexOf('"delta":"舱门关闭，"')).toBeLessThan(streamed.text.indexOf('"delta":"飞船离开北港。"'));
     expect(streamed.text).toContain("event: complete");
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({

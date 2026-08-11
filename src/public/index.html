@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260809-galaxy-label-stability-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260812-agent-chat-font-size-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -23,7 +23,7 @@
           <button id="auth-login-tab" type="button" role="tab" aria-selected="true">登录</button>
           <button id="auth-register-tab" type="button" role="tab" aria-selected="false" aria-disabled="true" disabled>注册已禁用</button>
         </div>
-        <form id="login-form" class="auth-form">
+        <form id="login-form" class="auth-form" method="post" action="/api/auth/login">
           <label>用户名<input name="username" autocomplete="username" maxlength="100" required></label>
           <label>密码<input id="login-password" name="password" type="password" autocomplete="current-password" maxlength="200" required aria-describedby="login-lock-hint"></label>
           <p id="login-lock-hint" class="auth-security-hint">登录和注册采用验证码与来源限速防护，不会因他人输错密码而锁定账户。</p>
@@ -38,7 +38,7 @@
           <p id="login-captcha-hint" class="auth-captcha-hint">点击按钮显示验证码，显示后点击图片可刷新</p>
           <button class="primary-button" type="submit">登录</button>
         </form>
-        <form id="register-form" class="auth-form hidden">
+        <form id="register-form" class="auth-form hidden" method="post" action="/api/auth/register">
           <label>用户名<input name="username" autocomplete="username" minlength="3" maxlength="40" pattern="[A-Za-z0-9_.\-\u4e00-\u9fff]+" required></label>
           <label id="register-setup-token-field" class="hidden">初始化令牌<input name="setupToken" type="password" autocomplete="off" minlength="32" maxlength="500" aria-describedby="register-setup-token-hint"><small id="register-setup-token-hint">请输入服务端 APP_SETUP_TOKEN 的值。</small></label>
           <label>密码<span class="password-field"><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="10" maxlength="200" required><button class="password-toggle" type="button" data-password-toggle="register-password" aria-label="显示密码" aria-pressed="false" title="显示密码"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M2.5 12s3.3-5.5 9.5-5.5S21.5 12 21.5 12 18.2 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/></svg></button></span></label>
@@ -126,7 +126,7 @@
           <nav id="module-nav" class="module-nav" aria-label="作品模块">
             <button type="button" data-module="editor" class="active"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>正文</button>
             <button type="button" data-module="drafts"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>想法</button>
-            <button type="button" data-module="settings"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>设定库</button>
+            <button type="button" data-module="settings"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>设定</button>
             <button type="button" data-module="characters"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>角色</button>
             <button type="button" data-module="organizations"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>组织</button>
             <button type="button" data-module="timeline"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>时间轴</button>
@@ -330,7 +330,7 @@
             <select id="ai-model" aria-label="实际使用模型"></select>
           </div>
           <div class="prompt-composer">
-            <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
+            <div id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list" aria-controls="ai-mention-menu" aria-haspopup="listbox" aria-expanded="false" aria-keyshortcuts="Enter" title="Enter 发送，Shift+Enter 换行" data-placeholder="告诉 AI 你想讨论或修改什么……"></div>
             <div id="ai-mention-menu" class="ai-mention-menu hidden" role="listbox" aria-label="引用角色、设定、章节或上下文能力"></div>
             <div class="prompt-composer-actions">
               <button id="ai-context-meter" class="ai-context-meter is-empty" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="ai-context-popover" aria-live="polite" aria-label="当前上下文用量"><b>—</b></button>
@@ -381,7 +381,7 @@
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
     <input id="cover-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
-    <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp">
+    <input id="avatar-file" class="hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
 
     <dialog id="background-task-dialog" class="dialog wide-dialog background-task-dialog" aria-labelledby="background-task-dialog-title">
       <form method="dialog">
@@ -448,7 +448,7 @@
     </dialog>
 
     <dialog id="chapter-batch-dialog" class="dialog chapter-batch-dialog" aria-labelledby="chapter-batch-title">
-      <form id="chapter-batch-form">
+      <form id="chapter-batch-form" method="post">
         <div class="dialog-header">
           <div><span class="eyebrow">正文工具</span><h2 id="chapter-batch-title">章节批量管理</h2><p class="dialog-header-meta">选择多个章节后统一移动、修改属性或软删除。</p></div>
           <button id="chapter-batch-close" class="dialog-close" type="button" aria-label="关闭章节批量管理">×</button>
@@ -508,11 +508,12 @@
     </dialog>
 
     <section id="entity-editor-view" class="entity-editor-view hidden" aria-label="全屏资料编辑">
-      <form id="setting-editor-form" class="entity-editor-page hidden" aria-label="设定编辑器">
+      <form id="setting-editor-form" class="entity-editor-page hidden" aria-label="设定编辑器" method="post">
         <header class="entity-editor-header setting-editor-header">
           <button id="setting-editor-back" class="entity-editor-back" type="button">返回设定库</button>
           <div class="entity-editor-heading">
             <span id="setting-editor-eyebrow" class="eyebrow">新建设定</span>
+            <span id="setting-editor-version" class="character-version-badge">新档案</span>
             <span id="setting-editor-readonly-badge" class="entity-editor-readonly-badge hidden">只读模式</span>
             <input id="setting-editor-name" class="setting-editor-title-input" name="title" maxlength="200" placeholder="新建设定" aria-label="设定标题">
             <div class="setting-editor-header-fields">
@@ -541,7 +542,7 @@
         </div>
       </form>
 
-      <form id="character-editor-form" class="entity-editor-page hidden" aria-labelledby="character-editor-title">
+      <form id="character-editor-form" class="entity-editor-page hidden" aria-labelledby="character-editor-title" method="post">
         <header class="character-editor-header">
           <button id="character-editor-close" class="entity-editor-back" type="button">返回角色列表</button>
           <div>
@@ -575,7 +576,7 @@
         </footer>
       </form>
 
-      <form id="knowledge-editor-form" class="entity-editor-page hidden" aria-labelledby="knowledge-editor-title">
+      <form id="knowledge-editor-form" class="entity-editor-page hidden" aria-labelledby="knowledge-editor-title" method="post">
         <header class="character-editor-header knowledge-editor-header">
           <button id="knowledge-editor-close" class="entity-editor-back" type="button">返回列表</button>
           <div>
@@ -595,7 +596,7 @@
           <main id="knowledge-editor-fields" class="character-editor-fields"></main>
         </div>
         <footer class="character-editor-actions knowledge-editor-actions">
-          <p id="knowledge-editor-footer-note">保存后返回当前列表。</p>
+          <p id="knowledge-editor-footer-note">保存后继续留在当前页面。</p>
           <div><button id="knowledge-editor-cancel" class="ghost-button" type="button">返回列表</button><button id="knowledge-editor-submit" class="primary-button" type="submit">保存档案</button></div>
         </footer>
       </form>
@@ -640,7 +641,7 @@
     </dialog>
 
     <dialog id="replace-dialog" class="dialog replace-dialog" aria-labelledby="replace-dialog-title" aria-describedby="replace-dialog-description">
-      <form id="replace-form">
+      <form id="replace-form" method="post">
         <div class="dialog-header">
           <div><span class="eyebrow">内容工具</span><h2 id="replace-dialog-title">全局替换</h2><p id="replace-dialog-description" class="dialog-header-meta">只处理已保存内容；每个被修改的章节或设定都会保留一个可恢复版本。</p></div>
           <button id="replace-dialog-close" class="dialog-close" aria-label="关闭全局替换" type="button">×</button>
@@ -734,7 +735,7 @@
             <strong>字体预览 Typography 0123</strong>
             <span>中文默认使用黑体，English letters always use monospace.</span>
             <span>第二段用于预览正文的行距与段落密度。</span>
-            <span id="font-size-preview">界面 14 px · Agent 对话 14 px</span>
+            <span id="font-size-preview">界面 14 px · Agent 对话 12 px</span>
           </div>
         </div>
         <div class="dialog-actions">
@@ -789,7 +790,7 @@
     </dialog>
 
     <dialog id="writing-progress-dialog" class="dialog wide-dialog writing-progress-dialog" aria-labelledby="writing-progress-title">
-      <form id="writing-goal-form">
+      <form id="writing-goal-form" method="post">
         <div class="dialog-header"><div><span class="eyebrow">创作节奏</span><h2 id="writing-progress-title">写作目标与字数趋势</h2><p class="dialog-header-meta">趋势根据正文版本历史重建，软删除章节不会继续计入。</p></div><button id="writing-progress-close" class="dialog-close" aria-label="关闭写作目标" type="button">×</button></div>
         <div class="writing-progress-body">
           <div class="writing-progress-stats"><article><small>当前总字数</small><strong id="writing-current-words">0</strong></article><article><small>今日新增</small><strong id="writing-today-words">0</strong></article><article><small>每日目标完成</small><strong id="writing-daily-completion">0%</strong></article><article><small>总目标完成</small><strong id="writing-total-completion">0%</strong></article></div>
@@ -802,7 +803,7 @@
 
     <dialog id="platform-ui-settings-dialog" class="dialog" aria-labelledby="platform-ui-settings-title">
       <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="platform-ui-settings-title">界面与分页</h2></div><div class="settings-dialog-header-actions"><button id="platform-ui-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="platform-ui-settings-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
-      <form id="platform-ui-settings-form">
+      <form id="platform-ui-settings-form" method="post">
         <div class="dialog-fields">
           <label>Toast 提示位置<select id="toast-position" name="toastPosition" aria-label="Toast 提示位置"><option value="bottom-right">右下角（默认）</option><option value="top-right">右上角</option></select></label>
           <small>该设置对所有用户生效，保存后的提示会立即显示在新位置。</small>
@@ -836,6 +837,17 @@
         <div class="settings-dialog-header-actions"><button id="s3-backup-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="s3-backup-close" class="dialog-close" aria-label="关闭 S3 系统备份" type="button">×</button></div>
       </div>
       <div class="s3-backup-body">
+        <fieldset class="s3-backup-encryption" aria-describedby="s3-backup-encryption-description">
+          <legend>备份加密</legend>
+          <div class="s3-backup-encryption-control">
+            <label><input id="s3-backup-encryption-toggle" type="checkbox"><span><strong>使用端到端加密</strong><small id="s3-backup-encryption-description">开启后，数据库快照、CredentialVault 恢复密钥和新上传图片都会先在本机加密。</small></span></label>
+            <span id="s3-backup-encryption-status" class="s3-backup-status">正在读取状态</span>
+          </div>
+          <div id="s3-backup-encryption-warning" class="s3-backup-encryption-warning hidden" role="note">
+            <strong>当前备份为明文</strong>
+            <p>请将所有 S3 目标桶设置为私有桶，避免数据库、密钥与图片被公开访问。</p>
+          </div>
+        </fieldset>
         <section class="s3-backup-overview" aria-labelledby="s3-backup-overview-title">
           <div><h3 id="s3-backup-overview-title">备份目标</h3><p id="s3-backup-summary">正在读取备份配置……</p></div>
           <div class="s3-backup-overview-actions"><button id="s3-backup-run-all" class="ghost-button" type="button">立即备份已启用目标</button><button id="s3-backup-add" class="primary-button" type="button">新增目标</button></div>
@@ -849,7 +861,7 @@
     </dialog>
 
     <dialog id="s3-backup-target-dialog" class="dialog editor-dialog s3-backup-target-dialog" aria-labelledby="s3-backup-target-title">
-      <form id="s3-backup-target-form">
+      <form id="s3-backup-target-form" method="post" action="/api/platform/backups/targets">
         <div class="dialog-header"><div><span class="eyebrow">系统备份目标</span><h2 id="s3-backup-target-title">新增 S3 目标</h2><p class="dialog-header-meta">AK 与 SK 会使用系统主密钥加密保存，读取配置时不会回显。</p></div><button id="s3-backup-target-close" class="dialog-close" aria-label="关闭 S3 目标编辑" type="button">×</button></div>
         <div class="dialog-fields s3-backup-target-fields">
           <label>配置名称<input id="s3-backup-name" name="name" maxlength="100" required autocomplete="off" placeholder="例如：异地 MinIO"></label>
@@ -873,6 +885,16 @@
       </form>
     </dialog>
 
+    <dialog id="s3-backup-key-dialog" class="dialog s3-backup-key-dialog" aria-labelledby="s3-backup-key-title" aria-describedby="s3-backup-key-description">
+      <div class="dialog-header"><div><span class="eyebrow">仅显示这一次</span><h2 id="s3-backup-key-title">立即保存备份加密密钥</h2><p id="s3-backup-key-description" class="dialog-header-meta">密钥丢失后，任何人都无法恢复加密备份。请先复制或下载并存放到 Scriverse 设备之外。</p></div></div>
+      <div class="s3-backup-key-body">
+        <div class="s3-backup-encryption-warning" role="alert"><strong>确认已保存后才会开启加密</strong><p>Scriverse 不会在后续设置页面再次展示这把密钥。刷新页面会放弃此次开启，下次可重新生成；关闭已启用的加密不会清除密钥，以便历史备份继续可恢复。开启加密不会回写桶内已有的明文图片对象，请继续将所有 S3 桶保持为私有桶。</p></div>
+        <label>备份加密密钥<textarea id="s3-backup-key-value" rows="3" readonly spellcheck="false" aria-label="备份加密密钥"></textarea></label>
+        <div class="s3-backup-key-actions"><button id="s3-backup-key-copy" class="ghost-button" type="button">复制密钥</button><button id="s3-backup-key-download" class="ghost-button" type="button">下载密钥文件</button></div>
+      </div>
+      <div class="dialog-actions"><button id="s3-backup-key-confirm" class="primary-button" type="button">我已保存</button></div>
+    </dialog>
+
     <dialog id="account-dialog" class="dialog account-dialog" aria-labelledby="account-dialog-title">
       <div class="dialog-header"><div><span class="eyebrow">个人账户</span><h2 id="account-dialog-title">账户设置</h2></div><button id="account-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div>
       <div class="account-settings-body">
@@ -880,14 +902,14 @@
           <header class="account-settings-section-header"><h3 id="profile-settings-title">个人资料</h3><p>用于作品协作和历史记录中的作者标识。</p></header>
           <div class="avatar-settings">
             <div id="profile-avatar-preview" class="user-avatar profile-avatar-preview" role="img" aria-label="当前头像"><span class="user-avatar-fallback">作</span></div>
-            <div class="avatar-settings-copy"><strong>头像图片</strong><small>支持 PNG、JPEG、WebP，文件不超过 5 MB。选择后可框选正方形选区再裁剪上传。</small></div>
+            <div class="avatar-settings-copy"><strong>头像图片</strong><small>支持 PNG、JPEG、WebP、GIF，文件不超过 2 MB。选择后可框选正方形选区再裁剪上传。</small></div>
             <div class="avatar-settings-actions"><button id="avatar-upload-button" class="ghost-button" type="button">上传头像</button><button id="avatar-remove-button" class="ghost-button hidden" type="button">移除头像</button></div>
           </div>
-          <form id="profile-form" class="account-settings-form"><label>显示名称<input id="profile-display-name" name="displayName" maxlength="80" required></label><button class="primary-button" type="submit">保存名称</button></form>
+          <form id="profile-form" class="account-settings-form" method="post"><label>显示名称<input id="profile-display-name" name="displayName" maxlength="80" required></label><button class="primary-button" type="submit">保存名称</button></form>
         </section>
         <section class="account-settings-section" aria-labelledby="password-settings-title">
           <header class="account-settings-section-header"><h3 id="password-settings-title">修改密码</h3><p>新密码至少需要 10 个字符。</p></header>
-          <form id="password-form" class="account-settings-form password-settings-form"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><label>确认新密码<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
+          <form id="password-form" class="account-settings-form password-settings-form" method="post" action="/api/auth/password"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" maxlength="200" required></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><label>确认新密码<input name="passwordConfirmation" type="password" autocomplete="new-password" minlength="10" maxlength="200" required></label><button class="primary-button" type="submit">更新密码</button></form>
         </section>
         <section class="account-settings-section" aria-labelledby="api-key-settings-title">
           <header class="account-settings-section-header"><h3 id="api-key-settings-title">CLI API Key</h3><p>用于 CLI 登录。服务端只保存摘要，重置后旧 Key 会立即失效，新 Key 仅显示一次。</p></header>
@@ -937,7 +959,7 @@
     <dialog id="members-dialog" class="dialog wide-dialog" aria-labelledby="members-dialog-title">
       <div class="dialog-header"><div><span id="members-dialog-eyebrow" class="eyebrow">作品权限</span><h2 id="members-dialog-title">成员模块权限</h2></div><div class="settings-dialog-header-actions"><button id="members-settings-return" class="ghost-button settings-parent-button hidden" type="button">返回设置</button><button id="members-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
       <div class="access-dialog-body">
-        <form id="member-permission-form" class="member-permission-form">
+        <form id="member-permission-form" class="member-permission-form" method="post">
           <label class="member-person-field">选择成员<select id="member-user-select" required></select><small>先选择已注册用户，再逐项配置模块权限。</small></label>
           <fieldset id="member-permission-fieldset" disabled>
             <legend>模块读写权限</legend>
@@ -1026,6 +1048,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260809-galaxy-size-threshold-v1"></script>
+    <script type="module" src="/app.js?v=20260812-image-upload-limit-v3"></script>
   </body>
 </html>

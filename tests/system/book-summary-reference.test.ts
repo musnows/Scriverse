@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("全书概要上下文引用", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("默认不引用上下文并保留显式的章节与全书范围", async () => {
@@ -28,7 +28,7 @@ describe("全书概要上下文引用", () => {
     expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('<option value="selection">选中文本</option>');
     expect(page.text).not.toContain('id="ai-book-summary-reference"');
-    expect(page.text).toContain('/app.js?v=20260809-galaxy-size-threshold-v1');
+    expect(page.text).toContain('/app.js?v=20260812-image-upload-limit-v3');
     expect(application.text).toContain('id="save-agent-tools"');
     expect(application.text).toContain('class="book-summary-context-percent-field"');
     expect(application.text).toContain('class="config-inline-save"');

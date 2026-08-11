@@ -120,8 +120,13 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | 开发环境 `true`，生产环境 `false` | 是否允许 AI 供应商连接本机或内网地址；链路本地与云元数据地址始终禁止 |
 | `APP_ALLOW_REGISTRATION` | `false` | 仅明确设为 `true` 或 `1` 时开放注册；未设置或其他值均关闭，首次初始化创建管理员也必须显式开启 |
 | `APP_SETUP_TOKEN` | 空 | 开放注册时必填且至少 32 个字符；仅首位管理员注册需要在页面输入 |
+| `SCRIVERSE_AVATAR_IMAGE_MAX_BYTES` | `2097152` | 头像图片上传大小上限，单位为字节 |
+| `SCRIVERSE_COVER_IMAGE_MAX_BYTES` | `5242880` | 作品封面图片上传大小上限，单位为字节；封面不支持 GIF |
+| `SCRIVERSE_ATTACHMENT_IMAGE_MAX_BYTES` | `31457280` | 设定库等其他图片附件上传大小上限，单位为字节；包括 GIF |
 
 布尔环境变量统一接受 `true`/`1` 表示开启、`false`/`0` 表示关闭；其他数字不会被解析为布尔值。`APP_TRUST_PROXY` 例外，其 `0`–`10` 数字表示可信代理跳数。
+
+上述三个图片大小限制均使用字节配置；非法、小于 1 或超过 1 GiB 的值会回退到默认值或按 1 GiB 处理。
 
 自定义示例：
 

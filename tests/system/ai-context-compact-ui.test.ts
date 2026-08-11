@@ -10,6 +10,14 @@ describe("AI 对话上下文 compact 界面", () => {
       readFile(join(publicPath, "app.js"), "utf8"),
       readFile(join(publicPath, "styles.css"), "utf8")
     ]);
+    const applyRoleplayCharacter = application.slice(
+      application.indexOf("function applyAiRoleplayCharacter"),
+      application.indexOf("function refreshAiMessageRoleLabels")
+    );
+    const updateRoleplayCharacter = application.slice(
+      application.indexOf("async function updateAiRoleplayCharacter"),
+      application.indexOf("async function ensureAiConversation()")
+    );
 
     expect(page).toContain('id="ai-context-warning"');
     expect(page).toContain('id="ai-context-popover"');
@@ -26,6 +34,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('eventName === "context"');
     expect(application).toContain('eventName === "context_compacted"');
     expect(application).toContain('eventName === "user_message"');
+    expect(application).toContain('if (!state.aiPromptSent) setAiContextMeter(payload.usage);');
     expect(application).toContain("/compact`");
     expect(application).not.toContain("prepareAiConversationContext");
     expect(application).toContain('contextAction === "warn"');
@@ -37,12 +46,20 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('kind: "tool"');
     expect(application).toContain('divider.className = "ai-context-compaction-divider"');
     expect(application).not.toContain("ai-process-context-compaction");
+    expect(application).toContain('setAiContextMeter(suggestion.contextUsage, false);');
     expect(application).toContain('setAiContextMeter(payload.contextUsage);');
-    expect(application).toContain("const displayUsage = resolveAiContextUsage(latestAiContextUsage, usage);");
+    expect(application).toContain('setAiContextMeter(payload.contextUsage, announcedCompaction);');
+    expect(application).toContain('const announcedCompaction = contextAction === "compacted" || streamContextCompacted;');
+    expect(application).toContain("function setAiContextMeter(usage, allowShrink = true)");
+    expect(application).toContain("mergeAiContextUsage(latestAiContextUsage, usage, false)");
     expect(application).toContain("latestAiContextUsage = displayUsage;");
     expect(application).toContain("function resetAiContextMeter()");
+    expect(applyRoleplayCharacter).not.toContain("resetAiContextMeter()");
+    expect(updateRoleplayCharacter).toContain("resetAiContextMeter()");
     expect(application).toContain("normalizeAiContextTokenDistribution");
     expect(application).toContain("formatAiContextUsagePercent");
+    expect(application).toContain("formatAiContextUsagePercent(displayUsage.inputTokens, displayUsage.contextWindow)");
+    expect(application).toContain('/ai-context-meter.js?v=20260812-context-usage-remaining-v2');
     expect(application).toContain("setAiContextDistributionVisible");
     expect(styles).toContain(".ai-context-popover::after { position: absolute; right: 71px;");
     expect(styles).toContain(".ai-context-popover.hidden { display: none; }");

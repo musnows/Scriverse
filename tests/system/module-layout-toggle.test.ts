@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("知识模块布局切换", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("设定、角色、种族、组织、伏笔与审核保留卡片并支持列表切换", async () => {
@@ -23,9 +23,9 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260809-galaxy-label-stability-v1');
-    expect(page.text).toContain('/app.js?v=20260809-galaxy-size-threshold-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260809-galaxy-size-threshold-v1"></script>');
+    expect(page.text).toContain('/styles.css?v=20260812-agent-chat-font-size-v1');
+    expect(page.text).toContain('/app.js?v=20260812-image-upload-limit-v3');
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260812-image-upload-limit-v3"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -121,7 +121,7 @@ expect(application.text).toContain('/display-labels.js?v=20260809-global-replace
     expect(application.text).toContain('data-open-organization="${esc(item.id)}" role="button" tabindex="0" aria-label="查看组织 ${esc(item.name)}"');
     expect(application.text).not.toContain("人工修正");
     expect(application.text).toContain('item ? "编辑设定" : "新建设定"');
-    expect(application.text).toContain('const changeNote = item ? await inputToast(');
+    expect(application.text).toContain('const changeNote = currentItem ? await inputToast(');
     expect(application.text).toContain('title: "填写版本说明"');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "设定列表样式")');
     expect(application.text).toContain('mountModuleLayoutToggle(layout, "角色列表样式")');

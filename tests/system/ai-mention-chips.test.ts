@@ -5,8 +5,8 @@ import { createRuntime, type Runtime } from "../../src/app.js";
 describe("AI 输入框引用气泡", () => {
   const runtimes: Runtime[] = [];
 
-  afterEach(() => {
-    while (runtimes.length) runtimes.pop()?.close();
+  afterEach(async () => {
+    while (runtimes.length) await runtimes.pop()?.close();
   });
 
   it("将引用放入可编辑输入框并移除上方引用区", async () => {
@@ -22,7 +22,8 @@ describe("AI 输入框引用气泡", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
-    expect(page.text).toContain('id="ai-prompt" class="ai-prompt" contenteditable="true"');
+    expect(page.text).toContain('id="ai-prompt" class="ai-prompt" contenteditable="true" role="textbox" aria-multiline="true" aria-autocomplete="list"');
+    expect(page.text).toContain('aria-controls="ai-mention-menu" aria-haspopup="listbox" aria-expanded="false"');
     expect(page.text).toContain('aria-label="引用角色、设定、章节或上下文能力"');
     expect(page.text).not.toContain('id="ai-include-setting-info"');
     expect(page.text).not.toContain('id="ai-references"');
@@ -32,6 +33,11 @@ describe("AI 输入框引用气泡", () => {
     expect(application.text).toContain('item.kind !== "context-settings" || $("#ai-task").value !== "roleplay"');
     expect(application.text).toContain("volumeTitle: volume.title");
     expect(application.text).toContain("没有匹配的角色、设定、章节或上下文能力");
+    expect(application.text).toContain("function moveAiMentionActiveOption(direction)");
+    expect(application.text).toContain('prompt.setAttribute("aria-activedescendant", activeOption.id);');
+    expect(application.text).toContain('option.setAttribute("aria-selected", String(active));');
+    expect(application.text).toContain('event.key === "ArrowDown" || event.key === "ArrowUp"');
+    expect(application.text).toContain('selectAiMention(activeOption);');
     expect(application.text).toContain("conversationScope.includeSettingInfo = false");
     expect(application.text).toContain("range.insertNode(createAiReferenceChip(reference));");
     expect(application.text).toContain("function clearAiPromptComposer()");
@@ -42,6 +48,7 @@ describe("AI 输入框引用气泡", () => {
     expect(sendAiSource).toMatch(/appendMessage\("user"[\s\S]+?clearAiPromptComposer\(\);[\s\S]+?await streamChat/u);
     expect(sendAiSource.match(/clearAiPromptComposer\(\);/gu)).toHaveLength(1);
     expect(styles.text).toContain(".ai-prompt-reference");
+    expect(styles.text).toContain(".ai-mention-option.is-active");
     expect(styles.text).not.toContain(".ai-reference-chip");
   });
 });
