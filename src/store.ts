@@ -2379,7 +2379,7 @@ export class Store {
       this.getChapter(chapterId);
       return paginated([], pagination);
     }
-    return paginated(rows.slice(pagination.offset, pagination.offset + pagination.limit + 1).map((row) => this.mapChapterVersionRow(row)), pagination);
+    return paginated(rows.map((row) => this.mapChapterVersionRow(row)), pagination);
   }
 
   listChapterInsights(chapterId: string): Record<string, unknown>[] {
