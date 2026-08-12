@@ -57,6 +57,7 @@ describe("沉浸式阅读预览界面", () => {
     expect(styles.text).toContain(".reader-viewport.is-paged .reader-content");
     expect(styles.text).toContain("@media (max-width: 700px)");
     expect(styles.text).toContain(".reader-settings-panel { position: static;");
+    expect(styles.text).toContain(".app-shell.ai-hidden-mode:not(.shelf-mode) { grid-template-columns: minmax(0, 1fr); }");
     expect(readingState.text).toContain("export function createReadingRequestGate()");
     expect(pageRoute.text).toContain('view === "reader"');
   });
