@@ -7,6 +7,7 @@ import {
   type Row
 } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
+import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -9035,6 +9036,36 @@ export class Store {
       volumes,
       cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
     });
+  }
+
+  async exportEpub(workId: string, volumeId?: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
+    const tree = this.getWorkTree(workId);
+    const allVolumes = tree.volumes as Record<string, unknown>[];
+    const selectedVolume = volumeId ? allVolumes.find((volume) => String(volume.id) === volumeId) : undefined;
+    if (volumeId && !selectedVolume) throw notFound("分卷");
+    const sourceVolumes = selectedVolume ? [selectedVolume] : allVolumes;
+    const title = selectedVolume ? `${String(tree.title)} - ${String(selectedVolume.title)}` : String(tree.title);
+    const cover = this.findWorkCover(workId);
+    const archive = await createEpubArchive({
+      title,
+      author: String(tree.author ?? ""),
+      description: String(tree.description ?? ""),
+      language: String(tree.language ?? "zh-CN"),
+      volumes: sourceVolumes.map((volume) => ({
+        title: String(volume.title),
+        chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+          title: String(chapter.title),
+          content: String(chapter.content ?? "")
+        }))
+      })),
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
+    return { title, archive };
+  }
+
+  async exportVolumeEpub(volumeId: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
+    const volume = this.getVolume(volumeId);
+    return this.exportEpub(String(volume.workId), volumeId);
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {

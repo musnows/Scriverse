@@ -502,7 +502,7 @@ function helpText(): string {
   scriverse work get <workId>
   scriverse work history <workId>
   scriverse work restore <workId> --version <number>
-  scriverse manuscript get <workId> [--format json|markdown|txt|docx] [--output <path>]
+  scriverse manuscript get <workId> [--format json|markdown|txt|docx|epub] [--output <path>]
   scriverse search <workId> --query <text> [--type <type>] [--limit <number>]
   scriverse audit <workId>
   scriverse writing progress <workId>
@@ -539,7 +539,7 @@ AI 编辑辅助：
 
 function schemaList(): Record<string, unknown> {
   return {
-    output: "除 manuscript 的 markdown/txt/docx 外，所有成功结果都输出 JSON；错误输出到 stderr 并返回非零状态码。",
+    output: "除 manuscript 的 markdown/txt/docx/epub 外，所有成功结果都输出 JSON；错误输出到 stderr 并返回非零状态码。",
     input: {
       json: "create/update 使用 --input file.json 或 --input - 从标准输入读取 JSON 对象",
       longText: "使用可重复的 --field-file field=path 注入长文本字段",
@@ -774,12 +774,13 @@ async function execute(parsed: ParsedArguments, dependencies: Required<CliDepend
     const workId = requiredPosition(parsed.positionals, 2, "workId");
     assertPositionCount(parsed.positionals, 3);
     const format = option(parsed, "format") ?? "json";
-    if (!["json", "markdown", "txt", "docx"].includes(format)) throw new CliError("CLI_FORMAT_INVALID", "format 必须是 json、markdown、txt 或 docx");
+    if (!["json", "markdown", "txt", "docx", "epub"].includes(format)) throw new CliError("CLI_FORMAT_INVALID", "format 必须是 json、markdown、txt、docx 或 epub");
     if (format === "json") {
       if (option(parsed, "output")) throw new CliError("CLI_OUTPUT_UNSUPPORTED", "JSON 格式直接输出到标准输出，不支持 --output");
       emitJson(dependencies.stdout, await apiRequest(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}`), compact);
-    } else if (format === "markdown" || format === "docx") {
-      const outputPath = option(parsed, "output") ?? (format === "docx" ? `novel-${workId}.docx` : `novel-${workId}.zip`);
+    } else if (format === "markdown" || format === "docx" || format === "epub") {
+      const defaultOutput = format === "docx" ? `novel-${workId}.docx` : format === "epub" ? `novel-${workId}.epub` : `novel-${workId}.zip`;
+      const outputPath = option(parsed, "output") ?? defaultOutput;
       emitJson(dependencies.stdout, {
         format,
         ...(await downloadToFile(dependencies.fetchImpl, config, `/api/works/${encoded(workId)}/export?format=${format}`, outputPath, dependencies.cwd))
