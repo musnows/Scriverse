@@ -107,6 +107,19 @@ describe("EPUB 导出生成器", () => {
     await expect(withCover.zip.file("OEBPS/text/cover.xhtml")?.async("string")).resolves.toContain('../images/cover.png');
   });
 
+  it("完整保留接近章节上限的长正文", async () => {
+    const longContent = `开头 <标签>。\n${"星海中的长段落 & 航线。\n".repeat(80_000)}结尾。`;
+    const { zip } = await generatedArchive({
+      title: "长篇测试",
+      volumes: [{ title: "正文", chapters: [{ title: "长章节", content: longContent }] }]
+    });
+    const chapter = await zip.file("OEBPS/text/chapter-001-001.xhtml")?.async("string");
+    expect(chapter).toContain("开头 &lt;标签&gt;。");
+    expect(chapter).toContain("星海中的长段落 &amp; 航线。");
+    expect(chapter).toContain("结尾。");
+    expect(chapter).not.toContain("<标签>");
+  });
+
   it("安全生成中文下载文件名和回退响应头", () => {
     expect(epubDownloadFileName(" ../北港\r\n纪事\\终章?. ")).toBe("北港 纪事 终章.epub");
     const disposition = epubContentDisposition("../北港\r\n纪事", "novel-../../work\r\nX-Test");
