@@ -42,6 +42,16 @@ import { AiConnectivityTestGate, hashAiConnectivityConfiguration, type AiConnect
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import {
+  characterExtractionHash,
+  characterExtractionSelectionFingerprint,
+  editableCharacterExtractionCandidate,
+  normalizeCharacterExtractionCandidate,
+  parseStoredCharacterExtractionCandidates,
+  type CharacterExtractionCandidate,
+  type CharacterExtractionEvidence,
+  type CharacterExtractionSelection
+} from "./character-extraction.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import {
@@ -371,12 +381,6 @@ export type TaskRunActor = {
   allowAdminAccess: boolean;
 };
 
-type CharacterExtractionEvidence = {
-  chapterId: string;
-  chapterTitle: string;
-  quote: string;
-};
-
 type CharacterExtractionGroup = {
   name: string;
   aliases: Set<string>;
@@ -410,6 +414,31 @@ type CharacterVerificationDecision = {
   verdict: "same" | "separate" | "uncertain";
   confidence: number;
   reason: string;
+};
+
+type CharacterExtractionMatch = {
+  characterId: string;
+  name: string;
+  aliases: string[];
+  versionNo: number;
+  matchType: "stable" | "name" | "alias";
+  matchedNames: string[];
+};
+
+type CharacterExtractionPreviewItem = CharacterExtractionCandidate & {
+  suggestedAction: "create" | "merge" | "skip";
+  matchCandidates: CharacterExtractionMatch[];
+  conflicts: string[];
+};
+
+type CharacterExtractionApplicationItem = {
+  candidateId: string;
+  action: "create" | "merge" | "skip";
+  status: "created" | "merged" | "unchanged" | "skipped";
+  characterId?: string;
+  characterName?: string;
+  addedAliases?: string[];
+  conflicts?: string[];
 };
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
@@ -3200,6 +3229,317 @@ export class AiManager {
       taskType: input.taskType,
       ...(input.scope ? { scope: input.scope } : {}),
       ...(modelId ? { modelId } : {})
+    });
+  }
+
+  private assertCharacterExtractionTask(taskId: string): Record<string, unknown> {
+    const task = this.store.getTask(taskId);
+    if (task.taskType !== "character-extraction" && task.taskType !== "character-summary") {
+      throw new AppError(409, "CHARACTER_EXTRACTION_TASK_REQUIRED", "只有角色抽取任务可以预览或应用角色档案");
+    }
+    if (task.status !== "review" && task.status !== "completed") {
+      throw new AppError(409, "CHARACTER_EXTRACTION_TASK_NOT_COMPLETED", "只有已成功完成的角色抽取任务可以应用角色档案");
+    }
+    return task;
+  }
+
+  private characterExtractionMatches(
+    candidate: CharacterExtractionCandidate,
+    characters: Record<string, unknown>[]
+  ): { matches: CharacterExtractionMatch[]; conflicts: string[] } {
+    const candidateNames = [candidate.name, ...candidate.aliases];
+    const candidateNormalized = new Map(candidateNames.map((name) => [normalizeCharacterName(name), name]));
+    const stable = candidate.stableCharacterId
+      ? characters.find((character) => character.id === candidate.stableCharacterId)
+      : undefined;
+    const matches = new Map<string, CharacterExtractionMatch>();
+    for (const character of characters) {
+      const primaryName = String(character.name);
+      const aliases = Array.isArray(character.aliases) ? character.aliases.map(String) : [];
+      const primaryNormalized = normalizeCharacterName(primaryName);
+      const aliasNormalized = new Set(aliases.map(normalizeCharacterName));
+      const matchedNames = [...candidateNormalized]
+        .filter(([normalized]) => normalized === primaryNormalized || aliasNormalized.has(normalized))
+        .map(([, name]) => name);
+      if (matchedNames.length === 0 && character !== stable) continue;
+      const matchType = character === stable
+        ? "stable"
+        : matchedNames.some((name) => normalizeCharacterName(name) === primaryNormalized)
+          ? "name"
+          : "alias";
+      matches.set(String(character.id), {
+        characterId: String(character.id),
+        name: primaryName,
+        aliases,
+        versionNo: Number(character.versionNo),
+        matchType,
+        matchedNames
+      });
+    }
+    const conflicts: string[] = [];
+    if (candidate.stableCharacterId && !stable) conflicts.push("任务生成时匹配的角色已不存在，请改为新建或跳过");
+    if (matches.size > 1) conflicts.push("候选名称或别名分别命中了多个已有角色，必须明确选择目标或改名新建");
+    const priority: Record<CharacterExtractionMatch["matchType"], number> = { stable: 0, name: 1, alias: 2 };
+    return {
+      matches: [...matches.values()].sort((left, right) => priority[left.matchType] - priority[right.matchType]
+        || left.name.localeCompare(right.name, "zh-CN")),
+      conflicts
+    };
+  }
+
+  private characterExtractionPreviewData(
+    task: Record<string, unknown>,
+    result: Record<string, unknown>,
+    candidates: CharacterExtractionCandidate[]
+  ): Record<string, unknown> {
+    const workId = String(task.workId);
+    const characters = this.store.listCharacters(workId, false, false, false);
+    const items: CharacterExtractionPreviewItem[] = candidates.map((candidate) => {
+      const { matches, conflicts } = this.characterExtractionMatches(candidate, characters);
+      return {
+        ...candidate,
+        suggestedAction: matches.length === 0 ? "create" : matches.length === 1 || matches[0]?.matchType === "stable" ? "merge" : "skip",
+        matchCandidates: matches,
+        conflicts
+      };
+    });
+    const previewToken = characterExtractionHash({
+      taskId: task.id,
+      taskUpdatedAt: task.updatedAt,
+      candidates,
+      roster: characters.map((character) => ({
+        id: character.id,
+        name: character.name,
+        aliases: character.aliases,
+        raceId: character.raceId,
+        identity: character.attributes && typeof character.attributes === "object" && !Array.isArray(character.attributes)
+          ? String((character.attributes as Record<string, unknown>).identity ?? "")
+          : "",
+        firstChapterId: character.firstChapterId,
+        versionNo: character.versionNo
+      }))
+    });
+    const application = result.characterApplication && typeof result.characterApplication === "object"
+      && !Array.isArray(result.characterApplication)
+      ? result.characterApplication as Record<string, unknown>
+      : null;
+    return {
+      taskId: String(task.id),
+      status: application?.status === "applied" ? "applied" : "pending",
+      totalCount: candidates.length,
+      previewToken,
+      items,
+      ...(application?.status === "applied" ? { application } : {})
+    };
+  }
+
+  getCharacterExtractionPreview(taskId: string): Record<string, unknown> {
+    const task = this.assertCharacterExtractionTask(taskId);
+    const result = this.store.getTaskStoredResult(taskId);
+    const application = result.characterApplication && typeof result.characterApplication === "object"
+      && !Array.isArray(result.characterApplication)
+      ? result.characterApplication as Record<string, unknown>
+      : null;
+    if (application?.status !== "applied" && !this.store.isTaskSourceCurrent(taskId)) {
+      throw new AppError(409, "CHARACTER_EXTRACTION_SOURCE_CHANGED", "任务分析的正文来源已发生变化，请重新运行角色抽取后再应用");
+    }
+    const candidates = parseStoredCharacterExtractionCandidates(result.characterCandidates);
+    return this.characterExtractionPreviewData(task, result, candidates);
+  }
+
+  private characterExtractionFirstChapter(
+    workId: string,
+    candidate: CharacterExtractionCandidate
+  ): { firstChapterId: string | null; conflict?: string } {
+    if (!candidate.firstChapterId) return { firstChapterId: null };
+    try {
+      const chapter = this.store.getChapter(candidate.firstChapterId);
+      if (chapter.workId === workId) return { firstChapterId: candidate.firstChapterId };
+    } catch {
+      // 原任务结果可能来自旧数据；应用时按当前作品重新核验。
+    }
+    return { firstChapterId: null, conflict: "首次登场章节已不存在或不属于当前作品，未写入该关联" };
+  }
+
+  applyCharacterExtractionPreview(
+    taskId: string,
+    previewToken: string,
+    selections: CharacterExtractionSelection[]
+  ): Record<string, unknown> {
+    this.assertCharacterExtractionTask(taskId);
+    const requestFingerprint = characterExtractionSelectionFingerprint(selections);
+    return this.store.db.transaction(() => {
+      const task = this.assertCharacterExtractionTask(taskId);
+      const result = this.store.getTaskStoredResult(taskId);
+      const application = result.characterApplication && typeof result.characterApplication === "object"
+        && !Array.isArray(result.characterApplication)
+        ? result.characterApplication as Record<string, unknown>
+        : null;
+      if (application?.status === "applied") {
+        if (application.requestFingerprint === requestFingerprint) return application;
+        throw new AppError(409, "CHARACTER_EXTRACTION_ALREADY_APPLIED", "本任务已按另一组确认结果应用，不能再次修改角色档案");
+      }
+      if (!this.store.isTaskSourceCurrent(taskId)) {
+        throw new AppError(409, "CHARACTER_EXTRACTION_SOURCE_CHANGED", "任务分析的正文来源已发生变化，请重新运行角色抽取后再应用");
+      }
+      const candidates = parseStoredCharacterExtractionCandidates(result.characterCandidates);
+      const selectionById = new Map(selections.map((selection) => [selection.candidateId, selection]));
+      if (selectionById.size !== selections.length
+        || selectionById.size !== candidates.length
+        || candidates.some((candidate) => !selectionById.has(candidate.candidateId))) {
+        throw new AppError(400, "CHARACTER_EXTRACTION_SELECTION_INVALID", "必须为预览中的每个角色候选明确选择新建、合并或跳过");
+      }
+      const preview = this.characterExtractionPreviewData(task, result, candidates);
+      if (preview.previewToken !== previewToken) {
+        throw new AppError(409, "CHARACTER_EXTRACTION_PREVIEW_STALE", "角色档案在预览后已发生变化，请刷新预览再确认");
+      }
+      const previewItems = new Map((preview.items as CharacterExtractionPreviewItem[])
+        .map((item) => [item.candidateId, item]));
+      const workId = String(task.workId);
+      const appliedItems: CharacterExtractionApplicationItem[] = [];
+      const characterIds: string[] = [];
+
+      for (const candidate of candidates) {
+        const selection = selectionById.get(candidate.candidateId)!;
+        if (selection.action === "skip") {
+          appliedItems.push({ candidateId: candidate.candidateId, action: "skip", status: "skipped" });
+          continue;
+        }
+        const editable = editableCharacterExtractionCandidate(candidate, selection);
+        const firstChapter = this.characterExtractionFirstChapter(workId, candidate);
+        const conflicts = firstChapter.conflict ? [firstChapter.conflict] : [];
+        const raceId = editable.species ? this.store.resolveRaceReference(workId, editable.species) : null;
+        if (editable.species && !raceId) conflicts.push(`种族“${editable.species}”未命中当前作品已有种族，未写入种族关联`);
+
+        if (selection.action === "create") {
+          const created = this.store.createCharacter(workId, {
+            name: editable.name,
+            aliases: editable.aliases,
+            raceId,
+            attributes: editable.identity ? { identity: editable.identity } : {},
+            firstChapterId: firstChapter.firstChapterId
+          }, "ai", taskId, "应用 AI 角色抽取预览并新建档案");
+          characterIds.push(String(created.id));
+          appliedItems.push({
+            candidateId: candidate.candidateId,
+            action: "create",
+            status: "created",
+            characterId: String(created.id),
+            characterName: String(created.name),
+            ...(conflicts.length ? { conflicts } : {})
+          });
+          continue;
+        }
+
+        const previewItem = previewItems.get(candidate.candidateId)!;
+        const targetMatch = previewItem.matchCandidates.find((match) => match.characterId === selection.targetCharacterId);
+        if (!targetMatch || !selection.targetCharacterId) {
+          throw new AppError(400, "CHARACTER_EXTRACTION_TARGET_INVALID", "合并目标不是服务端预览确认的候选角色", {
+            candidateId: candidate.candidateId
+          });
+        }
+        const target = this.store.getCharacter(selection.targetCharacterId);
+        if (target.workId !== workId || target.mergedIntoCharacterId) {
+          throw new AppError(409, "CHARACTER_EXTRACTION_TARGET_STALE", "合并目标已失效，请刷新预览再确认", {
+            candidateId: candidate.candidateId
+          });
+        }
+        const existingAliases = Array.isArray(target.aliases) ? target.aliases.map(String) : [];
+        const existingNames = new Set([String(target.name), ...existingAliases].map(normalizeCharacterName));
+        const addedAliases: string[] = [];
+        for (const alias of [editable.name, ...editable.aliases]) {
+          const normalized = normalizeCharacterName(alias);
+          if (!normalized || existingNames.has(normalized)) continue;
+          const ownerId = this.store.resolveCharacterReference(workId, alias);
+          if (ownerId && ownerId !== target.id) {
+            conflicts.push(`名称或别名“${alias}”已属于其他角色，未合并该别名`);
+            continue;
+          }
+          existingNames.add(normalized);
+          addedAliases.push(alias);
+        }
+        const update: {
+          aliases?: string[];
+          raceId?: string | null;
+          attributes?: Record<string, unknown>;
+          firstChapterId?: string | null;
+        } = {};
+        if (addedAliases.length > 0) update.aliases = [...existingAliases, ...addedAliases];
+        const attributes = target.attributes && typeof target.attributes === "object" && !Array.isArray(target.attributes)
+          ? target.attributes as Record<string, unknown>
+          : {};
+        const existingIdentity = typeof attributes.identity === "string" ? attributes.identity.trim() : "";
+        if (editable.identity && !existingIdentity) update.attributes = { ...attributes, identity: editable.identity };
+        else if (editable.identity && normalizeCharacterName(editable.identity) !== normalizeCharacterName(existingIdentity)) {
+          conflicts.push("已有身份与定位内容未被抽取结果覆盖");
+        }
+        if (editable.species) {
+          if (!target.raceId && raceId) update.raceId = raceId;
+          else if (target.raceId && (!raceId || target.raceId !== raceId)) conflicts.push("已有种族关联未被抽取结果覆盖");
+        }
+        if (!target.firstChapterId && firstChapter.firstChapterId) update.firstChapterId = firstChapter.firstChapterId;
+        const changed = Object.keys(update).length > 0;
+        const updated = changed
+          ? this.store.updateCharacter(
+            String(target.id),
+            update,
+            "ai",
+            taskId,
+            "应用 AI 角色抽取预览并合并可靠信息",
+            Number(target.versionNo)
+          )
+          : target;
+        characterIds.push(String(updated.id));
+        appliedItems.push({
+          candidateId: candidate.candidateId,
+          action: "merge",
+          status: changed ? "merged" : "unchanged",
+          characterId: String(updated.id),
+          characterName: String(updated.name),
+          ...(addedAliases.length ? { addedAliases } : {}),
+          ...(conflicts.length ? { conflicts } : {})
+        });
+      }
+
+      const appliedAt = now();
+      const applicationResult = {
+        status: "applied",
+        previewToken,
+        requestFingerprint,
+        ...(typeof application?.generatedAt === "string" ? { generatedAt: application.generatedAt } : {}),
+        appliedAt,
+        totalCount: candidates.length,
+        createdCount: appliedItems.filter((item) => item.status === "created").length,
+        mergedCount: appliedItems.filter((item) => item.status === "merged").length,
+        unchangedCount: appliedItems.filter((item) => item.status === "unchanged").length,
+        skippedCount: appliedItems.filter((item) => item.status === "skipped").length,
+        characterIds: [...new Set(characterIds)],
+        items: appliedItems
+      };
+      this.store.updateTask(taskId, {
+        status: String(task.status),
+        result: {
+          ...result,
+          characterIds: applicationResult.characterIds,
+          savedCount: applicationResult.characterIds.length,
+          characterApplication: applicationResult
+        }
+      });
+      this.store.audit(workId, "character.extraction.applied", "analysis-task", taskId, {
+        createdCount: applicationResult.createdCount,
+        mergedCount: applicationResult.mergedCount,
+        unchangedCount: applicationResult.unchangedCount,
+        skippedCount: applicationResult.skippedCount,
+        characterIds: applicationResult.characterIds
+      });
+      logger.info("ai.character_extraction.applied", {
+        taskId,
+        workId,
+        createdCount: applicationResult.createdCount,
+        mergedCount: applicationResult.mergedCount,
+        skippedCount: applicationResult.skippedCount
+      });
+      return applicationResult;
     });
   }
 
@@ -6810,8 +7150,12 @@ export class AiManager {
 
     const byChapterId = new Map(chapters.map((chapter) => [String(chapter.id), chapter]));
     const groups: CharacterExtractionGroup[] = [];
+    const preprocessingSkipped: Array<{ name: string; reason: string }> = [];
     for (const candidate of rawCandidates) {
-      if (typeof candidate.canonicalName !== "string" || !candidate.canonicalName.trim()) continue;
+      if (typeof candidate.canonicalName !== "string" || !candidate.canonicalName.trim()) {
+        preprocessingSkipped.push({ name: "未命名候选", reason: "角色标准名为空，未进入入库预览" });
+        continue;
+      }
       const name = candidate.canonicalName.normalize("NFKC").trim();
       const aliases = (Array.isArray(candidate.aliases) ? candidate.aliases : [])
         .filter((value): value is string => typeof value === "string")
@@ -6823,7 +7167,10 @@ export class AiManager {
       const chapterId = evidence && typeof evidence.chapterId === "string" ? evidence.chapterId : null;
       const quote = evidence && typeof evidence.quote === "string" ? evidence.quote.trim() : "";
       if (!chapterId || !quote || quote.length > 80 || !byChapterId.has(chapterId)
-        || !this.quoteExists(String(byChapterId.get(chapterId)?.content ?? ""), quote)) continue;
+        || !this.quoteExists(String(byChapterId.get(chapterId)?.content ?? ""), quote)) {
+        preprocessingSkipped.push({ name: name.slice(0, 200), reason: "首次出现证据无效或无法在本次正文范围内核验" });
+        continue;
+      }
       const refs = new Set([name, ...aliases].map((value) => this.normalizeReference(value)));
       const matches = groups.filter((group) => [...refs].some((value) => group.references.has(value)));
       const group = matches[0] ?? {
@@ -6907,7 +7254,7 @@ export class AiManager {
       }
     }
 
-    const skipped: Array<{ name: string; reason: string }> = [];
+    const skipped: Array<{ name: string; reason: string }> = [...preprocessingSkipped];
     let verificationCallId: string | null = null;
     let confirmedSameCount = 0;
     let confirmedSeparateCount = 0;
@@ -7017,48 +7364,40 @@ export class AiManager {
       if (!blockedReasons.has(root) && blockedReasons.has(index)) blockedReasons.set(root, blockedReasons.get(index)!);
     }
 
-    const characterIds: string[] = [];
+    const characterCandidates: CharacterExtractionCandidate[] = [];
     for (const [root, group] of mergedGroups) {
       if (blockedGroups.has(root)) {
         skipped.push({ name: group.name, reason: blockedReasons.get(root) ?? "角色身份二次确认未通过" });
         continue;
       }
       const aliases = [...group.aliases].filter((alias) => this.isSafeGlobalAlias(alias));
-      const extractedRaceId = group.species ? this.store.resolveRaceReference(workId, group.species) : null;
       const existingId = existingIdByRoot.get(root) ?? [group.name, ...aliases]
         .map((value) => this.store.resolveCharacterReference(workId, value))
         .find((value): value is string => Boolean(value));
-      try {
-        if (existingId) {
-          const existing = this.store.getCharacter(existingId);
-          const mergedAliases = [...new Set([...(existing.aliases as string[]), group.name, ...aliases])]
-            .filter((alias) => this.isSafeGlobalAlias(alias) && this.normalizeReference(alias) !== this.normalizeReference(String(existing.name)));
-          const updated = this.store.updateCharacter(existingId, {
-            aliases: mergedAliases,
-            raceId: (existing.raceId as string | null) ?? extractedRaceId,
-            attributes: { ...(existing.attributes as Record<string, unknown>), ...(group.identity ? { identity: group.identity } : {}) },
-            firstChapterId: existing.firstChapterId as string | null ?? group.firstChapterId
-          }, "ai", taskId ?? null, "全书角色抽取及身份二次确认");
-          characterIds.push(String(updated.id));
-        } else {
-          const created = this.store.createCharacter(workId, {
-            name: group.name,
-            aliases,
-            raceId: extractedRaceId,
-            attributes: group.identity ? { identity: group.identity } : {},
-            firstChapterId: group.firstChapterId
-          });
-          characterIds.push(String(created.id));
-        }
-      } catch (error) {
-        skipped.push({ name: group.name, reason: error instanceof Error ? error.message : "名称冲突" });
-      }
+      const candidate = normalizeCharacterExtractionCandidate({
+        name: group.name,
+        aliases,
+        species: group.species,
+        identity: group.identity,
+        firstChapterId: group.firstChapterId,
+        firstEvidence: group.firstEvidence,
+        stableCharacterId: existingId ?? null
+      }, characterCandidates.length);
+      if (candidate) characterCandidates.push(candidate);
+      else skipped.push({ name: group.name.slice(0, 200), reason: "候选名称或属性不符合角色档案字段限制" });
     }
+    const generatedAt = now();
     return {
-      characterIds: [...new Set(characterIds)],
-      candidateCount: mergedGroups.size,
-      savedCount: new Set(characterIds).size,
+      characterIds: [],
+      characterCandidates,
+      candidateCount: characterCandidates.length,
+      savedCount: 0,
       skipped,
+      characterApplication: {
+        status: "pending",
+        totalCount: characterCandidates.length,
+        generatedAt
+      },
       batchCount: chunks.length,
       coveredChapterCount: chapters.length,
       fallbackSegmentCount,

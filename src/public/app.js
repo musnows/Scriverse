@@ -8369,6 +8369,188 @@ function renderRelationshipChangePreview(task, result) {
   </section>`;
 }
 
+function renderCharacterExtractionPreview(task, result) {
+  const preview = result.characterExtractionPreview && typeof result.characterExtractionPreview === "object"
+    ? result.characterExtractionPreview
+    : null;
+  if (!preview) return "";
+  const totalCount = Number(preview.totalCount ?? 0);
+  if (preview.status === "pending") {
+    return `<section class="character-extraction-preview is-pending" data-character-extraction-preview aria-label="角色抽取结果待确认">
+      <div><small>角色档案写入前预览</small><h4>角色库尚未修改</h4><p>已生成 ${totalCount} 个结构化候选。加载预览后可逐项勾选，并明确选择新建、合并或跳过；现有非空字段不会被静默覆盖。</p></div>
+      <div class="character-extraction-preview-actions">
+        ${totalCount > 0 && canEditModule("characters") ? `<button class="primary-button" type="button" data-load-character-extraction-preview="${esc(task.id)}">加载并编辑 ${totalCount} 个候选</button>` : ""}
+        ${totalCount === 0 ? "<small>本次没有可应用的角色候选。</small>" : ""}
+        ${!canEditModule("characters") && totalCount > 0 ? "<small>当前账号没有角色模块编辑权限，只能查看任务摘要。</small>" : ""}
+      </div>
+      <div data-character-extraction-preview-content></div>
+    </section>`;
+  }
+  const counts = `新建 ${Number(preview.createdCount ?? 0)} 个 · 合并 ${Number(preview.mergedCount ?? 0)} 个 · 保持不变 ${Number(preview.unchangedCount ?? 0)} 个 · 跳过 ${Number(preview.skippedCount ?? 0)} 个`;
+  return `<section class="character-extraction-preview is-applied" aria-label="角色抽取结果已应用">
+    <div><small>角色档案写入结果</small><h4>确认结果已应用</h4><p>${esc(counts)}。原始抽取结果仍保留在任务记录中，已创建或更新的档案可在角色库继续编辑。</p></div>
+  </section>`;
+}
+
+function characterExtractionMatchLabel(match) {
+  if (match.matchType === "stable") return "稳定匹配";
+  if (match.matchType === "name") return "标准名匹配";
+  return "别名匹配";
+}
+
+function renderCharacterExtractionEditor(preview) {
+  const items = Array.isArray(preview.items) ? preview.items : [];
+  if (!items.length) return '<p class="character-extraction-empty">没有可应用的角色候选。</p>';
+  return `<div class="character-extraction-editor" data-character-extraction-editor data-preview-token="${esc(preview.previewToken)}">
+    <div class="character-extraction-policy" role="note"><strong>合并规则</strong><span>优先使用任务保存的稳定角色引用，其次使用当前标准名和别名匹配。合并只追加无冲突别名、空缺身份、种族和首次登场；已有非空字段保持不变。</span></div>
+    <div class="character-extraction-editor-toolbar"><span data-character-extraction-selected-count>已选择 0 项</span><button class="ghost-button" type="button" data-character-extraction-select-all>全选可处理项</button><button class="ghost-button" type="button" data-character-extraction-clear>全部跳过</button></div>
+    <div class="character-extraction-candidate-list">${items.map((item, index) => {
+      const matches = Array.isArray(item.matchCandidates) ? item.matchCandidates : [];
+      const suggestedAction = item.suggestedAction === "merge" && matches.length ? "merge" : item.suggestedAction === "skip" ? "skip" : "create";
+      const selected = suggestedAction !== "skip";
+      const actionOptions = [
+        ...(matches.length ? [["merge", "合并到已有角色"]] : []),
+        ["create", "创建新角色档案"],
+        ["skip", "跳过，不写入"]
+      ];
+      const conflicts = Array.isArray(item.conflicts) ? item.conflicts : [];
+      const evidence = item.firstEvidence && typeof item.firstEvidence === "object" ? item.firstEvidence : null;
+      return `<article class="character-extraction-candidate${selected ? "" : " is-skipped"}" data-character-extraction-candidate="${esc(item.candidateId)}">
+        <header>
+          <label class="character-extraction-candidate-toggle"><input type="checkbox" data-character-extraction-selected ${selected ? "checked" : ""} aria-describedby="character-extraction-candidate-note-${index}"><span>选择候选</span></label>
+          <div><strong>${esc(item.name || `候选 ${index + 1}`)}</strong><small>${matches.length ? `${matches.length} 个已有角色匹配` : "未命中已有角色"}</small></div>
+          <span class="character-extraction-strategy">${suggestedAction === "merge" ? "建议合并" : suggestedAction === "create" ? "建议新建" : "需要确认"}</span>
+        </header>
+        <p id="character-extraction-candidate-note-${index}" class="character-extraction-candidate-note">${conflicts.length ? esc(conflicts.join("；")) : matches.length ? `匹配依据：${esc(matches.map(characterExtractionMatchLabel).join("、"))}` : "名称与别名当前均可用于新建。"}</p>
+        <div class="character-extraction-fields">
+          <label>处理策略<select data-character-extraction-action>${actionOptions.map(([value, label]) => `<option value="${value}" ${value === suggestedAction ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+          <label class="character-extraction-target ${suggestedAction === "merge" ? "" : "hidden"}">合并目标<select data-character-extraction-target>${matches.map((match) => `<option value="${esc(match.characterId)}">${esc(match.name)} · v${Number(match.versionNo)} · ${esc(characterExtractionMatchLabel(match))}</option>`).join("")}</select></label>
+          <label>标准名<input type="text" maxlength="200" value="${esc(item.name || "")}" data-character-extraction-name></label>
+          <label>种族<input type="text" maxlength="200" value="${esc(item.species || "")}" data-character-extraction-species placeholder="仅匹配当前作品已有种族"></label>
+          <label class="character-extraction-wide-field">别名<textarea maxlength="20100" rows="2" data-character-extraction-aliases placeholder="每行或逗号分隔一个别名">${esc((Array.isArray(item.aliases) ? item.aliases : []).join("\n"))}</textarea></label>
+          <label class="character-extraction-wide-field">身份与定位<textarea maxlength="20000" rows="2" data-character-extraction-identity>${esc(item.identity || "")}</textarea></label>
+        </div>
+        ${evidence ? `<details><summary>查看首次出现证据</summary><p><strong>${esc(evidence.chapterTitle || "原文章节")}</strong><q>${esc(evidence.quote || "")}</q></p></details>` : ""}
+      </article>`;
+    }).join("")}</div>
+    <p class="character-extraction-apply-error hidden" data-character-extraction-error role="alert"></p>
+    <div class="character-extraction-apply-actions"><button class="primary-button" type="button" data-apply-character-extraction>确认并应用所选候选</button><small>确认采用整批事务；任一新建项名称冲突时全部回滚。重复点击或网络重试不会重复创建。</small></div>
+  </div>`;
+}
+
+function parseCharacterExtractionAliases(value) {
+  return String(value ?? "").split(/[\n,，]/u).map((alias) => alias.trim()).filter(Boolean);
+}
+
+function bindCharacterExtractionEditor(container, taskId) {
+  const editor = container.querySelector("[data-character-extraction-editor]");
+  if (!editor) return;
+  editor.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.type === "text") {
+      event.preventDefault();
+    }
+  });
+  const candidates = [...editor.querySelectorAll("[data-character-extraction-candidate]")];
+  const applyButton = editor.querySelector("[data-apply-character-extraction]");
+  const selectedCount = editor.querySelector("[data-character-extraction-selected-count]");
+  const updateCandidate = (candidate) => {
+    const selected = candidate.querySelector("[data-character-extraction-selected]");
+    const action = candidate.querySelector("[data-character-extraction-action]");
+    const targetField = candidate.querySelector(".character-extraction-target");
+    const enabled = Boolean(selected?.checked) && action?.value !== "skip";
+    candidate.classList.toggle("is-skipped", !enabled);
+    targetField?.classList.toggle("hidden", action?.value !== "merge" || !enabled);
+    candidate.querySelectorAll(".character-extraction-fields input, .character-extraction-fields textarea, .character-extraction-fields select").forEach((control) => {
+      control.disabled = !enabled;
+    });
+    if (action) action.disabled = !selected?.checked;
+  };
+  const updateCount = () => {
+    candidates.forEach(updateCandidate);
+    const count = candidates.filter((candidate) => candidate.querySelector("[data-character-extraction-selected]")?.checked
+      && candidate.querySelector("[data-character-extraction-action]")?.value !== "skip").length;
+    if (selectedCount) selectedCount.textContent = `已选择 ${count} 项，共 ${candidates.length} 项`;
+    if (applyButton) {
+      applyButton.disabled = count === 0;
+      applyButton.textContent = count > 0 ? `确认并应用 ${count} 项` : "请至少选择一项";
+    }
+  };
+  for (const candidate of candidates) {
+    const selected = candidate.querySelector("[data-character-extraction-selected]");
+    const action = candidate.querySelector("[data-character-extraction-action]");
+    selected?.addEventListener("change", () => {
+      if (selected.checked && action?.value === "skip") {
+        action.value = candidate.querySelector("[data-character-extraction-target] option") ? "merge" : "create";
+      }
+      updateCount();
+    });
+    action?.addEventListener("change", () => {
+      if (selected) selected.checked = action.value !== "skip";
+      updateCount();
+    });
+  }
+  editor.querySelector("[data-character-extraction-select-all]")?.addEventListener("click", () => {
+    for (const candidate of candidates) {
+      const selected = candidate.querySelector("[data-character-extraction-selected]");
+      const action = candidate.querySelector("[data-character-extraction-action]");
+      if (selected) selected.checked = true;
+      if (action?.value === "skip") action.value = candidate.querySelector("[data-character-extraction-target] option") ? "merge" : "create";
+    }
+    updateCount();
+  });
+  editor.querySelector("[data-character-extraction-clear]")?.addEventListener("click", () => {
+    for (const candidate of candidates) {
+      const selected = candidate.querySelector("[data-character-extraction-selected]");
+      const action = candidate.querySelector("[data-character-extraction-action]");
+      if (selected) selected.checked = false;
+      if (action) action.value = "skip";
+    }
+    updateCount();
+  });
+  applyButton?.addEventListener("click", async () => {
+    if (applyButton.disabled) return;
+    const errorHost = editor.querySelector("[data-character-extraction-error]");
+    const selections = candidates.map((candidate) => {
+      const selected = candidate.querySelector("[data-character-extraction-selected]")?.checked;
+      const chosenAction = candidate.querySelector("[data-character-extraction-action]")?.value;
+      const action = selected && chosenAction !== "skip" ? chosenAction : "skip";
+      if (action === "skip") return { candidateId: candidate.dataset.characterExtractionCandidate, action };
+      return {
+        candidateId: candidate.dataset.characterExtractionCandidate,
+        action,
+        ...(action === "merge" ? { targetCharacterId: candidate.querySelector("[data-character-extraction-target]")?.value } : {}),
+        name: candidate.querySelector("[data-character-extraction-name]")?.value.trim(),
+        aliases: parseCharacterExtractionAliases(candidate.querySelector("[data-character-extraction-aliases]")?.value),
+        species: candidate.querySelector("[data-character-extraction-species]")?.value.trim(),
+        attributes: { identity: candidate.querySelector("[data-character-extraction-identity]")?.value.trim() }
+      };
+    });
+    editor.querySelectorAll("button, input, textarea, select").forEach((control) => { control.disabled = true; });
+    applyButton.textContent = "正在应用角色档案";
+    errorHost?.classList.add("hidden");
+    try {
+      const applied = await api(`/api/tasks/${encodeURIComponent(taskId)}/character-extraction/apply`, {
+        method: "POST",
+        body: { previewToken: editor.dataset.previewToken, selections }
+      });
+      $("#form-dialog").close();
+      toast(`角色候选已处理：新建 ${Number(applied.createdCount ?? 0)} 个，合并 ${Number(applied.mergedCount ?? 0)} 个，跳过 ${Number(applied.skippedCount ?? 0)} 个`);
+      await loadAiReferences();
+      if (state.module === "tasks") await renderTasks();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "角色候选应用失败";
+      if (errorHost) {
+        errorHost.textContent = message;
+        errorHost.classList.remove("hidden");
+      }
+      toast(message, "error");
+      editor.querySelectorAll("button, input, textarea, select").forEach((control) => { control.disabled = false; });
+      updateCount();
+    }
+  });
+  updateCount();
+}
+
 function renderTaskResult(task) {
   const result = task.resultSummary && typeof task.resultSummary === "object" ? task.resultSummary : {};
   const metrics = Array.isArray(result.metrics) ? result.metrics : [];
@@ -8382,6 +8564,7 @@ function renderTaskResult(task) {
       ${result.restricted ? '<p class="task-result-warning">部分结果因当前账号权限受限而隐藏。</p>' : ""}
     </section>
     ${renderRelationshipChangePreview(task, result)}
+    ${renderCharacterExtractionPreview(task, result)}
     <section class="task-result-section">
       <h4>结果保存位置</h4>
       <p><strong>作品</strong> ${esc(state.work?.title || "当前作品")}</p>
@@ -8402,6 +8585,27 @@ function renderTaskResult(task) {
 }
 
 function bindTaskResultActions(container) {
+  container.querySelectorAll("[data-load-character-extraction-preview]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    const section = button.closest("[data-character-extraction-preview]");
+    const content = section?.querySelector("[data-character-extraction-preview-content]");
+    if (!section || !content) return;
+    button.disabled = true;
+    button.textContent = "正在加载角色候选";
+    content.innerHTML = '<p class="character-extraction-loading" role="status">正在根据当前角色库重新核对名称、别名与稳定引用…</p>';
+    try {
+      const taskId = button.dataset.loadCharacterExtractionPreview;
+      const preview = await api(`/api/tasks/${encodeURIComponent(taskId)}/character-extraction/preview`);
+      content.innerHTML = renderCharacterExtractionEditor(preview);
+      button.textContent = "角色候选已加载";
+      bindCharacterExtractionEditor(content, taskId);
+    } catch (error) {
+      content.innerHTML = `<p class="character-extraction-apply-error" role="alert">${esc(error.message)}</p>`;
+      button.disabled = false;
+      button.textContent = "重新加载角色候选";
+      toast(error.message, "error");
+    }
+  }));
   container.querySelectorAll("[data-load-task-result-json]").forEach((button) => button.addEventListener("click", async () => {
     if (button.disabled) return;
     const content = button.closest(".task-result-json-loader")?.querySelector("[data-task-result-json-content]");

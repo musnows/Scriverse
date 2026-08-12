@@ -64,6 +64,23 @@ async function configureAi(runtime: Runtime, workId: string) {
   return model.body.data.id as string;
 }
 
+async function applySuggestedCharacterCandidates(runtime: Runtime, taskId: string) {
+  const preview = await request(runtime.app).get(`/api/tasks/${taskId}/character-extraction/preview`).expect(200);
+  const selections = preview.body.data.items.map((item: {
+    candidateId: string;
+    suggestedAction: "create" | "merge" | "skip";
+    matchCandidates: Array<{ characterId: string }>;
+  }) => ({
+    candidateId: item.candidateId,
+    action: item.suggestedAction,
+    ...(item.suggestedAction === "merge" ? { targetCharacterId: item.matchCandidates[0]?.characterId } : {})
+  }));
+  return request(runtime.app).post(`/api/tasks/${taskId}/character-extraction/apply`).send({
+    previewToken: preview.body.data.previewToken,
+    selections
+  }).expect(200);
+}
+
 describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
   let runtime: Runtime;
 
@@ -886,7 +903,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
 
   afterEach(() => runtime.close());
 
-  it("全书角色抽取会落库人物、合并安全别名并过滤通用称谓", async () => {
+  it("全书角色抽取先生成预览，确认后落库并过滤通用称谓", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens: number };
       const prompt = body.messages[1]?.content ?? "";
@@ -912,17 +929,27 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(result.body.data.result).toMatchObject({ savedCount: 2, coveredChapterCount: 3, fallbackSegmentCount: 0 });
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 0,
+      candidateCount: 2,
+      coveredChapterCount: 3,
+      fallbackSegmentCount: 0,
+      characterApplication: { status: "pending", totalCount: 2 }
+    });
     const prompts = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).messages[1].content as string);
     expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(1);
     expect(prompts.some((prompt) => prompt.includes('fragment="'))).toBe(true);
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(beforeApply.body.data).toEqual([]);
+    const applied = await applySuggestedCharacterCandidates(runtime, task.body.data.id);
+    expect(applied.body.data).toMatchObject({ createdCount: 2, mergedCount: 0 });
     const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     const byName = new Map(characters.body.data.map((character: { name: string }) => [character.name, character]));
     expect((byName.get("林舟") as { aliases: string[] }).aliases).toEqual(["小舟"]);
     expect((byName.get("沈星") as { aliases: string[] }).aliases).toEqual(["沈博士"]);
   });
 
-  it("角色职称变体在落库前经 AI 确认同一人后合并", async () => {
+  it("角色职称变体在预览前经 AI 确认同一人后形成单一候选", async () => {
     let verificationCalls = 0;
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
@@ -953,11 +980,15 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
-      savedCount: 1,
+      savedCount: 0,
       candidateCount: 1,
+      characterApplication: { status: "pending", totalCount: 1 },
       verification: { pairCount: 1, confirmedSameCount: 1, confirmedSeparateCount: 0, unresolvedCount: 0 }
     });
     expect(verificationCalls).toBe(1);
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(beforeApply.body.data).toEqual([]);
+    await applySuggestedCharacterCandidates(runtime, task.body.data.id);
     const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     expect(characters.body.data).toHaveLength(1);
     expect(characters.body.data[0]).toMatchObject({ name: "马克", aliases: ["马克博士"] });
@@ -998,7 +1029,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(characters.body.data).toEqual([]);
   });
 
-  it("角色职称变体命中已有角色时经确认后只更新原档案", async () => {
+  it("角色职称变体命中已有角色时经确认后仅在应用阶段更新原档案", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
       const prompt = body.messages[1]?.content ?? "";
@@ -1023,7 +1054,17 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(result.body.data.result).toMatchObject({ savedCount: 1, verification: { pairCount: 1, confirmedSameCount: 1 } });
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 0,
+      candidateCount: 1,
+      characterApplication: { status: "pending", totalCount: 1 },
+      verification: { pairCount: 1, confirmedSameCount: 1 }
+    });
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(beforeApply.body.data).toHaveLength(1);
+    expect(beforeApply.body.data[0]).toMatchObject({ id: existing.body.data.id, name: "马克", aliases: [] });
+    const applied = await applySuggestedCharacterCandidates(runtime, task.body.data.id);
+    expect(applied.body.data).toMatchObject({ createdCount: 0, mergedCount: 1 });
     const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     expect(characters.body.data).toHaveLength(1);
     expect(characters.body.data[0]).toMatchObject({ id: existing.body.data.id, name: "马克", aliases: ["马克博士"] });

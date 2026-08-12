@@ -1054,6 +1054,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/tasks\/[^/]+\/trace(?:\/calls\/[^/]+)?$/u.test(pathname)) {
     return { read: ["ai-analysis", ...contentPermissionModules] };
   }
+  if (/^\/api\/tasks\/[^/]+\/character-extraction\/preview$/u.test(pathname)) {
+    return { read: ["ai-analysis", "prose", "characters", "races"] };
+  }
+  if (write && /^\/api\/tasks\/[^/]+\/character-extraction\/apply$/u.test(pathname)) {
+    return { read: ["prose", "characters"], write: ["ai-analysis", "characters", "races"] };
+  }
   if (write && /^\/api\/tasks\/[^/]+\/relationship-changes\/apply$/u.test(pathname)) {
     return { write: ["ai-analysis", "relationships"] };
   }

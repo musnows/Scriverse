@@ -21,6 +21,6 @@ describe("AI 对话流幂等前端", () => {
     expect(application).toContain('toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error")');
     expect(application).toContain('$("#ai-prompt").focus();');
     expect(application).toContain('eventName === "request_status"');
-    expect(page).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-v1');
+    expect(page).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-v1');
   });
 });
