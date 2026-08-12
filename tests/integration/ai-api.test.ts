@@ -78,6 +78,19 @@ describe("AI 供应商、模型与建议 API", () => {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", contextWindow, modelId);
   }
 
+  function streamedDeltas(value: string): string {
+    return value.split(/\r?\n\r?\n/u).flatMap((eventText) => {
+      const lines = eventText.split(/\r?\n/u);
+      if (!lines.some((line) => line.trim() === "event: delta")) return [];
+      const data = lines.filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+      if (!data) return [];
+      const payload = JSON.parse(data) as unknown;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+      const delta = (payload as Record<string, unknown>).delta;
+      return typeof delta === "string" ? [delta] : [];
+    }).join("");
+  }
+
   it("只有连接测试成功的启用供应商才能设置默认模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).put(`/api/works/${workId}/task-defaults/continue`).send({ modelId }).expect(409);
@@ -2174,7 +2187,7 @@ describe("AI 供应商、模型与建议 API", () => {
       start(controller) {
         const encoder = new TextEncoder();
         controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"安全前缀 sk-sensitive-"}}]}\n\n'));
-        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"test-value 安全后缀"},"finish_reason":"stop"}]}\n\n'));
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"test-value 安全后缀s"},"finish_reason":"stop"}]}\n\n'));
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
       }
@@ -2187,10 +2200,149 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200).expect("Content-Type", /text\/event-stream/u);
     const suggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
 
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"安全前缀 "}');
-    expect(streamed.text).toContain('event: delta\ndata: {"delta":"sk-s*****lue 安全后缀"}');
+    expect(streamedDeltas(streamed.text)).toBe("安全前缀 sk-s*****lue 安全后缀s");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
-    expect(suggestions.body.data[0].content).toBe("安全前缀 sk-s*****lue 安全后缀");
+    expect(suggestions.body.data[0].content).toBe("安全前缀 sk-s*****lue 安全后缀s");
+  });
+
+  it("上游读取异常时安全刷新尾部并只保存一次中断正文", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async () => {
+      let sent = false;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (!sent) {
+            sent = true;
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode(
+              'data: {"choices":[{"delta":{"content":"安全前缀 sk-sensitive-"}}]}\n\n'
+              + 'data: {"choices":[{"delta":{"content":"test-values"}}]}\n\n'
+            ));
+            return;
+          }
+          controller.error(new Error("upstream network disconnected"));
+        }
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "测试异常尾部",
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    const assistantMessages = runtime.database.all<{ content: string; metadata_json: string; request_id: string }>(
+      "SELECT content, metadata_json, request_id FROM ai_conversation_messages WHERE role = 'assistant'"
+    );
+    const failedCall = runtime.database.get<{ status: string; output_chars: number }>(
+      "SELECT status, output_chars FROM ai_calls ORDER BY created_at DESC LIMIT 1"
+    );
+
+    expect(streamedDeltas(streamed.text)).toBe("安全前缀 sk-s*****lues");
+    expect(streamed.text).toContain("event: error");
+    expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
+    expect(streamed.text).not.toContain("event: complete");
+    expect(streamed.text).not.toContain("sk-sensitive-test-value");
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toMatchObject({
+      content: "安全前缀 sk-s*****lues",
+      request_id: expect.stringMatching(/^assistant:/u)
+    });
+    expect(JSON.parse(assistantMessages[0]?.metadata_json ?? "{}") as unknown).toMatchObject({
+      interrupted: true,
+      interruptionCode: "AI_CALL_FAILED"
+    });
+    expect(failedCall).toEqual({ status: "failed", output_chars: "安全前缀 sk-s*****lues".length });
+  });
+
+  it("用户取消流式请求时安全刷新尾部并幂等保存正文", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    fetchMock.mockImplementation(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"取消正文末尾s"}}]}\n\n'));
+        init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), { once: true });
+      }
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const conversation = runtime.store.createAiConversation(workId);
+    const userMessage = runtime.store.addAiConversationMessage(String(conversation.id), {
+      role: "user",
+      content: "取消流式请求"
+    });
+    const controller = new AbortController();
+    const deltas: string[] = [];
+    let cancelled = false;
+
+    const call = runtime.ai.createStreamingChat({
+      workId,
+      instruction: "取消流式请求",
+      scope: { type: "none" },
+      modelId,
+      conversationId: String(conversation.id),
+      assistantMessageRequestId: `assistant:${String(userMessage.id)}`,
+      signal: controller.signal
+    }, (delta) => {
+      deltas.push(delta);
+      if (!cancelled) {
+        cancelled = true;
+        controller.abort(new Error("用户取消流式请求"));
+      }
+    });
+
+    await expect(call).rejects.toMatchObject({
+      code: "AI_CALL_FAILED",
+      details: { failure: "用户取消流式请求" }
+    });
+    const assistantMessages = runtime.database.all<{ content: string; metadata_json: string; request_id: string }>(
+      "SELECT content, metadata_json, request_id FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant'",
+      String(conversation.id)
+    );
+    const failedCall = runtime.database.get<{ status: string; output_chars: number }>(
+      "SELECT status, output_chars FROM ai_calls ORDER BY created_at DESC LIMIT 1"
+    );
+
+    expect(deltas.join("")).toBe("取消正文末尾s");
+    expect(assistantMessages).toHaveLength(1);
+    expect(assistantMessages[0]).toMatchObject({
+      content: "取消正文末尾s",
+      request_id: `assistant:${String(userMessage.id)}`
+    });
+    expect(JSON.parse(assistantMessages[0]?.metadata_json ?? "{}") as unknown).toMatchObject({ interrupted: true });
+    expect(failedCall).toEqual({ status: "failed", output_chars: "取消正文末尾s".length });
+
+    fetchMock.mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(streamController) {
+        streamController.enqueue(new TextEncoder().encode([
+          'data: {"choices":[{"delta":{"content":"重试完整正文"},"finish_reason":"stop"}]}',
+          "",
+          "data: [DONE]",
+          "",
+          ""
+        ].join("\n")));
+        streamController.close();
+      }
+    }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+    const retried = await runtime.ai.createStreamingChat({
+      workId,
+      instruction: "取消流式请求",
+      scope: { type: "none" },
+      modelId,
+      conversationId: String(conversation.id),
+      assistantMessageRequestId: `assistant:${String(userMessage.id)}`
+    }, () => undefined);
+    const messagesAfterRetry = runtime.database.all<{ content: string; metadata_json: string; request_id: string }>(
+      "SELECT content, metadata_json, request_id FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant'",
+      String(conversation.id)
+    );
+
+    expect(retried.content).toBe("重试完整正文");
+    expect(messagesAfterRetry).toEqual([{
+      content: "重试完整正文",
+      metadata_json: expect.not.stringContaining('"interrupted":true'),
+      request_id: `assistant:${String(userMessage.id)}`
+    }]);
   });
 
   it("收到 OpenAI 流式 DONE 标记后不等待供应商关闭连接", async () => {

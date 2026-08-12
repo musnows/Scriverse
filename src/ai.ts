@@ -581,7 +581,7 @@ function redactProviderSecrets(value: unknown, secrets: string | string[], depth
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, list, depth + 1)]));
 }
 
-class ProviderSecretStreamRedactor {
+export class ProviderSecretStreamRedactor {
   private pending = "";
   private readonly secrets: string[];
 
@@ -3305,7 +3305,42 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
-    const generated = await this.generate({ ...input, taskType: "chat" }, onDelta);
+    let streamedContent = "";
+    let generated: GenerateResult;
+    try {
+      generated = await this.generate({ ...input, taskType: "chat" }, (delta) => {
+        streamedContent += delta;
+        onDelta(delta);
+      });
+    } catch (error) {
+      if (streamedContent && input.conversationId && input.assistantMessageRequestId) {
+        try {
+          const partialMessage = this.store.addAiConversationMessage(input.conversationId, {
+            role: "assistant",
+            content: streamedContent,
+            requestId: input.assistantMessageRequestId,
+            metadata: {
+              interrupted: true,
+              interruptionCode: error instanceof AppError ? error.code : "AI_STREAM_FAILED"
+            }
+          });
+          logger.info("ai.stream.partial_saved", {
+            workId: input.workId,
+            conversationId: input.conversationId,
+            messageId: partialMessage.id,
+            outputChars: streamedContent.length
+          });
+        } catch (persistError) {
+          logger.error("ai.stream.partial_save_failed", {
+            workId: input.workId,
+            conversationId: input.conversationId,
+            outputChars: streamedContent.length,
+            error: aiErrorForLog(persistError)
+          });
+        }
+      }
+      throw error;
+    }
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3328,6 +3363,7 @@ export class AiManager {
         role: "assistant",
         content: generated.content,
         requestId: input.assistantMessageRequestId,
+        replaceInterrupted: true,
         metadata: {
           ...(modelDisplayName ? { modelDisplayName } : {}),
           outputTokens: generated.outputTokens,
@@ -5097,6 +5133,7 @@ export class AiManager {
       toolCount: tools.length
     });
     let activeSecrets: string[] = [];
+    let streamedContent = "";
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -5128,7 +5165,6 @@ export class AiManager {
       let totalCachedInputTokens = 0;
       const processSteps: AiProcessStep[] = [];
       const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
-      let streamedContent = "";
       let streamingGenerationRound = 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
@@ -5627,11 +5663,12 @@ export class AiManager {
       const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run(
         `UPDATE ai_calls
-         SET status = 'failed', failure = ?, input_tokens = ?, output_tokens = ?,
+         SET status = 'failed', failure = ?, output_chars = ?, input_tokens = ?, output_tokens = ?,
              cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         message,
+        streamedContent.length,
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
@@ -5846,40 +5883,46 @@ export class AiManager {
         appendContent(delta);
       }
     };
+    const flushRedactors = (): void => {
+      const finalContent = contentRedactor.flush();
+      if (finalContent) {
+        content += finalContent;
+        onDelta(finalContent);
+      }
+      const finalReasoning = reasoningRedactor.flush();
+      if (finalReasoning) {
+        reasoning += finalReasoning;
+        onThinkingDelta(finalReasoning);
+      }
+    };
     let receivedBytes = 0;
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.value?.byteLength) {
-        receivedBytes += chunk.value.byteLength;
-        if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
-          await reader.cancel().catch(() => undefined);
-          throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.value?.byteLength) {
+          receivedBytes += chunk.value.byteLength;
+          if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+          }
         }
+        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+        const events = buffer.split(/\r?\n\r?\n/u);
+        buffer = events.pop() ?? "";
+        for (const eventText of events) {
+          consumeEvent(eventText);
+          if (upstreamDone) break;
+        }
+        if (upstreamDone) {
+          await reader.cancel().catch(() => undefined);
+          buffer = "";
+          break;
+        }
+        if (chunk.done) break;
       }
-      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-      const events = buffer.split(/\r?\n\r?\n/u);
-      buffer = events.pop() ?? "";
-      for (const eventText of events) {
-        consumeEvent(eventText);
-        if (upstreamDone) break;
-      }
-      if (upstreamDone) {
-        await reader.cancel().catch(() => undefined);
-        buffer = "";
-        break;
-      }
-      if (chunk.done) break;
-    }
-    if (buffer.trim()) consumeEvent(buffer);
-    const finalContent = contentRedactor.flush();
-    if (finalContent) {
-      content += finalContent;
-      onDelta(finalContent);
-    }
-    const finalReasoning = reasoningRedactor.flush();
-    if (finalReasoning) {
-      reasoning += finalReasoning;
-      onThinkingDelta(finalReasoning);
+      if (buffer.trim()) consumeEvent(buffer);
+    } finally {
+      flushRedactors();
     }
     const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
     const openAiToolCallsComplete = openAiToolCallsFinalized
