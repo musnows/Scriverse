@@ -2218,7 +2218,6 @@ describe("AI 供应商、模型与建议 API", () => {
             const encoder = new TextEncoder();
             controller.enqueue(encoder.encode(
               'data: {"choices":[{"delta":{"content":"安全前缀 sk-sensitive-"}}]}\n\n'
-              + 'data: {"choices":[{"delta":{"content":"test-values"}}]}\n\n'
             ));
             return;
           }
@@ -2239,21 +2238,22 @@ describe("AI 供应商、模型与建议 API", () => {
       "SELECT status, output_chars FROM ai_calls ORDER BY created_at DESC LIMIT 1"
     );
 
-    expect(streamedDeltas(streamed.text)).toBe("安全前缀 sk-s*****lues");
+    expect(streamedDeltas(streamed.text)).toBe("安全前缀 sk-s*****");
     expect(streamed.text).toContain("event: error");
     expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
     expect(streamed.text).not.toContain("event: complete");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
+    expect(streamed.text).not.toContain("sk-sensitive-");
     expect(assistantMessages).toHaveLength(1);
     expect(assistantMessages[0]).toMatchObject({
-      content: "安全前缀 sk-s*****lues",
+      content: "安全前缀 sk-s*****",
       request_id: expect.stringMatching(/^assistant:/u)
     });
     expect(JSON.parse(assistantMessages[0]?.metadata_json ?? "{}") as unknown).toMatchObject({
       interrupted: true,
       interruptionCode: "AI_CALL_FAILED"
     });
-    expect(failedCall).toEqual({ status: "failed", output_chars: "安全前缀 sk-s*****lues".length });
+    expect(failedCall).toEqual({ status: "failed", output_chars: "安全前缀 sk-s*****".length });
   });
 
   it("用户取消流式请求时安全刷新尾部并幂等保存正文", async () => {

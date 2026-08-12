@@ -607,10 +607,17 @@ export class ProviderSecretStreamRedactor {
     return retainedLength > 0 ? combined.slice(0, -retainedLength) : combined;
   }
 
-  flush(): string {
-    const value = redactProviderSecretsText(this.pending, ...this.secrets);
+  flush(options: { interrupted?: boolean } = {}): string {
+    const pending = this.pending;
+    const value = redactProviderSecretsText(pending, ...this.secrets);
     this.pending = "";
-    return value;
+    if (!options.interrupted || !pending) return value;
+    const matchingSecrets = this.secrets.filter((secret) => secret.startsWith(pending));
+    if (matchingSecrets.length === 0) return value;
+    const visiblePrefixLength = Math.min(...matchingSecrets.map((secret) => secret.length > 7 ? 4 : 0));
+    if (pending.length <= visiblePrefixLength) return value;
+    if (visiblePrefixLength === 0) return "********";
+    return `${pending.slice(0, visiblePrefixLength)}*****`;
   }
 }
 
@@ -5883,19 +5890,20 @@ export class AiManager {
         appendContent(delta);
       }
     };
-    const flushRedactors = (): void => {
-      const finalContent = contentRedactor.flush();
+    const flushRedactors = (interrupted: boolean): void => {
+      const finalContent = contentRedactor.flush({ interrupted });
       if (finalContent) {
         content += finalContent;
         onDelta(finalContent);
       }
-      const finalReasoning = reasoningRedactor.flush();
+      const finalReasoning = reasoningRedactor.flush({ interrupted });
       if (finalReasoning) {
         reasoning += finalReasoning;
         onThinkingDelta(finalReasoning);
       }
     };
     let receivedBytes = 0;
+    let streamReadCompleted = false;
     try {
       while (true) {
         const chunk = await reader.read();
@@ -5921,8 +5929,9 @@ export class AiManager {
         if (chunk.done) break;
       }
       if (buffer.trim()) consumeEvent(buffer);
+      streamReadCompleted = true;
     } finally {
-      flushRedactors();
+      flushRedactors(!streamReadCompleted);
     }
     const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
     const openAiToolCallsComplete = openAiToolCallsFinalized

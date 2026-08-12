@@ -33,6 +33,21 @@ describe("ProviderSecretStreamRedactor", () => {
     expect(output).not.toContain(secret);
   });
 
+  it("异常结束时隐藏超过既有掩码可见范围的密钥前缀", () => {
+    const redactor = new ProviderSecretStreamRedactor(secret);
+
+    expect(redactor.push("正文 sk-sensitive-")).toBe("正文 ");
+    expect(redactor.flush({ interrupted: true })).toBe("sk-s*****");
+    expect(redactor.flush({ interrupted: true })).toBe("");
+  });
+
+  it("异常结束时仍输出掩码允许范围内的普通短尾部", () => {
+    const redactor = new ProviderSecretStreamRedactor(secret);
+
+    expect(redactor.push("普通正文末尾s")).toBe("普通正文末尾");
+    expect(redactor.flush({ interrupted: true })).toBe("s");
+  });
+
   it("未配置密钥时不暂存正文", () => {
     const redactor = new ProviderSecretStreamRedactor("");
 
