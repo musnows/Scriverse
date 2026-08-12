@@ -22,7 +22,7 @@ describe("沉浸式阅读预览界面", () => {
     const readingState = await request(runtime.app).get("/reading-preview.js").expect(200);
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('/styles.css?v=20260813-reader-mobile-fixes-v2');
     expect(page.text).toContain('/app.js?v=20260813-reader-theme-v2');
     expect(page.text).toContain('id="reader-open-button" class="module-nav-secondary hidden"');
     expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="reader-open-button"[\s\S]*data-module="comments"/u);
@@ -56,6 +56,7 @@ describe("沉浸式阅读预览界面", () => {
     expect(styles.text).toContain('.reader-view[data-reader-theme="dark"]');
     expect(styles.text).toContain(".reader-viewport.is-paged .reader-content");
     expect(styles.text).toContain("@media (max-width: 700px)");
+    expect(styles.text).toContain(".reader-settings-panel { position: static;");
     expect(readingState.text).toContain("export function createReadingRequestGate()");
     expect(pageRoute.text).toContain('view === "reader"');
   });

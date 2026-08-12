@@ -23,7 +23,7 @@ describe("人物关系图搜索界面", () => {
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('/styles.css?v=20260813-reader-mobile-fixes-v2');
     expect(page.text).toContain('/app.js?v=20260813-reader-theme-v2');
     expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-size-threshold-v1');
     expect(graph.text).toContain('export function searchRelationshipNodes(nodes, query, limit = 8)');
