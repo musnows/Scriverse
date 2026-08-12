@@ -8,6 +8,7 @@ import {
 } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
 import { AppError, notFound } from "./errors.js";
+import { normalizeWorkSearchQuery } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -23,6 +24,7 @@ import {
 import {
   countWords,
   documentShortSearchTerms,
+  escapeSqlLikePattern,
   id,
   json,
   normalizeDocumentSearchText,
@@ -3959,7 +3961,7 @@ export class Store {
     this.getWork(workId);
     const safeLimit = Math.min(30, Math.max(1, Math.trunc(limit)));
     const normalizedQuery = query.normalize("NFKC").trim();
-    const escapedQuery = normalizedQuery.replace(/[\\%_]/gu, "\\$&");
+    const escapedQuery = escapeSqlLikePattern(normalizedQuery);
     const pattern = `%${escapedQuery}%`;
     const rows = normalizedQuery
       ? this.db.all(
@@ -8887,14 +8889,15 @@ export class Store {
 
   search(workId: string, query: string): Record<string, unknown>[] {
     this.getWork(workId);
-    const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    const normalizedQuery = normalizeWorkSearchQuery(query);
+    if (!normalizedQuery) return [];
+    const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
     const chapters = this.db.all(
       "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
       pattern,
       pattern
     );
-    const normalizedQuery = query.toLocaleLowerCase("zh-CN");
     const races = this.listRaces(workId).filter((race) => {
       const lineage = race.lineage as Array<{ name: string }>;
       const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
@@ -8944,9 +8947,9 @@ export class Store {
       pattern,
       pattern
     );
-    const characterSections = this.searchCharacterProfileSections(workId, query, 30);
+    const characterSections = this.searchCharacterProfileSections(workId, normalizedQuery, 30);
     const snippet = (content: string): string => {
-      const index = content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+      const index = content.toLocaleLowerCase().indexOf(normalizedQuery);
       const start = Math.max(0, index - 40);
       return content.slice(start, start + 120);
     };

@@ -954,11 +954,19 @@ describe("AI 供应商、模型与建议 API", () => {
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }>; tools?: Array<{ function?: { name?: string; description?: string } }> };
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content?: string }>;
+        tools?: Array<{ function?: {
+          name?: string;
+          description?: string;
+          parameters?: { properties?: { query?: { maxLength?: number } } };
+        } }>;
+      };
       if (completionCount === 1) {
         const searchTool = body.tools?.find((tool) => tool.function?.name === "search_story_entities");
         expect(searchTool?.function?.description).toContain("只有值为 true 才能判定");
         expect(searchTool?.function?.description).toContain("字段为 false 时必须视为仍存活、未灭绝或未解散");
+        expect(searchTool?.function?.parameters?.properties?.query?.maxLength).toBe(100);
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
           id: "race-knowledge",
           type: "function",

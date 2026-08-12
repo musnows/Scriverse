@@ -548,6 +548,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".work-audit-time strong { color: var(--ink); font-size: 18px;");
     expect(styles.text).toContain(".work-audit-event-heading strong { color: var(--ink); font-size: 17px;");
     expect(page.text).toContain('id="search-dialog"');
+    expect(page.text).toContain('id="search-query" name="query" type="search" maxlength="100"');
     expect(application.text).toContain('isGlobalSearchShortcut(event)');
     expect(application.text).toContain('const target = resolveGlobalSearchTarget(result);');
     expect(application.text).toContain('await selectChapter(target.id);');
