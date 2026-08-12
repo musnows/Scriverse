@@ -2549,6 +2549,22 @@ function clearAiPromptComposer() {
   hideAiMentionMenu();
 }
 
+function captureAiPromptComposer() {
+  return {
+    text: aiPromptText(),
+    citations: state.aiCitations.map((citation) => ({ ...citation })),
+    references: state.aiReferences.map((reference) => ({ ...reference }))
+  };
+}
+
+function restoreAiPromptComposer(snapshot) {
+  state.aiCitations = snapshot.citations.map((citation) => ({ ...citation }));
+  state.aiReferences = snapshot.references.map((reference) => ({ ...reference }));
+  setAiPromptText(snapshot.text);
+  renderAiCitations();
+  hideAiMentionMenu();
+}
+
 function aiPromptTextBeforeCursor() {
   const prompt = $("#ai-prompt");
   const selection = window.getSelection();
@@ -11998,14 +12014,15 @@ function openModelDialog(providerId, item = null, provider = null) {
 
 async function sendAi() {
   if (!state.work) return toast("请先选择作品", "error");
-  const instruction = aiPromptText().trim();
+  const composerSnapshot = captureAiPromptComposer();
+  const instruction = composerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
-  const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  const citations = composerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   const requestHolder = {
     snapshot: aiRequestManager.begin({
       workId: state.work.id,
@@ -12132,7 +12149,13 @@ async function sendAi() {
       await persistAiRequestInterruption(request);
       return;
     }
-    if (["AI_CONVERSATION_RESPONSE_IN_PROGRESS", "AI_IDEMPOTENT_REQUEST_IN_PROGRESS"].includes(error?.code)) {
+    if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
+      restoreAiPromptComposer(composerSnapshot);
+      toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
+      $("#ai-prompt").focus();
+      return;
+    }
+    if (error?.code === "AI_IDEMPOTENT_REQUEST_IN_PROGRESS") {
       toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
       $("#ai-prompt").focus();
       return;
