@@ -53,8 +53,21 @@ import { logger, sanitizeError } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
-import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
-import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext, type VersionedEntityType } from "./store.js";
+import { analysisTaskReadModules, canReadWorkModule, canWriteWorkModule, workPermissionModuleLabels, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import {
+  AI_WRITE_TOOL_SWITCH_LABELS,
+  AI_WRITE_TOOL_SWITCH_KEYS,
+  aiWriteEntityVersionType,
+  applyEntryChanges,
+  buildEntryFieldDiffs,
+  writeToolSwitchKey,
+  type AiWriteEntityType,
+  type AiWriteFieldDiff,
+  type AiWriteOperationModule,
+  type AiWriteOperationType,
+  type AiWriteToolSwitchKey
+} from "./ai-write-tools.js";
 import { buildWritingCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
@@ -369,9 +382,38 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"] as const;
-const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
+const WRITE_AGENT_TOOL_IDS = [
+  "write_setting",
+  "write_character",
+  "write_race",
+  "write_organization",
+  "write_timeline",
+  "write_relationship",
+  "write_outline",
+  "write_foreshadow",
+  "create_chapter_annotation",
+  "create_analysis_task",
+  "ask_user_question"
+] as const;
+const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, ...WRITE_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
+type WriteAgentToolId = (typeof WRITE_AGENT_TOOL_IDS)[number];
+
+/** 可写工具对应的权限模块；ask_user_question 走 ai-chat 读权限。 */
+const WRITE_AGENT_TOOL_MODULES: Record<WriteAgentToolId, WorkPermissionModule> = {
+  write_setting: "settings",
+  write_character: "characters",
+  write_race: "races",
+  write_organization: "organizations",
+  write_timeline: "timeline",
+  write_relationship: "relationships",
+  write_outline: "outlines",
+  write_foreshadow: "outlines",
+  create_chapter_annotation: "prose",
+  create_analysis_task: "ai-analysis",
+  ask_user_question: "ai-chat"
+};
 const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
   story_index: ["prose"],
   read_chapters: ["prose"],
@@ -704,6 +746,258 @@ const recallRelationshipArguments = z.object({
   characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   cursor: agentToolCursor
 }).strict();
+
+// ===================== 可写工具与提问工具参数 =====================
+
+const writeToolSummary = z.string().trim().min(1).max(200);
+const writeToolEntryAction = z.enum(["create", "update"]);
+const writeToolIdParameter = z.string().trim().min(1).max(200);
+const limitedJsonObject = z.record(z.string(), z.unknown()).superRefine((value, context) => {
+  if (JSON.stringify(value).length > 100_000) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "对象内容过长，请精简后重试" });
+  }
+});
+
+function writeToolHasChanges(input: Record<string, unknown>, controlFields: string[]): boolean {
+  const controls = new Set(["action", "summary", "kind", "chapterId", "settingId", "characterId", "raceId", "organizationId", "entityId", "relationshipId", "foreshadowId", ...controlFields]);
+  return Object.keys(input).some((field) => !controls.has(field) && input[field] !== undefined);
+}
+
+const settingStatusValues = ["draft", "pending", "confirmed", "deprecated"] as const;
+const timelineStatusValues = ["candidate", "pending", "confirmed", "deprecated"] as const;
+const foreshadowStatusValues = ["planned", "planted", "resolved", "abandoned"] as const;
+const outlineStatusValues = ["draft", "ready", "completed"] as const;
+const relationshipConfirmationValues = ["pending", "confirmed", "rejected"] as const;
+
+const writeSettingArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  settingId: writeToolIdParameter.optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  category: z.string().trim().min(1).max(100).optional(),
+  content: z.string().max(100_000).optional(),
+  tags: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+  status: z.enum(settingStatusValues).optional(),
+  locked: z.boolean().optional(),
+  authorNote: z.string().max(2_000).optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.settingId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["settingId"], message: "编辑设定必须提供 settingId" });
+  }
+  if (input.action === "create" && (!input.title || !input.category || input.content === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["title"], message: "新建设定必须提供标题、分类和内容" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑设定必须至少修改一个字段" });
+  }
+});
+
+const writeCharacterArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  characterId: writeToolIdParameter.optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  code: z.string().trim().min(1).max(100).optional(),
+  aliases: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+  raceId: z.string().trim().min(1).max(200).nullable().optional(),
+  species: z.string().trim().min(1).max(200).optional(),
+  organizationIds: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+  attributes: limitedJsonObject.optional(),
+  profile: limitedJsonObject.optional(),
+  currentState: limitedJsonObject.optional(),
+  lockedFields: z.array(z.string().trim().min(1).max(100)).max(30).optional(),
+  firstChapterId: z.string().trim().min(1).max(200).nullable().optional(),
+  isDead: z.boolean().optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.characterId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["characterId"], message: "编辑角色必须提供 characterId" });
+  }
+  if (input.action === "create" && !input.name) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "新建角色必须提供名称" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑角色必须至少修改一个字段" });
+  }
+});
+
+const writeRaceArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  raceId: writeToolIdParameter.optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  isExtinct: z.boolean().optional(),
+  parentRaceId: z.string().trim().min(1).max(200).nullable().optional(),
+  description: z.string().max(20_000).optional(),
+  settingsMarkdown: z.string().max(100_000).optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.raceId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["raceId"], message: "编辑种族必须提供 raceId" });
+  }
+  if (input.action === "create" && !input.name) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "新建种族必须提供名称" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑种族必须至少修改一个字段" });
+  }
+});
+
+const writeOrganizationArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  organizationId: writeToolIdParameter.optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  isDissolved: z.boolean().optional(),
+  description: z.string().max(20_000).optional(),
+  settingsMarkdown: z.string().max(100_000).optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.organizationId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["organizationId"], message: "编辑组织必须提供 organizationId" });
+  }
+  if (input.action === "create" && !input.name) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "新建组织必须提供名称" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑组织必须至少修改一个字段" });
+  }
+});
+
+const writeTimelineArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  kind: z.enum(["track", "event"]),
+  entityId: writeToolIdParameter.optional(),
+  trackId: writeToolIdParameter.optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  description: z.string().max(20_000).optional(),
+  sortOrder: z.number().int().min(0).max(100_000).optional(),
+  eventType: z.string().trim().min(1).max(100).optional(),
+  timeLabel: z.string().trim().min(1).max(200).optional(),
+  timeSort: z.number().finite().optional(),
+  chapterIds: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+  participantIds: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+  location: z.string().trim().max(200).optional(),
+  causes: z.array(z.string().trim().min(1).max(1_000)).max(20).optional(),
+  impactScope: z.string().trim().min(1).max(100).optional(),
+  status: z.enum(timelineStatusValues).optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.entityId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["entityId"], message: "编辑时间线必须提供 entityId" });
+  }
+  if (input.action === "create" && input.kind === "track" && !input.name) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "新建时间轴必须提供名称" });
+  }
+  if (input.action === "create" && input.kind === "event" && (!input.trackId || !input.name || !input.timeLabel)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["name"], message: "新建时间线事件必须提供 trackId、名称和时间标签" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, ["trackId"])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑时间线必须至少修改一个字段" });
+  }
+});
+
+const writeRelationshipArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  relationshipId: writeToolIdParameter.optional(),
+  fromCharacterId: writeToolIdParameter.optional(),
+  toCharacterId: writeToolIdParameter.optional(),
+  category: z.string().trim().min(1).max(100).optional(),
+  subtype: z.string().trim().max(100).optional(),
+  keywords: z.array(z.string().trim().min(1).max(100)).max(20).optional(),
+  directed: z.boolean().optional(),
+  currentStatus: z.string().trim().min(1).max(100).optional(),
+  timeRange: limitedJsonObject.optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  confirmationStatus: z.enum(relationshipConfirmationValues).optional(),
+  locked: z.boolean().optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.relationshipId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["relationshipId"], message: "编辑人物关系必须提供 relationshipId" });
+  }
+  if (input.action === "create" && (!input.fromCharacterId || !input.toCharacterId || !input.category)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["fromCharacterId"], message: "新建人物关系必须提供源角色、目标角色和关系类型" });
+  }
+  if (input.action === "create" && input.fromCharacterId && input.fromCharacterId === input.toCharacterId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["toCharacterId"], message: "人物关系的两个角色不能相同" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑人物关系必须至少修改一个字段" });
+  }
+});
+
+const writeOutlineArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  chapterId: writeToolIdParameter,
+  goal: z.string().max(20_000).optional(),
+  conflict: z.string().max(20_000).optional(),
+  turningPoint: z.string().max(20_000).optional(),
+  notes: z.string().max(20_000).optional(),
+  status: z.enum(outlineStatusValues).optional()
+}).strict().superRefine((input, context) => {
+  if (!writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "大纲修改必须至少提供一个内容字段" });
+  }
+});
+
+const writeForeshadowArguments = z.object({
+  action: writeToolEntryAction,
+  summary: writeToolSummary,
+  foreshadowId: writeToolIdParameter.optional(),
+  title: z.string().trim().min(1).max(200).optional(),
+  description: z.string().max(20_000).optional(),
+  status: z.enum(foreshadowStatusValues).optional(),
+  importance: z.enum(["low", "medium", "high"]).optional(),
+  plannedPayoffChapterId: z.string().trim().min(1).max(200).nullable().optional(),
+  resolutionNote: z.string().max(5_000).optional()
+}).strict().superRefine((input, context) => {
+  if (input.action === "update" && !input.foreshadowId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["foreshadowId"], message: "编辑伏笔必须提供 foreshadowId" });
+  }
+  if (input.action === "create" && !input.title) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["title"], message: "新建伏笔必须提供标题" });
+  }
+  if (input.action === "update" && !writeToolHasChanges(input as Record<string, unknown>, [])) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["summary"], message: "编辑伏笔必须至少修改一个字段" });
+  }
+});
+
+const createChapterAnnotationArguments = z.object({
+  summary: writeToolSummary,
+  chapterId: writeToolIdParameter,
+  kind: z.enum(["note", "todo"]),
+  startLine: z.number().int().min(1).max(1_000_000),
+  endLine: z.number().int().min(1).max(1_000_000),
+  note: z.string().trim().min(1).max(2_000)
+}).strict().superRefine((input, context) => {
+  if (input.endLine < input.startLine) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endLine"], message: "结束行不能小于起始行" });
+  }
+  if (input.endLine - input.startLine >= 20) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endLine"], message: "单次批注最多覆盖 20 行" });
+  }
+});
+
+const analysisTaskTypeValues = ["structure", "chapter-analysis", "character-extraction", "character-summary", "character-identity-audit", "timeline-analysis", "worldview-analysis", "setting-extraction", "consistency-check", "report-update", "book-analysis", "relationship-analysis"] as const;
+
+const createAnalysisTaskArguments = z.object({
+  summary: writeToolSummary,
+  taskType: z.enum(analysisTaskTypeValues),
+  scope: limitedJsonObject.optional(),
+  modelId: writeToolIdParameter.optional()
+}).strict();
+
+const askUserQuestionArguments = z.object({
+  question: z.string().trim().min(1).max(500),
+  options: z.array(z.string().trim().min(1).max(200)).min(2).max(8),
+  recommendedOption: z.string().trim().min(1).max(200).optional()
+}).strict().superRefine((input, context) => {
+  if (new Set(input.options).size !== input.options.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["options"], message: "预置选项不能重复" });
+  }
+  if (input.recommendedOption !== undefined && !input.options.includes(input.recommendedOption)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["recommendedOption"], message: "推荐选项必须包含在预置选项中" });
+  }
+});
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
@@ -783,6 +1077,206 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "recall_relationship",
       description: "查询当前扮演角色的人物关系。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
       parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  write_setting: {
+    type: "function",
+    function: {
+      name: "write_setting",
+      description: "提交世界设定的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认；用户确认后系统才会写入。不支持删除设定。edit 必须提供 settingId 并至少修改一个字段；create 必须提供标题、分类和内容。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建设定，update 编辑已有设定" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        settingId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标设定 ID" },
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        category: { type: "string", minLength: 1, maxLength: 100 },
+        content: { type: "string", maxLength: 100000 },
+        tags: { type: "array", items: { type: "string", minLength: 1, maxLength: 100 }, maxItems: 20 },
+        status: { type: "string", enum: settingStatusValues },
+        locked: { type: "boolean" },
+        authorNote: { type: "string", maxLength: 2000 }
+      }, required: ["action", "summary"], additionalProperties: false }
+    }
+  },
+  write_character: {
+    type: "function",
+    function: {
+      name: "write_character",
+      description: "提交角色的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。不支持删除角色。edit 必须提供 characterId 并至少修改一个字段；create 必须提供名称。属性、档案和当前状态为 JSON 对象，会整体替换。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建角色，update 编辑已有角色" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        characterId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标角色 ID" },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        code: { type: "string", minLength: 1, maxLength: 100 },
+        aliases: { type: "array", items: { type: "string", minLength: 1, maxLength: 100 }, maxItems: 20 },
+        raceId: { type: ["string", "null"], minLength: 1, maxLength: 200, description: "种族 ID；传 null 表示清除种族归属" },
+        species: { type: "string", minLength: 1, maxLength: 200 },
+        organizationIds: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 50 },
+        attributes: { type: "object", description: "属性 JSON 对象，整体替换" },
+        profile: { type: "object", description: "人物档案 JSON 对象，整体替换" },
+        currentState: { type: "object", description: "当前状态 JSON 对象，整体替换" },
+        lockedFields: { type: "array", items: { type: "string", minLength: 1, maxLength: 100 }, maxItems: 30 },
+        firstChapterId: { type: ["string", "null"], minLength: 1, maxLength: 200 },
+        isDead: { type: "boolean" }
+      }, required: ["action", "summary"], additionalProperties: false }
+    }
+  },
+  write_race: {
+    type: "function",
+    function: {
+      name: "write_race",
+      description: "提交种族的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。不支持删除种族。edit 必须提供 raceId 并至少修改一个字段；create 必须提供名称。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建种族，update 编辑已有种族" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        raceId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标种族 ID" },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        isExtinct: { type: "boolean" },
+        parentRaceId: { type: ["string", "null"], minLength: 1, maxLength: 200, description: "父种族 ID；传 null 表示设为顶级种族" },
+        description: { type: "string", maxLength: 20000 },
+        settingsMarkdown: { type: "string", maxLength: 100000, description: "种族设定 Markdown 全文" }
+      }, required: ["action", "summary"], additionalProperties: false }
+    }
+  },
+  write_organization: {
+    type: "function",
+    function: {
+      name: "write_organization",
+      description: "提交组织的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。不支持删除组织。edit 必须提供 organizationId 并至少修改一个字段；create 必须提供名称。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建组织，update 编辑已有组织" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        organizationId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标组织 ID" },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        isDissolved: { type: "boolean" },
+        description: { type: "string", maxLength: 20000 },
+        settingsMarkdown: { type: "string", maxLength: 100000, description: "组织设定 Markdown 全文" }
+      }, required: ["action", "summary"], additionalProperties: false }
+    }
+  },
+  write_timeline: {
+    type: "function",
+    function: {
+      name: "write_timeline",
+      description: "提交时间线（时间轴或时间线事件）的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。不支持删除。kind 为 track 时编辑时间轴；kind 为 event 时编辑时间线事件。edit 必须提供 entityId 并至少修改一个字段；create 时间轴必须提供名称；create 时间线事件必须提供 trackId、名称和时间标签。编辑时 trackId 会被忽略。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建，update 编辑已有时间线对象" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        kind: { type: "string", enum: ["track", "event"], description: "track 时间轴，event 时间线事件" },
+        entityId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标时间轴或事件 ID" },
+        trackId: { type: "string", minLength: 1, maxLength: 200, description: "新建时间线事件时必填：所属时间轴 ID" },
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        description: { type: "string", maxLength: 20000 },
+        sortOrder: { type: "integer", minimum: 0, maximum: 100000, description: "仅时间轴：排序值" },
+        eventType: { type: "string", minLength: 1, maxLength: 100, description: "仅时间线事件：事件类型" },
+        timeLabel: { type: "string", minLength: 1, maxLength: 200, description: "仅时间线事件：时间标签" },
+        timeSort: { type: "number", description: "仅时间线事件：时间排序值" },
+        chapterIds: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 100, description: "仅时间线事件：关联章节 ID 列表" },
+        participantIds: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 100, description: "仅时间线事件：参与角色 ID 列表" },
+        location: { type: "string", maxLength: 200, description: "仅时间线事件：地点" },
+        causes: { type: "array", items: { type: "string", minLength: 1, maxLength: 1000 }, maxItems: 20, description: "仅时间线事件：起因" },
+        impactScope: { type: "string", minLength: 1, maxLength: 100, description: "仅时间线事件：影响范围" },
+        status: { type: "string", enum: timelineStatusValues }
+      }, required: ["action", "summary", "kind"], additionalProperties: false }
+    }
+  },
+  write_relationship: {
+    type: "function",
+    function: {
+      name: "write_relationship",
+      description: "提交人物关系的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。不支持删除关系。edit 必须提供 relationshipId 并至少修改一个字段；create 必须提供两个角色 ID 和关系类型。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建关系，update 编辑已有关系" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        relationshipId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标关系 ID" },
+        fromCharacterId: { type: "string", minLength: 1, maxLength: 200, description: "新建时必填：源角色 ID" },
+        toCharacterId: { type: "string", minLength: 1, maxLength: 200, description: "新建时必填：目标角色 ID" },
+        category: { type: "string", minLength: 1, maxLength: 100, description: "关系类型，如 family/social/emotional/conflict/uncertain" },
+        subtype: { type: "string", maxLength: 100 },
+        keywords: { type: "array", items: { type: "string", minLength: 1, maxLength: 100 }, maxItems: 20 },
+        directed: { type: "boolean" },
+        currentStatus: { type: "string", minLength: 1, maxLength: 100 },
+        timeRange: { type: "object", description: "时间范围 JSON 对象" },
+        confidence: { type: "number", minimum: 0, maximum: 1 },
+        confirmationStatus: { type: "string", enum: relationshipConfirmationValues },
+        locked: { type: "boolean" }
+      }, required: ["action", "summary"], additionalProperties: false }
+    }
+  },
+  write_outline: {
+    type: "function",
+    function: {
+      name: "write_outline",
+      description: "提交章节大纲的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。大纲以章节为键；章节已有大纲时使用 update，否则使用 create。必须至少提供一个内容字段。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 建立章节大纲，update 编辑已有大纲" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        chapterId: { type: "string", minLength: 1, maxLength: 200, description: "必填：目标章节 ID" },
+        goal: { type: "string", maxLength: 20000, description: "本章目标" },
+        conflict: { type: "string", maxLength: 20000, description: "冲突" },
+        turningPoint: { type: "string", maxLength: 20000, description: "转折点" },
+        notes: { type: "string", maxLength: 20000, description: "备注" },
+        status: { type: "string", enum: outlineStatusValues }
+      }, required: ["action", "summary", "chapterId"], additionalProperties: false }
+    }
+  },
+  write_foreshadow: {
+    type: "function",
+    function: {
+      name: "write_foreshadow",
+      description: "提交伏笔的新建或编辑操作。操作不会立即生效，而是进入修改计划等待用户确认。不支持删除伏笔。edit 必须提供 foreshadowId 并至少修改一个字段；create 必须提供标题。",
+      parameters: { type: "object", properties: {
+        action: { type: "string", enum: ["create", "update"], description: "create 新建伏笔，update 编辑已有伏笔" },
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        foreshadowId: { type: "string", minLength: 1, maxLength: 200, description: "编辑时必填：目标伏笔 ID" },
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        description: { type: "string", maxLength: 20000 },
+        status: { type: "string", enum: foreshadowStatusValues },
+        importance: { type: "string", enum: ["low", "medium", "high"] },
+        plannedPayoffChapterId: { type: ["string", "null"], minLength: 1, maxLength: 200, description: "计划揭晓章节 ID；传 null 表示清除" },
+        resolutionNote: { type: "string", maxLength: 5000 }
+      }, required: ["action", "summary"], additionalProperties: false }
+    }
+  },
+  create_chapter_annotation: {
+    type: "function",
+    function: {
+      name: "create_chapter_annotation",
+      description: "在指定章节正文位置创建评论或待办批注。操作不会立即生效，而是进入修改计划等待用户确认。不得用于修改正文内容，不会改变正文、标题、章节顺序或分卷归属。startLine 与 endLine 为 1 起始的行号，单次最多覆盖 20 行。",
+      parameters: { type: "object", properties: {
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        chapterId: { type: "string", minLength: 1, maxLength: 200, description: "必填：目标章节 ID" },
+        kind: { type: "string", enum: ["note", "todo"], description: "note 评论，todo 待办" },
+        startLine: { type: "integer", minimum: 1, maximum: 1000000, description: "起始行号（1 起始）" },
+        endLine: { type: "integer", minimum: 1, maximum: 1000000, description: "结束行号（1 起始）" },
+        note: { type: "string", minLength: 1, maxLength: 2000, description: "评论或待办内容" }
+      }, required: ["summary", "chapterId", "kind", "startLine", "endLine", "note"], additionalProperties: false }
+    }
+  },
+  create_analysis_task: {
+    type: "function",
+    function: {
+      name: "create_analysis_task",
+      description: "提交创建 AI 分析任务的操作。操作不会立即生效，而是进入修改计划等待用户确认；用户确认后任务才会创建并进入既有任务队列。任务类型、模型和分析范围必须与你向用户说明的内容一致。scope 结构：正文类任务用 type 为 chapter/volume/book 等，并可选 chapterId、volumeId、chapterIds、characterIds、settingIds、raceIds、organizationIds、includeAllSettings；relationship-analysis 支持 characterIds、includeAllSettings 等。",
+      parameters: { type: "object", properties: {
+        summary: { type: "string", minLength: 1, maxLength: 200, description: "本次操作的一句话简述，展示给用户" },
+        taskType: { type: "string", enum: analysisTaskTypeValues, description: "分析任务类型" },
+        scope: { type: "object", description: "分析范围 JSON 对象" },
+        modelId: { type: "string", minLength: 1, maxLength: 200, description: "可选：指定模型 ID；缺省使用任务默认模型" }
+      }, required: ["summary", "taskType"], additionalProperties: false }
+    }
+  },
+  ask_user_question: {
+    type: "function",
+    function: {
+      name: "ask_user_question",
+      description: "向用户提出一个单选问题。一次只能提出一个问题；必须提供至少两个预置选项；把你最推荐的选项放在 options 数组第一个位置（或用 recommendedOption 指定）。用户未回答、拒绝或回答过期时，不得伪造回答，也不得依赖该回答继续执行任何写操作。提出问题后应结束本轮回复，等待用户回答。",
+      parameters: { type: "object", properties: {
+        question: { type: "string", minLength: 1, maxLength: 500, description: "要问用户的问题" },
+        options: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, minItems: 2, maxItems: 8, description: "预置选项；最推荐的选项放在第一个" },
+        recommendedOption: { type: "string", minLength: 1, maxLength: 200, description: "可选：指定推荐选项（必须包含在 options 中），系统会将其移到第一位" }
+      }, required: ["question", "options"], additionalProperties: false }
     }
   }
 };
@@ -4237,9 +4731,13 @@ export class AiManager {
     const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is ConfiguredAgentToolId => typeof item === "string" && CONFIGURED_AGENT_TOOL_IDS.includes(item as ConfiguredAgentToolId)));
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
-    return CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
+    const configured = CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
       && (!requested || requested.has(toolId))
       && this.canReadWithAgentTool(permissions, toolId));
+    const writeTools = conversationId && taskType === "chat"
+      ? this.enabledWriteAgentToolIds(workId, conversationId, requested)
+      : [];
+    return [...configured, ...writeTools];
   }
 
   private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): Record<string, unknown>[] {
@@ -4251,6 +4749,34 @@ export class AiManager {
       return Object.values(AGENT_ENTITY_CATEGORY_MODULES).some((module) => canReadWorkModule(permissions, module));
     }
     return AGENT_TOOL_READ_MODULES[toolId].every((module) => canReadWorkModule(permissions, module));
+  }
+
+  /** 当前操作用户与 AI 对话归属用户的模块权限交集；任一用户不可用时返回 null。 */
+  private aiWritePermissionIntersection(workId: string, conversationId: string): WorkModulePermissions | null {
+    const actor = currentRequestActor();
+    if (!actor?.userId) return null;
+    const ownerUserId = this.store.getAiConversationOwnerUserId(conversationId);
+    if (!ownerUserId) return null;
+    const actorPermissions = this.store.userWorkModulePermissions(actor.userId, workId);
+    const ownerPermissions = this.store.userWorkModulePermissions(ownerUserId, workId);
+    if (!actorPermissions || !ownerPermissions) return null;
+    return this.store.intersectWorkPermissions(actorPermissions, ownerPermissions);
+  }
+
+  /** 依据作品开关与权限交集列出当前对话可用的可写工具。 */
+  private enabledWriteAgentToolIds(workId: string, conversationId: string, requested?: Set<AgentToolId> | null): WriteAgentToolId[] {
+    const writeTools = this.store.getWorkAiWriteTools(workId);
+    const intersection = this.aiWritePermissionIntersection(workId, conversationId);
+    if (!intersection) return [];
+    return WRITE_AGENT_TOOL_IDS.filter((toolId) => {
+      if (requested && !requested.has(toolId)) return false;
+      const module = WRITE_AGENT_TOOL_MODULES[toolId];
+      if (toolId === "ask_user_question") {
+        return writeTools["ask-user-questions"] === true && canReadWorkModule(intersection, "ai-chat");
+      }
+      return writeTools[writeToolSwitchKey(module as AiWriteOperationModule)] === true
+        && canWriteWorkModule(intersection, module);
+    });
   }
 
   private resolveImageToolModel(workId: string): { model: ModelRow; provider: ProviderRow } {
@@ -4372,7 +4898,8 @@ export class AiManager {
     roleplayCharacterId: string | null = null,
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
-    onUsage?: (usage: ResolvedAiTokenUsage) => void
+    onUsage?: (usage: ResolvedAiTokenUsage) => void,
+    conversationId: string | null = null
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -4404,6 +4931,17 @@ export class AiManager {
       : name === "image" ? imageArguments
       : name === "recall_self" ? recallSelfArguments
       : name === "recall_relationship" ? recallRelationshipArguments
+      : name === "write_setting" ? writeSettingArguments
+      : name === "write_character" ? writeCharacterArguments
+      : name === "write_race" ? writeRaceArguments
+      : name === "write_organization" ? writeOrganizationArguments
+      : name === "write_timeline" ? writeTimelineArguments
+      : name === "write_relationship" ? writeRelationshipArguments
+      : name === "write_outline" ? writeOutlineArguments
+      : name === "write_foreshadow" ? writeForeshadowArguments
+      : name === "create_chapter_annotation" ? createChapterAnnotationArguments
+      : name === "create_analysis_task" ? createAnalysisTaskArguments
+      : name === "ask_user_question" ? askUserQuestionArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
     const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
@@ -4412,10 +4950,16 @@ export class AiManager {
     const configuredToolId = toolId && CONFIGURED_AGENT_TOOL_IDS.includes(toolId as ConfiguredAgentToolId)
       ? toolId as ConfiguredAgentToolId
       : null;
+    const writeToolId = toolId && WRITE_AGENT_TOOL_IDS.includes(toolId as WriteAgentToolId)
+      ? toolId as WriteAgentToolId
+      : null;
     const toolAvailable = roleplayCharacterId
       ? (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
         || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
-      : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
+      : Boolean(
+          (configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId))
+          || (writeToolId && !roleplayCharacterId && enabledTools.has(writeToolId))
+        );
     if (!schema || !toolId || !toolAvailable) {
       return {
         id: toolCall.id,
@@ -4439,6 +4983,17 @@ export class AiManager {
       };
     }
     const args = parsed.data;
+    if (writeToolId) {
+      return await this.executeWriteAgentTool(
+        workId,
+        writeToolId,
+        args,
+        conversationId,
+        toolCall,
+        suppliedArguments,
+        calledAt
+      );
+    }
     if (name === "recall_relationship") {
       if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_relationship");
       const { characters: requestedCharacters, cursor } = args as z.infer<typeof recallRelationshipArguments>;
@@ -4861,6 +5416,519 @@ export class AiManager {
       };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
+  }
+
+  /** 执行可写工具：生成修改计划草稿或创建提问，不直接写入任何数据。 */
+  private async executeWriteAgentTool(
+    workId: string,
+    toolId: WriteAgentToolId,
+    args: Record<string, unknown>,
+    conversationId: string | null,
+    toolCall: CompletionToolCall,
+    suppliedArguments: Record<string, unknown> | null,
+    calledAt: string
+  ): Promise<AgentToolCallResult> {
+    const failed = (code: string, message: string): AgentToolCallResult => ({
+      id: toolCall.id,
+      name: toolId,
+      calledAt,
+      arguments: suppliedArguments,
+      status: "failed",
+      result: { ok: false, error: { code, message } }
+    });
+    try {
+      if (!conversationId) {
+        return failed("WRITE_TOOL_CONVERSATION_REQUIRED", "可写工具只能在 AI 对话中使用");
+      }
+      const intersection = this.aiWritePermissionIntersection(workId, conversationId);
+      if (!intersection) {
+        return failed("WRITE_TOOL_PERMISSION_DENIED", "当前用户与 AI 对话归属用户至少一方已失去作品访问权限");
+      }
+      if (toolId === "ask_user_question") {
+        if (!canReadWorkModule(intersection, "ai-chat")) {
+          return failed("WRITE_TOOL_PERMISSION_DENIED", "当前用户与 AI 对话归属用户均无 AI 对话权限");
+        }
+        const requestedOptions = (args.options as string[]).slice(0, 8);
+        const recommended = typeof args.recommendedOption === "string" ? args.recommendedOption : requestedOptions[0] ?? "";
+        const options = requestedOptions.includes(recommended)
+          ? [recommended, ...requestedOptions.filter((item) => item !== recommended)]
+          : requestedOptions;
+        const question = this.store.createAiToolQuestion(workId, conversationId, String(args.question), options);
+        return {
+          id: toolCall.id,
+          name: toolId,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "completed",
+          result: {
+            ok: true,
+            data: {
+              questionId: question.id,
+              question: question.question,
+              options: question.options,
+              recommendedOption: Array.isArray(question.options) ? question.options[0] : null,
+              expiresAt: question.expiresAt,
+              message: "问题已展示给用户。请结束本轮回复等待用户回答；用户未回答、拒绝或回答过期时，不得伪造回答，也不得依赖该回答继续执行写操作。"
+            }
+          }
+        };
+      }
+      const module = WRITE_AGENT_TOOL_MODULES[toolId];
+      if (!canWriteWorkModule(intersection, module)) {
+        return failed("WRITE_TOOL_PERMISSION_DENIED", `当前用户与 AI 对话归属用户均无「${workPermissionModuleLabels[module]}」写权限`);
+      }
+      const operation = this.buildAiWriteOperation(workId, toolId, args);
+      const actor = currentRequestActor();
+      const ownerUserId = this.store.getAiConversationOwnerUserId(conversationId);
+      if (!actor?.userId || !ownerUserId) {
+        return failed("WRITE_TOOL_OWNER_REQUIRED", "AI 对话缺少归属用户，无法创建修改计划");
+      }
+      let plan = this.store.getDraftAiWritePlan(conversationId);
+      if (!plan) plan = this.store.createDraftAiWritePlan(workId, conversationId, actor.userId, ownerUserId);
+      const added = this.store.addAiWritePlanOperation(String(plan.id), operation);
+      return {
+        id: toolCall.id,
+        name: toolId,
+        calledAt,
+        arguments: suppliedArguments,
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            planId: plan.id,
+            operationIndex: added.opIndex,
+            operation: {
+              opType: added.opType,
+              module: added.module,
+              entityType: added.entityType,
+              targetLabel: added.targetLabel
+            },
+            message: "修改已加入修改计划。本轮生成结束后计划将提交给用户确认，用户确认前不会写入任何内容；用户只能整体确认或整体拒绝。"
+          }
+        }
+      };
+    } catch (error) {
+      const appError = error instanceof AppError ? error : null;
+      logger.warn("ai.write_tool.failed", { workId, toolId, error: appError?.code ?? aiErrorForLog(error) });
+      return failed(appError?.code ?? "WRITE_TOOL_FAILED", appError?.message ?? "可写工具执行失败");
+    }
+  }
+
+  /** 依据当前数据库内容生成不可变的计划操作：前后值、版本与字段级 diff。 */
+  private buildAiWriteOperation(workId: string, toolId: WriteAgentToolId, args: Record<string, unknown>): {
+    opType: AiWriteOperationType;
+    module: AiWriteOperationModule;
+    entityType: AiWriteEntityType;
+    targetId: string | null;
+    targetVersion: number | null;
+    targetLabel: string;
+    aiSummary: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown>;
+    diff: AiWriteFieldDiff[];
+  } {
+    const summary = String(args.summary ?? "");
+    const module = WRITE_AGENT_TOOL_MODULES[toolId] as AiWriteOperationModule;
+    if (toolId === "create_chapter_annotation") {
+      const chapterId = String(args.chapterId);
+      const chapter = this.store.getChapter(chapterId);
+      if (String(chapter.workId) !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "目标章节不属于当前作品");
+      const startLine = Number(args.startLine);
+      const endLine = Number(args.endLine);
+      const lines = String(chapter.content).split(/\r?\n/u);
+      if (endLine > lines.length) throw new AppError(400, "ANNOTATION_LINE_RANGE_INVALID", "批注行号超出章节正文范围");
+      const quote = lines.slice(startLine - 1, endLine).join("\n");
+      const kind = args.kind === "todo" ? "todo" : "note";
+      const note = String(args.note);
+      return {
+        opType: "create-annotation",
+        module: "prose",
+        entityType: "chapter-annotation",
+        targetId: chapterId,
+        targetVersion: Number(chapter.versionNo),
+        targetLabel: `章节「${String(chapter.title)}」`,
+        aiSummary: summary,
+        before: {
+          chapterId,
+          chapterTitle: chapter.title,
+          chapterVersion: chapter.versionNo,
+          startLine,
+          endLine,
+          quote
+        },
+        after: { chapterId, kind, startLine, endLine, note },
+        diff: [{ field: "annotation", label: "新增批注", before: null, after: { kind, startLine, endLine, note } }]
+      };
+    }
+    if (toolId === "create_analysis_task") {
+      const taskType = String(args.taskType);
+      const scope = args.scope && typeof args.scope === "object" && !Array.isArray(args.scope)
+        ? args.scope as Record<string, unknown>
+        : { type: "book" };
+      const modelId = typeof args.modelId === "string" && args.modelId.trim() ? args.modelId : null;
+      if (modelId) this.resolveModel(workId, this.analysisTaskModelPurpose(taskType), modelId);
+      const payload = { taskType, scope, modelId };
+      return {
+        opType: "create-task",
+        module: "ai-analysis",
+        entityType: "analysis-task",
+        targetId: null,
+        targetVersion: null,
+        targetLabel: `分析任务「${taskType}」`,
+        aiSummary: summary,
+        before: null,
+        after: payload,
+        diff: [{ field: "task", label: "分析任务", before: null, after: payload }]
+      };
+    }
+    const isCreate = args.action === "create";
+    const entityType: AiWriteEntityType = toolId === "write_setting" ? "setting"
+      : toolId === "write_character" ? "character"
+      : toolId === "write_race" ? "race"
+      : toolId === "write_organization" ? "organization"
+      : toolId === "write_timeline" ? (args.kind === "track" ? "timeline-track" : "timeline-event")
+      : toolId === "write_relationship" ? "relationship"
+      : toolId === "write_foreshadow" ? "foreshadow"
+      : "chapter-outline";
+    const idField = toolId === "write_setting" ? "settingId"
+      : toolId === "write_character" ? "characterId"
+      : toolId === "write_race" ? "raceId"
+      : toolId === "write_organization" ? "organizationId"
+      : toolId === "write_timeline" ? "entityId"
+      : toolId === "write_relationship" ? "relationshipId"
+      : toolId === "write_foreshadow" ? "foreshadowId"
+      : null;
+    const changes = Object.fromEntries(Object.entries(args).filter(([field]) =>
+      !["action", "summary", "kind", "settingId", "characterId", "raceId", "organizationId", "entityId", "relationshipId", "foreshadowId", "chapterId", "trackId"].includes(field)
+      && args[field] !== undefined));
+    if (toolId === "write_timeline" && isCreate && args.kind === "event") {
+      changes.trackId = String(args.trackId);
+    }
+    let targetId: string | null = null;
+    let before: Record<string, unknown> | null = null;
+    let targetVersion: number | null = null;
+    let outlineLabel: string | null = null;
+    if (entityType === "chapter-outline") {
+      targetId = String(args.chapterId);
+      const chapter = this.store.getChapter(targetId);
+      if (String(chapter.workId) !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "目标章节不属于当前作品");
+      outlineLabel = `章节大纲「${String(chapter.title)}」`;
+      if (isCreate) {
+        if (this.store.getChapterOutline(targetId)) throw new AppError(409, "OUTLINE_ALREADY_EXISTS", "该章节已有大纲，请使用 update 编辑");
+        targetVersion = 0;
+      } else {
+        const current = this.store.getChapterOutline(targetId);
+        if (!current) throw new AppError(404, "OUTLINE_NOT_FOUND", "该章节还没有大纲，请使用 create 建立");
+        before = current;
+        targetVersion = this.store.aiWriteTargetVersion(workId, "chapter-outline", targetId);
+      }
+    } else if (!isCreate) {
+      const entityId = String(args[idField ?? ""]);
+      before = this.readEntryCurrent(workId, entityType, entityId);
+      targetId = entityId;
+      targetVersion = this.store.aiWriteTargetVersion(workId, entityType, entityId);
+      if (targetVersion === null) throw new AppError(404, "ENTRY_NOT_FOUND", "目标词条不存在或不属于当前作品");
+    }
+    const after = applyEntryChanges(entityType, before ?? {}, changes);
+    const diff = buildEntryFieldDiffs(entityType, before, after);
+    const targetLabel = outlineLabel ?? this.aiWriteTargetLabel(workId, entityType, before, after, isCreate);
+    return {
+      opType: isCreate ? "create-entry" : "update-entry",
+      module,
+      entityType,
+      targetId,
+      targetVersion,
+      targetLabel,
+      aiSummary: summary,
+      before,
+      after,
+      diff
+    };
+  }
+
+  private readEntryCurrent(workId: string, entityType: AiWriteEntityType, entityId: string): Record<string, unknown> {
+    const current = entityType === "setting" ? this.store.getSetting(entityId)
+      : entityType === "character" ? this.store.getCharacter(entityId)
+      : entityType === "race" ? this.store.getRace(entityId)
+      : entityType === "organization" ? this.store.getOrganization(entityId)
+      : entityType === "timeline-track" ? this.store.getTimelineTrack(entityId)
+      : entityType === "timeline-event" ? this.store.getTimelineEvent(entityId)
+      : entityType === "relationship" ? this.store.getRelationship(entityId)
+      : entityType === "foreshadow" ? this.store.getForeshadow(entityId)
+      : null;
+    if (!current) throw new AppError(404, "ENTRY_NOT_FOUND", "目标词条不存在");
+    if (String(current.workId) !== workId) throw new AppError(400, "ENTRY_WORK_MISMATCH", "目标词条不属于当前作品");
+    return current;
+  }
+
+  private aiWriteTargetLabel(
+    workId: string,
+    entityType: AiWriteEntityType,
+    before: Record<string, unknown> | null,
+    after: Record<string, unknown>,
+    isCreate: boolean
+  ): string {
+    const value = (field: string): string => String((isCreate ? after : before)?.[field] ?? "未命名");
+    if (entityType === "relationship") {
+      const fromId = String(after.fromCharacterId ?? before?.fromCharacterId ?? "");
+      const toId = String(after.toCharacterId ?? before?.toCharacterId ?? "");
+      const nameOf = (characterId: string): string => {
+        try {
+          return String(this.store.getCharacter(characterId).name);
+        } catch {
+          return characterId;
+        }
+      };
+      return `人物关系「${nameOf(fromId)} ↔ ${nameOf(toId)}」`;
+    }
+    const prefix = entityType === "setting" ? "世界设定"
+      : entityType === "character" ? "角色"
+      : entityType === "race" ? "种族"
+      : entityType === "organization" ? "组织"
+      : entityType === "timeline-track" ? "时间轴"
+      : entityType === "timeline-event" ? "时间线事件"
+      : entityType === "foreshadow" ? "伏笔"
+      : "词条";
+    return `${prefix}「${value("title") || value("name")}」`;
+  }
+
+  // ===================== 修改计划执行与撤销 =====================
+
+  /** 执行已确认的修改计划：重新校验后原子执行全部操作。 */
+  executeAiWritePlan(planId: string, executorUserId: string): Record<string, unknown> {
+    const preview = this.store.getAiWritePlan(planId);
+    const workId = String(preview.workId);
+    const ownerUserId = typeof preview.conversationOwnerUserId === "string" ? preview.conversationOwnerUserId : null;
+    const creatorUserId = typeof preview.createdByUserId === "string" ? preview.createdByUserId : null;
+    if (executorUserId !== ownerUserId && executorUserId !== creatorUserId) {
+      throw new AppError(403, "PLAN_ACTOR_DENIED", "只有计划发起用户或 AI 对话归属用户可以处理该审批");
+    }
+    try {
+      return this.store.db.transaction(() => {
+        const plan = this.store.getAiWritePlan(planId);
+        if (String(plan.status) !== "pending") {
+          throw new AppError(409, "PLAN_NOT_PENDING", String(plan.status) === "executed"
+            ? "该审批已执行过，不能重复执行"
+            : `审批当前状态为 ${String(plan.status)}，无法执行`);
+        }
+        const cas = this.store.db.run(
+          "UPDATE ai_write_plans SET status = 'executing', updated_at = ? WHERE id = ? AND status = 'pending'",
+          now(),
+          planId
+        );
+        if (cas.changes === 0) throw new AppError(409, "PLAN_NOT_PENDING", "审批正在被处理，请勿重复操作");
+        if (this.store.isAiWritePlanExpired(planId)) {
+          throw new AppError(410, "PLAN_EXPIRED", "审批已过期，请重新发起修改计划");
+        }
+        const invalid = (reason: string): never => {
+          throw new AppError(410, "PLAN_INVALID", reason);
+        };
+        const planOwnerUserId = typeof plan.conversationOwnerUserId === "string" ? plan.conversationOwnerUserId : null;
+        if (!planOwnerUserId) return invalid("AI 对话缺少归属用户，审批已失效");
+        const executorPermissions = this.store.userWorkModulePermissions(executorUserId, workId);
+        const ownerPermissions = this.store.userWorkModulePermissions(planOwnerUserId, workId);
+        if (!executorPermissions || !ownerPermissions) {
+          return invalid("当前用户或 AI 对话归属用户已失去作品访问权限");
+        }
+        const intersection = this.store.intersectWorkPermissions(executorPermissions, ownerPermissions);
+        const writeTools = this.store.getWorkAiWriteTools(workId);
+        const operations = plan.operations as Record<string, unknown>[];
+        for (const op of operations) {
+          const opModule = String(op.module) as AiWriteOperationModule;
+          const switchKey = writeToolSwitchKey(opModule);
+          if (!writeTools[switchKey]) {
+            return invalid(`作品设置已关闭「${AI_WRITE_TOOL_SWITCH_LABELS[switchKey]}」可写工具`);
+          }
+          if (String(op.opType) === "create-task") {
+            if (!canWriteWorkModule(intersection, "ai-analysis")) {
+              return invalid("当前用户与 AI 对话归属用户均无 AI 分析写权限");
+            }
+            const payload = (op.after ?? {}) as Record<string, unknown>;
+            for (const readModule of analysisTaskReadModules(payload.taskType, payload.scope)) {
+              if (!canReadWorkModule(intersection, readModule)) {
+                return invalid(`当前用户与 AI 对话归属用户均无「${workPermissionModuleLabels[readModule]}」读取权限`);
+              }
+            }
+            continue;
+          }
+          if (!canWriteWorkModule(intersection, opModule)) {
+            return invalid(`当前用户与 AI 对话归属用户均无「${workPermissionModuleLabels[opModule]}」写权限`);
+          }
+          if (String(op.opType) === "update-entry") {
+            const currentVersion = this.store.aiWriteTargetVersion(workId, String(op.entityType) as AiWriteEntityType, String(op.targetId));
+            if (currentVersion === null) {
+              return invalid(`目标${String(op.targetLabel)}已不存在`);
+            }
+            if (currentVersion !== Number(op.targetVersion)) {
+              return invalid(`目标${String(op.targetLabel)}版本已发生变化`);
+            }
+          }
+          if (String(op.opType) === "create-annotation") {
+            const chapterVersion = this.store.aiWriteTargetVersion(workId, "chapter", String(op.targetId));
+            if (chapterVersion === null) {
+              return invalid(`目标${String(op.targetLabel)}已不存在`);
+            }
+            if (chapterVersion !== Number(op.targetVersion)) {
+              return invalid(`目标${String(op.targetLabel)}正文已发生变化`);
+            }
+          }
+        }
+        const results: Record<string, unknown>[] = [];
+        const timestamp = now();
+        for (const op of operations) {
+          const result = this.executeAiWritePlanOperation(workId, op);
+          results.push({ operationId: op.id, ...result });
+          this.store.db.run(
+            "UPDATE ai_write_plan_operations SET status = 'executed', result_json = ?, updated_at = ? WHERE id = ?",
+            JSON.stringify(result),
+            timestamp,
+            String(op.id)
+          );
+        }
+        this.store.db.run(
+          `UPDATE ai_write_plans SET status = 'executed', executed_at = ?, executed_by_user_id = ?, result_json = ?, updated_at = ?
+           WHERE id = ?`,
+          timestamp,
+          executorUserId,
+          JSON.stringify({ operations: results }),
+          timestamp,
+          planId
+        );
+        this.store.audit(workId, "ai-plan.executed", "ai-write-plan", planId, { operationCount: operations.length });
+        return this.store.getAiWritePlan(planId);
+      });
+    } catch (error) {
+      if (error instanceof AppError && error.code === "PLAN_INVALID") {
+        this.store.markAiWritePlanInvalid(planId, error.message);
+      } else if (error instanceof AppError && error.code === "PLAN_EXPIRED") {
+        this.store.markAiWritePlanExpired(planId);
+      } else if (!(error instanceof AppError) || !["PLAN_NOT_PENDING"].includes(error.code)) {
+        const detail = error instanceof AppError
+          ? { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) }
+          : { code: "INTERNAL_ERROR", message: "计划执行内部错误" };
+        this.store.markAiWritePlanFailed(planId, detail);
+      }
+      throw error;
+    }
+  }
+
+  /** 执行计划中的单项操作，返回目标 ID 与执行后版本号。 */
+  private executeAiWritePlanOperation(workId: string, op: Record<string, unknown>): Record<string, unknown> {
+    const entityType = String(op.entityType) as AiWriteEntityType;
+    const opType = String(op.opType);
+    const targetId = typeof op.targetId === "string" ? op.targetId : null;
+    const after = (op.after ?? {}) as Record<string, unknown>;
+    const planId = String(op.planId);
+    const source = "ai-write-plan";
+    const changeNote = "AI 修改计划审批执行";
+    if (opType === "create-annotation") {
+      if (!targetId) throw new AppError(400, "ANNOTATION_CHAPTER_REQUIRED", "批注操作缺少目标章节");
+      const created = this.store.createChapterAnnotation(targetId, {
+        kind: after.kind === "todo" ? "todo" : "note",
+        startLine: Number(after.startLine),
+        endLine: Number(after.endLine),
+        note: String(after.note ?? "")
+      });
+      return { targetId: String(created.id), versionNo: Number(created.versionNo), entityType };
+    }
+    if (opType === "create-task") {
+      const taskType = String(after.taskType ?? "");
+      const scope = after.scope && typeof after.scope === "object" && !Array.isArray(after.scope)
+        ? after.scope as Record<string, unknown>
+        : { type: "book" };
+      const modelId = typeof after.modelId === "string" && after.modelId.trim() ? after.modelId : null;
+      const task = this.createTask(workId, { taskType, scope, ...(modelId ? { modelId } : {}) });
+      return { targetId: String(task.id), versionNo: null, entityType: "analysis-task" };
+    }
+    if (!targetId) throw new AppError(400, "TARGET_REQUIRED", "词条操作缺少目标对象");
+    const expectedVersionNo = Number(op.targetVersion);
+    const input = after;
+    if (opType === "create-entry") {
+      const created = entityType === "setting" ? this.store.createSetting(workId, input as Parameters<Store["createSetting"]>[1], source, planId)
+        : entityType === "character" ? this.store.createCharacter(workId, input as Parameters<Store["createCharacter"]>[1])
+        : entityType === "race" ? this.store.createRace(workId, input as Parameters<Store["createRace"]>[1])
+        : entityType === "organization" ? this.store.createOrganization(workId, input as Parameters<Store["createOrganization"]>[1])
+        : entityType === "timeline-track" ? this.store.createTimelineTrack(workId, input as Parameters<Store["createTimelineTrack"]>[1], source, planId)
+        : entityType === "timeline-event" ? this.store.createTimelineEvent(workId, input as Parameters<Store["createTimelineEvent"]>[1], source, planId)
+        : entityType === "relationship" ? this.store.createRelationship(workId, input as Parameters<Store["createRelationship"]>[1], source, planId)
+        : entityType === "foreshadow" ? this.store.createForeshadow(workId, input as Parameters<Store["createForeshadow"]>[1])
+        : this.store.upsertChapterOutline(targetId, input as Parameters<Store["upsertChapterOutline"]>[1], source, planId, changeNote, expectedVersionNo);
+      return { targetId: String(created.id), versionNo: Number(created.versionNo), entityType };
+    }
+    const updated = entityType === "setting" ? this.store.updateSetting(targetId, input as Partial<Parameters<Store["updateSetting"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "character" ? this.store.updateCharacter(targetId, input as Partial<Parameters<Store["updateCharacter"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "race" ? this.store.updateRace(targetId, input as Partial<Parameters<Store["updateRace"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "organization" ? this.store.updateOrganization(targetId, input as Partial<Parameters<Store["updateOrganization"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "timeline-track" ? this.store.updateTimelineTrack(targetId, input as Partial<Parameters<Store["updateTimelineTrack"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "timeline-event" ? this.store.updateTimelineEvent(targetId, input as Partial<Parameters<Store["updateTimelineEvent"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "relationship" ? this.store.updateRelationship(targetId, input as Partial<Parameters<Store["updateRelationship"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "foreshadow" ? this.store.updateForeshadow(targetId, input as Partial<Parameters<Store["updateForeshadow"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : this.store.upsertChapterOutline(targetId, input as Parameters<Store["upsertChapterOutline"]>[1], source, planId, changeNote, expectedVersionNo);
+    return { targetId: String(updated.id), versionNo: Number(updated.versionNo), entityType };
+  }
+
+  /** 撤销本次审批的编辑操作：仅当目标词条未被后续版本修改时允许。 */
+  undoAiWritePlan(planId: string, executorUserId: string): Record<string, unknown> {
+    const preview = this.store.getAiWritePlan(planId);
+    const workId = String(preview.workId);
+    const ownerUserId = typeof preview.conversationOwnerUserId === "string" ? preview.conversationOwnerUserId : null;
+    const creatorUserId = typeof preview.createdByUserId === "string" ? preview.createdByUserId : null;
+    if (executorUserId !== ownerUserId && executorUserId !== creatorUserId) {
+      throw new AppError(403, "PLAN_ACTOR_DENIED", "只有计划发起用户或 AI 对话归属用户可以撤销该审批");
+    }
+    return this.store.db.transaction(() => {
+      const plan = this.store.getAiWritePlan(planId);
+      if (String(plan.status) !== "executed") throw new AppError(409, "PLAN_NOT_EXECUTED", "仅执行成功的审批支持撤销");
+      if (plan.undoneAt) throw new AppError(409, "PLAN_ALREADY_UNDONE", "该审批已撤销过");
+      const operations = (plan.operations as Record<string, unknown>[])
+        .filter((op) => op.opType === "update-entry" && op.status === "executed");
+      if (operations.length === 0) throw new AppError(409, "PLAN_UNDO_NOT_APPLICABLE", "该审批没有可撤销的编辑操作；AI 新建的词条不支持通过撤销自动删除");
+      for (const op of operations) {
+        const entityType = String(op.entityType) as AiWriteEntityType;
+        const targetId = String(op.targetId);
+        const result = (op.result ?? {}) as Record<string, unknown>;
+        const afterVersion = Number(result.afterVersionNo ?? result.versionNo ?? -1);
+        const currentVersion = this.store.aiWriteTargetVersion(workId, entityType, targetId);
+        if (currentVersion === null) {
+          throw new AppError(409, "PLAN_UNDO_TARGET_MISSING", `目标${String(op.targetLabel)}已不存在，无法撤销`);
+        }
+        if (currentVersion !== afterVersion) {
+          throw new AppError(409, "PLAN_UNDO_VERSION_CONFLICT", `目标${String(op.targetLabel)}已被后续修改，无法撤销`);
+        }
+      }
+      const timestamp = now();
+      for (const op of operations) {
+        this.restoreAiWritePlanOperation(workId, op);
+        this.store.db.run(
+          "UPDATE ai_write_plan_operations SET status = 'undone', updated_at = ? WHERE id = ?",
+          timestamp,
+          String(op.id)
+        );
+      }
+      this.store.db.run(
+        "UPDATE ai_write_plans SET undone_at = ?, updated_at = ? WHERE id = ?",
+        timestamp,
+        timestamp,
+        planId
+      );
+      this.store.audit(workId, "ai-plan.undone", "ai-write-plan", planId, { operationCount: operations.length });
+      return this.store.getAiWritePlan(planId);
+    });
+  }
+
+  private restoreAiWritePlanOperation(workId: string, op: Record<string, unknown>): void {
+    const entityType = String(op.entityType) as AiWriteEntityType;
+    const targetId = String(op.targetId);
+    const beforeVersion = Number(op.targetVersion);
+    const result = (op.result ?? {}) as Record<string, unknown>;
+    const currentVersion = Number(result.afterVersionNo ?? result.versionNo ?? -1);
+    if (entityType === "character") {
+      this.store.restoreCharacter(targetId, beforeVersion, currentVersion);
+      return;
+    }
+    const versionType = aiWriteEntityVersionType(entityType);
+    if (!versionType) throw new AppError(409, "PLAN_UNDO_NOT_APPLICABLE", "该操作类型不支持撤销");
+    this.store.restoreEntityVersion(versionType as VersionedEntityType, targetId, beforeVersion, currentVersion);
   }
 
   private constrainParametersForContext(
@@ -5400,7 +6468,8 @@ export class AiManager {
             generationRoleplayCharacterId,
             allowedToolIds,
             input.signal,
-            trackUsage
+            trackUsage,
+            input.conversationId ?? null
           );
           logger.info("ai.tool_call.completed", {
             callId,

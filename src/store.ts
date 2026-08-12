@@ -7,13 +7,32 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
 import {
+  analysisTaskReadModules,
+  canReadWorkModule,
+  canWriteWorkModule,
   classifyWorkModulePermissions,
   emptyWorkModulePermissions,
   fullWorkModulePermissions,
   storedWorkModulePermissions,
+  workPermissionModules,
   type WorkModulePermissions,
   type WorkPermissionModule
 } from "./work-permissions.js";
+import {
+  AI_WRITE_TOOL_SWITCH_KEYS,
+  AI_WRITE_TOOL_SWITCH_LABELS,
+  aiWriteEntityVersionType,
+  applyEntryChanges,
+  buildEntryFieldDiffs,
+  resolveAiWritePlanLimits,
+  writeToolSwitchKey,
+  type AiWriteEntityType,
+  type AiWriteFieldDiff,
+  type AiWriteOperationModule,
+  type AiWriteOperationType,
+  type AiWritePlanLimits,
+  type AiWriteToolSwitchKey
+} from "./ai-write-tools.js";
 import {
   countWords,
   documentShortSearchTerms,
@@ -413,6 +432,9 @@ type AiConversationMessageInput = {
     processSteps?: unknown[];
     reasoningContent?: string;
     anthropicContent?: unknown[];
+    /** 工具结果注入消息标记：不在界面消息流中显示。 */
+    source?: "tool-result";
+    hidden?: boolean;
   };
 };
 
@@ -1193,6 +1215,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
+      writeTools: this.getWorkAiWriteTools(workId),
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
         ? null
         : String(row.image_tool_model_id),
@@ -1202,6 +1225,17 @@ export class Store {
         : String(row.title_generation_model_id),
       updatedAt: String(row?.updated_at ?? "")
     };
+  }
+
+  /** 读取作品的可写工具开关；未知键一律视为关闭。 */
+  getWorkAiWriteTools(workId: string): Record<AiWriteToolSwitchKey, boolean> {
+    this.getWork(workId);
+    const row = this.db.get("SELECT write_tools_json FROM work_ai_settings WHERE work_id = ?", workId);
+    const tools = Object.fromEntries(AI_WRITE_TOOL_SWITCH_KEYS.map((key) => [key, false])) as Record<AiWriteToolSwitchKey, boolean>;
+    if (!row?.write_tools_json) return tools;
+    const stored = json<Record<string, unknown>>(String(row.write_tools_json), {});
+    for (const key of AI_WRITE_TOOL_SWITCH_KEYS) tools[key] = stored[key] === true;
+    return tools;
   }
 
   updateWorkAiSettings(workId: string, input: {
@@ -1217,6 +1251,7 @@ export class Store {
     agentToolCallLimit?: number;
     agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
+    writeTools?: Partial<Record<AiWriteToolSwitchKey, boolean>>;
     imageToolModelId?: string | null;
     alwaysIncludeSettingInfo?: boolean;
     titleGenerationModelId?: string | null;
@@ -1238,6 +1273,13 @@ export class Store {
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
+    const nextWriteTools = { ...(current.writeTools as Record<AiWriteToolSwitchKey, boolean>) };
+    if (input.writeTools) {
+      for (const [key, enabled] of Object.entries(input.writeTools)) {
+        if (!AI_WRITE_TOOL_SWITCH_KEYS.includes(key as AiWriteToolSwitchKey)) continue;
+        nextWriteTools[key as AiWriteToolSwitchKey] = enabled === true;
+      }
+    }
     const nextImageToolModelId = input.imageToolModelId === undefined
       ? (current.imageToolModelId ? String(current.imageToolModelId) : null)
       : input.imageToolModelId?.trim() || null;
@@ -1251,8 +1293,8 @@ export class Store {
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
-         agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         agent_tools_json, write_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1270,6 +1312,7 @@ export class Store {
          agent_tool_call_limit = excluded.agent_tool_call_limit,
          agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
+         write_tools_json = excluded.write_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
          image_tool_model_id = excluded.image_tool_model_id,
          always_include_setting_info = excluded.always_include_setting_info,
@@ -1291,6 +1334,7 @@ export class Store {
       Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
+      JSON.stringify(nextWriteTools),
       nextTitleGenerationModelId,
       nextImageToolModelId,
       nextAlwaysIncludeSettingInfo ? 1 : 0,
@@ -1309,6 +1353,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
+      writeTools: nextWriteTools,
       imageToolModelId: nextImageToolModelId,
       alwaysIncludeSettingInfo: nextAlwaysIncludeSettingInfo,
       titleGenerationModelId: nextTitleGenerationModelId
@@ -8543,5 +8588,495 @@ export class Store {
       this.audit(workId, "work.writing_goal.updated", "work", workId, input);
     });
     return this.getWritingProgress(workId);
+  }
+
+  // ===================== AI 可写计划与提问 =====================
+
+  private aiWriteLimits(): AiWritePlanLimits {
+    return resolveAiWritePlanLimits();
+  }
+
+  /** AI 对话的归属用户；历史数据可能为空。 */
+  getAiConversationOwnerUserId(conversationId: string): string | null {
+    const row = this.db.get("SELECT created_by_user_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!row) throw notFound("AI 对话");
+    return optionalString(row, "created_by_user_id");
+  }
+
+  /** 用户在作品上的模块权限；用户不存在或非作品成员时返回 null。 */
+  userWorkModulePermissions(userId: string, workId: string): WorkModulePermissions | null {
+    const user = this.db.get("SELECT role FROM users WHERE id = ?", userId);
+    if (!user) return null;
+    if (String(user.role) === "admin") return fullWorkModulePermissions();
+    const work = this.db.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    if (!work) return null;
+    if (String(work.owner_user_id ?? "") === userId) return fullWorkModulePermissions();
+    const membership = this.db.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, userId);
+    if (!membership) return null;
+    return storedWorkModulePermissions(String(membership.role), membership.permissions_json);
+  }
+
+  /** 两个用户的模块权限交集：按 none < read < write 取较小值。 */
+  intersectWorkPermissions(a: WorkModulePermissions, b: WorkModulePermissions): WorkModulePermissions {
+    const rank = (access: string): number => access === "write" ? 2 : access === "read" ? 1 : 0;
+    const merged = emptyWorkModulePermissions();
+    for (const module of workPermissionModules) {
+      const access = Math.min(rank(a[module]), rank(b[module]));
+      merged[module] = access === 2 ? "write" : access === 1 ? "read" : "none";
+    }
+    return merged;
+  }
+
+  private aiWritePlanOperationsRows(planId: string): Row[] {
+    return this.db.all("SELECT * FROM ai_write_plan_operations WHERE plan_id = ? ORDER BY op_index ASC", planId);
+  }
+
+  private mapAiWriteOperation(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      planId: requiredString(row, "plan_id"),
+      opIndex: numberValue(row, "op_index"),
+      opType: requiredString(row, "op_type"),
+      module: requiredString(row, "module"),
+      entityType: requiredString(row, "entity_type"),
+      targetId: optionalString(row, "target_id"),
+      targetVersion: row.target_version === null || row.target_version === undefined ? null : numberValue(row, "target_version"),
+      targetLabel: requiredString(row, "target_label"),
+      aiSummary: requiredString(row, "ai_summary"),
+      before: row.before_json === null || row.before_json === undefined ? null : json(requiredString(row, "before_json"), null),
+      after: json(requiredString(row, "after_json"), {}),
+      diff: json(requiredString(row, "diff_json"), []),
+      status: requiredString(row, "status"),
+      result: json(requiredString(row, "result_json"), {}),
+      error: row.error_json === null || row.error_json === undefined ? null : json(requiredString(row, "error_json"), null)
+    };
+  }
+
+  private getAiWritePlanRow(planId: string): Row {
+    const row = this.db.get(
+      `SELECT plan.*,
+        creator.display_name AS creator_display_name, creator.username AS creator_username,
+        owner.display_name AS owner_display_name, owner.username AS owner_username,
+        executor.display_name AS executor_display_name, executor.username AS executor_username
+       FROM ai_write_plans plan
+       LEFT JOIN users creator ON creator.id = plan.created_by_user_id
+       LEFT JOIN users owner ON owner.id = plan.conversation_owner_user_id
+       LEFT JOIN users executor ON executor.id = plan.executed_by_user_id
+       WHERE plan.id = ?`,
+      planId
+    );
+    if (!row) throw notFound("AI 操作审批");
+    return row;
+  }
+
+  private mapAiWritePlan(row: Row, operations: Record<string, unknown>[]): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      conversationId: optionalString(row, "conversation_id"),
+      status: requiredString(row, "status"),
+      aiSummary: requiredString(row, "ai_summary"),
+      invalidReason: optionalString(row, "invalid_reason"),
+      failure: json(requiredString(row, "failure_json"), []),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at"),
+      executedAt: optionalString(row, "executed_at"),
+      rejectedAt: optionalString(row, "rejected_at"),
+      undoneAt: optionalString(row, "undone_at"),
+      createdBy: optionalString(row, "creator_display_name") ?? optionalString(row, "creator_username") ?? "历史数据",
+      conversationOwner: optionalString(row, "owner_display_name") ?? optionalString(row, "owner_username") ?? "历史数据",
+      executedBy: optionalString(row, "executor_display_name") ?? optionalString(row, "executor_username") ?? null,
+      createdByUserId: optionalString(row, "created_by_user_id"),
+      conversationOwnerUserId: optionalString(row, "conversation_owner_user_id"),
+      operations,
+      maxOperations: this.aiWriteLimits().maxOperations
+    };
+  }
+
+  getAiWritePlan(planId: string): Record<string, unknown> {
+    const row = this.getAiWritePlanRow(planId);
+    return this.mapAiWritePlan(row, this.aiWritePlanOperationsRows(planId).map((op) => this.mapAiWriteOperation(op)));
+  }
+
+  getAiWritePlanWorkId(planId: string): string {
+    return requiredString(this.getAiWritePlanRow(planId), "work_id");
+  }
+
+  createDraftAiWritePlan(workId: string, conversationId: string, creatorUserId: string, ownerUserId: string): Record<string, unknown> {
+    this.getWork(workId);
+    const timestamp = now();
+    const planId = id("aiPlan");
+    this.db.run(
+      `INSERT INTO ai_write_plans (id, work_id, conversation_id, status, created_at, updated_at, created_by_user_id, conversation_owner_user_id)
+       VALUES (?, ?, ?, 'draft', ?, ?, ?, ?)`,
+      planId,
+      workId,
+      conversationId,
+      timestamp,
+      timestamp,
+      creatorUserId,
+      ownerUserId
+    );
+    return this.getAiWritePlan(planId);
+  }
+
+  /** 读取对话当前生成中的草稿计划；不存在时返回 null。 */
+  getDraftAiWritePlan(conversationId: string): Record<string, unknown> | null {
+    const row = this.db.get(
+      "SELECT id FROM ai_write_plans WHERE conversation_id = ? AND status = 'draft' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      conversationId
+    );
+    if (!row) return null;
+    return this.getAiWritePlan(requiredString(row, "id"));
+  }
+
+  addAiWritePlanOperation(planId: string, input: {
+    opType: AiWriteOperationType;
+    module: AiWriteOperationModule;
+    entityType: AiWriteEntityType;
+    targetId?: string | null;
+    targetVersion?: number | null;
+    targetLabel: string;
+    aiSummary: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown>;
+    diff: AiWriteFieldDiff[];
+  }): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const row = this.getAiWritePlanRow(planId);
+      if (String(row.status) !== "draft") {
+        throw new AppError(409, "PLAN_NOT_DRAFT", "修改计划已提交，无法继续添加操作");
+      }
+      const count = numberValue(this.db.get("SELECT COUNT(*) AS count FROM ai_write_plan_operations WHERE plan_id = ?", planId) ?? {}, "count");
+      const maxOperations = this.aiWriteLimits().maxOperations;
+      if (count >= maxOperations) {
+        throw new AppError(409, "PLAN_OPERATIONS_LIMIT", `一份修改计划最多包含 ${maxOperations} 项操作，请先提交现有计划`);
+      }
+      const timestamp = now();
+      const operationId = id("aiPlanOp");
+      this.db.run(
+        `INSERT INTO ai_write_plan_operations (id, plan_id, op_index, op_type, module, entity_type, target_id, target_version, target_label, ai_summary, before_json, after_json, diff_json, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        operationId,
+        planId,
+        count,
+        input.opType,
+        input.module,
+        input.entityType,
+        input.targetId ?? null,
+        input.targetVersion ?? null,
+        input.targetLabel.slice(0, 300),
+        input.aiSummary.slice(0, 500),
+        input.before === null ? null : JSON.stringify(input.before),
+        JSON.stringify(input.after),
+        JSON.stringify(input.diff),
+        timestamp,
+        timestamp
+      );
+      return this.mapAiWriteOperation(this.db.get("SELECT * FROM ai_write_plan_operations WHERE id = ?", operationId) as Row);
+    });
+  }
+
+  /** 将生成过程中的草稿计划提交为待确认；无操作时直接丢弃。 */
+  submitDraftAiWritePlan(conversationId: string): Record<string, unknown> | null {
+    return this.db.transaction(() => {
+      const row = this.db.get(
+        "SELECT * FROM ai_write_plans WHERE conversation_id = ? AND status = 'draft' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        conversationId
+      );
+      if (!row) return null;
+      const planId = requiredString(row, "id");
+      const operations = this.aiWritePlanOperationsRows(planId);
+      if (operations.length === 0) {
+        this.db.run("DELETE FROM ai_write_plans WHERE id = ?", planId);
+        return null;
+      }
+      const summaries = operations.map((op) => requiredString(op, "ai_summary")).filter(Boolean);
+      const aiSummary = summaries.length === 1
+        ? summaries[0] ?? ""
+        : `共 ${summaries.length} 项操作：${summaries.slice(0, 3).join("；")}${summaries.length > 3 ? "等" : ""}`;
+      this.db.run(
+        "UPDATE ai_write_plans SET status = 'pending', ai_summary = ?, updated_at = ? WHERE id = ?",
+        aiSummary.slice(0, 500),
+        now(),
+        planId
+      );
+      this.audit(requiredString(row, "work_id"), "ai-plan.created", "ai-write-plan", planId, {
+        operationCount: operations.length
+      });
+      return this.getAiWritePlan(planId);
+    });
+  }
+
+  discardDraftAiWritePlan(conversationId: string): void {
+    this.db.run("DELETE FROM ai_write_plans WHERE conversation_id = ? AND status = 'draft'", conversationId);
+  }
+
+  /** 仅返回查看者作为发起用户或对话归属用户的计划。 */
+  listAiWritePlansPage(workId: string, viewerUserId: string, pagination: Pagination, status?: string): PaginatedResult<Record<string, unknown>> {
+    this.getWork(workId);
+    const conditions = ["work_id = ?", "(created_by_user_id = ? OR conversation_owner_user_id = ?)"];
+    const params: Array<string | number> = [workId, viewerUserId, viewerUserId];
+    if (status) {
+      conditions.push("status = ?");
+      params.push(status);
+    }
+    const where = conditions.join(" AND ");
+    const total = numberValue(
+      this.db.get(`SELECT COUNT(*) AS count FROM ai_write_plans WHERE ${where}`, ...params) ?? {},
+      "count"
+    );
+    const page = paginationSql(pagination);
+    const rows = this.db.all(
+      `SELECT id FROM ai_write_plans WHERE ${where} ORDER BY created_at DESC, id DESC${page.sql}`,
+      ...params,
+      ...page.params
+    );
+    return paginated(rows.map((row) => this.getAiWritePlan(requiredString(row, "id"))), pagination, total);
+  }
+
+  /** 惰性过期：超出有效期的待确认计划标记为已过期。 */
+  markExpiredAiWritePlans(workId: string): void {
+    const cutoff = new Date(Date.now() - this.aiWriteLimits().planTtlMs).toISOString();
+    this.db.run(
+      "UPDATE ai_write_plans SET status = 'expired', updated_at = ? WHERE work_id = ? AND status = 'pending' AND created_at < ?",
+      now(),
+      workId,
+      cutoff
+    );
+  }
+
+  isAiWritePlanExpired(planId: string): boolean {
+    const row = this.db.get("SELECT created_at FROM ai_write_plans WHERE id = ? AND status = 'pending'", planId);
+    if (!row) return false;
+    return new Date(String(row.created_at)).getTime() + this.aiWriteLimits().planTtlMs <= Date.now();
+  }
+
+  markAiWritePlanInvalid(planId: string, reason: string): void {
+    this.db.run(
+      "UPDATE ai_write_plans SET status = 'invalid', invalid_reason = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+      reason.slice(0, 1_000),
+      now(),
+      planId
+    );
+  }
+
+  markAiWritePlanExpired(planId: string): void {
+    this.db.run(
+      "UPDATE ai_write_plans SET status = 'expired', updated_at = ? WHERE id = ? AND status = 'pending'",
+      now(),
+      planId
+    );
+  }
+
+  markAiWritePlanFailed(planId: string, detail: unknown): void {
+    this.db.run(
+      "UPDATE ai_write_plans SET status = 'failed', failure_json = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+      JSON.stringify([detail]),
+      now(),
+      planId
+    );
+  }
+
+  rejectAiWritePlan(planId: string, userId: string): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const row = this.getAiWritePlanRow(planId);
+      const current = String(row.status);
+      if (current === "rejected") return this.getAiWritePlan(planId);
+      if (current !== "pending") throw new AppError(409, "PLAN_NOT_PENDING", `审批当前状态为 ${current}，无法拒绝`);
+      const result = this.db.run(
+        "UPDATE ai_write_plans SET status = 'rejected', rejected_at = ?, rejected_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+        now(),
+        userId,
+        now(),
+        planId
+      );
+      if (result.changes === 0) throw new AppError(409, "PLAN_NOT_PENDING", "审批正在被处理，请勿重复操作");
+      this.audit(requiredString(row, "work_id"), "ai-plan.rejected", "ai-write-plan", planId);
+      return this.getAiWritePlan(planId);
+    });
+  }
+
+  /** 读取操作目标的当前版本；实体不存在或不属于该作品时返回 null。 */
+  aiWriteTargetVersion(workId: string, entityType: AiWriteEntityType, targetId: string): number | null {
+    try {
+      if (entityType === "character") {
+        const character = this.getCharacter(targetId);
+        if (String(character.workId) !== workId) return null;
+        return numberValue(character, "version_no");
+      }
+      if (entityType === "chapter") {
+        const chapter = this.getChapter(targetId);
+        if (String(chapter.workId) !== workId) return null;
+        return numberValue(chapter, "version_no");
+      }
+      const versionType = aiWriteEntityVersionType(entityType);
+      if (!versionType) return null;
+      const entity = this.tryVersionedEntity(versionType as VersionedEntityType, targetId);
+      if (!entity) return null;
+      if (String(entity.workId) !== workId) return null;
+      return this.currentEntityVersionNo(versionType as VersionedEntityType, targetId);
+    } catch (error) {
+      if (error instanceof AppError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  // ===================== AI 提问交互 =====================
+
+  createAiToolQuestion(workId: string, conversationId: string, question: string, options: string[]): Record<string, unknown> {
+    this.getWork(workId);
+    const conversation = this.db.get("SELECT id, work_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (String(conversation.work_id) !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const existing = this.db.get("SELECT id FROM ai_tool_questions WHERE conversation_id = ? AND status = 'pending'", conversationId);
+    if (existing) throw new AppError(409, "QUESTION_ALREADY_PENDING", "该对话已有待回答的问题，请先等待用户回答");
+    const questionId = id("aiQuestion");
+    const timestamp = now();
+    const expiresAt = new Date(Date.now() + this.aiWriteLimits().questionTtlMs).toISOString();
+    this.db.run(
+      `INSERT INTO ai_tool_questions (id, work_id, conversation_id, question, options_json, status, expires_at, created_at, created_by_user_id)
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      questionId,
+      workId,
+      conversationId,
+      question.slice(0, 500),
+      JSON.stringify(options.slice(0, 8)),
+      expiresAt,
+      timestamp,
+      currentRequestActor()?.userId ?? null
+    );
+    return this.getAiToolQuestion(questionId);
+  }
+
+  private mapAiToolQuestion(row: Row): Record<string, unknown> {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      conversationId: requiredString(row, "conversation_id"),
+      question: requiredString(row, "question"),
+      options: json(requiredString(row, "options_json"), []),
+      status: requiredString(row, "status"),
+      answer: optionalString(row, "answer"),
+      expiresAt: requiredString(row, "expires_at"),
+      answeredAt: optionalString(row, "answered_at"),
+      createdAt: requiredString(row, "created_at"),
+      createdByUserId: optionalString(row, "created_by_user_id")
+    };
+  }
+
+  getAiToolQuestion(questionId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
+    if (!row) throw notFound("AI 提问");
+    return this.mapAiToolQuestion(row);
+  }
+
+  getAiToolQuestionWorkId(questionId: string): string {
+    const row = this.db.get("SELECT work_id FROM ai_tool_questions WHERE id = ?", questionId);
+    if (!row) throw notFound("AI 提问");
+    return requiredString(row, "work_id");
+  }
+
+  getPendingAiToolQuestion(conversationId: string): Record<string, unknown> | null {
+    const row = this.db.get(
+      "SELECT * FROM ai_tool_questions WHERE conversation_id = ? AND status = 'pending' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      conversationId
+    );
+    if (!row) return null;
+    if (String(row.expires_at) <= now()) {
+      this.expireAiToolQuestion(requiredString(row, "id"));
+      return null;
+    }
+    return this.mapAiToolQuestion(row);
+  }
+
+  private expireAiToolQuestion(questionId: string): void {
+    const result = this.db.run(
+      "UPDATE ai_tool_questions SET status = 'expired' WHERE id = ? AND status = 'pending'",
+      questionId
+    );
+    if (result.changes === 0) return;
+    const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
+    if (row) this.injectAiToolQuestionResult(row);
+  }
+
+  answerAiToolQuestion(questionId: string, answer: string): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
+      if (!row) throw notFound("AI 提问");
+      const status = String(row.status);
+      if (status === "answered") return this.mapAiToolQuestion(row);
+      if (status === "rejected") throw new AppError(409, "QUESTION_REJECTED", "该提问已被拒绝，无法回答");
+      if (status === "expired" || String(row.expires_at) <= now()) {
+        this.expireAiToolQuestion(questionId);
+        throw new AppError(410, "QUESTION_EXPIRED", "该提问已过期，无法回答");
+      }
+      const result = this.db.run(
+        "UPDATE ai_tool_questions SET status = 'answered', answer = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
+        answer.slice(0, 2_000),
+        now(),
+        questionId
+      );
+      if (result.changes === 0) throw new AppError(409, "QUESTION_NOT_PENDING", "该提问正在被处理，请勿重复操作");
+      const updated = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId) as Row;
+      this.injectAiToolQuestionResult(updated);
+      return this.mapAiToolQuestion(updated);
+    });
+  }
+
+  rejectAiToolQuestion(questionId: string): Record<string, unknown> {
+    return this.db.transaction(() => {
+      const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
+      if (!row) throw notFound("AI 提问");
+      const status = String(row.status);
+      if (status === "rejected") return this.mapAiToolQuestion(row);
+      if (status === "answered") throw new AppError(409, "QUESTION_ALREADY_ANSWERED", "该提问已回答，无法拒绝");
+      if (status === "expired" || String(row.expires_at) <= now()) {
+        this.expireAiToolQuestion(questionId);
+        throw new AppError(410, "QUESTION_EXPIRED", "该提问已过期，无法拒绝");
+      }
+      const result = this.db.run(
+        "UPDATE ai_tool_questions SET status = 'rejected', answered_at = ? WHERE id = ? AND status = 'pending'",
+        now(),
+        questionId
+      );
+      if (result.changes === 0) throw new AppError(409, "QUESTION_NOT_PENDING", "该提问正在被处理，请勿重复操作");
+      const updated = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId) as Row;
+      this.injectAiToolQuestionResult(updated);
+      return this.mapAiToolQuestion(updated);
+    });
+  }
+
+  /** 将对话内已过期的待回答问题标记为过期，并注入通知消息。 */
+  expireConversationAiToolQuestions(conversationId: string): void {
+    const rows = this.db.all(
+      "SELECT * FROM ai_tool_questions WHERE conversation_id = ? AND status = 'pending'",
+      conversationId
+    );
+    for (const row of rows) {
+      if (String(row.expires_at) <= now()) this.expireAiToolQuestion(requiredString(row, "id"));
+    }
+  }
+
+  /** 把提问结果作为隐藏的 user 消息写入对话历史，供模型在后续轮次读取。 */
+  private injectAiToolQuestionResult(row: Row): void {
+    const status = String(row.status);
+    const question = String(row.question);
+    const answer = status === "answered" ? String(row.answer ?? "") : "";
+    const content = status === "answered"
+      ? `【工具结果】你之前通过 ask_user_question 工具向用户提出的问题："${question}"。用户选择了："${answer}"。请以该回答为准继续完成用户的任务，不得编造或假设其他答案。`
+      : status === "rejected"
+        ? `【工具结果】你之前通过 ask_user_question 工具向用户提出的问题："${question}"。用户拒绝回答。不得编造或假设用户的回答，不得依赖该回答继续执行任何写操作。`
+        : `【工具结果】你之前通过 ask_user_question 工具向用户提出的问题："${question}"。用户未在有效期内回答，问题已过期。不得编造或假设用户的回答，不得依赖该回答继续执行任何写操作。`;
+    this.db.run(
+      `INSERT INTO ai_conversation_messages (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id)
+       VALUES (?, ?, 'user', ?, '[]', ?, NULL, ?, ?)`,
+      id("aiMessage"),
+      String(row.conversation_id),
+      content,
+      JSON.stringify({ source: "tool-result", hidden: true }),
+      now(),
+      currentRequestActor()?.userId ?? null
+    );
   }
 }

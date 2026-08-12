@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
+import { AI_WRITE_TOOL_SWITCH_KEYS } from "./ai-write-tools.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
@@ -492,6 +493,7 @@ const workAiSettingsSchema = z.object({
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  writeTools: z.record(z.enum(AI_WRITE_TOOL_SWITCH_KEYS), z.boolean()).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -2342,6 +2344,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
       }
       const conversationId = String(conversation.id);
+      // 将对话内已过期的提问标记为过期并注入通知，模型不会基于未回答的问题继续写操作。
+      store.expireConversationAiToolQuestions(conversationId);
       const permissions = requestPermissions(request, request.params.workId);
       const prepared = await ai.prepareConversationContext({
         conversationId,
@@ -2382,6 +2386,23 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
+      // 提交本轮生成产生的修改计划草稿，并推送审批通知。
+      const writePlan = store.submitDraftAiWritePlan(conversationId);
+      if (writePlan) {
+        sendEvent("approval_plan", {
+          planId: writePlan.id,
+          aiSummary: writePlan.aiSummary,
+          status: writePlan.status,
+          operations: (writePlan.operations as Record<string, unknown>[]).map((operation) => ({
+            opIndex: operation.opIndex,
+            opType: operation.opType,
+            module: operation.module,
+            entityType: operation.entityType,
+            targetLabel: operation.targetLabel,
+            aiSummary: operation.aiSummary
+          }))
+        });
+      }
       sendEvent("complete", {
         suggestionId: suggestion.id,
         callId: suggestion.callId,
@@ -2403,6 +2424,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           : undefined
       });
     } catch (error) {
+      // 生成失败或中断时丢弃本次生成未提交的修改计划草稿。
+      if (input.conversationId) store.discardDraftAiWritePlan(String(input.conversationId));
       if (!controller.signal.aborted) {
         logger.error("ai.stream.failed", {
           workId: request.params.workId,
@@ -2418,6 +2441,77 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const suggestion = ai.getSuggestion(request.params.suggestionId);
     const permissions = requestPermissions(request, String(suggestion.workId));
     data(response, redactSuggestion(suggestion, permissions));
+  });
+  app.get("/api/works/:workId/ai-write-plans", (request, response) => {
+    const status = typeof request.query.status === "string" && request.query.status.trim()
+      ? request.query.status.trim()
+      : undefined;
+    store.markExpiredAiWritePlans(request.params.workId);
+    const userId = String(request.authUser?.userId ?? "");
+    data(response, store.listAiWritePlansPage(request.params.workId, userId, parsePagination(request) ?? { page: 1, limit: 30, offset: 0 }, status));
+  });
+  app.get("/api/works/:workId/ai-write-plans/:planId", (request, response) => {
+    const plan = store.getAiWritePlan(request.params.planId);
+    if (String(plan.workId) !== request.params.workId) throw new AppError(400, "PLAN_WORK_MISMATCH", "审批不属于当前作品");
+    const userId = String(request.authUser?.userId ?? "");
+    if (userId !== plan.createdByUserId && userId !== plan.conversationOwnerUserId) {
+      throw new AppError(403, "PLAN_ACTOR_DENIED", "只有计划发起用户或 AI 对话归属用户可以查看该审批");
+    }
+    data(response, plan);
+  });
+  app.post("/api/works/:workId/ai-write-plans/:planId/approve", (request, response) => {
+    const plan = store.getAiWritePlan(request.params.planId);
+    if (String(plan.workId) !== request.params.workId) throw new AppError(400, "PLAN_WORK_MISMATCH", "审批不属于当前作品");
+    const userId = String(request.authUser?.userId ?? "");
+    data(response, ai.executeAiWritePlan(request.params.planId, userId));
+  });
+  app.post("/api/works/:workId/ai-write-plans/:planId/reject", (request, response) => {
+    const plan = store.getAiWritePlan(request.params.planId);
+    if (String(plan.workId) !== request.params.workId) throw new AppError(400, "PLAN_WORK_MISMATCH", "审批不属于当前作品");
+    const userId = String(request.authUser?.userId ?? "");
+    data(response, store.rejectAiWritePlan(request.params.planId, userId));
+  });
+  app.post("/api/works/:workId/ai-write-plans/:planId/undo", (request, response) => {
+    const plan = store.getAiWritePlan(request.params.planId);
+    if (String(plan.workId) !== request.params.workId) throw new AppError(400, "PLAN_WORK_MISMATCH", "审批不属于当前作品");
+    const userId = String(request.authUser?.userId ?? "");
+    data(response, ai.undoAiWritePlan(request.params.planId, userId));
+  });
+  app.get("/api/works/:workId/ai-questions", (request, response) => {
+    const conversationId = typeof request.query.conversationId === "string" ? request.query.conversationId : "";
+    if (!conversationId) throw new AppError(400, "CONVERSATION_REQUIRED", "缺少对话标识");
+    const conversation = store.getAiConversationSummary(conversationId);
+    if (String(conversation.workId) !== request.params.workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const question = store.getPendingAiToolQuestion(conversationId);
+    data(response, { question });
+  });
+  app.get("/api/ai-questions/:questionId", (request, response) => {
+    const question = store.getAiToolQuestion(request.params.questionId);
+    const userId = String(request.authUser?.userId ?? "");
+    const ownerUserId = store.getAiConversationOwnerUserId(String(question.conversationId));
+    if (userId !== question.createdByUserId && userId !== ownerUserId) {
+      throw new AppError(403, "QUESTION_ACTOR_DENIED", "只有提问发起用户或 AI 对话归属用户可以查看该问题");
+    }
+    data(response, question);
+  });
+  app.post("/api/ai-questions/:questionId/answer", (request, response) => {
+    const input = parse(z.object({ answer: z.string().trim().min(1).max(2_000) }).strict(), request.body);
+    const question = store.getAiToolQuestion(request.params.questionId);
+    const userId = String(request.authUser?.userId ?? "");
+    const ownerUserId = store.getAiConversationOwnerUserId(String(question.conversationId));
+    if (userId !== question.createdByUserId && userId !== ownerUserId) {
+      throw new AppError(403, "QUESTION_ACTOR_DENIED", "只有提问发起用户或 AI 对话归属用户可以回答该问题");
+    }
+    data(response, store.answerAiToolQuestion(request.params.questionId, input.answer));
+  });
+  app.post("/api/ai-questions/:questionId/reject", (request, response) => {
+    const question = store.getAiToolQuestion(request.params.questionId);
+    const userId = String(request.authUser?.userId ?? "");
+    const ownerUserId = store.getAiConversationOwnerUserId(String(question.conversationId));
+    if (userId !== question.createdByUserId && userId !== ownerUserId) {
+      throw new AppError(403, "QUESTION_ACTOR_DENIED", "只有提问发起用户或 AI 对话归属用户可以拒绝该问题");
+    }
+    data(response, store.rejectAiToolQuestion(request.params.questionId));
   });
   app.get("/api/suggestions/:suggestionId/guards", (request, response) => {
     const pagination = parsePagination(request.query);

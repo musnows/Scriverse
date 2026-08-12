@@ -179,6 +179,7 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     reviews: "review_items",
     tasks: "analysis_tasks",
     "ai-conversations": "ai_conversations",
+    "ai-questions": "ai_tool_questions",
     suggestions: "ai_suggestions"
   };
   const table = tableByResource[resource];
@@ -985,6 +986,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   }
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
+  }
+  if (/^\/api\/works\/[^/]+\/ai-write-plans(?:\/[^/]+)?(?:\/(?:approve|reject|undo))?$/u.test(pathname)) {
+    return direct("ai-chat");
+  }
+  if (/^\/api\/(?:works\/[^/]+\/ai-questions|ai-questions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    return direct("ai-chat");
   }
   const conversationRoleplayWrite = /^\/api\/ai-conversations\/[^/]+\/roleplay$/u.test(pathname);
   if (write && conversationRoleplayWrite) {
