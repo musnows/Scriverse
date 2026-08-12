@@ -47,6 +47,7 @@ describe("作品工作台按需加载", () => {
     );
 
     expect(refreshSource).toContain("buildGlobalReplaceRefreshPlan");
+    expect(refreshSource).toContain("chapterCount: resolveGlobalReplaceChapterCount(volume, previousVolume)");
     expect(refreshSource).toContain("++workScopedUiGeneration");
     expect(refreshSource).toContain("await Promise.all(refreshPlan.reloadVolumeIds.map((volumeId) => loadVolumeChapters(volumeId)))");
     expect(refreshSource).not.toContain("state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));");

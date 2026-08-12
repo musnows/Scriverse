@@ -64,7 +64,7 @@ import { systemStatusPresentation } from "/system-status.js?v=20260801-system-he
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
-import { buildGlobalReplaceRefreshPlan } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v1";
+import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
   containImageRect,
@@ -5105,6 +5105,7 @@ async function refreshWorkAfterGlobalReplace(route, result) {
     const previousVolume = previousVolumeById.get(volume.id);
     return {
       ...volume,
+      chapterCount: resolveGlobalReplaceChapterCount(volume, previousVolume),
       chapters: refreshPlan.proseChanged
         ? []
         : Array.isArray(previousVolume?.chapters)

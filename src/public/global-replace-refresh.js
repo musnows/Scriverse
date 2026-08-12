@@ -8,6 +8,21 @@ function collapsedIds(value) {
   return new Set(Array.isArray(value) ? value.map(normalizeId).filter(Boolean) : []);
 }
 
+function normalizedChapterCount(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const count = Number(value);
+  return Number.isSafeInteger(count) && count >= 0 ? count : null;
+}
+
+export function resolveGlobalReplaceChapterCount(volume, previousVolume) {
+  const responseCount = normalizedChapterCount(volume?.chapterCount);
+  if (responseCount !== null) return responseCount;
+  if (Array.isArray(volume?.chapters)) return volume.chapters.length;
+  const previousCount = normalizedChapterCount(previousVolume?.chapterCount);
+  if (previousCount !== null) return previousCount;
+  return Array.isArray(previousVolume?.chapters) ? previousVolume.chapters.length : 0;
+}
+
 export function buildGlobalReplaceRefreshPlan({
   volumes = [],
   collapsedVolumeIds = [],

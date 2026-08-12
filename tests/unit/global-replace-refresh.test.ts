@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { buildGlobalReplaceRefreshPlan } from "../../src/public/global-replace-refresh.js";
+import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "../../src/public/global-replace-refresh.js";
 
 describe("全局替换后的正文目录刷新计划", () => {
   const volumes = [
@@ -61,5 +61,17 @@ describe("全局替换后的正文目录刷新计划", () => {
       chapterCount: 0,
       settingCount: 2
     })).toMatchObject({ proseChanged: false, settingsChanged: true, reloadVolumeIds: [] });
+  });
+
+  it("清空正文目录时保留折叠分卷的章节计数", () => {
+    expect(resolveGlobalReplaceChapterCount(
+      { id: "volume-1", chapters: [{ id: "chapter-1" }, { id: "chapter-2" }] },
+      { id: "volume-1", chapterCount: 2, chapters: [] }
+    )).toBe(2);
+
+    expect(resolveGlobalReplaceChapterCount(
+      { id: "volume-1" },
+      { id: "volume-1", chapterCount: 2, chapters: [] }
+    )).toBe(2);
   });
 });
