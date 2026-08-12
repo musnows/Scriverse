@@ -322,4 +322,48 @@ describe("AI 对话流 API 幂等与并发", () => {
       "recovered-request-01"
     )).toEqual({ status: "completed" });
   });
+
+  it("空闲超时记录明确终态并释放目标对话锁", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const body = {
+      instruction: "验证空闲超时收尾",
+      scope: { type: "none" },
+      modelId,
+      conversationId: conversation.body.data.id
+    };
+    const streamSpy = vi.spyOn(runtime.ai, "createStreamingChat").mockRejectedValueOnce(
+      new AppError(504, "AI_STREAM_IDLE_TIMEOUT", "AI 流事件等待超时")
+    );
+    const timedOut = await request(runtime.app).post(`/api/works/${workId}/chat/stream`)
+      .set("Idempotency-Key", "timed-out-request-01")
+      .send(body)
+      .expect(200);
+    expect(timedOut.text).toContain("AI_STREAM_IDLE_TIMEOUT");
+    expect(runtime.database.get(
+      "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+      "timed-out-request-01"
+    )).toEqual({ status: "timed_out", terminal_reason: "AI_STREAM_IDLE_TIMEOUT" });
+
+    const terminalRetry = await request(runtime.app).post(`/api/works/${workId}/chat/stream`)
+      .set("Idempotency-Key", "timed-out-request-01")
+      .send(body)
+      .expect(200);
+    expect(terminalRetry.text).toContain('"status":"timed_out"');
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    streamSpy.mockRestore();
+
+    fetchMock.mockImplementation(async () => new Response(
+      'data: {"choices":[{"delta":{"content":"超时后恢复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      { status: 200, headers: { "Content-Type": "text/event-stream" } }
+    ));
+    const recovered = await request(runtime.app).post(`/api/works/${workId}/chat/stream`)
+      .set("Idempotency-Key", "after-timeout-request")
+      .send({ ...body, instruction: "超时后再次发送" })
+      .expect(200);
+    expect(recovered.text).toContain("event: complete");
+    expect(runtime.database.get(
+      "SELECT status FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+      "after-timeout-request"
+    )).toEqual({ status: "completed" });
+  });
 });
