@@ -190,7 +190,9 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     reviews: "review_items",
     tasks: "analysis_tasks",
     "ai-conversations": "ai_conversations",
-    suggestions: "ai_suggestions"
+    suggestions: "ai_suggestions",
+    "ai-write-approvals": "ai_write_approvals",
+    "ai-user-questions": "ai_user_questions"
   };
   const table = tableByResource[resource];
   if (table && decoded[3]) {
@@ -1036,6 +1038,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/(?:works\/[^/]+\/(?:ai-conversations|chat)|ai-conversations\/[^/]+)(?:\/|$)/u.test(pathname)) {
     const contextRead = aiContextReadModules(request);
     return write ? { read: contextRead, write: ["ai-chat"] } : { read: ["ai-chat"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/ai-write-approvals|ai-write-approvals\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
+  }
+  if (/^\/api\/(?:works\/[^/]+\/ai-user-questions|ai-user-questions\/[^/]+)(?:\/|$)/u.test(pathname)) {
+    return write ? { write: ["ai-chat"] } : { read: ["ai-chat"] };
   }
   if (/^\/api\/(?:works\/[^/]+\/suggestions|suggestions\/[^/]+)(?:\/|$)/u.test(pathname)) {
     const contextRead = aiContextReadModules(request);

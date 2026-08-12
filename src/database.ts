@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 74;
+export const DATABASE_SCHEMA_VERSION = 75;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2945,6 +2945,85 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(75)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS ai_write_approvals (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+          status TEXT NOT NULL CHECK(status IN ('pending', 'rejected', 'expired', 'invalidated', 'executing', 'succeeded', 'failed')),
+          ai_summary TEXT NOT NULL,
+          required_modules_json TEXT NOT NULL,
+          required_tool_ids_json TEXT NOT NULL,
+          initiator_user_id TEXT,
+          conversation_owner_user_id TEXT,
+          expires_at TEXT NOT NULL,
+          invalidation_reason TEXT NOT NULL DEFAULT '',
+          failure_json TEXT,
+          result_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          decided_at TEXT,
+          decided_by_user_id TEXT,
+          executed_at TEXT
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_approvals_work_status ON ai_write_approvals(work_id, status, created_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_approvals_conversation ON ai_write_approvals(conversation_id, created_at)");
+        this.run(`CREATE TABLE IF NOT EXISTS ai_write_approval_operations (
+          id TEXT PRIMARY KEY,
+          approval_id TEXT NOT NULL REFERENCES ai_write_approvals(id) ON DELETE CASCADE,
+          sort_order INTEGER NOT NULL,
+          kind TEXT NOT NULL,
+          tool_id TEXT NOT NULL,
+          module TEXT NOT NULL,
+          action TEXT NOT NULL CHECK(action IN ('create', 'update')),
+          target_id TEXT,
+          target_work_id TEXT NOT NULL,
+          target_label TEXT NOT NULL,
+          expected_version_no INTEGER,
+          required_modules_json TEXT NOT NULL,
+          ai_summary TEXT NOT NULL,
+          fields_json TEXT NOT NULL,
+          before_json TEXT,
+          after_json TEXT NOT NULL,
+          diffs_json TEXT NOT NULL,
+          annotation_json TEXT,
+          analysis_task_json TEXT,
+          result_json TEXT,
+          UNIQUE(approval_id, sort_order)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_write_approval_operations_approval ON ai_write_approval_operations(approval_id, sort_order)");
+        this.run(`CREATE TABLE IF NOT EXISTS ai_user_questions (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+          status TEXT NOT NULL CHECK(status IN ('pending', 'answered', 'rejected', 'expired', 'invalidated')),
+          question TEXT NOT NULL,
+          options_json TEXT NOT NULL,
+          allow_custom INTEGER NOT NULL DEFAULT 1 CHECK(allow_custom IN (0, 1)),
+          selected_option_id TEXT,
+          custom_answer TEXT,
+          answer_text TEXT,
+          initiator_user_id TEXT,
+          conversation_owner_user_id TEXT,
+          expires_at TEXT NOT NULL,
+          invalidation_reason TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          decided_at TEXT,
+          decided_by_user_id TEXT
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_user_questions_work_status ON ai_user_questions(work_id, status, created_at)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_user_questions_conversation ON ai_user_questions(conversation_id, created_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
@@ -2971,6 +3050,13 @@ export class Database {
       `UPDATE analysis_tasks SET status = 'partial', failure_json = ?, updated_at = ?
        WHERE status = 'running'`,
       JSON.stringify([{ message: "服务重启导致任务中断" }]),
+      timestamp
+    );
+    this.run(
+      `UPDATE ai_write_approvals
+       SET status = 'failed', failure_json = ?, updated_at = ?
+       WHERE status = 'executing'`,
+      JSON.stringify({ message: "服务重启导致审批执行中断" }),
       timestamp
     );
   }

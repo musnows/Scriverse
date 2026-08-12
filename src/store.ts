@@ -14,6 +14,7 @@ import {
   type WorkModulePermissions,
   type WorkPermissionModule
 } from "./work-permissions.js";
+import { WORK_AGENT_READ_TOOL_IDS, WORK_AGENT_WRITE_TOOL_IDS } from "./ai-write-plan.js";
 import {
   countWords,
   documentShortSearchTerms,
@@ -39,17 +40,9 @@ type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
 
 export const attachmentPermissionModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
-export const WORK_AGENT_TOOL_IDS = [
-  "story_index",
-  "read_chapters",
-  "grep",
-  "search_story_entities",
-  "read_character_sections",
-  "search_drafts",
-  "image"
-] as const;
+export const WORK_AGENT_TOOL_IDS = [...WORK_AGENT_READ_TOOL_IDS, ...WORK_AGENT_WRITE_TOOL_IDS] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
-const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_READ_TOOL_IDS];
 
 export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
   const source = Array.isArray(value)
@@ -1156,6 +1149,18 @@ export class Store {
 
   setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.analysisTaskQueuedHandler = handler;
+  }
+
+  pauseAnalysisTaskNotifications(): () => void {
+    const handler = this.analysisTaskQueuedHandler;
+    this.analysisTaskQueuedHandler = null;
+    return () => {
+      this.analysisTaskQueuedHandler = handler;
+    };
+  }
+
+  notifyAnalysisTasksQueued(workId: string): void {
+    this.notifyAnalysisTaskQueued(workId);
   }
 
   setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {

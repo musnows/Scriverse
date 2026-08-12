@@ -20,7 +20,7 @@ import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
+import { aiConversationTaskTypes, attachmentPermissionModules, Store, WORK_AGENT_TOOL_IDS, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -493,7 +493,7 @@ const workAiSettingsSchema = z.object({
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  agentTools: z.array(z.enum(WORK_AGENT_TOOL_IDS)).max(WORK_AGENT_TOOL_IDS.length).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -2376,6 +2376,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope: input.scope as ContextScope,
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),
+        onWriteApproval: (approval) => sendEvent("write_approval", approval),
+        onUserQuestion: (question) => sendEvent("ask_user_question", question),
         onProcessStep: (step) => sendEvent("process_step", step),
         onContextCompacted: (event) => sendEvent("context_compacted", event),
         conversationId,
@@ -2415,6 +2417,50 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     } finally {
       if (!response.writableEnded && !response.destroyed) response.end();
     }
+  });
+  const emptyBodySchema = z.object({}).strict();
+  const aiUserQuestionAnswerSchema = z.object({
+    optionId: z.string().trim().min(1).max(80).optional(),
+    customAnswer: z.string().trim().min(1).max(2_000).optional()
+  }).strict();
+  app.get("/api/works/:workId/ai-write-approvals/pending-toasts", (request, response) => {
+    data(response, ai.writeApprovals.listPendingToasts(request.params.workId));
+  });
+  app.get("/api/works/:workId/ai-write-approvals", (request, response) => {
+    const pagination = parsePagination(request.query);
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    data(response, ai.writeApprovals.listApprovals(request.params.workId, pagination ?? undefined, status));
+  });
+  app.get("/api/ai-write-approvals/:approvalId", (request, response) => {
+    data(response, ai.writeApprovals.getApproval(request.params.approvalId));
+  });
+  app.post("/api/ai-write-approvals/:approvalId/confirm", (request, response) => {
+    parse(emptyBodySchema, request.body ?? {});
+    data(response, ai.writeApprovals.confirmApproval(request.params.approvalId));
+  });
+  app.post("/api/ai-write-approvals/:approvalId/reject", (request, response) => {
+    parse(emptyBodySchema, request.body ?? {});
+    data(response, ai.writeApprovals.rejectApproval(request.params.approvalId));
+  });
+  app.post("/api/ai-write-approvals/:approvalId/rollback", (request, response) => {
+    parse(emptyBodySchema, request.body ?? {});
+    data(response, ai.writeApprovals.rollbackApproval(request.params.approvalId));
+  });
+  app.get("/api/works/:workId/ai-user-questions", (request, response) => {
+    const pagination = parsePagination(request.query);
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    data(response, ai.writeApprovals.listQuestions(request.params.workId, pagination ?? undefined, status));
+  });
+  app.get("/api/ai-user-questions/:questionId", (request, response) => {
+    data(response, ai.writeApprovals.getQuestion(request.params.questionId));
+  });
+  app.post("/api/ai-user-questions/:questionId/answer", (request, response) => {
+    const input = parse(aiUserQuestionAnswerSchema, request.body ?? {});
+    data(response, ai.writeApprovals.answerQuestion(request.params.questionId, input));
+  });
+  app.post("/api/ai-user-questions/:questionId/reject", (request, response) => {
+    parse(emptyBodySchema, request.body ?? {});
+    data(response, ai.writeApprovals.rejectQuestion(request.params.questionId));
   });
   app.get("/api/suggestions/:suggestionId", (request, response) => {
     const suggestion = ai.getSuggestion(request.params.suggestionId);
