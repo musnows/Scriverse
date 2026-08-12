@@ -5797,8 +5797,8 @@ function renderTree() {
     return `
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
-        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
-        <button class="chapter-batch-button volume-export-button" type="button" data-export-volume="${esc(volume.id)}" aria-label="导出“${esc(volume.title)}”为 EPUB" title="导出当前分卷为 EPUB"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg></button>
+        <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
+        ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情">详情</button>` : ""}
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
@@ -5820,6 +5820,11 @@ function renderTree() {
       event.preventDefault();
       openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
     });
+    button.addEventListener("keydown", (event) => {
+      if (!canEditProse() || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
+      event.preventDefault();
+      openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeToggle));
+    });
     if (proseEditable) {
       button.addEventListener("dragover", (event) => {
         if (!event.dataTransfer?.types.includes("text/plain")) return;
@@ -5836,14 +5841,13 @@ function renderTree() {
       });
     }
   });
+  $("#novel-tree").querySelectorAll("[data-volume-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeDetail));
+    });
+  });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
-  });
-  $("#novel-tree").querySelectorAll("[data-export-volume]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const volume = state.work?.volumes.find((item) => item.id === button.dataset.exportVolume);
-      if (volume) void downloadVolumeEpub(volume, button);
-    });
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -11138,11 +11142,11 @@ function openVolumeDialog(item) {
   if (!state.work) return openWorkDialog();
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
-  const management = item ? `<section class="entity-dialog-management" aria-label="分卷操作">
-    <div><strong>分卷操作</strong><small>分卷会连同其中章节移入回收站，正文、版本和关联资料默认保留 30 天。</small></div>
-    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-volume-delete>移入回收站</button></div>
+  const management = item ? `<section class="entity-dialog-management" aria-label="分卷详情操作">
+    <div><strong>分卷详情</strong><small>可将当前分卷单独导出为 EPUB；移入回收站时会连同其中章节隐藏，正文、版本和关联资料默认保留 30 天。</small></div>
+    <div class="entity-dialog-management-actions"><button class="ghost-button" type="button" data-dialog-volume-export>导出 EPUB</button><button class="danger-button" type="button" data-dialog-volume-delete>移入回收站</button></div>
   </section>` : "";
-  openDialog(item ? "编辑分卷" : "新建分卷",
+  openDialog(item ? "分卷详情" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
     field("kind", "分卷类型", "select", item?.kind ?? "main", kindOptions) +
     field("description", "分卷简介", "textarea", item?.description) +
@@ -11160,6 +11164,9 @@ function openVolumeDialog(item) {
       renderTree();
       toast(item ? "分卷设置已保存" : "分卷已创建");
     }, "分卷设置");
+  $("#dialog-fields").querySelector("[data-dialog-volume-export]")?.addEventListener("click", (event) => {
+    void downloadVolumeEpub(item, event.currentTarget);
+  });
   $("#dialog-fields").querySelector("[data-dialog-volume-delete]")?.addEventListener("click", () => {
     void deleteVolume(item);
   });

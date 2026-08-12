@@ -22,8 +22,8 @@ describe("沉浸式阅读预览界面", () => {
     const readingState = await request(runtime.app).get("/reading-preview.js").expect(200);
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
-    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('/styles.css?v=20260813-mobile-volume-detail-v1');
+    expect(page.text).toContain('/app.js?v=20260813-mobile-volume-detail-v1');
     expect(page.text).toContain('id="reader-open-button"');
     expect(page.text).toContain('id="chapter-reader-button"');
     expect(page.text).toContain('id="reader-view" class="reader-view hidden"');
