@@ -832,6 +832,12 @@ const contentPermissionModules = workPermissionModules.filter((module) => !["dra
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 const attachmentModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
 
+export function exportReadPermissionModules(format: unknown): WorkPermissionModule[] {
+  return format === "json" || format === undefined
+    ? ["drafts", ...contentPermissionModules, "reviews"]
+    : ["prose"];
+}
+
 function requestedAttachmentModule(request: Request): WorkPermissionModule {
   const module = String(request.query.module ?? "settings");
   return attachmentModules.includes(module as typeof attachmentModules[number])
@@ -1061,7 +1067,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       : { read: [...contentPermissionModules] };
   }
   if (/^\/api\/works\/[^/]+\/export$/u.test(pathname)) {
-    return { read: request.query.format === "json" || request.query.format === undefined ? ["drafts", ...contentPermissionModules] : ["prose"] };
+    return { read: exportReadPermissionModules(request.query.format) };
   }
   return { ownerOnly: true };
 }
