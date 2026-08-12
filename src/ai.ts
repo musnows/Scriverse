@@ -117,6 +117,21 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
   return sanitized;
 }
 
+function connectivityTestErrorForLog(error: unknown): Record<string, unknown> {
+  if (error instanceof AppError) {
+    return { category: "application_error", status: error.status, code: error.code };
+  }
+  if (!(error instanceof Error)) return { category: "upstream_failure" };
+  if (error.name === "AbortError") return { category: "timeout" };
+  const httpStatus = error.message.match(/^HTTP ([1-5]\d{2})(?::|$)/u)?.[1];
+  if (httpStatus) return { category: "upstream_http", status: Number(httpStatus) };
+  if (/无效 JSON|响应缺少可用回复|没有返回(?:模型列表|可用模型)/u.test(error.message)) {
+    return { category: "invalid_response" };
+  }
+  if (error instanceof TypeError) return { category: "network_error" };
+  return { category: "upstream_failure" };
+}
+
 const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
@@ -2763,7 +2778,7 @@ export class AiManager {
         ok: false,
         cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
-        error: aiErrorForLog(error)
+        error: connectivityTestErrorForLog(error)
       });
       return { ok: false, error: message, cooldown, provider: this.getProvider(providerId) };
     } finally {
@@ -2842,7 +2857,7 @@ export class AiManager {
         ok: false,
         cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
-        error: aiErrorForLog(error)
+        error: connectivityTestErrorForLog(error)
       });
       return { ok: false, error: message, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } finally {

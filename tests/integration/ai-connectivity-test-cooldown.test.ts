@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
+import { createLogger, logger, type LogRecord } from "../../src/logger.js";
 import { createTestRuntime } from "../helpers.js";
 
 function releasePendingRequest(release: (() => void) | null): void {
@@ -31,13 +32,16 @@ describe("AI 供应商与模型连通性测试冷却", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await runtime.close();
+    vi.restoreAllMocks();
   });
 
-  async function configureConnectivityTarget(): Promise<{ providerId: string; modelId: string }> {
+  async function configureConnectivityTarget(
+    apiKey = "sk-provider-cooldown-secret"
+  ): Promise<{ providerId: string; modelId: string }> {
     const provider = await request(runtime.app).post("/api/platform/ai/providers").send({
       name: "冷却测试供应商",
       baseUrl: "https://cooldown-ai.test/v1",
-      apiKey: "sk-provider-cooldown-secret",
+      apiKey,
       status: "enabled"
     }).expect(201);
     const providerId = String(provider.body.data.id);
@@ -119,6 +123,53 @@ describe("AI 供应商与模型连通性测试冷却", () => {
     expect(recovered.body.data.cooldown).toMatchObject({ reason: "success_cooldown", retryAfterSeconds: 120 });
     const successCooldown = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(429);
     expect(successCooldown.body.error.details.reason).toBe("success_cooldown");
+  });
+
+  it.each([
+    {
+      target: "provider" as const,
+      credential: "opaque://tenant-a/key+Alpha=77",
+      event: "ai.provider_test.completed",
+      expectedError: { category: "upstream_failure" }
+    },
+    {
+      target: "model" as const,
+      credential: "tenant.model::Beta/42?#not-a-standard-token!",
+      event: "ai.model_test.completed",
+      expectedError: { category: "upstream_http", status: 503 }
+    }
+  ])("$target 上游异常日志不记录任意格式的完整凭据或原始异常", async ({ target, credential, event, expectedError }) => {
+    const { providerId, modelId } = await configureConnectivityTarget(credential);
+    const records: LogRecord[] = [];
+    const captureLogger = createLogger({
+      level: "warn",
+      write: (_level, record) => records.push(record)
+    });
+    vi.spyOn(logger, "warn").mockImplementation((loggedEvent, fields) => captureLogger.warn(loggedEvent, fields));
+    if (target === "provider") {
+      fetchMock.mockRejectedValue(new Error(`upstream exception included credential ${credential}`));
+    } else {
+      fetchMock.mockResolvedValue(new Response(`upstream response included credential ${credential}`, { status: 503 }));
+    }
+
+    const response = await request(runtime.app)
+      .post(target === "provider" ? `/api/providers/${providerId}/test` : `/api/models/${modelId}/test`)
+      .send({})
+      .expect(200);
+
+    const completedLog = records.find((record) => record.event === event);
+    expect(completedLog).toBeDefined();
+    expect(completedLog).toMatchObject({
+      ok: false,
+      error: expectedError,
+      requestId: response.headers["x-request-id"]
+    });
+    expect(completedLog?.error).not.toHaveProperty("message");
+    expect(completedLog?.error).not.toHaveProperty("stack");
+    expect(JSON.stringify(completedLog)).not.toContain(credential);
+    expect(JSON.stringify(response.body)).not.toContain(credential);
+    expect(JSON.stringify(runtime.database.get("SELECT last_error FROM providers WHERE id = ?", providerId))).not.toContain(credential);
+    expect(response.headers["x-request-id"]).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
   it("模型测试使用独立对象冷却，并在模型或供应商配置变化后立即放行", async () => {
