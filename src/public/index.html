@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260812-recycle-bin-v3">
+    <link rel="stylesheet" href="/styles.css?v=20260812-ai-conversation-export-v3">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -1040,6 +1040,12 @@
           <button id="ai-history-next" type="button" disabled>下一页</button>
         </nav>
       </div>
+      <div id="ai-history-action-menu" class="ai-history-action-menu hidden" role="menu" aria-label="对话操作">
+        <button type="button" role="menuitem" data-ai-history-action="export">
+          <span>导出 Markdown</span>
+          <small>下载当前对话的角色、时间和消息正文</small>
+        </button>
+      </div>
     </dialog>
 
     <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
@@ -1073,6 +1079,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260812-recycle-bin-v3"></script>
+    <script type="module" src="/app.js?v=20260812-ai-conversation-fork-v2"></script>
   </body>
 </html>

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
+import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
@@ -2409,10 +2410,26 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const permissions = requestPermissions(request, String(conversation.workId));
     data(response, redactAiConversation(conversation, permissions));
   });
+  app.get("/api/ai-conversations/:conversationId/export", (request, response) => {
+    const conversation = store.getAiConversation(request.params.conversationId);
+    const permissions = requestPermissions(request, String(conversation.workId));
+    const readableConversation = redactAiConversation(conversation, permissions);
+    response.type("text/markdown; charset=utf-8");
+    response.setHeader("Content-Disposition", aiConversationExportContentDisposition(readableConversation));
+    response.send(exportAiConversationMarkdown(readableConversation));
+  });
   app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
-    const input = parse(z.object({ messageId: identifier, title: z.string().max(200).optional() }), request.body);
-    const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title);
-    const permissions = requestPermissions(request, String(forked.workId));
+    const input = parse(z.object({
+      messageId: identifier,
+      title: z.string().max(200).optional(),
+      requestId: identifier.optional()
+    }).strict(), request.body);
+    const sourceConversation = store.getAiConversationSummary(request.params.conversationId);
+    const permissions = requestPermissions(request, String(sourceConversation.workId));
+    if (sourceConversation.roleplayCharacter && !canReadWorkModule(permissions, "characters")) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取“角色”模块的权限");
+    }
+    const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title, input.requestId);
     data(response, redactAiConversation(forked, permissions), 201);
   });
   app.patch("/api/ai-conversations/:conversationId/task-type", (request, response) => {

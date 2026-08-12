@@ -1726,16 +1726,20 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
+  if (message.dataset.messageId) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
-    fork.setAttribute("aria-label", "从此消息 Fork 新对话");
-    fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>分支</span>';
+    fork.setAttribute("aria-label", "从此消息续写为新对话");
+    fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>从此续写</span>';
+    const forkRequestId = crypto.randomUUID();
     fork.addEventListener("click", async () => {
       fork.disabled = true;
       try {
-        const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, { method: "POST", body: { messageId: message.dataset.messageId } });
+        const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, {
+          method: "POST",
+          body: { messageId: message.dataset.messageId, requestId: forkRequestId }
+        });
         upsertAiConversationSummary(conversation);
         await openAiConversation(conversation.id);
         toast("已从所选消息创建分支对话");
@@ -1982,7 +1986,59 @@ function setAiHistoryVisible(visible) {
   $("#ai-history-toggle").setAttribute("aria-expanded", String(dialog.open));
 }
 
+let aiHistoryActionConversation = null;
+let aiHistoryActionAnchor = null;
+
+function closeAiHistoryActionMenu(restoreFocus = false) {
+  const menu = $("#ai-history-action-menu");
+  menu.classList.add("hidden");
+  document.querySelectorAll(".ai-history-more[aria-expanded=\"true\"]").forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
+  if (restoreFocus && aiHistoryActionAnchor?.isConnected) aiHistoryActionAnchor.focus();
+  aiHistoryActionConversation = null;
+  aiHistoryActionAnchor = null;
+}
+
+function showAiHistoryActionMenu(anchor, conversation) {
+  const menu = $("#ai-history-action-menu");
+  closeAiHistoryActionMenu();
+  aiHistoryActionConversation = conversation;
+  aiHistoryActionAnchor = anchor;
+  menu.classList.remove("hidden");
+  const anchorRect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchorRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+  const top = Math.max(8, Math.min(anchorRect.bottom + 6, window.innerHeight - menuRect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  anchor.setAttribute("aria-expanded", "true");
+  menu.querySelector("button")?.focus();
+}
+
+async function downloadAiConversation(conversation) {
+  if (!conversation?.id) return;
+  const response = await fetch(`/api/ai-conversations/${encodeURIComponent(conversation.id)}/export`, {
+    headers: { Accept: "text/markdown" }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
+    throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  const safeId = String(conversation.id).replace(/[^A-Za-z0-9_-]/gu, "-") || "export";
+  anchor.href = objectUrl;
+  anchor.download = `ai-conversation-${safeId}.md`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
 function renderAiConversationHistory() {
+  closeAiHistoryActionMenu();
   const host = $("#ai-history-list");
   host.replaceChildren();
   const pagination = $("#ai-history-pagination");
@@ -1996,6 +2052,8 @@ function renderAiConversationHistory() {
     return;
   }
   for (const conversation of state.aiConversations) {
+    const row = document.createElement("div");
+    row.className = "ai-history-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = `ai-history-item${conversation.id === state.aiConversationId ? " is-active" : ""}`;
@@ -2006,7 +2064,22 @@ function renderAiConversationHistory() {
     meta.textContent = `${conversation.messageCount} 条${conversation.roleplayCharacter?.name ? ` · 扮演 ${conversation.roleplayCharacter.name}` : ""} · ${formatDateTime(conversation.updatedAt)}`;
     button.append(title, meta);
     button.addEventListener("click", () => openAiConversation(conversation.id));
-    host.append(button);
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "ai-history-more";
+    more.setAttribute("aria-label", `打开“${conversation.title}”对话操作`);
+    more.setAttribute("aria-haspopup", "menu");
+    more.setAttribute("aria-controls", "ai-history-action-menu");
+    more.setAttribute("aria-expanded", "false");
+    more.textContent = "···";
+    more.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const expanded = more.getAttribute("aria-expanded") === "true";
+      if (expanded) closeAiHistoryActionMenu(true);
+      else showAiHistoryActionMenu(more, conversation);
+    });
+    row.append(button, more);
+    host.append(row);
   }
 }
 
@@ -13849,6 +13922,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#manuscript-export-menu") && !event.target.closest("#export-button") && !event.target.closest("#work-export-button")) {
     closeManuscriptExportMenu();
   }
+  if (!event.target.closest("#ai-history-action-menu") && !event.target.closest(".ai-history-more")) closeAiHistoryActionMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
@@ -13868,10 +13942,12 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (!$("#ai-history-action-menu").classList.contains("hidden")) return;
     closeChapterTypeMenu();
     closeLineCitationMenu();
     closeMarkdownTableMenu(true);
     closeManuscriptExportMenu();
+    closeAiHistoryActionMenu(true);
     hideAiMentionMenu();
     setAiContextDistributionVisible(false);
   }
@@ -13974,7 +14050,32 @@ $("#ai-history-next").addEventListener("click", async () => {
 });
 $("#ai-history-close").addEventListener("click", () => setAiHistoryVisible(false));
 $("#ai-history-dialog").addEventListener("close", () => {
+  closeAiHistoryActionMenu();
   $("#ai-history-toggle").setAttribute("aria-expanded", "false");
+});
+$("#ai-history-dialog").addEventListener("cancel", (event) => {
+  if ($("#ai-history-action-menu").classList.contains("hidden")) return;
+  event.preventDefault();
+  closeAiHistoryActionMenu(true);
+});
+$("#ai-history-action-menu").addEventListener("click", async (event) => {
+  const option = event.target.closest("[data-ai-history-action=\"export\"]");
+  const conversation = aiHistoryActionConversation;
+  if (!option || !conversation || option.disabled) return;
+  const label = option.querySelector("span");
+  option.disabled = true;
+  if (label) label.textContent = "下载中";
+  try {
+    await downloadAiConversation(conversation);
+    closeAiHistoryActionMenu(true);
+    toast("对话 Markdown 已开始下载");
+  } catch (error) {
+    toast(`对话导出失败：${error.message}`, "error");
+    option.focus();
+  } finally {
+    option.disabled = false;
+    if (label) label.textContent = "导出 Markdown";
+  }
 });
 $("#ai-prompt").addEventListener("keydown", (event) => {
   const mentionMenuVisible = !$("#ai-mention-menu").classList.contains("hidden");

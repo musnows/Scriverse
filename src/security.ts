@@ -254,7 +254,10 @@ export function createCaptchaRateLimitMiddleware(limit = 20, windowMs = 60_000, 
 type ExpensiveApiKind = "ai" | "export" | "search";
 
 function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
-  if (method === "GET" && /^\/api\/works\/[^/]+\/export$/u.test(path)) return "export";
+  if (method === "GET" && (
+    /^\/api\/works\/[^/]+\/export$/u.test(path)
+    || /^\/api\/ai-conversations\/[^/]+\/export$/u.test(path)
+  )) return "export";
   if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
   if (method !== "POST") return null;
   if (
