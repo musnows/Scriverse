@@ -3443,7 +3443,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
   .main-panel {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 2 / -1;
     min-width: 0;
     min-height: 0;
     overflow: hidden;

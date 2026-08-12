@@ -10,7 +10,7 @@ describe("AI 用户消息角色引用横幅", () => {
       readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('/styles.css?v=20260812-foreshadow-reminder-v2');
+    expect(page).toContain('/styles.css?v=20260812-mobile-main-fill-v1');
     expect(page).toContain('/app.js?v=20260812-foreshadow-reminder-v2');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");
