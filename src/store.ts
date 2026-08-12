@@ -8903,12 +8903,12 @@ export class Store {
       if (entityType === "character") {
         const character = this.getCharacter(targetId);
         if (String(character.workId) !== workId) return null;
-        return numberValue(character, "version_no");
+        return Number(character.versionNo);
       }
       if (entityType === "chapter") {
         const chapter = this.getChapter(targetId);
         if (String(chapter.workId) !== workId) return null;
-        return numberValue(chapter, "version_no");
+        return Number(chapter.versionNo);
       }
       const versionType = aiWriteEntityVersionType(entityType);
       if (!versionType) return null;
@@ -9001,16 +9001,17 @@ export class Store {
   }
 
   answerAiToolQuestion(questionId: string, answer: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
+    if (!row) throw notFound("AI 提问");
+    const status = String(row.status);
+    if (status === "answered") return this.mapAiToolQuestion(row);
+    if (status === "rejected") throw new AppError(409, "QUESTION_REJECTED", "该提问已被拒绝，无法回答");
+    if (status === "expired" || String(row.expires_at) <= now()) {
+      // 过期标记在事务外完成，避免随异常回滚
+      this.expireAiToolQuestion(questionId);
+      throw new AppError(410, "QUESTION_EXPIRED", "该提问已过期，无法回答");
+    }
     return this.db.transaction(() => {
-      const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
-      if (!row) throw notFound("AI 提问");
-      const status = String(row.status);
-      if (status === "answered") return this.mapAiToolQuestion(row);
-      if (status === "rejected") throw new AppError(409, "QUESTION_REJECTED", "该提问已被拒绝，无法回答");
-      if (status === "expired" || String(row.expires_at) <= now()) {
-        this.expireAiToolQuestion(questionId);
-        throw new AppError(410, "QUESTION_EXPIRED", "该提问已过期，无法回答");
-      }
       const result = this.db.run(
         "UPDATE ai_tool_questions SET status = 'answered', answer = ?, answered_at = ? WHERE id = ? AND status = 'pending'",
         answer.slice(0, 2_000),
@@ -9025,16 +9026,16 @@ export class Store {
   }
 
   rejectAiToolQuestion(questionId: string): Record<string, unknown> {
+    const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
+    if (!row) throw notFound("AI 提问");
+    const status = String(row.status);
+    if (status === "rejected") return this.mapAiToolQuestion(row);
+    if (status === "answered") throw new AppError(409, "QUESTION_ALREADY_ANSWERED", "该提问已回答，无法拒绝");
+    if (status === "expired" || String(row.expires_at) <= now()) {
+      this.expireAiToolQuestion(questionId);
+      throw new AppError(410, "QUESTION_EXPIRED", "该提问已过期，无法拒绝");
+    }
     return this.db.transaction(() => {
-      const row = this.db.get("SELECT * FROM ai_tool_questions WHERE id = ?", questionId);
-      if (!row) throw notFound("AI 提问");
-      const status = String(row.status);
-      if (status === "rejected") return this.mapAiToolQuestion(row);
-      if (status === "answered") throw new AppError(409, "QUESTION_ALREADY_ANSWERED", "该提问已回答，无法拒绝");
-      if (status === "expired" || String(row.expires_at) <= now()) {
-        this.expireAiToolQuestion(questionId);
-        throw new AppError(410, "QUESTION_EXPIRED", "该提问已过期，无法拒绝");
-      }
       const result = this.db.run(
         "UPDATE ai_tool_questions SET status = 'rejected', answered_at = ? WHERE id = ? AND status = 'pending'",
         now(),

@@ -5711,15 +5711,15 @@ export class AiManager {
             ? "该审批已执行过，不能重复执行"
             : `审批当前状态为 ${String(plan.status)}，无法执行`);
         }
+        if (this.store.isAiWritePlanExpired(planId)) {
+          throw new AppError(410, "PLAN_EXPIRED", "审批已过期，请重新发起修改计划");
+        }
         const cas = this.store.db.run(
           "UPDATE ai_write_plans SET status = 'executing', updated_at = ? WHERE id = ? AND status = 'pending'",
           now(),
           planId
         );
         if (cas.changes === 0) throw new AppError(409, "PLAN_NOT_PENDING", "审批正在被处理，请勿重复操作");
-        if (this.store.isAiWritePlanExpired(planId)) {
-          throw new AppError(410, "PLAN_EXPIRED", "审批已过期，请重新发起修改计划");
-        }
         const invalid = (reason: string): never => {
           throw new AppError(410, "PLAN_INVALID", reason);
         };
@@ -5840,10 +5840,14 @@ export class AiManager {
       const task = this.createTask(workId, { taskType, scope, ...(modelId ? { modelId } : {}) });
       return { targetId: String(task.id), versionNo: null, entityType: "analysis-task" };
     }
-    if (!targetId) throw new AppError(400, "TARGET_REQUIRED", "词条操作缺少目标对象");
+    if (opType === "update-entry" && !targetId) throw new AppError(400, "TARGET_REQUIRED", "编辑操作缺少目标对象");
+    if (opType === "create-entry" && entityType === "chapter-outline" && !targetId) {
+      throw new AppError(400, "OUTLINE_CHAPTER_REQUIRED", "大纲操作缺少目标章节");
+    }
     const expectedVersionNo = Number(op.targetVersion);
     const input = after;
     if (opType === "create-entry") {
+      const outlineChapterId = targetId;
       const created = entityType === "setting" ? this.store.createSetting(workId, input as Parameters<Store["createSetting"]>[1], source, planId)
         : entityType === "character" ? this.store.createCharacter(workId, input as Parameters<Store["createCharacter"]>[1])
         : entityType === "race" ? this.store.createRace(workId, input as Parameters<Store["createRace"]>[1])
@@ -5852,18 +5856,20 @@ export class AiManager {
         : entityType === "timeline-event" ? this.store.createTimelineEvent(workId, input as Parameters<Store["createTimelineEvent"]>[1], source, planId)
         : entityType === "relationship" ? this.store.createRelationship(workId, input as Parameters<Store["createRelationship"]>[1], source, planId)
         : entityType === "foreshadow" ? this.store.createForeshadow(workId, input as Parameters<Store["createForeshadow"]>[1])
-        : this.store.upsertChapterOutline(targetId, input as Parameters<Store["upsertChapterOutline"]>[1], source, planId, changeNote, expectedVersionNo);
+        : this.store.upsertChapterOutline(String(outlineChapterId), input as Parameters<Store["upsertChapterOutline"]>[1], source, planId, changeNote, expectedVersionNo);
       return { targetId: String(created.id), versionNo: Number(created.versionNo), entityType };
     }
-    const updated = entityType === "setting" ? this.store.updateSetting(targetId, input as Partial<Parameters<Store["updateSetting"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "character" ? this.store.updateCharacter(targetId, input as Partial<Parameters<Store["updateCharacter"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "race" ? this.store.updateRace(targetId, input as Partial<Parameters<Store["updateRace"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "organization" ? this.store.updateOrganization(targetId, input as Partial<Parameters<Store["updateOrganization"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "timeline-track" ? this.store.updateTimelineTrack(targetId, input as Partial<Parameters<Store["updateTimelineTrack"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "timeline-event" ? this.store.updateTimelineEvent(targetId, input as Partial<Parameters<Store["updateTimelineEvent"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "relationship" ? this.store.updateRelationship(targetId, input as Partial<Parameters<Store["updateRelationship"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : entityType === "foreshadow" ? this.store.updateForeshadow(targetId, input as Partial<Parameters<Store["updateForeshadow"]>[1]>, source, planId, changeNote, expectedVersionNo)
-      : this.store.upsertChapterOutline(targetId, input as Parameters<Store["upsertChapterOutline"]>[1], source, planId, changeNote, expectedVersionNo);
+    const updateTargetId = targetId;
+    if (!updateTargetId) throw new AppError(400, "TARGET_REQUIRED", "编辑操作缺少目标对象");
+    const updated = entityType === "setting" ? this.store.updateSetting(updateTargetId, input as Partial<Parameters<Store["updateSetting"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "character" ? this.store.updateCharacter(updateTargetId, input as Partial<Parameters<Store["updateCharacter"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "race" ? this.store.updateRace(updateTargetId, input as Partial<Parameters<Store["updateRace"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "organization" ? this.store.updateOrganization(updateTargetId, input as Partial<Parameters<Store["updateOrganization"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "timeline-track" ? this.store.updateTimelineTrack(updateTargetId, input as Partial<Parameters<Store["updateTimelineTrack"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "timeline-event" ? this.store.updateTimelineEvent(updateTargetId, input as Partial<Parameters<Store["updateTimelineEvent"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "relationship" ? this.store.updateRelationship(updateTargetId, input as Partial<Parameters<Store["updateRelationship"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : entityType === "foreshadow" ? this.store.updateForeshadow(updateTargetId, input as Partial<Parameters<Store["updateForeshadow"]>[1]>, source, planId, changeNote, expectedVersionNo)
+      : this.store.upsertChapterOutline(updateTargetId, input as Parameters<Store["upsertChapterOutline"]>[1], source, planId, changeNote, expectedVersionNo);
     return { targetId: String(updated.id), versionNo: Number(updated.versionNo), entityType };
   }
 
