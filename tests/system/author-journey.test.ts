@@ -328,8 +328,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260813-volume-detail-export-v1');
-    expect(page.text).toContain('/app.js?v=20260813-volume-detail-export-v1');
+    expect(page.text).toContain('/styles.css?v=20260813-mobile-volume-detail-v1');
+    expect(page.text).toContain('/app.js?v=20260813-mobile-volume-detail-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -836,6 +836,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('openDialog(item ? "分卷详情" : "新建分卷"');
     expect(application.text).toContain('data-dialog-volume-export>导出 EPUB</button>');
     expect(application.text).toContain('downloadVolumeEpub(item, event.currentTarget)');
+    expect(application.text).toContain('class="ghost-button volume-detail-button"');
+    expect(application.text).toContain('data-volume-detail="${esc(volume.id)}"');
+    expect(application.text).toContain('button.dataset.volumeDetail));');
     expect(application.text).toContain('event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")');
     expect(application.text).toContain('field("keywords", "分卷关键词", "keyword-chips"');
     expect(application.text).toContain('keywords: uniqueRelationshipKeywords(form.getAll("keywords").map(String))');
@@ -850,6 +853,11 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("const proseEditable = canEditProse();");
     expect(application.text).toContain("${proseEditable ? `<button class=\"add-button chapter-add-button\"");
     expect(application.text).toContain('class="add-button chapter-add-button"');
+    expect(styles.text).toContain(".volume-detail-button { display: none; }");
+    expect(styles.text).toContain(".panel-heading { display: flex; margin-top: 8px; }");
+    expect(styles.text).toContain("#novel-tree { display: block; padding-bottom: 18px; }");
+    expect(styles.text).toContain(".volume-detail-button { display: inline-flex; flex: none;");
+    expect(styles.text).not.toContain(".panel-heading, #novel-tree { display: none; }");
     expect(application.text).toContain('aria-label="在“${esc(volume.title)}”中新建章节"');
     expect(application.text).toContain('button.dataset.volumeToggle));');
     expect(application.text).toContain('class="record-card character-card preview-record-card has-card-edit" data-open-character');

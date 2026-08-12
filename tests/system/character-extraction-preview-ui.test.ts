@@ -11,8 +11,8 @@ describe("角色抽取结果入库预览界面", () => {
       readFile(join(publicPath, "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('/styles.css?v=20260813-volume-detail-export-v1');
-    expect(page).toContain('/app.js?v=20260813-volume-detail-export-v1');
+    expect(page).toContain('/styles.css?v=20260813-mobile-volume-detail-v1');
+    expect(page).toContain('/app.js?v=20260813-mobile-volume-detail-v1');
     expect(application).toContain("function renderCharacterExtractionPreview(task, result)");
     expect(application).toContain("function renderCharacterExtractionEditor(preview)");
     expect(application).toContain("function bindCharacterExtractionEditor(container, taskId)");

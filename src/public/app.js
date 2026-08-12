@@ -5798,6 +5798,7 @@ function renderTree() {
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
         <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
+        ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情">详情</button>` : ""}
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
@@ -5839,6 +5840,11 @@ function renderTree() {
         if (chapterId && volume) await moveChapterInTree(chapterId, volume.id, Number(volume.chapterCount ?? volume.chapters.length));
       });
     }
+  });
+  $("#novel-tree").querySelectorAll("[data-volume-detail]").forEach((button) => {
+    button.addEventListener("click", () => {
+      openVolumeDialog(state.work.volumes.find((volume) => volume.id === button.dataset.volumeDetail));
+    });
   });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
