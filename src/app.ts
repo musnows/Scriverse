@@ -1702,6 +1702,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     noContent(response);
   });
 
+  app.get("/api/works/:workId/chapters/:chapterId/foreshadow-reminders", (request, response) => {
+    data(response, store.listChapterForeshadowReminders(request.params.workId, request.params.chapterId));
+  });
+  app.post("/api/works/:workId/chapters/:chapterId/foreshadow-reminders/:foreshadowId/resolve", (request, response) => {
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    data(response, store.resolveChapterForeshadowReminder(
+      request.params.workId,
+      request.params.chapterId,
+      request.params.foreshadowId,
+      input.expectedVersionNo
+    ));
+  });
+
   app.get("/api/works/:workId/foreshadows", (request, response) => {
     const query = parse(z.object({
       status: z.enum(["all", "unresolved", "resolved"]).default("all"),

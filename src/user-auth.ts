@@ -939,6 +939,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
+  if (/^\/api\/works\/[^/]+\/chapters\/[^/]+\/foreshadow-reminders(?:\/[^/]+\/resolve)?$/u.test(pathname)) {
+    return write ? { read: ["prose"], write: ["outlines"] } : { read: ["prose", "outlines"] };
+  }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
     return write ? direct(requestedAttachmentModule(request)) : { anyRead: [...attachmentModules] };
   }

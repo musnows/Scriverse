@@ -115,7 +115,8 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain('moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize)');
     expect(application).toContain('moduleApiAllPages("relationships", `/api/works/${state.work.id}/relationships`)');
     expect(application).toContain('moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh })');
-    expect(application).toContain('if (state.chapter?.id !== chapterId) {\n    state.chapter = await api(`/api/chapters/${chapterId}`);\n    mergeChapterDirectoryEntry(state.chapter);\n  }');
+    expect(application).toContain('const selectionRequestId = ++chapterSelectionRequestId;');
+    expect(application).toContain('const chapter = await api(`/api/chapters/${chapterId}`);\n    if (selectionRequestId !== chapterSelectionRequestId) return;\n    state.chapter = chapter;\n    mergeChapterDirectoryEntry(chapter);');
     expect(application).toContain('await renderTasks(taskListPage, { refresh: true });');
     expect(application).toContain("invalidateModuleRequestsAfterMutation(path, method);");
   });

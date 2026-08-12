@@ -6,6 +6,14 @@ import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-a
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260812-ai-request-snapshot-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
+import {
+  FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
+  foreshadowReminderRequestTargetsState,
+  foreshadowReminderSnoozeKey,
+  parseForeshadowReminderSnoozes,
+  serializeForeshadowReminderSnoozes,
+  visibleForeshadowReminders
+} from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
@@ -1076,6 +1084,7 @@ function applyPanelLayout(persist = false) {
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
   $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
+  syncMobileAiPanelSafeTop();
   scheduleChapterLineNumbers();
   if (persist) {
     try { localStorage.setItem(panelLayoutStorageKey, JSON.stringify(panelLayout)); } catch { /* 浏览器禁用存储时仅保留当前布局 */ }
@@ -1134,6 +1143,20 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterSelectionRequestId = 0;
+let chapterForeshadowReminderRequestId = 0;
+let chapterForeshadowReminders = [];
+let chapterForeshadowReminderIndex = 0;
+let chapterForeshadowReminderDetailsExpanded = false;
+let chapterForeshadowReminderResolveInFlight = false;
+let foreshadowReminderSnoozes = new Set();
+try {
+  foreshadowReminderSnoozes = parseForeshadowReminderSnoozes(
+    presenceSessionStorage?.getItem(FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY)
+  );
+} catch {
+  // 浏览器禁用会话存储时使用页面级静默状态。
+}
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 const chapterLineInputRenderDelay = 32;
@@ -3318,7 +3341,7 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   if (path.includes("/races")) affected.add("races");
   if (path.includes("/organizations")) affected.add("organizations");
   if (path.includes("/timeline")) affected.add("timeline");
-  if (path.includes("/outlines") || path.includes("/foreshadows")) affected.add("outlines");
+  if (path.includes("/outlines") || path.includes("/foreshadows") || path.includes("/foreshadow-reminders")) affected.add("outlines");
   if (path.includes("/relationships")) affected.add("relationships");
   if (path.includes("/chapter-annotations/") || /\/chapters\/[^/]+\/annotations(?:$|\?)/u.test(path)) affected.add("comments");
   if (path.includes("/reviews")) affected.add("reviews");
@@ -4005,6 +4028,7 @@ async function persistChapter({ automatic = false } = {}) {
   }
   if (sameChapterSnapshot(draft, lastSavedChapterSnapshot)) {
     setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
+    if (!automatic) await loadChapterForeshadowReminders();
     return state.chapter;
   }
   const saveGuard = confirmConcurrentSave();
@@ -4041,6 +4065,7 @@ async function persistChapter({ automatic = false } = {}) {
     } else {
       scheduleChapterAutoSave(250);
     }
+    await loadChapterForeshadowReminders();
     return state.chapter;
   } catch (error) {
     if (state.chapter?.id === draft.chapterId) setSaveState("自动保存失败", true);
@@ -5523,6 +5548,8 @@ function renderShelf() {
 }
 
 function resetWorkScopedUiCaches() {
+  chapterSelectionRequestId += 1;
+  clearChapterForeshadowReminders({ invalidateRequest: true });
   invalidateAiConversationNavigation("已切换作品");
   stopBackgroundTaskCenter();
   workScopedUiGeneration += 1;
@@ -6022,13 +6049,214 @@ async function deleteChapter(chapterId) {
   }
 }
 
+function currentChapterForeshadowReminder() {
+  return chapterForeshadowReminders[chapterForeshadowReminderIndex] ?? null;
+}
+
+function syncMobileAiPanelSafeTop() {
+  const container = $("#chapter-foreshadow-reminder");
+  const safeTop = container.classList.contains("hidden")
+    ? 0
+    : Math.ceil(container.getBoundingClientRect().bottom);
+  $("#app").style.setProperty("--mobile-ai-panel-safe-top", `${safeTop}px`);
+}
+
+function renderChapterForeshadowReminder() {
+  const container = $("#chapter-foreshadow-reminder");
+  const reminder = currentChapterForeshadowReminder();
+  if (!reminder || !state.chapter || !state.work) {
+    container.classList.add("hidden");
+    container.removeAttribute("data-role");
+    container.removeAttribute("data-multiple");
+    $("#chapter-foreshadow-reminder-details").classList.add("hidden");
+    $("#chapter-foreshadow-reminder-details-button").setAttribute("aria-expanded", "false");
+    syncMobileAiPanelSafeTop();
+    return;
+  }
+  const roleLabel = reminder.role === "payoff" ? "回收章" : "提醒章";
+  container.dataset.role = reminder.role;
+  $("#chapter-foreshadow-reminder-role").textContent = roleLabel;
+  $("#chapter-foreshadow-reminder-title").textContent = `本章是伏笔《${reminder.title}》的${roleLabel}`;
+  $("#chapter-foreshadow-reminder-context").textContent = reminder.note.trim()
+    || reminder.description.trim()
+    || `重要程度：${levelLabel(reminder.importance)}`;
+  $("#chapter-foreshadow-reminder-counter").textContent = `${chapterForeshadowReminderIndex + 1} / ${chapterForeshadowReminders.length}`;
+  const hasMultiple = chapterForeshadowReminders.length > 1;
+  container.dataset.multiple = String(hasMultiple);
+  const previous = $("#chapter-foreshadow-reminder-previous");
+  const next = $("#chapter-foreshadow-reminder-next");
+  previous.classList.toggle("hidden", !hasMultiple);
+  next.classList.toggle("hidden", !hasMultiple);
+  previous.disabled = chapterForeshadowReminderIndex === 0;
+  next.disabled = chapterForeshadowReminderIndex >= chapterForeshadowReminders.length - 1;
+  $("#chapter-foreshadow-reminder-description").textContent = reminder.description;
+  $("#chapter-foreshadow-reminder-description-row").classList.toggle("hidden", !reminder.description.trim());
+  $("#chapter-foreshadow-reminder-note").textContent = reminder.note;
+  $("#chapter-foreshadow-reminder-note-row").classList.toggle("hidden", !reminder.note.trim());
+  $("#chapter-foreshadow-reminder-importance").textContent = levelLabel(reminder.importance);
+  const details = $("#chapter-foreshadow-reminder-details");
+  const detailsButton = $("#chapter-foreshadow-reminder-details-button");
+  details.classList.toggle("hidden", !chapterForeshadowReminderDetailsExpanded);
+  detailsButton.setAttribute("aria-expanded", String(chapterForeshadowReminderDetailsExpanded));
+  detailsButton.textContent = chapterForeshadowReminderDetailsExpanded ? "收起详情" : "查看详情";
+  const snooze = $("#chapter-foreshadow-reminder-snooze");
+  snooze.setAttribute("aria-label", `本次会话暂不处理伏笔“${reminder.title}”`);
+  const resolve = $("#chapter-foreshadow-reminder-resolve");
+  resolve.classList.toggle("hidden", !canEditModule("outlines"));
+  resolve.disabled = chapterForeshadowReminderResolveInFlight;
+  resolve.textContent = chapterForeshadowReminderResolveInFlight ? "正在标记" : "标记已回收";
+  resolve.setAttribute("aria-label", `将伏笔“${reminder.title}”标记为已回收`);
+  container.classList.remove("hidden");
+  syncMobileAiPanelSafeTop();
+}
+
+function clearChapterForeshadowReminders({ invalidateRequest = false } = {}) {
+  if (invalidateRequest) chapterForeshadowReminderRequestId += 1;
+  chapterForeshadowReminders = [];
+  chapterForeshadowReminderIndex = 0;
+  chapterForeshadowReminderDetailsExpanded = false;
+  chapterForeshadowReminderResolveInFlight = false;
+  renderChapterForeshadowReminder();
+}
+
+function persistForeshadowReminderSnoozes() {
+  try {
+    presenceSessionStorage?.setItem(
+      FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
+      serializeForeshadowReminderSnoozes(foreshadowReminderSnoozes)
+    );
+  } catch {
+    // 浏览器禁用会话存储时，当前页面内的静默状态仍然有效。
+  }
+}
+
+function focusAfterChapterForeshadowReminderAction() {
+  queueMicrotask(() => {
+    if (currentChapterForeshadowReminder()) $("#chapter-foreshadow-reminder-details-button").focus();
+    else $("#chapter-content").focus({ preventScroll: true });
+  });
+}
+
+async function loadChapterForeshadowReminders({ preserveOccurrenceId = null, focusAfterUpdate = false } = {}) {
+  const workId = state.work?.id;
+  const chapterId = state.chapter?.id;
+  const requestId = ++chapterForeshadowReminderRequestId;
+  const target = { workId, chapterId };
+  if (!workId || !chapterId || state.module !== "editor" || !canReadModule("outlines")) {
+    clearChapterForeshadowReminders();
+    if (focusAfterUpdate) focusAfterChapterForeshadowReminderAction();
+    return false;
+  }
+  const previousOccurrenceId = preserveOccurrenceId ?? currentChapterForeshadowReminder()?.occurrenceId ?? null;
+  try {
+    const reminders = await api(`/api/works/${encodeURIComponent(workId)}/chapters/${encodeURIComponent(chapterId)}/foreshadow-reminders`);
+    if (
+      requestId !== chapterForeshadowReminderRequestId
+      || state.module !== "editor"
+      || $("#editor-view").classList.contains("hidden")
+      || !foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })
+    ) return false;
+    chapterForeshadowReminders = visibleForeshadowReminders(
+      reminders,
+      workId,
+      chapterId,
+      foreshadowReminderSnoozes
+    );
+    const preservedIndex = previousOccurrenceId
+      ? chapterForeshadowReminders.findIndex((item) => item.occurrenceId === previousOccurrenceId)
+      : -1;
+    chapterForeshadowReminderIndex = preservedIndex >= 0 ? preservedIndex : 0;
+    chapterForeshadowReminderDetailsExpanded = false;
+    chapterForeshadowReminderResolveInFlight = false;
+    renderChapterForeshadowReminder();
+    if (focusAfterUpdate) focusAfterChapterForeshadowReminderAction();
+    return true;
+  } catch (error) {
+    if (
+      requestId !== chapterForeshadowReminderRequestId
+      || !foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })
+    ) return false;
+    clearChapterForeshadowReminders();
+    if (focusAfterUpdate) focusAfterChapterForeshadowReminderAction();
+    toast("伏笔提醒读取失败，请稍后重试", "error");
+    return false;
+  }
+}
+
+function showChapterForeshadowReminderAt(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= chapterForeshadowReminders.length) return;
+  chapterForeshadowReminderIndex = index;
+  chapterForeshadowReminderDetailsExpanded = false;
+  renderChapterForeshadowReminder();
+}
+
+function snoozeCurrentChapterForeshadowReminder() {
+  const reminder = currentChapterForeshadowReminder();
+  const workId = state.work?.id;
+  const chapterId = state.chapter?.id;
+  const key = foreshadowReminderSnoozeKey(workId, chapterId, reminder);
+  if (!reminder || !key) return;
+  foreshadowReminderSnoozes.delete(key);
+  foreshadowReminderSnoozes.add(key);
+  persistForeshadowReminderSnoozes();
+  chapterForeshadowReminders = chapterForeshadowReminders.filter((item) => item.occurrenceId !== reminder.occurrenceId);
+  chapterForeshadowReminderIndex = Math.min(chapterForeshadowReminderIndex, Math.max(0, chapterForeshadowReminders.length - 1));
+  chapterForeshadowReminderDetailsExpanded = false;
+  renderChapterForeshadowReminder();
+  focusAfterChapterForeshadowReminderAction();
+  toast("本次会话将不再提示这条伏笔");
+}
+
+async function resolveCurrentChapterForeshadowReminder() {
+  const reminder = currentChapterForeshadowReminder();
+  const workId = state.work?.id;
+  const chapterId = state.chapter?.id;
+  if (!reminder || !workId || !chapterId || !canEditModule("outlines") || chapterForeshadowReminderResolveInFlight) return;
+  const target = { workId, chapterId };
+  chapterForeshadowReminderResolveInFlight = true;
+  renderChapterForeshadowReminder();
+  try {
+    await api(`/api/works/${encodeURIComponent(workId)}/chapters/${encodeURIComponent(chapterId)}/foreshadow-reminders/${encodeURIComponent(reminder.foreshadowId)}/resolve`, {
+      method: "POST",
+      body: { expectedVersionNo: reminder.versionNo }
+    });
+    if (!foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })) return;
+    chapterForeshadowReminders = chapterForeshadowReminders.filter((item) => item.foreshadowId !== reminder.foreshadowId);
+    chapterForeshadowReminderIndex = Math.min(chapterForeshadowReminderIndex, Math.max(0, chapterForeshadowReminders.length - 1));
+    chapterForeshadowReminderResolveInFlight = false;
+    chapterForeshadowReminderDetailsExpanded = false;
+    renderChapterForeshadowReminder();
+    toast(`伏笔“${reminder.title}”已标记为已回收`);
+    await loadChapterForeshadowReminders({ focusAfterUpdate: true });
+  } catch (error) {
+    if (!foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })) return;
+    chapterForeshadowReminderResolveInFlight = false;
+    renderChapterForeshadowReminder();
+    if (error.code === "VERSION_CONFLICT" || error.status === 404) {
+      await loadChapterForeshadowReminders({ focusAfterUpdate: true });
+      toast("伏笔状态已变化，提醒已刷新");
+      return;
+    }
+    toast(error.message, "error");
+  }
+}
+
 async function selectChapter(chapterId, { editMode = false } = {}) {
-  if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
+  const selectionRequestId = ++chapterSelectionRequestId;
+  clearChapterForeshadowReminders({ invalidateRequest: true });
+  if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) {
+    if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
+    return;
+  }
+  if (selectionRequestId !== chapterSelectionRequestId) return;
   cancelChapterAutoSave();
   if (state.chapter?.id !== chapterId) {
-    state.chapter = await api(`/api/chapters/${chapterId}`);
-    mergeChapterDirectoryEntry(state.chapter);
+    const chapter = await api(`/api/chapters/${chapterId}`);
+    if (selectionRequestId !== chapterSelectionRequestId) return;
+    state.chapter = chapter;
+    mergeChapterDirectoryEntry(chapter);
   }
+  if (selectionRequestId !== chapterSelectionRequestId) return;
   state.collapsedVolumeIds.delete(state.chapter.volumeId);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   chapterEditorReadOnly = !canEditProse() || !editMode;
@@ -6056,6 +6284,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   else setSaveState("已保存");
   renderTree();
   replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
+  await loadChapterForeshadowReminders();
 }
 
 function updateChapterStats() {
@@ -6083,6 +6312,8 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  chapterSelectionRequestId += 1;
+  clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
@@ -6129,6 +6360,10 @@ async function showModule(module) {
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
+  if (module !== "editor") {
+    chapterSelectionRequestId += 1;
+    clearChapterForeshadowReminders({ invalidateRequest: true });
+  }
   if (module !== "tasks") stopTaskProgressRefresh();
   applyWorkAccessMode();
   markActiveModule(module);
@@ -13950,6 +14185,27 @@ $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-foreshadow-reminder-previous").addEventListener("click", () => {
+  showChapterForeshadowReminderAt(chapterForeshadowReminderIndex - 1);
+});
+$("#chapter-foreshadow-reminder-next").addEventListener("click", () => {
+  showChapterForeshadowReminderAt(chapterForeshadowReminderIndex + 1);
+});
+$("#chapter-foreshadow-reminder-details-button").addEventListener("click", () => {
+  chapterForeshadowReminderDetailsExpanded = !chapterForeshadowReminderDetailsExpanded;
+  renderChapterForeshadowReminder();
+});
+$("#chapter-foreshadow-reminder-snooze").addEventListener("click", snoozeCurrentChapterForeshadowReminder);
+$("#chapter-foreshadow-reminder-resolve").addEventListener("click", () => {
+  void resolveCurrentChapterForeshadowReminder();
+});
+$("#chapter-foreshadow-reminder").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !chapterForeshadowReminderDetailsExpanded) return;
+  event.preventDefault();
+  chapterForeshadowReminderDetailsExpanded = false;
+  renderChapterForeshadowReminder();
+  $("#chapter-foreshadow-reminder-details-button").focus();
+});
 $("#chapter-delete-button").addEventListener("click", () => {
   if (state.chapter) void deleteChapter(state.chapter.id);
 });
@@ -14097,6 +14353,7 @@ $("#ai-panel-toggle").addEventListener("click", () => {
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncMobileAiPanelSafeTop).observe($("#chapter-foreshadow-reminder"));
 window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
   applyPanelLayout();
