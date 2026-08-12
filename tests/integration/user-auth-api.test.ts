@@ -2121,6 +2121,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
         .expect(403);
       expect(denied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     }
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_stream_requests WHERE work_id = ?",
+      workId
+    )).toEqual({ count: 0 });
   });
 
   it("AI 工具按当前成员模块权限限制正文读取", async () => {

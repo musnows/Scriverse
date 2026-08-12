@@ -21,7 +21,7 @@ describe("设定筛选界面", () => {
     ]);
 
     expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-v3');
-    expect(page.text).toContain('/app.js?v=20260812-race-common-settings-v2');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-idempotency-v2');
     expect(application.text).toContain('/setting-filters.js?v=20260810-setting-inline-filters-v1');
     expect(application.text).toContain('const settingFilters = { keyword: "", category: "", lockState: "all" };');
     expect(application.text).toContain('aria-label="筛选设定" aria-controls="setting-filter-panel" aria-expanded="${settingFiltersPanelOpen}"');

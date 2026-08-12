@@ -539,6 +539,11 @@ function aiAssistantRequestId(request) {
   return request.userMessageId ? `assistant:${request.userMessageId}` : null;
 }
 
+function createAiIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2).padEnd(16, "0")}`;
+}
+
 function userAvatarInitial(user) {
   return Array.from(String(user?.displayName || user?.username || "作"))[0] ?? "作";
 }
@@ -12064,7 +12069,7 @@ async function sendAi() {
         modelId,
         citations,
         conversationId: requestHolder.snapshot.conversationId
-      });
+      }, createAiIdempotencyKey());
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (streamed.action === "warn") return;
       assistantContent = streamed.content;
@@ -12127,6 +12132,15 @@ async function sendAi() {
       await persistAiRequestInterruption(request);
       return;
     }
+    if (["AI_CONVERSATION_RESPONSE_IN_PROGRESS", "AI_IDEMPOTENT_REQUEST_IN_PROGRESS"].includes(error?.code)) {
+      toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
+      $("#ai-prompt").focus();
+      return;
+    }
+    if (["IDEMPOTENCY_KEY_REUSED", "AI_IDEMPOTENT_REQUEST_TERMINAL"].includes(error?.code)) {
+      toast(error.message, "error");
+      return;
+    }
     setAiAssistantStatus("error");
     const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
@@ -12150,7 +12164,7 @@ async function sendAi() {
   }
 }
 
-async function streamChat(requestHolder, body) {
+async function streamChat(requestHolder, body, idempotencyKey) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
@@ -12220,7 +12234,7 @@ async function streamChat(requestHolder, body) {
     const request = assertAiRequestCurrent(requestHolder.snapshot);
     const response = await fetch(`/api/works/${encodeURIComponent(request.workId)}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken },
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken, "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(body),
       signal: request.signal
     });
@@ -12340,6 +12354,8 @@ async function streamChat(requestHolder, body) {
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
+      } else if (eventName === "request_status") {
+        streamError = createClientError(payload, "AI 请求状态不可重放", response.status);
       } else if (eventName === "error") {
         setAiAssistantStatus("error");
         streamError = createClientError(payload, "AI 流式调用失败", response.status);

@@ -1305,4 +1305,41 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
+
+  it("迁移 89 创建 AI 对话流请求锁并保持旧对话完整", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stream-lock-"));
+    roots.push(root);
+    const filename = join(root, "stream-lock.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "流请求锁迁移作品" });
+    const conversation = store.createAiConversation(String(work.id), "迁移前对话");
+    store.addAiConversationMessage(String(conversation.id), { role: "user", content: "迁移前消息" });
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("DROP TABLE ai_conversation_stream_requests; DELETE FROM schema_migrations WHERE version = 89");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    const migratedStore = new Store(migrated);
+    const started = migratedStore.beginAiConversationStreamRequest({
+      workId: String(work.id),
+      conversationId: String(conversation.id),
+      actorScope: "user:migration-author",
+      idempotencyKey: "migration-request-0001",
+      requestHash: "a".repeat(64),
+      userMessage: { content: "迁移后消息" }
+    });
+    expect(started.disposition).toBe("started");
+    expect(migrated.all("PRAGMA index_list(ai_conversation_stream_requests)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_ai_conversation_stream_requests_active",
+      "idx_ai_conversation_stream_requests_lease"
+    ]));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 89")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?", String(conversation.id))).toEqual({ count: 2 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
 });

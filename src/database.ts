@@ -6,9 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 88;
+export const DATABASE_SCHEMA_VERSION = 89;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -598,6 +598,28 @@ export class Database {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS ai_conversation_stream_requests (
+        id TEXT PRIMARY KEY,
+        work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+        actor_scope TEXT NOT NULL CHECK(length(actor_scope) BETWEEN 1 AND 200),
+        idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 16 AND 128),
+        request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
+        status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'cancelled', 'failed', 'timed_out', 'abandoned')),
+        terminal_reason TEXT,
+        user_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+        assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+        lease_expires_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT,
+        UNIQUE(actor_scope, work_id, idempotency_key),
+        CHECK(
+          (status = 'in_progress' AND lease_expires_at IS NOT NULL AND completed_at IS NULL)
+          OR (status <> 'in_progress' AND lease_expires_at IS NULL AND completed_at IS NOT NULL)
+        )
+      );
+
       CREATE TABLE IF NOT EXISTS ai_conversation_forks (
         source_conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
         source_message_id TEXT NOT NULL REFERENCES ai_conversation_messages(id) ON DELETE CASCADE,
@@ -755,6 +777,10 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_ai_suggestions_work ON ai_suggestions(work_id, status, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversations_work ON ai_conversations(work_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_messages ON ai_conversation_messages(conversation_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_active
+        ON ai_conversation_stream_requests(conversation_id) WHERE status = 'in_progress';
+      CREATE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_lease
+        ON ai_conversation_stream_requests(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_ai_conversation_forks_message ON ai_conversation_forks(source_message_id);
       CREATE INDEX IF NOT EXISTS idx_audit_logs_work_created ON audit_logs(work_id, created_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_character_names_primary ON character_names(character_id) WHERE kind = 'primary';
@@ -3417,6 +3443,42 @@ export class Database {
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (88, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(89)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS ai_conversation_stream_requests (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+          actor_scope TEXT NOT NULL CHECK(length(actor_scope) BETWEEN 1 AND 200),
+          idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 16 AND 128),
+          request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
+          status TEXT NOT NULL CHECK(status IN ('in_progress', 'completed', 'cancelled', 'failed', 'timed_out', 'abandoned')),
+          terminal_reason TEXT,
+          user_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+          assistant_message_id TEXT REFERENCES ai_conversation_messages(id) ON DELETE SET NULL,
+          lease_expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT,
+          UNIQUE(actor_scope, work_id, idempotency_key),
+          CHECK(
+            (status = 'in_progress' AND lease_expires_at IS NOT NULL AND completed_at IS NULL)
+            OR (status <> 'in_progress' AND lease_expires_at IS NULL AND completed_at IS NOT NULL)
+          )
+        )`);
+        this.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_active
+          ON ai_conversation_stream_requests(conversation_id) WHERE status = 'in_progress'`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_ai_conversation_stream_requests_lease
+          ON ai_conversation_stream_requests(status, lease_expires_at)`);
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (89, ?)", new Date().toISOString());
       });
     }
   }

@@ -2025,7 +2025,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const controller = new AbortController();
     const streamed = await fetch(`http://127.0.0.1:${address.port}/api/works/${workId}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", "Idempotency-Key": "disconnect-request-0001" },
       body: JSON.stringify({
         instruction: "切换对话时取消旧流",
         scope: { type: "chapter", chapterId },
@@ -2054,12 +2054,43 @@ describe("AI 供应商、模型与建议 API", () => {
     for (let index = 0; index < 50 && !upstreamAborted; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
     expect(upstreamAborted).toBe(true);
 
+    let streamRequest = runtime.database.get<Record<string, unknown>>(
+      "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+      "disconnect-request-0001"
+    );
+    for (let index = 0; index < 50 && streamRequest?.status === "in_progress"; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      streamRequest = runtime.database.get(
+        "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+        "disconnect-request-0001"
+      );
+    }
+    expect(streamRequest).toMatchObject({ status: "cancelled" });
+
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(reloaded.body.data.title).toBe("切换对话时取消旧流");
     expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
       { role: "user", content: "切换对话时取消旧流" }
     ]);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions WHERE work_id = ?", workId)).toEqual({ count: 0 });
+
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      return new Response('data: {"choices":[{"delta":{"content":"取消后恢复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    const resumed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`)
+      .set("Idempotency-Key", "disconnect-request-0002")
+      .send({
+        instruction: "取消后继续",
+        scope: { type: "chapter", chapterId },
+        modelId,
+        conversationId
+      })
+      .expect(200);
+    expect(resumed.text).toContain("event: complete");
   });
 
   it("客户端完成回调重试使用用户消息请求键避免重复 assistant 消息", async () => {
