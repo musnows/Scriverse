@@ -383,6 +383,23 @@ function applyWorkAccessMode() {
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+const scrollBarHideTimers = new WeakMap();
+const scrollBarHideDelay = 650;
+
+function showScrollbarWhileScrolling(target) {
+  const element = target instanceof Element ? target : document.scrollingElement;
+  if (!element) return;
+  element.classList.add("is-scrollbar-visible");
+  const previousTimer = scrollBarHideTimers.get(element);
+  if (previousTimer) window.clearTimeout(previousTimer);
+  const timer = window.setTimeout(() => {
+    element.classList.remove("is-scrollbar-visible");
+    scrollBarHideTimers.delete(element);
+  }, scrollBarHideDelay);
+  scrollBarHideTimers.set(element, timer);
+}
+
+document.addEventListener("scroll", (event) => showScrollbarWhileScrolling(event.target), { capture: true, passive: true });
 const defaultImageUploadLimits = {
   avatarBytes: 2 * 1024 * 1024,
   coverBytes: 5 * 1024 * 1024,

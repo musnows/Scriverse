@@ -327,8 +327,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260812-image-upload-progress-v1');
-    expect(page.text).toContain('/styles.css?v=20260812-image-upload-progress-v2');
+    expect(page.text).toContain('/app.js?v=20260812-scrollbar-autohide-v1');
+    expect(page.text).toContain('/styles.css?v=20260812-scrollbar-autohide-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -432,6 +432,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("uploadWithProgress");
     expect(application.text).toContain("renderAvatarUploadProgress");
     expect(application.text).toContain("renderWorkCoverUploadProgress");
+    expect(application.text).toContain("showScrollbarWhileScrolling");
+    expect(application.text).toContain("scrollBarHideDelay = 650");
     expect(page.text).toContain('id="cover-file"');
     expect(page.text).toContain('accept="image/png,image/jpeg,image/webp"');
     expect(application.text).toContain('uploadWithProgress("/api/auth/avatar", { method: "PUT", body }');
@@ -595,6 +597,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
     expect(styles.text).toContain(".vditor-upload-queue {");
     expect(styles.text).toContain(".image-upload-progress-panel {");
+    expect(styles.text).toContain(".is-scrollbar-visible::-webkit-scrollbar {");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
     expect(styles.text).toContain("#character-section-editor-view");
     expect(styles.text).toContain("#knowledge-section-editor-view");
