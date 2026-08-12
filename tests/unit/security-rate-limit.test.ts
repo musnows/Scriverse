@@ -66,6 +66,7 @@ describe("安全限速器", () => {
       next();
     });
     expensiveApp.use(createExpensiveApiRateLimitMiddleware(60_000));
+    expensiveApp.get("/api/ai-conversations/:conversationId/export", (_request, response) => response.json({ ok: true }));
     expensiveApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
     const expensiveAgent = request.agent(expensiveApp);
 
