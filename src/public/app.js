@@ -6836,6 +6836,25 @@ function setTimelineMultiSelectMode(enabled) {
   updateTimelineMultiSelectControls();
 }
 
+async function deleteTimelineEvent(item, page = moduleListPages.timeline) {
+  if (!item || !canEditModule("timeline")) return toast("当前权限不能删除时间事件", "error");
+  if (!await confirmToast(`确认删除时间事件“${item.name}”吗？删除后将从当前时间轴移除。`, {
+    title: "删除时间事件",
+    confirmLabel: "继续删除"
+  })) return;
+  if (!await confirmToast(`删除时间事件“${item.name}”后将从当前时间轴移除，版本历史和审计记录仍会保留。仍要删除吗？`, {
+    title: "删除操作需要再次确认",
+    confirmLabel: "确认删除"
+  })) return;
+  try {
+    await api(`/api/timeline/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await renderTimeline(page);
+    toast(`已删除时间事件“${item.name}”`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 async function renderTimeline(page = moduleListPages.timeline) {
   const [events, tracks] = await Promise.all([
     moduleApiAllPages("timeline", `/api/works/${state.work.id}/timeline`),
@@ -6872,10 +6891,11 @@ async function renderTimeline(page = moduleListPages.timeline) {
     ? `<button class="timeline-track-menu" data-edit-timeline-track="${esc(activeTrack.id)}" type="button">编辑</button><button class="timeline-track-menu" data-entity-history="timeline-track" data-entity-id="${esc(activeTrack.id)}" data-entity-title="${esc(activeTrack.name)}" type="button">历史</button>`
     : "";
   const panelMarkup = `<section id="timeline-track-panel" class="timeline-track-panel" data-track-color-index="${timelineTrackColorIndex(activeTrack.id, tracks)}" role="tabpanel" aria-labelledby="timeline-track-tab-${esc(String(activeTrack.id || "ungrouped"))}"><div class="timeline-track-panel-copy"><strong>${esc(activeTrack.name)}</strong><p>${esc(activeTrack.description || "暂无说明")}</p></div><div class="timeline-track-panel-actions"><div class="timeline-track-actions" role="group" aria-label="当前轨道操作">${trackManageActions}<button class="timeline-track-menu" data-add-event-track="${esc(String(activeTrack.id ?? ""))}" type="button">添加事件</button><button class="timeline-track-menu" data-timeline-sort="asc" type="button" aria-pressed="${timelineSortDirection === "asc"}">正序</button><button class="timeline-track-menu" data-timeline-sort="desc" type="button" aria-pressed="${timelineSortDirection === "desc"}">倒序</button></div></div></section>`;
+  const canEditTimeline = canEditModule("timeline");
   const eventItem = (item) => {
     const trackKey = item.trackId ?? "";
     const colorIndex = timelineTrackColorIndex(trackKey, tracks);
-    return `<article class="timeline-item" data-track-color-index="${colorIndex}" data-event-id="${esc(item.id)}"><div class="timeline-card-meta"><input class="timeline-select" type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(timelineStatusLabel(item.status))}</small></div><h3>${esc(item.name)}</h3><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span class="timeline-item-location">地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}" type="button">编辑与排序</button><button data-split-event="${esc(item.id)}" type="button">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}" type="button">版本历史</button></div></article>`;
+    return `<article class="timeline-item" data-track-color-index="${colorIndex}" data-event-id="${esc(item.id)}"><div class="timeline-card-meta"><input class="timeline-select" type="checkbox" data-event-select="${esc(item.id)}" aria-label="选择 ${esc(item.name)}" hidden><small>${esc(item.timeLabel)} · ${esc(timelineStatusLabel(item.status))}</small></div><h3>${esc(item.name)}</h3><p>${esc(item.description || "暂无说明")}</p>${item.location ? `<span class="timeline-item-location">地点：${esc(item.location)}</span>` : ""}<div class="card-actions"><button data-edit-event="${esc(item.id)}" type="button">编辑与排序</button><button data-split-event="${esc(item.id)}" type="button">拆分</button><button data-entity-history="timeline-event" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.name)}" type="button">版本历史</button>${canEditTimeline ? `<button class="danger-button" data-delete-timeline-event="${esc(item.id)}" type="button" aria-label="删除时间事件 ${esc(item.name)}">删除</button>` : ""}</div></article>`;
   };
   const axisMarkup = pageResult.items.length
     ? `<div class="timeline-axis" data-testid="timeline-axis"><div class="timeline-list">${pageResult.items.map(eventItem).join("")}</div></div>`
@@ -6902,6 +6922,10 @@ async function renderTimeline(page = moduleListPages.timeline) {
   $("#module-content").querySelectorAll("[data-add-event-track]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(null, button.dataset.addEventTrack || null)));
   $("#module-content").querySelectorAll("[data-edit-event]").forEach((button) => button.addEventListener("click", () => openTimelineDialog(events.find((item) => item.id === button.dataset.editEvent))));
   $("#module-content").querySelectorAll("[data-split-event]").forEach((button) => button.addEventListener("click", () => openTimelineSplitDialog(events.find((item) => item.id === button.dataset.splitEvent))));
+  $("#module-content").querySelectorAll("[data-delete-timeline-event]").forEach((button) => button.addEventListener("click", () => {
+    const item = events.find((event) => event.id === button.dataset.deleteTimelineEvent);
+    if (item) void deleteTimelineEvent(item, pageResult.page);
+  }));
   bindEntityHistoryButtons(() => renderTimeline(pageResult.page));
   $("#merge-events")?.addEventListener("click", () => {
     const eventIds = [...$("#module-content").querySelectorAll("[data-event-select]:checked")].map((input) => input.dataset.eventSelect);
