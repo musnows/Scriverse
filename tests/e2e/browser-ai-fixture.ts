@@ -145,6 +145,11 @@ const mockAi = createServer(async (request, response) => {
     response.once("close", stop);
     return;
   }
+  if (latestUserMessage.includes("浏览器网络失败测试")) {
+    response.writeHead(503, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "浏览器模拟上游不可用" } }));
+    return;
+  }
   if (latestUserMessage.includes("这是什么项目")) {
     const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
     if (!systemPrompt.includes("预加载上下文为空或不足时，必须先调用工具主动查询")) {

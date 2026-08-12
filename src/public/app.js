@@ -12223,15 +12223,9 @@ async function streamChat(requestHolder, body) {
       throw error;
     }
     assertAiRequestCurrent(requestHolder.snapshot);
-    mountAssistantMessage();
     typewriter.reveal();
     revealProcessStepTypewriters();
-    message.classList.remove("is-streaming");
-    content.setAttribute("aria-busy", "false");
-    message.querySelector(".message-heading > span").textContent = aiAssistantLabel("生成中断");
-    renderStreamingProcessSteps(true, elapsedProcessTime());
-    meta.textContent = "生成中断";
-    scrollAiFeedToBottom();
+    if (messageMounted) message.remove();
     throw error;
   }
 }
