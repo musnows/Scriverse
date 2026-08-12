@@ -6,11 +6,21 @@ import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-a
 import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260812-ai-request-snapshot-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
+import {
+  FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
+  foreshadowReminderRequestTargetsState,
+  foreshadowReminderSnoozeKey,
+  parseForeshadowReminderSnoozes,
+  serializeForeshadowReminderSnoozes,
+  visibleForeshadowReminders
+} from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
+import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
+import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
@@ -64,6 +74,7 @@ import { systemStatusPresentation } from "/system-status.js?v=20260801-system-he
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
+import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
   containImageRect,
@@ -537,6 +548,11 @@ function invalidateAiConversationNavigation(reason) {
 
 function aiAssistantRequestId(request) {
   return request.userMessageId ? `assistant:${request.userMessageId}` : null;
+}
+
+function createAiIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2).padEnd(16, "0")}`;
 }
 
 function userAvatarInitial(user) {
@@ -1068,6 +1084,7 @@ function applyPanelLayout(persist = false) {
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
   $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
+  syncMobileAiPanelSafeTop();
   scheduleChapterLineNumbers();
   if (persist) {
     try { localStorage.setItem(panelLayoutStorageKey, JSON.stringify(panelLayout)); } catch { /* 浏览器禁用存储时仅保留当前布局 */ }
@@ -1126,6 +1143,20 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterSelectionRequestId = 0;
+let chapterForeshadowReminderRequestId = 0;
+let chapterForeshadowReminders = [];
+let chapterForeshadowReminderIndex = 0;
+let chapterForeshadowReminderDetailsExpanded = false;
+let chapterForeshadowReminderResolveInFlight = false;
+let foreshadowReminderSnoozes = new Set();
+try {
+  foreshadowReminderSnoozes = parseForeshadowReminderSnoozes(
+    presenceSessionStorage?.getItem(FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY)
+  );
+} catch {
+  // 浏览器禁用会话存储时使用页面级静默状态。
+}
 let moduleNavExpanded = false;
 const chapterAutoSaveDelay = 800;
 const chapterLineInputRenderDelay = 32;
@@ -2498,15 +2529,18 @@ async function persistAiConversationMessage(conversationId, role, content, citat
   });
 }
 
-async function persistAiRequestInterruption(request) {
+async function persistAiRequestInterruption(request, interruption = null) {
   if (!request.conversationId || !request.userMessageId) return null;
+  const partialContent = typeof interruption?.content === "string" && interruption.content.trim()
+    ? interruption.content
+    : null;
   try {
     const message = await persistAiConversationMessage(
       request.conversationId,
       "assistant",
-      "调用失败：生成已取消，已收到的未完成内容未保存。",
+      partialContent ?? "调用失败：生成已取消，尚未收到可保留的回复内容。",
       [],
-      {},
+      partialContent ? interruption.metadata : {},
       { requestId: aiAssistantRequestId(request) }
     );
     updateAiConversationSummaryFromMessage(message);
@@ -2540,6 +2574,22 @@ function clearAiPromptComposer() {
   state.aiCitations = [];
   state.aiReferences = [];
   setAiPromptText("");
+  renderAiCitations();
+  hideAiMentionMenu();
+}
+
+function captureAiPromptComposer() {
+  return {
+    text: aiPromptText(),
+    citations: state.aiCitations.map((citation) => ({ ...citation })),
+    references: state.aiReferences.map((reference) => ({ ...reference }))
+  };
+}
+
+function restoreAiPromptComposer(snapshot) {
+  state.aiCitations = snapshot.citations.map((citation) => ({ ...citation }));
+  state.aiReferences = snapshot.references.map((reference) => ({ ...reference }));
+  setAiPromptText(snapshot.text);
   renderAiCitations();
   hideAiMentionMenu();
 }
@@ -3175,7 +3225,22 @@ function createClientError(payload, fallbackMessage, fallbackStatus = null) {
   error.providerId = typeof source.providerId === "string" ? source.providerId : undefined;
   error.modelId = typeof source.modelId === "string" ? source.modelId : undefined;
   error.modelRecordId = typeof source.modelRecordId === "string" ? source.modelRecordId : undefined;
+  error.phase = typeof source.phase === "string" ? source.phase : undefined;
+  error.idleTimeoutSeconds = typeof source.idleTimeoutSeconds === "number" ? source.idleTimeoutSeconds : undefined;
   return error;
+}
+
+function aiStreamInterruptionLabel(code) {
+  if (code === "AI_STREAM_IDLE_TIMEOUT") return "网络超时";
+  if (code === "AI_STREAM_NETWORK_ERROR") return "网络中断";
+  if (code === "AI_STREAM_UPSTREAM_CLOSED") return "流被关闭";
+  if (code === "AI_STREAM_REQUEST_CANCELLED") return "请求已取消";
+  return "生成中断";
+}
+
+function formatAiStreamInterruptionMeta(code, preservedCharacters) {
+  const label = aiStreamInterruptionLabel(code);
+  return preservedCharacters > 0 ? `${label} · 已保留 ${preservedCharacters} 字` : label;
 }
 
 function formatAiFailureMessage(error) {
@@ -3276,7 +3341,7 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   if (path.includes("/races")) affected.add("races");
   if (path.includes("/organizations")) affected.add("organizations");
   if (path.includes("/timeline")) affected.add("timeline");
-  if (path.includes("/outlines") || path.includes("/foreshadows")) affected.add("outlines");
+  if (path.includes("/outlines") || path.includes("/foreshadows") || path.includes("/foreshadow-reminders")) affected.add("outlines");
   if (path.includes("/relationships")) affected.add("relationships");
   if (path.includes("/chapter-annotations/") || /\/chapters\/[^/]+\/annotations(?:$|\?)/u.test(path)) affected.add("comments");
   if (path.includes("/reviews")) affected.add("reviews");
@@ -3648,6 +3713,8 @@ function toast(message, type = "info") {
   const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
+  element.setAttribute("role", type === "error" ? "alert" : "status");
+  element.setAttribute("aria-atomic", "true");
   element.textContent = message;
   region.append(element);
   raiseToastRegion();
@@ -3961,6 +4028,7 @@ async function persistChapter({ automatic = false } = {}) {
   }
   if (sameChapterSnapshot(draft, lastSavedChapterSnapshot)) {
     setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
+    if (!automatic) await loadChapterForeshadowReminders();
     return state.chapter;
   }
   const saveGuard = confirmConcurrentSave();
@@ -3997,6 +4065,7 @@ async function persistChapter({ automatic = false } = {}) {
     } else {
       scheduleChapterAutoSave(250);
     }
+    await loadChapterForeshadowReminders();
     return state.chapter;
   } catch (error) {
     if (state.chapter?.id === draft.chapterId) setSaveState("自动保存失败", true);
@@ -5084,29 +5153,69 @@ function openGlobalReplaceDialog() {
 async function refreshWorkAfterGlobalReplace(route, result) {
   const workId = state.work?.id;
   if (!workId) return;
+  const previousVolumes = Array.isArray(state.work.volumes) ? state.work.volumes : [];
+  const refreshPlan = buildGlobalReplaceRefreshPlan({
+    volumes: previousVolumes,
+    collapsedVolumeIds: state.collapsedVolumeIds,
+    selectedChapterId: state.chapter?.id,
+    selectedChapterVolumeId: state.chapter?.volumeId,
+    routeChapterId: route.view === "editor" ? route.chapterId : null,
+    scope: String(result?.scope ?? ""),
+    chapterCount: result?.chapterCount,
+    settingCount: result?.settingCount
+  });
   const nextWork = result?.work ?? await api(`/api/works/${encodeURIComponent(workId)}?directory=volumes`);
   if (!nextWork || nextWork.id !== workId) return;
+  const refreshGeneration = refreshPlan.proseChanged ? ++workScopedUiGeneration : workScopedUiGeneration;
+  const previousVolumeById = new Map(previousVolumes.map((volume) => [volume.id, volume]));
   state.work = nextWork;
-  state.work.volumes = state.work.volumes.map((volume) => ({ ...volume, chapters: Array.isArray(volume.chapters) ? volume.chapters : [] }));
+  state.work.volumes = (Array.isArray(state.work.volumes) ? state.work.volumes : []).map((volume) => {
+    const previousVolume = previousVolumeById.get(volume.id);
+    return {
+      ...volume,
+      chapterCount: resolveGlobalReplaceChapterCount(volume, previousVolume),
+      chapters: refreshPlan.proseChanged
+        ? []
+        : Array.isArray(previousVolume?.chapters)
+          ? previousVolume.chapters
+          : Array.isArray(volume.chapters) ? volume.chapters : []
+    };
+  });
   state.works = state.works.map((work) => work.id === workId ? { ...work, ...nextWork } : work);
-  state.settings = [];
-  loadedVolumeChapterIds.clear();
-  volumeChapterLoadingIds.clear();
-  volumeChapterRequests.clear();
-  for (const volume of state.work.volumes) loadedVolumeChapterIds.add(volume.id);
-  state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));
-  if (String(result?.scope) === "prose" || String(result?.scope) === "prose-and-settings") {
-    state.chapter = null;
-    lastSavedChapterSnapshot = null;
+  if (refreshPlan.settingsChanged) state.settings = [];
+  if (refreshPlan.proseChanged) {
+    loadedVolumeChapterIds.clear();
+    volumeChapterLoadingIds.clear();
+    volumeChapterRequests.clear();
   }
+  const expandedVolumeIds = new Set(refreshPlan.expandedVolumeIds);
+  state.collapsedVolumeIds = new Set(state.work.volumes
+    .filter((volume) => !expandedVolumeIds.has(volume.id))
+    .map((volume) => volume.id));
   applyWorkAccessMode();
   showSystemStatus();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
+  if (refreshPlan.proseChanged) {
+    await Promise.all(refreshPlan.reloadVolumeIds.map((volumeId) => loadVolumeChapters(volumeId)));
+    if (state.work?.id !== workId || refreshGeneration !== workScopedUiGeneration) return;
+  }
   if (route.view === "editor" && route.chapterId && canReadModule("editor")) {
+    if (refreshPlan.proseChanged) {
+      state.chapter = null;
+      lastSavedChapterSnapshot = null;
+    }
     await selectChapter(route.chapterId);
+    if (refreshPlan.proseChanged && state.chapter?.volumeId) await loadVolumeChapters(state.chapter.volumeId);
+  } else if (refreshPlan.proseChanged && refreshPlan.selectedChapterId) {
+    const chapter = await api(`/api/chapters/${encodeURIComponent(refreshPlan.selectedChapterId)}`);
+    if (state.work?.id !== workId || refreshGeneration !== workScopedUiGeneration) return;
+    state.chapter = chapter;
+    mergeChapterDirectoryEntry(chapter);
+    lastSavedChapterSnapshot = { chapterId: chapter.id, title: chapter.title, content: chapter.content };
+    await loadVolumeChapters(chapter.volumeId);
   } else if (route.view === "module") {
     await showModule(route.module);
   } else if (route.view === "settings") {
@@ -5157,10 +5266,17 @@ async function submitGlobalReplace(event) {
   const button = $("#replace-submit");
   const route = currentPageRoute();
   const workId = state.work.id;
+  const hadDirtyDraft = state.dirty;
   button.disabled = true;
   button.textContent = "替换中…";
   cancelChapterAutoSave();
   state.dirty = false;
+  let replacementApplied = false;
+  const restoreDraftAfterNoop = () => {
+    if (!hadDirtyDraft) return;
+    if (state.chapter && canEditProse() && !chapterEditorReadOnly) scheduleChapterAutoSave();
+    else state.dirty = true;
+  };
   try {
     const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
       method: "POST",
@@ -5168,16 +5284,20 @@ async function submitGlobalReplace(event) {
       skipOptimisticVersion: true
     });
     $("#replace-dialog").close();
-    if (Number(result.totalMatches) > 0) await refreshWorkAfterGlobalReplace(route, result);
     if (Number(result.totalMatches) > 0) {
+      replacementApplied = true;
+      await refreshWorkAfterGlobalReplace(route, result);
+      if (Number(result.chapterCount) === 0) restoreDraftAfterNoop();
       const changedTargets = [];
       if (Number(result.chapterCount) > 0) changedTargets.push(`${result.chapterCount} 章`);
       if (Number(result.settingCount) > 0) changedTargets.push(`${result.settingCount} 条设定`);
       toast(`全局替换完成：${result.totalMatches} 处，已更新 ${changedTargets.join("、")}`);
     } else {
+      restoreDraftAfterNoop();
       toast("没有找到需要替换的内容");
     }
   } catch (error) {
+    if (!replacementApplied) restoreDraftAfterNoop();
     toast(error.message, "error");
   } finally {
     button.disabled = false;
@@ -5428,6 +5548,8 @@ function renderShelf() {
 }
 
 function resetWorkScopedUiCaches() {
+  chapterSelectionRequestId += 1;
+  clearChapterForeshadowReminders({ invalidateRequest: true });
   invalidateAiConversationNavigation("已切换作品");
   stopBackgroundTaskCenter();
   workScopedUiGeneration += 1;
@@ -5556,9 +5678,11 @@ async function loadVolumeChapters(volumeId) {
         renderTree();
       }
     } finally {
-      volumeChapterLoadingIds.delete(volumeId);
-      volumeChapterRequests.delete(volumeId);
-      if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree();
+      if (volumeChapterRequests.get(volumeId) === request) {
+        volumeChapterLoadingIds.delete(volumeId);
+        volumeChapterRequests.delete(volumeId);
+        if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree();
+      }
     }
   })();
   volumeChapterRequests.set(volumeId, request);
@@ -5566,9 +5690,10 @@ async function loadVolumeChapters(volumeId) {
 }
 
 async function loadAllVolumeChapters(workId) {
+  const generation = workScopedUiGeneration;
   const volumeIds = state.work?.id === workId ? state.work.volumes.map((volume) => volume.id) : [];
   for (const volumeId of volumeIds) {
-    if (state.work?.id !== workId) return;
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
     await loadVolumeChapters(volumeId);
   }
 }
@@ -5625,6 +5750,7 @@ function renderTree() {
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
         <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
+        <button class="chapter-batch-button volume-export-button" type="button" data-export-volume="${esc(volume.id)}" aria-label="导出“${esc(volume.title)}”为 EPUB" title="导出当前分卷为 EPUB"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
@@ -5664,6 +5790,12 @@ function renderTree() {
   });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
+  });
+  $("#novel-tree").querySelectorAll("[data-export-volume]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const volume = state.work?.volumes.find((item) => item.id === button.dataset.exportVolume);
+      if (volume) void downloadVolumeEpub(volume, button);
+    });
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -5924,13 +6056,214 @@ async function deleteChapter(chapterId) {
   }
 }
 
+function currentChapterForeshadowReminder() {
+  return chapterForeshadowReminders[chapterForeshadowReminderIndex] ?? null;
+}
+
+function syncMobileAiPanelSafeTop() {
+  const container = $("#chapter-foreshadow-reminder");
+  const safeTop = container.classList.contains("hidden")
+    ? 0
+    : Math.ceil(container.getBoundingClientRect().bottom);
+  $("#app").style.setProperty("--mobile-ai-panel-safe-top", `${safeTop}px`);
+}
+
+function renderChapterForeshadowReminder() {
+  const container = $("#chapter-foreshadow-reminder");
+  const reminder = currentChapterForeshadowReminder();
+  if (!reminder || !state.chapter || !state.work) {
+    container.classList.add("hidden");
+    container.removeAttribute("data-role");
+    container.removeAttribute("data-multiple");
+    $("#chapter-foreshadow-reminder-details").classList.add("hidden");
+    $("#chapter-foreshadow-reminder-details-button").setAttribute("aria-expanded", "false");
+    syncMobileAiPanelSafeTop();
+    return;
+  }
+  const roleLabel = reminder.role === "payoff" ? "回收章" : "提醒章";
+  container.dataset.role = reminder.role;
+  $("#chapter-foreshadow-reminder-role").textContent = roleLabel;
+  $("#chapter-foreshadow-reminder-title").textContent = `本章是伏笔《${reminder.title}》的${roleLabel}`;
+  $("#chapter-foreshadow-reminder-context").textContent = reminder.note.trim()
+    || reminder.description.trim()
+    || `重要程度：${levelLabel(reminder.importance)}`;
+  $("#chapter-foreshadow-reminder-counter").textContent = `${chapterForeshadowReminderIndex + 1} / ${chapterForeshadowReminders.length}`;
+  const hasMultiple = chapterForeshadowReminders.length > 1;
+  container.dataset.multiple = String(hasMultiple);
+  const previous = $("#chapter-foreshadow-reminder-previous");
+  const next = $("#chapter-foreshadow-reminder-next");
+  previous.classList.toggle("hidden", !hasMultiple);
+  next.classList.toggle("hidden", !hasMultiple);
+  previous.disabled = chapterForeshadowReminderIndex === 0;
+  next.disabled = chapterForeshadowReminderIndex >= chapterForeshadowReminders.length - 1;
+  $("#chapter-foreshadow-reminder-description").textContent = reminder.description;
+  $("#chapter-foreshadow-reminder-description-row").classList.toggle("hidden", !reminder.description.trim());
+  $("#chapter-foreshadow-reminder-note").textContent = reminder.note;
+  $("#chapter-foreshadow-reminder-note-row").classList.toggle("hidden", !reminder.note.trim());
+  $("#chapter-foreshadow-reminder-importance").textContent = levelLabel(reminder.importance);
+  const details = $("#chapter-foreshadow-reminder-details");
+  const detailsButton = $("#chapter-foreshadow-reminder-details-button");
+  details.classList.toggle("hidden", !chapterForeshadowReminderDetailsExpanded);
+  detailsButton.setAttribute("aria-expanded", String(chapterForeshadowReminderDetailsExpanded));
+  detailsButton.textContent = chapterForeshadowReminderDetailsExpanded ? "收起详情" : "查看详情";
+  const snooze = $("#chapter-foreshadow-reminder-snooze");
+  snooze.setAttribute("aria-label", `本次会话暂不处理伏笔“${reminder.title}”`);
+  const resolve = $("#chapter-foreshadow-reminder-resolve");
+  resolve.classList.toggle("hidden", !canEditModule("outlines"));
+  resolve.disabled = chapterForeshadowReminderResolveInFlight;
+  resolve.textContent = chapterForeshadowReminderResolveInFlight ? "正在标记" : "标记已回收";
+  resolve.setAttribute("aria-label", `将伏笔“${reminder.title}”标记为已回收`);
+  container.classList.remove("hidden");
+  syncMobileAiPanelSafeTop();
+}
+
+function clearChapterForeshadowReminders({ invalidateRequest = false } = {}) {
+  if (invalidateRequest) chapterForeshadowReminderRequestId += 1;
+  chapterForeshadowReminders = [];
+  chapterForeshadowReminderIndex = 0;
+  chapterForeshadowReminderDetailsExpanded = false;
+  chapterForeshadowReminderResolveInFlight = false;
+  renderChapterForeshadowReminder();
+}
+
+function persistForeshadowReminderSnoozes() {
+  try {
+    presenceSessionStorage?.setItem(
+      FORESHADOW_REMINDER_SNOOZE_STORAGE_KEY,
+      serializeForeshadowReminderSnoozes(foreshadowReminderSnoozes)
+    );
+  } catch {
+    // 浏览器禁用会话存储时，当前页面内的静默状态仍然有效。
+  }
+}
+
+function focusAfterChapterForeshadowReminderAction() {
+  queueMicrotask(() => {
+    if (currentChapterForeshadowReminder()) $("#chapter-foreshadow-reminder-details-button").focus();
+    else $("#chapter-content").focus({ preventScroll: true });
+  });
+}
+
+async function loadChapterForeshadowReminders({ preserveOccurrenceId = null, focusAfterUpdate = false } = {}) {
+  const workId = state.work?.id;
+  const chapterId = state.chapter?.id;
+  const requestId = ++chapterForeshadowReminderRequestId;
+  const target = { workId, chapterId };
+  if (!workId || !chapterId || state.module !== "editor" || !canReadModule("outlines")) {
+    clearChapterForeshadowReminders();
+    if (focusAfterUpdate) focusAfterChapterForeshadowReminderAction();
+    return false;
+  }
+  const previousOccurrenceId = preserveOccurrenceId ?? currentChapterForeshadowReminder()?.occurrenceId ?? null;
+  try {
+    const reminders = await api(`/api/works/${encodeURIComponent(workId)}/chapters/${encodeURIComponent(chapterId)}/foreshadow-reminders`);
+    if (
+      requestId !== chapterForeshadowReminderRequestId
+      || state.module !== "editor"
+      || $("#editor-view").classList.contains("hidden")
+      || !foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })
+    ) return false;
+    chapterForeshadowReminders = visibleForeshadowReminders(
+      reminders,
+      workId,
+      chapterId,
+      foreshadowReminderSnoozes
+    );
+    const preservedIndex = previousOccurrenceId
+      ? chapterForeshadowReminders.findIndex((item) => item.occurrenceId === previousOccurrenceId)
+      : -1;
+    chapterForeshadowReminderIndex = preservedIndex >= 0 ? preservedIndex : 0;
+    chapterForeshadowReminderDetailsExpanded = false;
+    chapterForeshadowReminderResolveInFlight = false;
+    renderChapterForeshadowReminder();
+    if (focusAfterUpdate) focusAfterChapterForeshadowReminderAction();
+    return true;
+  } catch (error) {
+    if (
+      requestId !== chapterForeshadowReminderRequestId
+      || !foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })
+    ) return false;
+    clearChapterForeshadowReminders();
+    if (focusAfterUpdate) focusAfterChapterForeshadowReminderAction();
+    toast("伏笔提醒读取失败，请稍后重试", "error");
+    return false;
+  }
+}
+
+function showChapterForeshadowReminderAt(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= chapterForeshadowReminders.length) return;
+  chapterForeshadowReminderIndex = index;
+  chapterForeshadowReminderDetailsExpanded = false;
+  renderChapterForeshadowReminder();
+}
+
+function snoozeCurrentChapterForeshadowReminder() {
+  const reminder = currentChapterForeshadowReminder();
+  const workId = state.work?.id;
+  const chapterId = state.chapter?.id;
+  const key = foreshadowReminderSnoozeKey(workId, chapterId, reminder);
+  if (!reminder || !key) return;
+  foreshadowReminderSnoozes.delete(key);
+  foreshadowReminderSnoozes.add(key);
+  persistForeshadowReminderSnoozes();
+  chapterForeshadowReminders = chapterForeshadowReminders.filter((item) => item.occurrenceId !== reminder.occurrenceId);
+  chapterForeshadowReminderIndex = Math.min(chapterForeshadowReminderIndex, Math.max(0, chapterForeshadowReminders.length - 1));
+  chapterForeshadowReminderDetailsExpanded = false;
+  renderChapterForeshadowReminder();
+  focusAfterChapterForeshadowReminderAction();
+  toast("本次会话将不再提示这条伏笔");
+}
+
+async function resolveCurrentChapterForeshadowReminder() {
+  const reminder = currentChapterForeshadowReminder();
+  const workId = state.work?.id;
+  const chapterId = state.chapter?.id;
+  if (!reminder || !workId || !chapterId || !canEditModule("outlines") || chapterForeshadowReminderResolveInFlight) return;
+  const target = { workId, chapterId };
+  chapterForeshadowReminderResolveInFlight = true;
+  renderChapterForeshadowReminder();
+  try {
+    await api(`/api/works/${encodeURIComponent(workId)}/chapters/${encodeURIComponent(chapterId)}/foreshadow-reminders/${encodeURIComponent(reminder.foreshadowId)}/resolve`, {
+      method: "POST",
+      body: { expectedVersionNo: reminder.versionNo }
+    });
+    if (!foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })) return;
+    chapterForeshadowReminders = chapterForeshadowReminders.filter((item) => item.foreshadowId !== reminder.foreshadowId);
+    chapterForeshadowReminderIndex = Math.min(chapterForeshadowReminderIndex, Math.max(0, chapterForeshadowReminders.length - 1));
+    chapterForeshadowReminderResolveInFlight = false;
+    chapterForeshadowReminderDetailsExpanded = false;
+    renderChapterForeshadowReminder();
+    toast(`伏笔“${reminder.title}”已标记为已回收`);
+    await loadChapterForeshadowReminders({ focusAfterUpdate: true });
+  } catch (error) {
+    if (!foreshadowReminderRequestTargetsState(target, { workId: state.work?.id, chapterId: state.chapter?.id })) return;
+    chapterForeshadowReminderResolveInFlight = false;
+    renderChapterForeshadowReminder();
+    if (error.code === "VERSION_CONFLICT" || error.status === 404) {
+      await loadChapterForeshadowReminders({ focusAfterUpdate: true });
+      toast("伏笔状态已变化，提醒已刷新");
+      return;
+    }
+    toast(error.message, "error");
+  }
+}
+
 async function selectChapter(chapterId, { editMode = false } = {}) {
-  if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) return;
+  const selectionRequestId = ++chapterSelectionRequestId;
+  clearChapterForeshadowReminders({ invalidateRequest: true });
+  if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) {
+    if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
+    return;
+  }
+  if (selectionRequestId !== chapterSelectionRequestId) return;
   cancelChapterAutoSave();
   if (state.chapter?.id !== chapterId) {
-    state.chapter = await api(`/api/chapters/${chapterId}`);
-    mergeChapterDirectoryEntry(state.chapter);
+    const chapter = await api(`/api/chapters/${chapterId}`);
+    if (selectionRequestId !== chapterSelectionRequestId) return;
+    state.chapter = chapter;
+    mergeChapterDirectoryEntry(chapter);
   }
+  if (selectionRequestId !== chapterSelectionRequestId) return;
   state.collapsedVolumeIds.delete(state.chapter.volumeId);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   chapterEditorReadOnly = !canEditProse() || !editMode;
@@ -5958,6 +6291,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   else setSaveState("已保存");
   renderTree();
   replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
+  await loadChapterForeshadowReminders();
 }
 
 function updateChapterStats() {
@@ -5985,6 +6319,8 @@ function tidyChapterBlankLines() {
 }
 
 function showWelcome(hasWork = false) {
+  chapterSelectionRequestId += 1;
+  clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
@@ -6031,6 +6367,10 @@ async function showModule(module) {
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
   state.module = module;
+  if (module !== "editor") {
+    chapterSelectionRequestId += 1;
+    clearChapterForeshadowReminders({ invalidateRequest: true });
+  }
   if (module !== "tasks") stopTaskProgressRefresh();
   applyWorkAccessMode();
   markActiveModule(module);
@@ -8498,12 +8838,24 @@ function renderProviderCards(providers, models) {
 
 function bindPlatformProviderActions(host, providers, models) {
   host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
+    const providerId = button.dataset.testProvider;
     button.disabled = true;
     button.textContent = "测试中";
-    const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
-    toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
-    await renderPlatformAiConfig();
-    await loadModels();
+    try {
+      const result = await api(`/api/providers/${providerId}/test`, { method: "POST", body: {} });
+      const notification = connectivityTestResultToast(result, "provider");
+      toast(notification.message, notification.type);
+      await renderPlatformAiConfig();
+      await loadModels();
+    } catch (error) {
+      const notification = connectivityTestErrorToast(error, "provider");
+      toast(notification.message, notification.type);
+    } finally {
+      button.disabled = false;
+      button.textContent = "测试连接";
+      const focusTarget = button.isConnected ? button : host.querySelector(`[data-test-provider="${CSS.escape(providerId)}"]`);
+      focusTarget?.focus({ preventScroll: true });
+    }
   }));
   host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel))));
   host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => {
@@ -9848,21 +10200,69 @@ function bindWorkCoverControls(work) {
   });
 }
 
-function downloadWorkManuscript(work, format = "markdown") {
+async function prepareEpubDownload(path, trigger) {
+  if (!path || trigger?.disabled) return;
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.setAttribute("aria-busy", "true");
+  }
+  toast("正在准备 EPUB 下载…");
+  try {
+    let response;
+    try {
+      response = await fetch(path, { method: "HEAD", headers: { Accept: "application/epub+zip" } });
+    } catch (error) {
+      updateSystemHealth({ status: "offline" });
+      throw error;
+    }
+    updateSystemHealth({ status: response.status >= 500 ? "degraded" : "ready" });
+    if (!response.ok) {
+      if (response.status === 401) {
+        const restarted = await checkSystemBoot(true);
+        if (!restarted) invalidateAuthentication();
+      }
+      throw new Error(`请求失败：${response.status}`);
+    }
+    window.location.href = path;
+    toast("EPUB 下载已开始");
+  } catch (error) {
+    toast(`EPUB 导出失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+  } finally {
+    if (trigger?.isConnected) {
+      trigger.disabled = false;
+      trigger.removeAttribute("aria-busy");
+      trigger.focus();
+    }
+  }
+}
+
+function downloadVolumeEpub(volume, trigger) {
+  if (!volume?.id) return;
+  return prepareEpubDownload(`/api/volumes/${encodeURIComponent(volume.id)}/export?format=epub`, trigger);
+}
+
+function downloadWorkManuscript(work, format = "markdown", trigger = null) {
   if (!work?.id) return;
-  const exportFormat = format === "docx" ? "docx" : "markdown";
+  const exportFormat = ["docx", "epub"].includes(format) ? format : "markdown";
+  if (exportFormat === "epub") {
+    return prepareEpubDownload(`/api/works/${encodeURIComponent(work.id)}/export?format=epub`, trigger);
+  }
   window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=${exportFormat}`;
 }
 
 let manuscriptExportWork = null;
+let manuscriptExportAnchor = null;
 
-function closeManuscriptExportMenu() {
+function closeManuscriptExportMenu(restoreFocus = false) {
   const menu = $("#manuscript-export-menu");
   if (!menu) return;
+  const anchor = manuscriptExportAnchor;
   menu.classList.add("hidden");
   manuscriptExportWork = null;
+  manuscriptExportAnchor = null;
   $("#export-button")?.setAttribute("aria-expanded", "false");
   $("#work-export-button")?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected) anchor.focus();
 }
 
 function showManuscriptExportMenu(anchor, work) {
@@ -9870,6 +10270,7 @@ function showManuscriptExportMenu(anchor, work) {
   const menu = $("#manuscript-export-menu");
   if (!menu) return;
   manuscriptExportWork = work;
+  manuscriptExportAnchor = anchor;
   menu.classList.remove("hidden");
   const anchorRect = anchor.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
@@ -9900,7 +10301,7 @@ function openWorkSettingsDialog(work) {
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
   const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
-    <div><strong id="work-export-settings-title">导出正文</strong><small>点击后选择导出 Markdown ZIP 或 DOCX（书名、分卷、章节为一级至三级标题；若已设置封面则嵌入为首页）。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <div><strong id="work-export-settings-title">导出正文</strong><small>点击后选择 Markdown ZIP、DOCX 或 EPUB；EPUB 包含作品元信息、封面、分卷层级和可跳转目录。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
     <button id="work-export-button" class="ghost-button" type="button" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false">导出正文</button>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
@@ -12109,6 +12510,7 @@ function openProviderDialog(item) {
       await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
       await renderPlatformAiConfig();
       await loadModels();
+      if (item) toast(connectivityConfigurationSavedToast("provider"));
     },
     item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex"
   );
@@ -12143,6 +12545,7 @@ function openModelDialog(providerId, item = null, provider = null) {
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
+    if (item) toast(connectivityConfigurationSavedToast("model"));
   }, item ? "模型配置" : "供应商模型");
   const modelIdInput = $("#dialog-fields input[name='modelId']");
   const contextWindowInput = $("#model-context-window");
@@ -12180,14 +12583,17 @@ function openModelDialog(providerId, item = null, provider = null) {
     button.textContent = "测试中";
     try {
       const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-      toast(result.ok ? (result.multimodalTested ? "模型连接测试成功，图片请求已验证" : "模型连接测试成功") : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      const notification = connectivityTestResultToast(result, "model");
+      toast(notification.message, notification.type);
       await renderPlatformAiConfig();
       await loadModels();
     } catch (error) {
-      toast(`模型连接测试失败：${error.message}`, "error");
+      const notification = connectivityTestErrorToast(error, "model");
+      toast(notification.message, notification.type);
     } finally {
       button.disabled = false;
       button.textContent = "测试连接";
+      if (button.isConnected) button.focus({ preventScroll: true });
     }
   });
   syncModelContextWindowGuidance();
@@ -12197,14 +12603,15 @@ function openModelDialog(providerId, item = null, provider = null) {
 
 async function sendAi() {
   if (!state.work) return toast("请先选择作品", "error");
-  const instruction = aiPromptText().trim();
+  const composerSnapshot = captureAiPromptComposer();
+  const instruction = composerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
   const requestScope = currentAiRequestScope();
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
-  const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  const citations = composerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
   const requestHolder = {
     snapshot: aiRequestManager.begin({
       workId: state.work.id,
@@ -12268,7 +12675,7 @@ async function sendAi() {
         modelId,
         citations,
         conversationId: requestHolder.snapshot.conversationId
-      });
+      }, createAiIdempotencyKey());
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (streamed.action === "warn") return;
       assistantContent = streamed.content;
@@ -12328,10 +12735,57 @@ async function sendAi() {
   } catch (error) {
     const request = requestHolder.snapshot;
     if (isAiRequestCancellation(error, request) || !aiRequestTargetsCurrentState(request)) {
-      await persistAiRequestInterruption(request);
+      await persistAiRequestInterruption(request, error?.streamInterruption);
+      return;
+    }
+    if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
+      restoreAiPromptComposer(composerSnapshot);
+      toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
+      $("#ai-prompt").focus();
+      return;
+    }
+    if (error?.code === "AI_IDEMPOTENT_REQUEST_IN_PROGRESS") {
+      toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
+      $("#ai-prompt").focus();
+      return;
+    }
+    if (["IDEMPOTENCY_KEY_REUSED", "AI_IDEMPOTENT_REQUEST_TERMINAL"].includes(error?.code)) {
+      toast(error.message, "error");
       return;
     }
     setAiAssistantStatus("error");
+    const interruption = error?.streamInterruption;
+    if (interruption?.content) {
+      try {
+        const persistedAssistantMessage = await persistAiConversationMessage(
+          request.conversationId,
+          "assistant",
+          interruption.content,
+          [],
+          interruption.metadata,
+          { requestId: aiAssistantRequestId(request) }
+        );
+        updateAiConversationSummaryFromMessage(persistedAssistantMessage);
+        const persistedContent = typeof persistedAssistantMessage.content === "string"
+          ? persistedAssistantMessage.content
+          : interruption.content;
+        if (aiRequestTargetsCurrentState(request)) {
+          const messageBody = interruption.message?.querySelector(".message-body");
+          if (messageBody && persistedContent !== interruption.content) messageBody.innerHTML = renderMarkdown(persistedContent);
+          const messageMeta = interruption.message?.querySelector(".message-meta");
+          if (messageMeta) messageMeta.textContent = formatAiStreamInterruptionMeta(error.code, persistedContent.length);
+          attachAssistantCopyAction(interruption.message, persistedContent);
+          updateMessageCreatedAt(interruption.message, persistedAssistantMessage.createdAt);
+          attachMessageIdentity(interruption.message, persistedAssistantMessage.id);
+        }
+      } catch {
+        /* 主请求错误已显示，已收到内容仍保留在当前页面。 */
+      }
+      if (aiRequestTargetsCurrentState(request)) {
+        toast(`${aiStreamInterruptionLabel(error.code)}：${error.message}`, "error");
+      }
+      return;
+    }
     const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
     try {
@@ -12354,7 +12808,7 @@ async function sendAi() {
   }
 }
 
-async function streamChat(requestHolder, body) {
+async function streamChat(requestHolder, body, idempotencyKey) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
@@ -12424,7 +12878,7 @@ async function streamChat(requestHolder, body) {
     const request = assertAiRequestCurrent(requestHolder.snapshot);
     const response = await fetch(`/api/works/${encodeURIComponent(request.workId)}/chat/stream`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken },
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken, "Idempotency-Key": idempotencyKey },
       body: JSON.stringify(body),
       signal: request.signal
     });
@@ -12433,20 +12887,9 @@ async function streamChat(requestHolder, body) {
       const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
       throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
     }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let streamError = null;
-    const consume = async (eventText) => {
+    const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
-      let eventName = "message";
-      const dataLines = [];
-      for (const line of eventText.split(/\r?\n/)) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-      }
-      if (!dataLines.length) return;
-      const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!state.aiPromptSent) setAiContextMeter(payload.usage);
@@ -12544,41 +12987,72 @@ async function streamChat(requestHolder, body) {
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
+      } else if (eventName === "request_status") {
+        streamError = createClientError(payload, "AI 请求状态不可重放", response.status);
       } else if (eventName === "error") {
         setAiAssistantStatus("error");
         streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
-    while (true) {
-      const chunk = await reader.read();
-      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-      const events = buffer.split(/\r?\n\r?\n/);
-      buffer = events.pop() ?? "";
-      for (const eventText of events) await consume(eventText);
-      if (chunk.done) break;
-    }
-    if (buffer.trim()) await consume(buffer);
+    const { completed: streamCompleted } = await readAiEventStream(response.body, consume);
     await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
     assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
+    assertAiStreamCompleted(streamCompleted);
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
+    const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));
+    const interruptionCode = typeof streamFailure.code === "string" ? streamFailure.code.slice(0, 100) : "AI_STREAM_FAILED";
+    const interruption = streamedText ? {
+      content: streamedText,
+      message,
+      metadata: {
+        interrupted: true,
+        interruptionCode,
+        interruptionMessage: streamFailure.message.slice(0, 500),
+        processDurationMs: Math.min(86_400_000, elapsedProcessTime())
+      }
+    } : null;
+    if (interruption) streamFailure.streamInterruption = interruption;
     if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) {
+      typewriter.reveal();
+      revealProcessStepTypewriters();
       if (messageMounted) message.remove();
-      throw error;
+      throw streamFailure;
     }
     assertAiRequestCurrent(requestHolder.snapshot);
     typewriter.reveal();
     revealProcessStepTypewriters();
-    if (messageMounted) message.remove();
-    throw error;
+    if (!interruption) {
+      if (messageMounted) message.remove();
+      throw streamFailure;
+    }
+    const interruptionLabel = aiStreamInterruptionLabel(interruptionCode);
+    message.classList.remove("is-streaming");
+    message.classList.add("is-error");
+    message.dataset.status = "interrupted";
+    content.setAttribute("aria-busy", "false");
+    const headingRole = message.querySelector(".message-heading > span");
+    headingRole.textContent = aiAssistantLabel(interruptionLabel);
+    const interruptionBadge = document.createElement("strong");
+    interruptionBadge.className = "ai-message-status is-error";
+    interruptionBadge.textContent = "中断";
+    interruptionBadge.setAttribute("aria-label", `消息状态：${interruptionLabel}`);
+    headingRole.append(interruptionBadge);
+    renderStreamingProcessSteps(true, elapsedProcessTime());
+    meta.textContent = formatAiStreamInterruptionMeta(interruptionCode, streamedText.length);
+    if (streamedText) attachAssistantCopyAction(message, streamedText);
+    scrollAiFeedToBottom();
+    throw streamFailure;
   }
 }
 
 function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null) {
   const message = document.createElement("div");
   const isFailure = role === "assistant" && text.startsWith("调用失败：");
-  message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;
+  const isInterrupted = role === "assistant" && metadata?.interrupted === true;
+  const interruptionCode = typeof metadata?.interruptionCode === "string" ? metadata.interruptionCode : "AI_STREAM_FAILED";
+  message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;
   const messageBody = isFailure
     ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
     : renderMarkdown(text);
@@ -12587,13 +13061,17 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     event.preventDefault();
     openAiToolCallSettings().catch((error) => toast(`打开 AI 设置失败：${error.message}`, "error"));
   });
-  const heading = attachMessageHeading(message, role === "user" ? "作者" : aiAssistantLabel(), createdAt ?? undefined);
-  if (isFailure) {
-    message.dataset.status = "failed";
+  const heading = attachMessageHeading(
+    message,
+    role === "user" ? "作者" : aiAssistantLabel(isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : ""),
+    createdAt ?? undefined
+  );
+  if (isFailure || isInterrupted) {
+    message.dataset.status = isInterrupted ? "interrupted" : "failed";
     const failureBadge = document.createElement("strong");
     failureBadge.className = "ai-message-status is-error";
-    failureBadge.textContent = "失败";
-    failureBadge.setAttribute("aria-label", "消息状态：失败");
+    failureBadge.textContent = isInterrupted ? "中断" : "失败";
+    failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
   }
   const mentionNames = role === "user"
@@ -12636,7 +13114,9 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     const outputTokens = Number.isFinite(metadata?.outputTokens) ? metadata.outputTokens : estimateAiMessageTokens(text);
     const meta = document.createElement("div");
     meta.className = "message-meta";
-    meta.textContent = formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
+    meta.textContent = isInterrupted
+      ? formatAiStreamInterruptionMeta(interruptionCode, text.length)
+      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
@@ -13965,6 +14445,27 @@ $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-foreshadow-reminder-previous").addEventListener("click", () => {
+  showChapterForeshadowReminderAt(chapterForeshadowReminderIndex - 1);
+});
+$("#chapter-foreshadow-reminder-next").addEventListener("click", () => {
+  showChapterForeshadowReminderAt(chapterForeshadowReminderIndex + 1);
+});
+$("#chapter-foreshadow-reminder-details-button").addEventListener("click", () => {
+  chapterForeshadowReminderDetailsExpanded = !chapterForeshadowReminderDetailsExpanded;
+  renderChapterForeshadowReminder();
+});
+$("#chapter-foreshadow-reminder-snooze").addEventListener("click", snoozeCurrentChapterForeshadowReminder);
+$("#chapter-foreshadow-reminder-resolve").addEventListener("click", () => {
+  void resolveCurrentChapterForeshadowReminder();
+});
+$("#chapter-foreshadow-reminder").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !chapterForeshadowReminderDetailsExpanded) return;
+  event.preventDefault();
+  chapterForeshadowReminderDetailsExpanded = false;
+  renderChapterForeshadowReminder();
+  $("#chapter-foreshadow-reminder-details-button").focus();
+});
 $("#chapter-delete-button").addEventListener("click", () => {
   if (state.chapter) void deleteChapter(state.chapter.id);
 });
@@ -14112,6 +14613,7 @@ $("#ai-panel-toggle").addEventListener("click", () => {
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncMobileAiPanelSafeTop).observe($("#chapter-foreshadow-reminder"));
 window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
   applyPanelLayout();
@@ -14363,7 +14865,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest("#manuscript-export-menu") && !event.target.closest("#export-button") && !event.target.closest("#work-export-button")) {
-    closeManuscriptExportMenu();
+    closeManuscriptExportMenu(true);
   }
   if (!event.target.closest("#ai-history-action-menu") && !event.target.closest(".ai-history-more")) closeAiHistoryActionMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
@@ -14604,10 +15106,12 @@ $("#export-button").addEventListener("click", (event) => {
 $("#manuscript-export-menu").addEventListener("click", (event) => {
   const option = event.target.closest("[data-export-format]");
   if (!option || !manuscriptExportWork) return;
-  const format = option.getAttribute("data-export-format") === "docx" ? "docx" : "markdown";
+  const requestedFormat = option.getAttribute("data-export-format");
+  const format = ["docx", "epub"].includes(requestedFormat) ? requestedFormat : "markdown";
   const work = manuscriptExportWork;
-  closeManuscriptExportMenu();
-  downloadWorkManuscript(work, format);
+  const trigger = manuscriptExportAnchor;
+  closeManuscriptExportMenu(true);
+  void downloadWorkManuscript(work, format, trigger);
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;

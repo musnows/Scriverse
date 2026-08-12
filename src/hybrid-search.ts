@@ -13,6 +13,16 @@ export const HYBRID_SEARCH_TYPES = [
   "agent-history"
 ] as const;
 
+export const MAXIMUM_WORK_SEARCH_QUERY_LENGTH = 100;
+
+export function normalizeWorkSearchQuery(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("zh-CN")
+    .trim()
+    .slice(0, MAXIMUM_WORK_SEARCH_QUERY_LENGTH);
+}
+
 export type HybridSearchType = typeof HYBRID_SEARCH_TYPES[number];
 export type HybridSearchMatchKind = "metadata" | "exact" | "phonetic";
 

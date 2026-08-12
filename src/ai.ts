@@ -38,6 +38,8 @@ import {
   structuralToolResultRecords,
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
+import { AiConnectivityTestGate, hashAiConnectivityConfiguration, type AiConnectivityTestClaim } from "./ai-connectivity-test.js";
+import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import {
@@ -61,9 +63,11 @@ import {
 } from "./google-vertex-auth.js";
 import {
   HYBRID_SEARCH_TYPES,
+  MAXIMUM_WORK_SEARCH_QUERY_LENGTH,
   buildHybridSearchSnippet,
   documentParagraphLineRange,
   fuseHybridSearchChannels,
+  normalizeWorkSearchQuery,
   type HybridSearchCandidate,
   type HybridSearchMatchKind,
   type HybridSearchType
@@ -126,11 +130,97 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
   return sanitized;
 }
 
+function connectivityTestErrorForLog(error: unknown): Record<string, unknown> {
+  if (error instanceof AppError) {
+    return { category: "application_error", status: error.status, code: error.code };
+  }
+  if (!(error instanceof Error)) return { category: "upstream_failure" };
+  if (error.name === "AbortError") return { category: "timeout" };
+  const httpStatus = error.message.match(/^HTTP ([1-5]\d{2})(?::|$)/u)?.[1];
+  if (httpStatus) return { category: "upstream_http", status: Number(httpStatus) };
+  if (/无效 JSON|响应缺少可用回复|没有返回(?:模型列表|可用模型)/u.test(error.message)) {
+    return { category: "invalid_response" };
+  }
+  if (error instanceof TypeError) return { category: "network_error" };
+  return { category: "upstream_failure" };
+}
+
 const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
+const interactiveStreamErrorCodes = new Set([
+  "AI_STREAM_IDLE_TIMEOUT",
+  "AI_STREAM_UPSTREAM_CLOSED",
+  "AI_STREAM_NETWORK_ERROR",
+  "AI_STREAM_REQUEST_CANCELLED"
+]);
+
+type InteractiveStreamWaitPhase = "first_event" | "between_events";
+
+type AiManagerOptions = {
+  interactiveStreamIdleTimeoutMs?: number;
+};
+
+function isInteractiveStreamError(error: unknown): error is AppError {
+  return error instanceof AppError && interactiveStreamErrorCodes.has(error.code);
+}
+
+function interactiveStreamRequestCancelledError(): AppError {
+  return new AppError(499, "AI_STREAM_REQUEST_CANCELLED", "AI 流式请求已取消");
+}
+
+class InteractiveStreamIdleWatchdog {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private completed = false;
+  failure: AppError | null = null;
+
+  constructor(
+    private readonly controller: AbortController,
+    private readonly timeoutMs: number
+  ) {}
+
+  start(): void {
+    this.arm("first_event");
+  }
+
+  receivedEvent(): void {
+    this.arm("between_events");
+  }
+
+  complete(): void {
+    this.completed = true;
+    this.clear();
+  }
+
+  dispose(): void {
+    this.clear();
+  }
+
+  private arm(phase: InteractiveStreamWaitPhase): void {
+    if (this.completed || this.failure) return;
+    this.clear();
+    this.timer = setTimeout(() => {
+      const idleTimeoutSeconds = this.timeoutMs / 1_000;
+      this.failure = new AppError(
+        504,
+        "AI_STREAM_IDLE_TIMEOUT",
+        phase === "first_event"
+          ? `等待 AI 首个流事件超时（${idleTimeoutSeconds} 秒无新事件），流已关闭`
+          : `AI 流已因 ${idleTimeoutSeconds} 秒无新事件而关闭，已保留已生成内容`,
+        { phase, idleTimeoutSeconds }
+      );
+      this.controller.abort(this.failure);
+    }, this.timeoutMs);
+  }
+
+  private clear(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = null;
+  }
+}
 
 function isAnalysisTaskType(value: string): value is AnalysisTaskType {
   return analysisTaskTypes.has(value);
@@ -610,7 +700,7 @@ function redactProviderSecrets(value: unknown, secrets: string | string[], depth
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, list, depth + 1)]));
 }
 
-class ProviderSecretStreamRedactor {
+export class ProviderSecretStreamRedactor {
   private pending = "";
   private readonly secrets: string[];
 
@@ -636,10 +726,17 @@ class ProviderSecretStreamRedactor {
     return retainedLength > 0 ? combined.slice(0, -retainedLength) : combined;
   }
 
-  flush(): string {
-    const value = redactProviderSecretsText(this.pending, ...this.secrets);
+  flush(options: { interrupted?: boolean } = {}): string {
+    const pending = this.pending;
+    const value = redactProviderSecretsText(pending, ...this.secrets);
     this.pending = "";
-    return value;
+    if (!options.interrupted || !pending) return value;
+    const matchingSecrets = this.secrets.filter((secret) => secret.startsWith(pending));
+    if (matchingSecrets.length === 0) return value;
+    const visiblePrefixLength = Math.min(...matchingSecrets.map((secret) => secret.length > 7 ? 4 : 0));
+    if (pending.length <= visiblePrefixLength) return value;
+    if (visiblePrefixLength === 0) return "********";
+    return `${pending.slice(0, visiblePrefixLength)}*****`;
   }
 }
 
@@ -732,7 +829,7 @@ const grepArguments = z.object({
   cursor: agentToolCursor
 }).strict();
 const searchStoryEntitiesArguments = z.object({
-  query: z.string().trim().min(1).max(200),
+  query: z.string().trim().min(1).max(MAXIMUM_WORK_SEARCH_QUERY_LENGTH),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([]),
   limit: z.number().int().min(1).max(30).default(30),
   cursor: agentToolCursor
@@ -798,7 +895,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "search_story_entities",
       description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。人物、种族、组织结果分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
-      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
+      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: MAXIMUM_WORK_SEARCH_QUERY_LENGTH }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
     }
   },
   read_character_sections: {
@@ -1117,6 +1214,39 @@ function numberValue(row: Row, key: string): number {
 
 function boolValue(row: Row, key: string): boolean {
   return Number(row[key] ?? 0) === 1;
+}
+
+const providerConnectivityConfigurationFields = [
+  "name",
+  "base_url",
+  "protocol",
+  "encrypted_key",
+  "key_iv",
+  "key_tag",
+  "status",
+  "concurrency_limit",
+  "rpm_limit",
+  "max_tokens",
+  "default_model_id",
+  "note"
+] as const;
+
+const modelConnectivityConfigurationFields = [
+  "display_name",
+  "model_id",
+  "purposes_json",
+  "context_note",
+  "context_window",
+  "output_note",
+  "preset_json",
+  "thinking_enabled",
+  "multimodal_enabled",
+  "enabled",
+  "note"
+] as const;
+
+function connectivityConfigurationValues(row: Row, fields: readonly string[]): unknown[] {
+  return fields.map((field) => row[field] ?? null);
 }
 
 function safeJsonObject(value: string): Record<string, unknown> {
@@ -1898,6 +2028,7 @@ export class ContextBuilder {
 
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
+  private readonly interactiveStreamIdleTimeoutMs: number;
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1924,6 +2055,7 @@ export class AiManager {
     timer: ReturnType<typeof setTimeout> | null;
   }>();
   private readonly vertexTokenCache = new GoogleVertexTokenCache();
+  private readonly connectivityTestGate: AiConnectivityTestGate;
 
   constructor(
     private readonly store: Store,
@@ -1931,8 +2063,14 @@ export class AiManager {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly validateOutboundUrl?: (url: string) => Promise<readonly { address: string; family: 4 | 6 }[] | void>,
     private readonly authorizeTaskRun?: (task: Record<string, unknown>, actor?: TaskRunActor) => void,
-    private readonly attachmentStorage?: AttachmentStorage
+    private readonly attachmentStorage?: AttachmentStorage,
+    options: AiManagerOptions = {}
   ) {
+    this.connectivityTestGate = new AiConnectivityTestGate(store.db);
+    this.interactiveStreamIdleTimeoutMs = Number.isSafeInteger(options.interactiveStreamIdleTimeoutMs)
+      && Number(options.interactiveStreamIdleTimeoutMs) > 0
+      ? Number(options.interactiveStreamIdleTimeoutMs)
+      : DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS;
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
     this.autoRunStartupTimer = setTimeout(() => {
@@ -1944,7 +2082,7 @@ export class AiManager {
       this.relationshipIndexTimer = null;
       void this.schedulePendingRelationshipIndexes();
     }, 0);
-    logger.info("ai.manager.ready");
+    logger.info("ai.manager.ready", { interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs });
   }
 
   getPlatformTokenUsage(timezoneOffset: number): Record<string, unknown> {
@@ -1990,7 +2128,7 @@ export class AiManager {
     options: { type?: HybridSearchType; limit?: number; includeAgentHistory?: boolean } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
-    const normalizedQuery = normalizeRelationshipSearchText(query).trim();
+    const normalizedQuery = normalizeWorkSearchQuery(query);
     if (!normalizedQuery) return [];
     const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
     if (options.includeAgentHistory === false) requestedTypes.delete("agent-history");
@@ -2654,7 +2792,7 @@ export class AiManager {
   }
 
   async testProvider(providerId: string): Promise<Record<string, unknown>> {
-    const row = this.getProviderRow(providerId);
+    const { row, configFingerprint, claim } = this.acquireProviderConnectivityTest(providerId);
     const protocol = providerProtocol(row);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
@@ -2703,48 +2841,69 @@ export class AiManager {
           : `${lastFailure}；也可先添加模型后再测试连接`);
       }
       await this.probeProviderModel(row, accessToken, probeModel, controller.signal);
-      const timestamp = now();
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
-        timestamp,
-        timestamp,
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "success", {
+        isConfigurationCurrent: () => {
+          try {
+            return this.providerConnectivityTestFingerprint(this.getProviderRow(providerId)) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
+            completedAt,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.info("ai.provider_test.completed", {
         providerId,
         protocol,
         ok: true,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         availableModelCount: availableModels.length,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, availableModels, provider: this.getProvider(providerId) };
+      return { ok: true, availableModels, cooldown, provider: this.getProvider(providerId) };
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
         : "连接失败";
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
-        message,
-        now(),
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "failure", {
+        isConfigurationCurrent: () => {
+          try {
+            return this.providerConnectivityTestFingerprint(this.getProviderRow(providerId)) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
+            message,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.warn("ai.provider_test.completed", {
         providerId,
         protocol,
         ok: false,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
-        error: aiErrorForLog(error)
+        error: connectivityTestErrorForLog(error)
       });
-      return { ok: false, error: message, provider: this.getProvider(providerId) };
+      return { ok: false, error: message, cooldown, provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
     }
   }
 
   async testModel(modelId: string): Promise<Record<string, unknown>> {
-    const model = this.getModelRow(modelId);
-    const providerId = stringValue(model, "provider_id");
-    const provider = this.getProviderRow(providerId);
+    const { model, provider, providerId, configFingerprint, claim } = this.acquireModelConnectivityTest(modelId);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     const startedAt = process.hrtime.bigint();
@@ -2756,40 +2915,67 @@ export class AiManager {
     try {
       ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider));
       await this.probeProviderModel(provider, accessToken, stringValue(model, "model_id"), controller.signal, { multimodal: multimodalTested });
-      const timestamp = now();
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
-        timestamp,
-        timestamp,
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "success", {
+        isConfigurationCurrent: () => {
+          try {
+            const currentModel = this.getModelRow(modelId);
+            const currentProvider = this.getProviderRow(stringValue(currentModel, "provider_id"));
+            return this.modelConnectivityTestFingerprint(currentModel, currentProvider) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
+            completedAt,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.info("ai.model_test.completed", {
         modelId,
         providerId,
         protocol,
         ok: true,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, multimodalTested, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return { ok: true, multimodalTested, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
         : "连接失败";
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
-        message,
-        now(),
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "failure", {
+        isConfigurationCurrent: () => {
+          try {
+            const currentModel = this.getModelRow(modelId);
+            const currentProvider = this.getProviderRow(stringValue(currentModel, "provider_id"));
+            return this.modelConnectivityTestFingerprint(currentModel, currentProvider) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
+            message,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.warn("ai.model_test.completed", {
         modelId,
         providerId,
         protocol,
         ok: false,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
-        error: aiErrorForLog(error)
+        error: connectivityTestErrorForLog(error)
       });
-      return { ok: false, error: message, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return { ok: false, error: message, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
     }
@@ -4245,16 +4431,34 @@ export class AiManager {
     };
   }
 
-  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
+  inspectConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string }): {
+    action: "ready" | "warn" | "compact";
+    usage: Record<string, unknown>;
+  } {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
     if (!usage.compactRecommended) {
-      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
       return { action: "ready", usage: { ...usage, contextWarningPending: false } };
     }
     if (!conversation.warningPending) {
-      this.store.setAiConversationContextWarning(input.conversationId, true);
       return { action: "warn", usage: { ...usage, contextWarningPending: true } };
+    }
+    return { action: "compact", usage };
+  }
+
+  async prepareConversationContext(
+    input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string },
+    options: { skipWarning?: boolean } = {}
+  ): Promise<Record<string, unknown>> {
+    const inspection = this.inspectConversationContext(input);
+    if (inspection.action === "ready") {
+      const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
+      return inspection;
+    }
+    if (inspection.action === "warn" && !options.skipWarning) {
+      this.store.setAiConversationContextWarning(input.conversationId, true);
+      return inspection;
     }
     const compaction = await this.compactConversation(input);
     const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
@@ -4275,8 +4479,12 @@ export class AiManager {
     return this.mergeInstructionEntityMatches(input.scope, matches);
   }
 
-  async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
-    const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+  async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
+    const conversation = this.store.getAiConversationContext(
+      input.conversationId,
+      input.workId,
+      input.excludeConversationMessageId
+    );
     const { model } = this.resolveModel(input.workId, "chat", input.modelId);
     const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model);
     const recentTokenBudget = Math.max(128, Math.floor(Number(budget.conversationBudgetTokens) * 0.75));
@@ -5437,6 +5645,7 @@ export class AiManager {
       toolCount: tools.length
     });
     let activeSecrets: string[] = [];
+    let streamedContent = "";
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -5468,7 +5677,6 @@ export class AiManager {
       let totalCachedInputTokens = 0;
       const processSteps: AiProcessStep[] = [];
       const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
-      let streamedContent = "";
       let streamingGenerationRound = 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
@@ -5535,7 +5743,14 @@ export class AiManager {
               const forwardAbort = (): void => controller.abort(input.signal?.reason);
               if (input.signal?.aborted) forwardAbort();
               else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-              const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(timeoutMs / 1_000)} 秒）`)), timeoutMs);
+              const streamWatchdog = streamResponse
+                ? new InteractiveStreamIdleWatchdog(controller, this.interactiveStreamIdleTimeoutMs)
+                : null;
+              const timeout = streamResponse
+                ? null
+                : setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(timeoutMs / 1_000)} 秒）`)), timeoutMs);
+              let responseReceived = false;
+              streamWatchdog?.start();
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
@@ -5551,6 +5766,7 @@ export class AiManager {
                   })),
                   signal: controller.signal
                 });
+                responseReceived = true;
                 if (!response.ok) {
                   return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
                 }
@@ -5587,16 +5803,26 @@ export class AiManager {
                     }
                     streamedThinkingStep.content += delta;
                     input.onProcessStep?.({ ...streamedThinkingStep, content: delta, append: true });
-                  }
+                  },
+                  () => streamWatchdog?.receivedEvent()
                 );
+                streamWatchdog?.complete();
                 return {
                   ok: true as const,
                   status: response.status,
                   payload: redactProviderSecrets(payload, activeSecrets) as CompletionPayload,
                   delivery: "sse" as const
                 };
+              } catch (error) {
+                if (streamResponse && input.signal?.aborted) throw interactiveStreamRequestCancelledError();
+                if (streamWatchdog?.failure) throw streamWatchdog.failure;
+                if (streamResponse && !responseReceived) {
+                  throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接失败，尚未收到首个事件");
+                }
+                throw error;
               } finally {
-                clearTimeout(timeout);
+                if (timeout) clearTimeout(timeout);
+                streamWatchdog?.dispose();
                 input.signal?.removeEventListener("abort", forwardAbort);
               }
             });
@@ -5643,6 +5869,7 @@ export class AiManager {
             }
           } catch (error) {
             lastFailure = error;
+            if (isInteractiveStreamError(error)) retryable = false;
             if (traceAttempt.status === "running") {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
@@ -5967,11 +6194,12 @@ export class AiManager {
       const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run(
         `UPDATE ai_calls
-         SET status = 'failed', failure = ?, input_tokens = ?, output_tokens = ?,
+         SET status = 'failed', failure = ?, output_chars = ?, input_tokens = ?, output_tokens = ?,
              cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         message,
+        streamedContent.length,
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
@@ -5989,7 +6217,11 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
-      if (error instanceof AppError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED")) {
+      if (error instanceof AppError && (
+        error.code === "CONTEXT_WINDOW_EXCEEDED"
+        || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
+        || isInteractiveStreamError(error)
+      )) {
         throw new AppError(error.status, error.code, error.message, {
           callId,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
@@ -6005,7 +6237,8 @@ export class AiManager {
     protocol: AiProviderProtocol,
     apiKey: string | string[],
     onDelta: (delta: string) => void,
-    onThinkingDelta: (delta: string) => void
+    onThinkingDelta: (delta: string) => void,
+    onEvent: () => void
   ): Promise<CompletionPayload> {
     const protocolLabel = providerProtocolLabelText(protocol);
     if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
@@ -6063,16 +6296,16 @@ export class AiManager {
       finalizedAnthropicToolInputs.set(index, completeInputJson);
       anthropicToolInputJson.delete(index);
     };
-    const consumeEvent = (eventText: string): void => {
+    const consumeEvent = (eventText: string): boolean => {
       const data = eventText.split(/\r?\n/u)
         .filter((line) => line.startsWith("data:"))
         .map((line) => line.slice(5).trimStart())
         .join("\n")
         .trim();
-      if (!data) return;
+      if (!data) return false;
       if (data === "[DONE]") {
         upstreamDone = true;
-        return;
+        return true;
       }
       const payload = JSON.parse(data) as Record<string, unknown>;
       const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
@@ -6139,7 +6372,7 @@ export class AiManager {
           appendContent(eventDelta.text);
         }
         if (type === "message_stop") upstreamDone = true;
-        return;
+        return true;
       }
       const streamUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
         ? payload.usage as Record<string, unknown>
@@ -6185,41 +6418,67 @@ export class AiManager {
       if (typeof delta === "string" && delta.length > 0) {
         appendContent(delta);
       }
+      return true;
+    };
+    let redactorsFlushed = false;
+    const flushRedactors = (interrupted: boolean): void => {
+      if (redactorsFlushed) return;
+      redactorsFlushed = true;
+      const finalContent = contentRedactor.flush({ interrupted });
+      if (finalContent) {
+        content += finalContent;
+        onDelta(finalContent);
+      }
+      const finalReasoning = reasoningRedactor.flush({ interrupted });
+      if (finalReasoning) {
+        reasoning += finalReasoning;
+        onThinkingDelta(finalReasoning);
+      }
     };
     let receivedBytes = 0;
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.value?.byteLength) {
-        receivedBytes += chunk.value.byteLength;
-        if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+    let readerEnded = false;
+    try {
+      while (true) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (error) {
+          if (error instanceof AppError) throw error;
+          throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接中断，已保留已生成内容");
+        }
+        if (chunk.value?.byteLength) {
+          receivedBytes += chunk.value.byteLength;
+          if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+          }
+        }
+        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+        const events = buffer.split(/\r?\n\r?\n/u);
+        buffer = events.pop() ?? "";
+        for (const eventText of events) {
+          if (consumeEvent(eventText)) onEvent();
+          if (upstreamDone) break;
+        }
+        if (upstreamDone) {
           await reader.cancel().catch(() => undefined);
-          throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+          buffer = "";
+          break;
+        }
+        if (chunk.done) {
+          readerEnded = true;
+          break;
         }
       }
-      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-      const events = buffer.split(/\r?\n\r?\n/u);
-      buffer = events.pop() ?? "";
-      for (const eventText of events) {
-        consumeEvent(eventText);
-        if (upstreamDone) break;
-      }
-      if (upstreamDone) {
-        await reader.cancel().catch(() => undefined);
-        buffer = "";
-        break;
-      }
-      if (chunk.done) break;
+      if (buffer.trim() && consumeEvent(buffer)) onEvent();
+    } catch (error) {
+      flushRedactors(true);
+      throw error;
     }
-    if (buffer.trim()) consumeEvent(buffer);
-    const finalContent = contentRedactor.flush();
-    if (finalContent) {
-      content += finalContent;
-      onDelta(finalContent);
-    }
-    const finalReasoning = reasoningRedactor.flush();
-    if (finalReasoning) {
-      reasoning += finalReasoning;
-      onThinkingDelta(finalReasoning);
+    const upstreamClosed = readerEnded && !upstreamDone && finishReason === "unknown";
+    flushRedactors(upstreamClosed);
+    if (upstreamClosed) {
+      throw new AppError(502, "AI_STREAM_UPSTREAM_CLOSED", "AI 上游流在正常结束前已关闭，已保留已生成内容");
     }
     const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
     const openAiToolCallsComplete = openAiToolCallsFinalized
@@ -9899,6 +10158,70 @@ export class AiManager {
     } catch {
       throw new AppError(500, "CREDENTIAL_DECRYPT_FAILED", "供应商凭据无法解密，请重新填写密钥或服务账号 JSON");
     }
+  }
+
+  private providerConnectivityTestFingerprint(row: ProviderRow): string {
+    const localModels = this.store.db.all(
+      "SELECT * FROM models WHERE provider_id = ? ORDER BY created_at, id",
+      stringValue(row, "id")
+    ).map((model) => [
+      stringValue(model, "id"),
+      connectivityConfigurationValues(model, modelConnectivityConfigurationFields)
+    ]);
+    return hashAiConnectivityConfiguration([
+      "provider-connectivity-v1",
+      connectivityConfigurationValues(row, providerConnectivityConfigurationFields),
+      localModels
+    ]);
+  }
+
+  private acquireProviderConnectivityTest(providerId: string): {
+    row: ProviderRow;
+    configFingerprint: string;
+    claim: AiConnectivityTestClaim;
+  } {
+    const acquired = this.connectivityTestGate.acquireWithConfiguration("provider", providerId, () => {
+      const row = this.getProviderRow(providerId);
+      const configFingerprint = this.providerConnectivityTestFingerprint(row);
+      return { configFingerprint, configuration: row };
+    });
+    return {
+      row: acquired.configuration,
+      configFingerprint: acquired.configFingerprint,
+      claim: acquired.claim
+    };
+  }
+
+  private modelConnectivityTestFingerprint(model: ModelRow, provider: ProviderRow): string {
+    return hashAiConnectivityConfiguration([
+      "model-connectivity-v1",
+      connectivityConfigurationValues(provider, providerConnectivityConfigurationFields),
+      connectivityConfigurationValues(model, modelConnectivityConfigurationFields)
+    ]);
+  }
+
+  private acquireModelConnectivityTest(modelId: string): {
+    model: ModelRow;
+    provider: ProviderRow;
+    providerId: string;
+    configFingerprint: string;
+    claim: AiConnectivityTestClaim;
+  } {
+    const acquired = this.connectivityTestGate.acquireWithConfiguration("model", modelId, () => {
+      const model = this.getModelRow(modelId);
+      const providerId = stringValue(model, "provider_id");
+      const provider = this.getProviderRow(providerId);
+      const configFingerprint = this.modelConnectivityTestFingerprint(model, provider);
+      return {
+        configFingerprint,
+        configuration: { model, provider, providerId }
+      };
+    });
+    return {
+      ...acquired.configuration,
+      configFingerprint: acquired.configFingerprint,
+      claim: acquired.claim
+    };
   }
 
   private getProviderRow(providerId: string): ProviderRow {

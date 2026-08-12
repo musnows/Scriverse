@@ -373,6 +373,42 @@ describe("Scriverse CLI 核心", () => {
     expect(readFileSync(defaultOutput)).toEqual(document);
   });
 
+  it("把服务端 EPUB 导出流写入默认文件名", async () => {
+    const root = temporaryRoot();
+    const configPath = join(root, "cli.json");
+    writeFileSync(configPath, JSON.stringify({
+      version: 2,
+      defaultServer: "http://127.0.0.1:13210",
+      servers: {
+        "http://127.0.0.1:13210": {
+          apiKey: "scrv_test_key",
+          apiKeyPrefix: "scrv_test",
+          user: { userId: "user-1", username: "writer", displayName: "Writer", role: "user" }
+        }
+      }
+    }));
+    const book = Buffer.from("PK-epub-bytes");
+    const fetchImpl = (async (input: string | URL | Request) => {
+      expect(String(input)).toBe("http://127.0.0.1:13210/api/works/work-1/export?format=epub");
+      return new Response(book, { status: 200, headers: { "Content-Type": "application/epub+zip" } });
+    }) as typeof fetch;
+    const stdout = outputCapture();
+    const stderr = outputCapture();
+    const defaultOutput = join(root, "novel-work-1.epub");
+
+    expect(await runCli([
+      "manuscript", "get", "work-1", "--format", "epub", "--config", configPath
+    ], { fetchImpl, stdout: stdout.stream, stderr: stderr.stream, cwd: root })).toBe(0);
+    expect(stderr.text()).toBe("");
+    expect(JSON.parse(stdout.text())).toMatchObject({
+      format: "epub",
+      outputPath: defaultOutput,
+      bytes: book.byteLength,
+      contentType: "application/epub+zip"
+    });
+    expect(readFileSync(defaultOutput)).toEqual(book);
+  });
+
   it("支持写作目标、章节移动与批量管理命令", async () => {
     const root = temporaryRoot();
     const configPath = join(root, "cli.json");

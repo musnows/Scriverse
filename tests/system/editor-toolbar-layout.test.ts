@@ -137,6 +137,7 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('buildVditorLineNumberRows');
     expect(styles.text).toContain('.chapter-stats { display: none; }');
     expect(styles.text).toContain('.app-shell.left-panel-collapsed .editor-actions { transform: translateX(0); pointer-events: auto; }');
+    expect(styles.text).toContain('grid-row: 2 / -1;');
     expect(styles.text).toContain('bottom: calc(76px + env(safe-area-inset-bottom));');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
     expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');

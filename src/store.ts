@@ -7,7 +7,9 @@ import {
   type Row
 } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
+import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
+import { normalizeWorkSearchQuery } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -23,6 +25,7 @@ import {
 import {
   countWords,
   documentShortSearchTerms,
+  escapeSqlLikePattern,
   id,
   json,
   normalizeDocumentSearchText,
@@ -438,11 +441,62 @@ type AiConversationMessageInput = {
     outputTokens?: number;
     cacheHitPercent?: number;
     processDurationMs?: number;
+    interrupted?: boolean;
+    interruptionCode?: string;
+    interruptionMessage?: string;
     toolCalls?: unknown[];
     processSteps?: unknown[];
     reasoningContent?: string;
     anthropicContent?: unknown[];
   };
+};
+
+export const AI_CONVERSATION_STREAM_REQUEST_LEASE_MS = 3 * 60_000;
+
+export type AiConversationStreamRequestStatus =
+  | "in_progress"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "timed_out"
+  | "abandoned";
+
+type BeginAiConversationStreamRequestInput = {
+  workId: string;
+  conversationId: string;
+  actorScope: string;
+  idempotencyKey: string;
+  requestHash: string;
+  userMessage: {
+    content: string;
+    citations?: unknown[];
+    metadata?: { mentionCharacterIds?: string[] };
+    existingMessageId?: string;
+  };
+};
+
+export type AiConversationStreamRequest = {
+  id: string;
+  workId: string;
+  conversationId: string;
+  actorScope: string;
+  idempotencyKey: string;
+  requestHash: string;
+  status: AiConversationStreamRequestStatus;
+  terminalReason: string | null;
+  userMessageId: string | null;
+  assistantMessageId: string | null;
+  leaseExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
+export type BeginAiConversationStreamRequestResult = {
+  disposition: "started" | "in_progress" | "terminal";
+  request: AiConversationStreamRequest;
+  userMessage: Record<string, unknown> | null;
+  assistantMessage: Record<string, unknown> | null;
 };
 
 export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"] as const;
@@ -2379,7 +2433,7 @@ export class Store {
       this.getChapter(chapterId);
       return paginated([], pagination);
     }
-    return paginated(rows.slice(pagination.offset, pagination.offset + pagination.limit + 1).map((row) => this.mapChapterVersionRow(row)), pagination);
+    return paginated(rows.map((row) => this.mapChapterVersionRow(row)), pagination);
   }
 
   listChapterInsights(chapterId: string): Record<string, unknown>[] {
@@ -3728,6 +3782,85 @@ export class Store {
     return paginated(rows.map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId)), pagination);
   }
 
+  listChapterForeshadowReminders(workId: string, chapterId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    this.assertChapterInWork(chapterId, workId);
+    const seenForeshadowIds = new Set<string>();
+    return this.db.all(
+      `SELECT occurrence.id AS occurrence_id, occurrence.foreshadow_id, occurrence.role, occurrence.note,
+       foreshadow.title, foreshadow.description, foreshadow.status, foreshadow.importance,
+       foreshadow.updated_at,
+       (SELECT MAX(version.version_no) FROM entity_versions version
+        WHERE version.entity_type = 'foreshadow' AND version.entity_id = foreshadow.id) AS version_no
+       FROM foreshadow_occurrences occurrence
+       JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+       JOIN chapters chapter ON chapter.id = occurrence.chapter_id
+       WHERE foreshadow.work_id = ? AND chapter.work_id = ? AND occurrence.chapter_id = ?
+         AND foreshadow.status IN ('planned', 'planted')
+         AND occurrence.role IN ('reminder', 'payoff')
+       ORDER BY CASE occurrence.role WHEN 'payoff' THEN 0 ELSE 1 END,
+         CASE foreshadow.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         foreshadow.created_at, occurrence.created_at`,
+      workId,
+      workId,
+      chapterId
+    ).flatMap((row) => {
+      const foreshadowId = requiredString(row, "foreshadow_id");
+      if (seenForeshadowIds.has(foreshadowId)) return [];
+      seenForeshadowIds.add(foreshadowId);
+      return [{
+        foreshadowId,
+        occurrenceId: requiredString(row, "occurrence_id"),
+        title: requiredString(row, "title"),
+        description: requiredString(row, "description"),
+        status: requiredString(row, "status"),
+        importance: requiredString(row, "importance"),
+        role: requiredString(row, "role"),
+        note: requiredString(row, "note"),
+        versionNo: numberValue(row, "version_no"),
+        updatedAt: requiredString(row, "updated_at")
+      }];
+    });
+  }
+
+  resolveChapterForeshadowReminder(
+    workId: string,
+    chapterId: string,
+    foreshadowId: string,
+    expectedVersionNo?: number
+  ): Record<string, unknown> {
+    this.getWork(workId);
+    this.assertChapterInWork(chapterId, workId);
+    const reminder = this.db.get(
+      `SELECT occurrence.id AS occurrence_id
+       FROM foreshadow_occurrences occurrence
+       JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+       WHERE foreshadow.id = ? AND foreshadow.work_id = ? AND occurrence.chapter_id = ?
+         AND foreshadow.status IN ('planned', 'planted')
+         AND occurrence.role IN ('reminder', 'payoff')
+       ORDER BY CASE occurrence.role WHEN 'payoff' THEN 0 ELSE 1 END, occurrence.created_at
+       LIMIT 1`,
+      foreshadowId,
+      workId,
+      chapterId
+    );
+    if (!reminder) throw notFound("伏笔提醒");
+    const updated = this.updateForeshadow(
+      foreshadowId,
+      { status: "resolved" },
+      "manual",
+      requiredString(reminder, "occurrence_id"),
+      "在编辑器标记伏笔已回收",
+      expectedVersionNo
+    );
+    return {
+      foreshadowId: String(updated.id),
+      status: String(updated.status),
+      versionNo: Number(updated.versionNo),
+      updatedAt: String(updated.updatedAt)
+    };
+  }
+
   updateForeshadow(
     foreshadowId: string,
     input: Partial<ForeshadowInput>,
@@ -3959,7 +4092,7 @@ export class Store {
     this.getWork(workId);
     const safeLimit = Math.min(30, Math.max(1, Math.trunc(limit)));
     const normalizedQuery = query.normalize("NFKC").trim();
-    const escapedQuery = normalizedQuery.replace(/[\\%_]/gu, "\\$&");
+    const escapedQuery = escapeSqlLikePattern(normalizedQuery);
     const pattern = `%${escapedQuery}%`;
     const rows = normalizedQuery
       ? this.db.all(
@@ -7231,13 +7364,30 @@ export class Store {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const requestId = input.requestId?.trim() || null;
+    const persistInterruption = (message: Row): Row => {
+      if (input.role !== "assistant" || input.metadata?.interrupted !== true || requiredString(message, "role") !== "assistant") {
+        return message;
+      }
+      const currentMetadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
+      const nextMetadata = { ...currentMetadata, ...input.metadata, interrupted: true };
+      if (JSON.stringify(currentMetadata) === JSON.stringify(nextMetadata)) return message;
+      this.db.transaction(() => {
+        this.db.run(
+          "UPDATE ai_conversation_messages SET metadata_json = ? WHERE id = ?",
+          JSON.stringify(nextMetadata),
+          requiredString(message, "id")
+        );
+        this.db.run("UPDATE ai_conversations SET updated_at = ? WHERE id = ?", now(), conversationId);
+      });
+      return this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", requiredString(message, "id")) ?? message;
+    };
     if (requestId) {
       const existing = this.db.get(
         "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?",
         conversationId,
         requestId
       );
-      if (existing) return this.mapAiConversationMessage(existing);
+      if (existing) return this.mapAiConversationMessage(persistInterruption(existing));
     }
     const messageId = id("message");
     const timestamp = now();
@@ -7269,7 +7419,208 @@ export class Store {
       ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
       : this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
     if (!message) throw notFound("AI 对话消息");
-    return this.mapAiConversationMessage(message);
+    return this.mapAiConversationMessage(persistInterruption(message));
+  }
+
+  beginAiConversationStreamRequest(
+    input: BeginAiConversationStreamRequestInput,
+    referenceTime = new Date()
+  ): BeginAiConversationStreamRequestResult {
+    const timestamp = referenceTime.toISOString();
+    const leaseExpiresAt = new Date(referenceTime.getTime() + AI_CONVERSATION_STREAM_REQUEST_LEASE_MS).toISOString();
+    return this.db.transaction(() => {
+      const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", input.conversationId);
+      if (!conversation) throw notFound("AI 对话");
+      if (requiredString(conversation, "work_id") !== input.workId) {
+        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      }
+      let existing = this.db.get(
+        `SELECT * FROM ai_conversation_stream_requests
+         WHERE actor_scope = ? AND work_id = ? AND idempotency_key = ?`,
+        input.actorScope,
+        input.workId,
+        input.idempotencyKey
+      );
+      if (existing) {
+        if (requiredString(existing, "status") === "in_progress"
+          && String(existing.lease_expires_at ?? "") <= timestamp) {
+          this.expireAiConversationStreamLease(input.conversationId, timestamp);
+          existing = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requiredString(existing, "id"));
+          if (!existing) throw notFound("AI 对话请求");
+        }
+        if (requiredString(existing, "conversation_id") !== input.conversationId
+          || requiredString(existing, "request_hash") !== input.requestHash) {
+          throw new AppError(409, "IDEMPOTENCY_KEY_REUSED", "该请求标识已用于另一项 AI 对话请求");
+        }
+        const request = this.mapAiConversationStreamRequest(existing);
+        return {
+          disposition: request.status === "in_progress" ? "in_progress" : "terminal",
+          request,
+          userMessage: this.aiConversationMessageOrNull(request.userMessageId),
+          assistantMessage: this.aiConversationMessageOrNull(request.assistantMessageId)
+        };
+      }
+      this.expireAiConversationStreamLease(input.conversationId, timestamp);
+      const active = this.db.get(
+        "SELECT id FROM ai_conversation_stream_requests WHERE conversation_id = ? AND status = 'in_progress'",
+        input.conversationId
+      );
+      if (active) {
+        throw new AppError(409, "AI_CONVERSATION_RESPONSE_IN_PROGRESS", "当前对话仍在生成回复，请等待完成或取消后再发送");
+      }
+      const requestId = id("chat_request");
+      const existingMessage = input.userMessage.existingMessageId
+        ? this.db.get(
+          `SELECT * FROM ai_conversation_messages
+           WHERE id = ? AND conversation_id = ? AND role = 'user'`,
+          input.userMessage.existingMessageId,
+          input.conversationId
+        )
+        : undefined;
+      if (input.userMessage.existingMessageId && !existingMessage) {
+        throw new AppError(400, "AI_STREAM_USER_MESSAGE_MISMATCH", "当前用户消息不属于目标 AI 对话");
+      }
+      const messageId = existingMessage ? requiredString(existingMessage, "id") : id("message");
+      const previousTitle = requiredString(conversation, "title");
+      const title = !existingMessage && previousTitle === "新对话"
+        ? defaultAiConversationTitle(input.userMessage.content)
+        : previousTitle;
+      this.db.run(
+        `INSERT INTO ai_conversation_stream_requests
+           (id, work_id, conversation_id, actor_scope, idempotency_key, request_hash, status,
+            lease_expires_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?)`,
+        requestId,
+        input.workId,
+        input.conversationId,
+        input.actorScope,
+        input.idempotencyKey,
+        input.requestHash,
+        leaseExpiresAt,
+        timestamp,
+        timestamp
+      );
+      if (!existingMessage) {
+        this.db.run(
+          `INSERT INTO ai_conversation_messages
+             (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id)
+           VALUES (?, ?, 'user', ?, ?, ?, ?, ?, ?)`,
+          messageId,
+          input.conversationId,
+          input.userMessage.content,
+          JSON.stringify(input.userMessage.citations ?? []),
+          JSON.stringify(input.userMessage.metadata ?? {}),
+          `stream:${requestId}:user`,
+          timestamp,
+          currentRequestActor()?.userId ?? null
+        );
+      }
+      this.db.run("UPDATE ai_conversation_stream_requests SET user_message_id = ? WHERE id = ?", messageId, requestId);
+      if (!existingMessage) {
+        this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, input.conversationId);
+        if (title !== previousTitle) this.syncAiHistorySearchShortTermsForSource("conversation", input.conversationId);
+        this.syncAiHistorySearchShortTermsForSource("message", messageId);
+      }
+      const created = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requestId);
+      if (!created) throw notFound("AI 对话请求");
+      return {
+        disposition: "started",
+        request: this.mapAiConversationStreamRequest(created),
+        userMessage: this.aiConversationMessageOrNull(messageId),
+        assistantMessage: null
+      };
+    });
+  }
+
+  findAiConversationStreamRequest(
+    actorScope: string,
+    workId: string,
+    idempotencyKey: string
+  ): AiConversationStreamRequest | null {
+    const request = this.db.get(
+      `SELECT * FROM ai_conversation_stream_requests
+       WHERE actor_scope = ? AND work_id = ? AND idempotency_key = ?`,
+      actorScope,
+      workId,
+      idempotencyKey
+    );
+    return request ? this.mapAiConversationStreamRequest(request) : null;
+  }
+
+  assertAiConversationStreamAvailable(conversationId: string, referenceTime = new Date()): void {
+    const timestamp = referenceTime.toISOString();
+    this.db.transaction(() => {
+      this.expireAiConversationStreamLease(conversationId, timestamp);
+      const active = this.db.get(
+        "SELECT id FROM ai_conversation_stream_requests WHERE conversation_id = ? AND status = 'in_progress'",
+        conversationId
+      );
+      if (active) {
+        throw new AppError(409, "AI_CONVERSATION_RESPONSE_IN_PROGRESS", "当前对话仍在生成回复，请等待完成或取消后再发送");
+      }
+    });
+  }
+
+  touchAiConversationStreamRequest(requestId: string, referenceTime = new Date()): boolean {
+    const timestamp = referenceTime.toISOString();
+    const leaseExpiresAt = new Date(referenceTime.getTime() + AI_CONVERSATION_STREAM_REQUEST_LEASE_MS).toISOString();
+    return this.db.run(
+      `UPDATE ai_conversation_stream_requests SET lease_expires_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'in_progress'`,
+      leaseExpiresAt,
+      timestamp,
+      requestId
+    ).changes === 1;
+  }
+
+  cancelActiveAiConversationStreamRequests(referenceTime = new Date()): number {
+    const timestamp = referenceTime.toISOString();
+    return this.db.run(
+      `UPDATE ai_conversation_stream_requests
+       SET status = 'cancelled', terminal_reason = 'runtime_shutdown', lease_expires_at = NULL,
+           updated_at = ?, completed_at = ?
+       WHERE status = 'in_progress'`,
+      timestamp,
+      timestamp
+    ).changes;
+  }
+
+  finishAiConversationStreamRequest(
+    requestId: string,
+    status: Exclude<AiConversationStreamRequestStatus, "in_progress">,
+    terminalReason: string,
+    assistantMessageId?: string,
+    referenceTime = new Date()
+  ): AiConversationStreamRequest {
+    const timestamp = referenceTime.toISOString();
+    return this.db.transaction(() => {
+      const request = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requestId);
+      if (!request) throw notFound("AI 对话请求");
+      if (assistantMessageId) {
+        const assistant = this.db.get(
+          `SELECT id FROM ai_conversation_messages
+           WHERE id = ? AND conversation_id = ? AND role = 'assistant'`,
+          assistantMessageId,
+          requiredString(request, "conversation_id")
+        );
+        if (!assistant) throw new AppError(400, "AI_STREAM_ASSISTANT_MISMATCH", "AI 回复消息不属于当前对话请求");
+      }
+      this.db.run(
+        `UPDATE ai_conversation_stream_requests
+         SET status = ?, terminal_reason = ?, assistant_message_id = COALESCE(assistant_message_id, ?),
+             lease_expires_at = NULL, updated_at = ?, completed_at = ?
+         WHERE id = ? AND status = 'in_progress'`,
+        status,
+        terminalReason.slice(0, 500),
+        assistantMessageId ?? null,
+        timestamp,
+        timestamp,
+        requestId
+      );
+      const completed = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requestId);
+      if (!completed) throw notFound("AI 对话请求");
+      return this.mapAiConversationStreamRequest(completed);
+    });
   }
 
   forkAiConversation(conversationId: string, messageId: string, requestedTitle?: string, requestId?: string): Record<string, unknown> {
@@ -7417,6 +7768,62 @@ export class Store {
         : normalizeWorkAgentTools(row.agent_tools_json),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private aiConversationMessageOrNull(messageId: string | null): Record<string, unknown> | null {
+    if (!messageId) return null;
+    const message = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
+    return message ? this.mapAiConversationMessage(message) : null;
+  }
+
+  private expireAiConversationStreamLease(conversationId: string, timestamp: string): void {
+    const expired = this.db.get(
+      `SELECT * FROM ai_conversation_stream_requests
+       WHERE conversation_id = ? AND status = 'in_progress' AND lease_expires_at <= ?`,
+      conversationId,
+      timestamp
+    );
+    if (!expired) return;
+    const userMessageId = optionalString(expired, "user_message_id");
+    const assistant = userMessageId
+      ? this.db.get(
+        `SELECT id FROM ai_conversation_messages
+         WHERE conversation_id = ? AND role = 'assistant' AND request_id = ?`,
+        conversationId,
+        `assistant:${userMessageId}`
+      )
+      : undefined;
+    this.db.run(
+      `UPDATE ai_conversation_stream_requests
+       SET status = ?, terminal_reason = ?, assistant_message_id = ?, lease_expires_at = NULL,
+           updated_at = ?, completed_at = ?
+       WHERE id = ? AND status = 'in_progress'`,
+      assistant ? "completed" : "abandoned",
+      assistant ? "recovered_completed_response" : "lease_expired",
+      assistant ? requiredString(assistant, "id") : null,
+      timestamp,
+      timestamp,
+      requiredString(expired, "id")
+    );
+  }
+
+  private mapAiConversationStreamRequest(row: Row): AiConversationStreamRequest {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      conversationId: requiredString(row, "conversation_id"),
+      actorScope: requiredString(row, "actor_scope"),
+      idempotencyKey: requiredString(row, "idempotency_key"),
+      requestHash: requiredString(row, "request_hash"),
+      status: requiredString(row, "status") as AiConversationStreamRequestStatus,
+      terminalReason: optionalString(row, "terminal_reason"),
+      userMessageId: optionalString(row, "user_message_id"),
+      assistantMessageId: optionalString(row, "assistant_message_id"),
+      leaseExpiresAt: optionalString(row, "lease_expires_at"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at"),
+      completedAt: optionalString(row, "completed_at")
     };
   }
 
@@ -8957,14 +9364,15 @@ export class Store {
 
   search(workId: string, query: string): Record<string, unknown>[] {
     this.getWork(workId);
-    const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    const normalizedQuery = normalizeWorkSearchQuery(query);
+    if (!normalizedQuery) return [];
+    const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
     const chapters = this.db.all(
       "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
       pattern,
       pattern
     );
-    const normalizedQuery = query.toLocaleLowerCase("zh-CN");
     const races = this.listRaces(workId).filter((race) => {
       const lineage = race.lineage as Array<{ name: string }>;
       const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
@@ -9014,9 +9422,9 @@ export class Store {
       pattern,
       pattern
     );
-    const characterSections = this.searchCharacterProfileSections(workId, query, 30);
+    const characterSections = this.searchCharacterProfileSections(workId, normalizedQuery, 30);
     const snippet = (content: string): string => {
-      const index = content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+      const index = content.toLocaleLowerCase().indexOf(normalizedQuery);
       const start = Math.max(0, index - 40);
       return content.slice(start, start + 120);
     };
@@ -9105,6 +9513,36 @@ export class Store {
       volumes,
       cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
     });
+  }
+
+  async exportEpub(workId: string, volumeId?: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
+    const tree = this.getWorkTree(workId);
+    const allVolumes = tree.volumes as Record<string, unknown>[];
+    const selectedVolume = volumeId ? allVolumes.find((volume) => String(volume.id) === volumeId) : undefined;
+    if (volumeId && !selectedVolume) throw notFound("分卷");
+    const sourceVolumes = selectedVolume ? [selectedVolume] : allVolumes;
+    const title = selectedVolume ? `${String(tree.title)} - ${String(selectedVolume.title)}` : String(tree.title);
+    const cover = this.findWorkCover(workId);
+    const archive = await createEpubArchive({
+      title,
+      author: String(tree.author ?? ""),
+      description: String(tree.description ?? ""),
+      language: String(tree.language ?? "zh-CN"),
+      volumes: sourceVolumes.map((volume) => ({
+        title: String(volume.title),
+        chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+          title: String(chapter.title),
+          content: String(chapter.content ?? "")
+        }))
+      })),
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
+    return { title, archive };
+  }
+
+  async exportVolumeEpub(volumeId: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
+    const volume = this.getVolume(volumeId);
+    return this.exportEpub(String(volume.workId), volumeId);
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {
