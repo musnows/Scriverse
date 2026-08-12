@@ -17,8 +17,8 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("与 ${String(state.aiRoleplayCharacter.name)} 角色开始对话……");
     expect(application).toContain("/roleplay`");
     expect(application).toContain("对话开始后不能切换任务类型");
-    expect(application).toContain('$("#ai-task").disabled = state.aiPromptSent;');
-    expect(application).toContain('$("#ai-scope").disabled = roleplaySelected || state.aiPromptSent;');
+    expect(application).toContain('$("#ai-task").disabled = interactionBusy || state.aiPromptSent;');
+    expect(application).toContain('$("#ai-scope").disabled = interactionBusy || roleplaySelected || state.aiPromptSent;');
     expect(application).toContain("对话开始后不能切换上下文引用");
     expect(application).toContain("当前对话已经开始，请新建对话后再切换任务类型");
     expect(application).toContain("角色扮演模式只使用角色自身的记忆");
@@ -26,7 +26,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("/context-scope`");
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("state.aiContextScope ?? { type: \"none\" }");
-    expect(application).toContain("await persistAiConversationContextScope(requestScope.conversationScope);");
+    expect(application).toContain('await prepareAiRequestConversation(requestHolder, $("#ai-task").value, requestScope.conversationScope);');
     expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");

@@ -7,7 +7,7 @@ describe("AI 错误详情界面", () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
-      application.indexOf("async function streamChat(body)")
+      application.indexOf("async function streamChat(requestHolder, body)")
     );
 
     expect(application).toContain("function createClientError(payload, fallbackMessage, fallbackStatus = null)");
