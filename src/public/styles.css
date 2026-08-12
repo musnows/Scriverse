@@ -2292,11 +2292,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .status-dot.is-error { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .ai-history-dialog-body { min-height: min(360px, 55vh); max-height: 65vh; overflow-y: auto; padding: 18px 24px 24px; }
 .ai-history-list { display: grid; gap: 8px; }
+.ai-history-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 7px; min-width: 0; }
 .ai-history-item { display: grid; gap: 5px; width: 100%; min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); text-align: left; }
 .ai-history-item:hover { border-color: var(--accent); background: var(--paper-deep); }
 .ai-history-item.is-active { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: var(--row-active); box-shadow: inset 3px 0 var(--accent); }
 .ai-history-item strong, .ai-history-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ai-history-item strong { font-size: 14px; font-weight: 600; }.ai-history-item small { color: var(--muted); font-size: 10px; }
+.ai-history-more { align-self: stretch; width: 38px; min-width: 38px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--muted); font: 17px/1 var(--font-latin), monospace; letter-spacing: 1px; }
+.ai-history-more:hover, .ai-history-more:focus-visible, .ai-history-more[aria-expanded="true"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); }
 .ai-history-empty { margin: 0; padding: 48px 12px; color: var(--muted); font-size: 12px; text-align: center; }
 .field-label { display: grid; gap: 6px; color: var(--muted); font-size: 10px; margin: 14px 0 10px; }
 .field-label select { padding: 8px; font-size: 12px; }
@@ -2644,6 +2647,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .manuscript-export-menu button:hover, .manuscript-export-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); outline: 0; }
 .manuscript-export-menu button span { font-size: 11px; font-weight: 600; }
 .manuscript-export-menu button small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.ai-history-action-menu { position: fixed; z-index: 90; display: grid; min-width: 230px; gap: 3px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); box-shadow: 0 14px 38px rgba(49,42,32,.22); }
+.ai-history-action-menu.hidden { display: none; }
+.ai-history-action-menu button { display: grid; width: 100%; gap: 2px; padding: 8px 9px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
+.ai-history-action-menu button:hover, .ai-history-action-menu button:focus-visible { background: var(--paper-deep); color: var(--accent-dark); outline: 0; }
+.ai-history-action-menu button:disabled { cursor: wait; opacity: .6; }
+.ai-history-action-menu button span { font-size: 11px; font-weight: 600; }
+.ai-history-action-menu button small { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .chapter-annotations-dialog { width: min(820px, 94vw); }
 .chapter-annotations-list { display: grid; gap: 10px; max-height: 62vh; overflow: auto; padding: 18px 24px; }
 .chapter-comment-module-list { display: grid; gap: 10px; }

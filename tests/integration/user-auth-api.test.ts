@@ -2102,6 +2102,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("AI 建议与对话按成员正文权限脱敏", async () => {
     const owner = await register(runtime, "ai_redact_owner");
     const collaborator = await register(runtime, "ai_redact_reader");
+    const outsider = await register(runtime, "ai_export_outsider");
     const work = await owner.agent.post("/api/works")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "AI 脱敏作品" })
@@ -2214,6 +2215,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(conversation.body.data.messages[0].citations).toEqual([]);
     expect(conversation.body.data.messages[0].metadata).toEqual({ restricted: true });
     expect(JSON.stringify(conversation.body.data)).not.toContain("TOP_SECRET_");
+
+    const exportedConversation = await collaborator.agent.get(`/api/ai-conversations/${conversationId}/export`).expect(200);
+    expect(exportedConversation.text).toContain("（正文读取权限受限）");
+    expect(exportedConversation.text).not.toContain("TOP_SECRET_");
+    const exportDenied = await outsider.agent.get(`/api/ai-conversations/${conversationId}/export`).expect(403);
+    expect(exportDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
 
     const conversations = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
     expect(conversations.body.data.items[0].title).toBe("（正文读取权限受限）");

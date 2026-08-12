@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
+import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
@@ -2381,6 +2382,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : store.getAiConversation(request.params.conversationId);
     const permissions = requestPermissions(request, String(conversation.workId));
     data(response, redactAiConversation(conversation, permissions));
+  });
+  app.get("/api/ai-conversations/:conversationId/export", (request, response) => {
+    const conversation = store.getAiConversation(request.params.conversationId);
+    const permissions = requestPermissions(request, String(conversation.workId));
+    const readableConversation = redactAiConversation(conversation, permissions);
+    response.type("text/markdown; charset=utf-8");
+    response.setHeader("Content-Disposition", aiConversationExportContentDisposition(readableConversation));
+    response.send(exportAiConversationMarkdown(readableConversation));
   });
   app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
     const input = parse(z.object({ messageId: identifier, title: z.string().max(200).optional() }), request.body);

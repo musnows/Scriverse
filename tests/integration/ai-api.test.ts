@@ -153,6 +153,44 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondPage.body.data.items).toHaveLength(1);
   });
 
+  it("将单个 AI 对话安全导出为与消息顺序一致的 Markdown", async () => {
+    await configureAi();
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      title: "../星海：密谈\r\nX-Evil: injected"
+    }).expect(201);
+    const conversationId = String(created.body.data.id);
+    const userContent = "请保留 @林舟 与特殊字符 *原样*。\n\n```ts\nconst answer = 42;\n```";
+    const assistantContent = "第一行\n第二行\n\n- 列表项";
+    runtime.store.addAiConversationMessage(conversationId, {
+      role: "user",
+      content: userContent,
+      metadata: { mentionCharacterIds: ["character_reference"] }
+    });
+    runtime.store.addAiConversationMessage(conversationId, {
+      role: "assistant",
+      content: assistantContent,
+      metadata: {
+        modelDisplayName: "小说模型",
+        reasoningContent: "INTERNAL_REASONING",
+        anthropicContent: [{ type: "thinking", thinking: "INTERNAL_THINKING" }]
+      }
+    });
+
+    const exported = await request(runtime.app).get(`/api/ai-conversations/${conversationId}/export`).expect(200);
+    expect(exported.headers["content-type"]).toContain("text/markdown");
+    expect(exported.headers["content-disposition"]).toContain(`filename="ai-conversation-${conversationId}.md"`);
+    expect(exported.headers["content-disposition"]).not.toMatch(/[\r\n]/u);
+    expect(exported.headers["content-disposition"]).not.toContain("../");
+    expect(exported.text).toContain("## 作者 · ");
+    expect(exported.text).toContain("## 助手 · ");
+    expect(exported.text).toContain(userContent);
+    expect(exported.text).toContain(assistantContent);
+    expect(exported.text.indexOf(userContent)).toBeLessThan(exported.text.indexOf(assistantContent));
+    expect(exported.text).not.toContain("sk-sensitive-test-value");
+    expect(exported.text).not.toContain("INTERNAL_REASONING");
+    expect(exported.text).not.toContain("INTERNAL_THINKING");
+  });
+
   it("拒绝新增或改为低于 32K 上下文的模型", async () => {
     const { providerId, modelId } = await configureAi();
     const invalidCreate = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
