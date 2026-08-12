@@ -1659,6 +1659,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
     for (const secret of Object.values(reviewSecrets)) {
       expect(JSON.stringify(outsiderDenied.body)).not.toContain(secret);
     }
+    const outsiderVolumeDenied = await outsider.agent.get(`/api/volumes/${volume.body.data.id}/export?format=epub`).expect(403);
+    expect(outsiderVolumeDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(outsiderVolumeDenied.headers["content-disposition"]).toBeUndefined();
+    await outsider.agent.head(`/api/volumes/${volume.body.data.id}/export?format=epub`).expect(403);
     const otherWork = await outsider.agent.post("/api/works")
       .set("X-CSRF-Token", outsider.csrfToken)
       .send({ title: "其他作品" })
@@ -1711,6 +1715,38 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const documentXml = await docxArchive.file("word/document.xml")?.async("string");
     expect(documentXml).toContain(proseSecret);
     for (const secret of Object.values(reviewSecrets)) expect(documentXml).not.toContain(secret);
+
+    const epubExport = await collaborator.agent.get(`/api/works/${workId}/export?format=epub`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/epub\+zip/u)
+      .expect(200);
+    const epubArchive = await JSZip.loadAsync(epubExport.body as Buffer);
+    const epubText = (await Promise.all(Object.values(epubArchive.files)
+      .filter((file) => !file.dir && !/\.(?:png|jpe?g)$/iu.test(file.name))
+      .map((file) => file.async("string")))).join("\n");
+    expect(epubText).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(epubText).not.toContain(secret);
+    await collaborator.agent.head(`/api/works/${workId}/export?format=epub`).expect(204);
+
+    const volumeEpubExport = await collaborator.agent.get(`/api/volumes/${volume.body.data.id}/export?format=epub`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect(200);
+    const volumeEpubArchive = await JSZip.loadAsync(volumeEpubExport.body as Buffer);
+    const volumeChapter = await volumeEpubArchive.file("OEBPS/text/chapter-001-001.xhtml")?.async("string");
+    expect(volumeChapter).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(volumeChapter).not.toContain(secret);
 
     await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
       .set("X-CSRF-Token", owner.csrfToken)

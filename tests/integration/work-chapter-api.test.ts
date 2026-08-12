@@ -801,6 +801,93 @@ describe("作品、导入和章节版本 API", () => {
     expect(coverDocument).toMatch(/<a:blip\b/u);
   });
 
+  it("将作品或单分卷导出为安全的 EPUB 3 文件", async () => {
+    const validPng = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2z94AAAAASUVORK5CYII=",
+      "base64"
+    );
+    const work = await request(runtime.app).post("/api/works").send({
+      title: "../北港\r\n纪事 <终章>",
+      author: "慕雪 & 合著者",
+      description: "不包含内部资料的作品简介。",
+      language: "zh-CN"
+    }).expect(201);
+    const workId = String(work.body.data.id);
+    const firstVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷 & 潮声" }).expect(201);
+    const firstChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: firstVolume.body.data.id,
+      title: "第一章 <启航>",
+      content: "正文 <script>alert(1)</script>。\n\n```js\nconst value = 1 < 2;\n```"
+    }).expect(201);
+    const emptyVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "空分卷" }).expect(201);
+    await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng, "封面.png").expect(200);
+
+    await request(runtime.app).head(`/api/works/${workId}/export?format=epub`).expect(204);
+    await request(runtime.app).head(`/api/volumes/${firstVolume.body.data.id}/export?format=epub`).expect(204);
+    await request(runtime.app).head(`/api/works/${workId}/export?format=docx`).expect(400);
+
+    const exported = await request(runtime.app)
+      .get(`/api/works/${workId}/export?format=epub`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/epub\+zip/u)
+      .expect(200);
+    expect(exported.headers["content-disposition"]).toContain(`filename="novel-${workId}.epub"`);
+    expect(exported.headers["content-disposition"]).toContain("filename*=UTF-8''");
+    expect(exported.headers["content-disposition"]).not.toMatch(/[\r\n]/u);
+    expect(exported.headers["cache-control"]).toBe("private, no-store");
+    const archive = await JSZip.loadAsync(exported.body as Buffer);
+    await expect(archive.file("mimetype")?.async("string")).resolves.toBe("application/epub+zip");
+    const packageXml = await archive.file("OEBPS/package.opf")?.async("string");
+    expect(packageXml).toContain('<package xmlns="http://www.idpf.org/2007/opf"');
+    expect(packageXml).toContain('version="3.0"');
+    expect(packageXml).toContain("慕雪 &amp; 合著者");
+    expect(packageXml).toContain('properties="cover-image"');
+    const chapterXhtml = await archive.file("OEBPS/text/chapter-001-001.xhtml")?.async("string");
+    expect(chapterXhtml).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(chapterXhtml).not.toContain("<script>");
+    await expect(archive.file("OEBPS/text/volume-002.xhtml")?.async("string")).resolves.toContain("空分卷");
+    const serialized = await Promise.all(Object.values(archive.files).filter((file) => !file.dir).map((file) => file.async("string")));
+    expect(serialized.join("\n")).not.toContain(workId);
+    expect(serialized.join("\n")).not.toContain(String(firstChapter.body.data.id));
+
+    const volumeExport = await request(runtime.app)
+      .get(`/api/volumes/${firstVolume.body.data.id}/export?format=epub`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/epub\+zip/u)
+      .expect(200);
+    const volumeArchive = await JSZip.loadAsync(volumeExport.body as Buffer);
+    const volumeNav = await volumeArchive.file("OEBPS/nav.xhtml")?.async("string");
+    expect(volumeNav).toContain("第一卷 &amp; 潮声");
+    expect(volumeNav).not.toContain("空分卷");
+    expect(volumeExport.headers["content-disposition"]).toContain(`filename="volume-${firstVolume.body.data.id}.epub"`);
+
+    const emptyExport = await request(runtime.app)
+      .get(`/api/volumes/${emptyVolume.body.data.id}/export`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect(200);
+    const emptyArchive = await JSZip.loadAsync(emptyExport.body as Buffer);
+    expect(Object.keys(emptyArchive.files).filter((name) => /chapter-\d/u.test(name))).toEqual([]);
+    await request(runtime.app).get(`/api/volumes/${firstVolume.body.data.id}/export?format=docx`).expect(400);
+  });
+
   it("删除章节后可列出版本并恢复", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "章节删除恢复" }).expect(201);
     const workId = work.body.data.id;

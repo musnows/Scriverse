@@ -5750,6 +5750,7 @@ function renderTree() {
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
         <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键设置分卷；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
+        <button class="chapter-batch-button volume-export-button" type="button" data-export-volume="${esc(volume.id)}" aria-label="导出“${esc(volume.title)}”为 EPUB" title="导出当前分卷为 EPUB"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg></button>
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
@@ -5789,6 +5790,12 @@ function renderTree() {
   });
   $("#novel-tree").querySelectorAll("[data-new-chapter-volume]").forEach((button) => {
     button.addEventListener("click", () => openChapterDialog(button.dataset.newChapterVolume));
+  });
+  $("#novel-tree").querySelectorAll("[data-export-volume]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const volume = state.work?.volumes.find((item) => item.id === button.dataset.exportVolume);
+      if (volume) void downloadVolumeEpub(volume, button);
+    });
   });
   $("#novel-tree").querySelectorAll("[data-chapter-id]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -9989,21 +9996,69 @@ function bindWorkCoverControls(work) {
   });
 }
 
-function downloadWorkManuscript(work, format = "markdown") {
+async function prepareEpubDownload(path, trigger) {
+  if (!path || trigger?.disabled) return;
+  if (trigger) {
+    trigger.disabled = true;
+    trigger.setAttribute("aria-busy", "true");
+  }
+  toast("正在准备 EPUB 下载…");
+  try {
+    let response;
+    try {
+      response = await fetch(path, { method: "HEAD", headers: { Accept: "application/epub+zip" } });
+    } catch (error) {
+      updateSystemHealth({ status: "offline" });
+      throw error;
+    }
+    updateSystemHealth({ status: response.status >= 500 ? "degraded" : "ready" });
+    if (!response.ok) {
+      if (response.status === 401) {
+        const restarted = await checkSystemBoot(true);
+        if (!restarted) invalidateAuthentication();
+      }
+      throw new Error(`请求失败：${response.status}`);
+    }
+    window.location.href = path;
+    toast("EPUB 下载已开始");
+  } catch (error) {
+    toast(`EPUB 导出失败：${error instanceof Error ? error.message : "未知错误"}`, "error");
+  } finally {
+    if (trigger?.isConnected) {
+      trigger.disabled = false;
+      trigger.removeAttribute("aria-busy");
+      trigger.focus();
+    }
+  }
+}
+
+function downloadVolumeEpub(volume, trigger) {
+  if (!volume?.id) return;
+  return prepareEpubDownload(`/api/volumes/${encodeURIComponent(volume.id)}/export?format=epub`, trigger);
+}
+
+function downloadWorkManuscript(work, format = "markdown", trigger = null) {
   if (!work?.id) return;
-  const exportFormat = format === "docx" ? "docx" : "markdown";
+  const exportFormat = ["docx", "epub"].includes(format) ? format : "markdown";
+  if (exportFormat === "epub") {
+    return prepareEpubDownload(`/api/works/${encodeURIComponent(work.id)}/export?format=epub`, trigger);
+  }
   window.location.href = `/api/works/${encodeURIComponent(work.id)}/export?format=${exportFormat}`;
 }
 
 let manuscriptExportWork = null;
+let manuscriptExportAnchor = null;
 
-function closeManuscriptExportMenu() {
+function closeManuscriptExportMenu(restoreFocus = false) {
   const menu = $("#manuscript-export-menu");
   if (!menu) return;
+  const anchor = manuscriptExportAnchor;
   menu.classList.add("hidden");
   manuscriptExportWork = null;
+  manuscriptExportAnchor = null;
   $("#export-button")?.setAttribute("aria-expanded", "false");
   $("#work-export-button")?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && anchor?.isConnected) anchor.focus();
 }
 
 function showManuscriptExportMenu(anchor, work) {
@@ -10011,6 +10066,7 @@ function showManuscriptExportMenu(anchor, work) {
   const menu = $("#manuscript-export-menu");
   if (!menu) return;
   manuscriptExportWork = work;
+  manuscriptExportAnchor = anchor;
   menu.classList.remove("hidden");
   const anchorRect = anchor.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
@@ -10041,7 +10097,7 @@ function openWorkSettingsDialog(work) {
     <button id="import-history-button" class="ghost-button" type="button" aria-controls="import-history-dialog" aria-haspopup="dialog" ${canOpenImportHistory ? "" : "disabled"}>${importHistoryAction}</button>
   </section>`;
   const exportField = `<section class="work-access-field" aria-labelledby="work-export-settings-title">
-    <div><strong id="work-export-settings-title">导出正文</strong><small>点击后选择导出 Markdown ZIP 或 DOCX（书名、分卷、章节为一级至三级标题；若已设置封面则嵌入为首页）。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
+    <div><strong id="work-export-settings-title">导出正文</strong><small>点击后选择 Markdown ZIP、DOCX 或 EPUB；EPUB 包含作品元信息、封面、分卷层级和可跳转目录。不包含角色、设定、关系、时间轴、大纲、伏笔或 AI 分析资料。</small></div>
     <button id="work-export-button" class="ghost-button" type="button" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false">导出正文</button>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
@@ -14605,7 +14661,7 @@ document.addEventListener("pointerdown", (event) => {
   if (!event.target.closest("#line-citation-menu")) closeLineCitationMenu();
   if (!event.target.closest("#markdown-table-menu")) closeMarkdownTableMenu();
   if (!event.target.closest("#manuscript-export-menu") && !event.target.closest("#export-button") && !event.target.closest("#work-export-button")) {
-    closeManuscriptExportMenu();
+    closeManuscriptExportMenu(true);
   }
   if (!event.target.closest("#ai-history-action-menu") && !event.target.closest(".ai-history-more")) closeAiHistoryActionMenu();
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
@@ -14846,10 +14902,12 @@ $("#export-button").addEventListener("click", (event) => {
 $("#manuscript-export-menu").addEventListener("click", (event) => {
   const option = event.target.closest("[data-export-format]");
   if (!option || !manuscriptExportWork) return;
-  const format = option.getAttribute("data-export-format") === "docx" ? "docx" : "markdown";
+  const requestedFormat = option.getAttribute("data-export-format");
+  const format = ["docx", "epub"].includes(requestedFormat) ? requestedFormat : "markdown";
   const work = manuscriptExportWork;
-  closeManuscriptExportMenu();
-  downloadWorkManuscript(work, format);
+  const trigger = manuscriptExportAnchor;
+  closeManuscriptExportMenu(true);
+  void downloadWorkManuscript(work, format, trigger);
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;

@@ -18,6 +18,7 @@ import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
+import { EPUB_MIME_TYPE, epubContentDisposition } from "./epub-export.js";
 import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
@@ -742,6 +743,19 @@ function data(response: Response, value: unknown, status = 200): void {
 
 function noContent(response: Response): void {
   response.status(204).end();
+}
+
+async function sendEpub(response: Response, archive: JSZip, title: string, fallbackStem: string): Promise<void> {
+  response.type(EPUB_MIME_TYPE);
+  response.setHeader("Content-Disposition", epubContentDisposition(title, fallbackStem));
+  response.setHeader("Cache-Control", "private, no-store");
+  await pipeline(archive.generateNodeStream({
+    type: "nodebuffer",
+    // 逐条目压缩后再写入，确保首个 mimetype 本地头包含确定长度且没有额外字段。
+    streamFiles: false,
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 }
+  }), response);
 }
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -1580,6 +1594,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination
       ? store.listVolumeChaptersPage(request.params.volumeId, pagination)
       : store.listVolumeChapters(request.params.volumeId));
+  });
+  app.head("/api/volumes/:volumeId/export", (request, response) => {
+    parse(z.enum(["epub"]), request.query.format ?? "epub");
+    store.getVolume(request.params.volumeId);
+    noContent(response);
+  });
+  app.get("/api/volumes/:volumeId/export", async (request, response) => {
+    parse(z.enum(["epub"]), request.query.format ?? "epub");
+    const exported = await store.exportVolumeEpub(request.params.volumeId);
+    await sendEpub(response, exported.archive, exported.title, `volume-${request.params.volumeId}`);
   });
   app.delete("/api/volumes/:volumeId", (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
@@ -2907,8 +2931,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       includeAgentHistory: permissions["ai-chat"] !== "none"
     }));
   });
+  app.head("/api/works/:workId/export", (request, response) => {
+    parse(z.enum(["epub"]), request.query.format ?? "epub");
+    store.getWork(request.params.workId);
+    noContent(response);
+  });
   app.get("/api/works/:workId/export", async (request, response) => {
-    const format = parse(z.enum(["json", "txt", "markdown", "docx"]), request.query.format ?? "json");
+    const format = parse(z.enum(["json", "txt", "markdown", "docx", "epub"]), request.query.format ?? "json");
     if (format === "json") {
       response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.json`);
       data(response, store.exportWork(request.params.workId));
@@ -2932,6 +2961,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       response.type("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
       response.setHeader("Content-Disposition", `attachment; filename=novel-${request.params.workId}.docx`);
       response.send(await store.exportDocx(request.params.workId));
+      return;
+    }
+    if (format === "epub") {
+      const exported = await store.exportEpub(request.params.workId);
+      await sendEpub(response, exported.archive, exported.title, `novel-${request.params.workId}`);
       return;
     }
     response.type("text/plain");
