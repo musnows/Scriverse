@@ -307,6 +307,10 @@
 }
 
 * { box-sizing: border-box; }
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { width: 0; }
+.is-scrollbar-visible { scrollbar-width: thin; }
+.is-scrollbar-visible::-webkit-scrollbar { width: 8px; }
 
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 
@@ -1134,6 +1138,24 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .avatar-crop-side p { margin: 0; color: var(--muted); font-size: 10px; }
 .avatar-crop-preview { width: 76px; height: 76px; border: 2px solid color-mix(in srgb, var(--line) 72%, transparent); background: var(--surface); }
 .avatar-crop-preview canvas { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; }
+.image-upload-placeholder-box { position: relative; display: grid; place-items: center; min-width: 42px; min-height: 42px; overflow: hidden; border: 1px dashed color-mix(in srgb, var(--accent) 48%, var(--line)); border-radius: 4px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--muted); font: 9px/1 var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: .08em; }
+.image-upload-placeholder-shine { position: absolute; inset: 0; background: linear-gradient(110deg, transparent 18%, color-mix(in srgb, var(--surface) 72%, transparent) 48%, transparent 78%); transform: translateX(-110%); animation: image-upload-placeholder-shimmer 1.45s ease-in-out infinite; }
+.image-upload-placeholder-icon { position: relative; z-index: 1; opacity: .72; }
+.image-upload-progress { display: grid; gap: 5px; min-width: 0; color: var(--muted); }
+.image-upload-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; font: 10px/1.35 var(--font-latin), var(--font-cjk), sans-serif; }
+.image-upload-progress-heading span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-upload-progress-heading output { flex: 0 0 auto; color: var(--ink); font: 10px/1 var(--font-latin), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.image-upload-progress-track { position: relative; height: 4px; overflow: hidden; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.image-upload-progress-track > span { display: block; width: var(--upload-progress, 0%); height: 100%; border-radius: inherit; background: var(--accent); transition: width .18s ease; }
+.image-upload-progress.is-indeterminate .image-upload-progress-track > span { width: 38%; animation: image-upload-progress-indeterminate 1.25s ease-in-out infinite; }
+.image-upload-progress-panel { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: center; gap: 10px; margin: 0 24px 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft)); }
+.image-upload-progress-panel .image-upload-placeholder-box { width: 42px; height: 42px; }
+.image-upload-progress-copy { display: grid; gap: 4px; min-width: 0; }
+.image-upload-progress-copy strong { color: var(--ink); font-size: 11px; }
+.image-upload-progress-copy small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.image-upload-progress-panel .image-upload-progress { margin-top: 2px; }
+@keyframes image-upload-placeholder-shimmer { from { transform: translateX(-110%); } to { transform: translateX(110%); } }
+@keyframes image-upload-progress-indeterminate { from { transform: translateX(-120%); } to { transform: translateX(300%); } }
 .account-settings-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; margin-top: 16px; }
 .account-settings-form label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 11px; }
 .account-settings-form input { width: 100%; min-height: 38px; padding: 9px 10px; background: var(--surface); font-size: 12px; }
@@ -1215,8 +1237,12 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 }
 .work-cover-preview.has-cover { border-style: solid; }
 .work-cover-preview img { width: 100%; height: 100%; object-fit: cover; }
+.work-cover-preview.is-uploading { border-style: solid; border-color: color-mix(in srgb, var(--accent) 42%, var(--line)); }
+.work-cover-preview.is-uploading .image-upload-placeholder-box { width: 100%; height: 100%; border: 0; border-radius: 3px; }
+.work-cover-upload-progress { grid-column: 2; min-width: 0; }
 .work-cover-actions { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px; }
 .work-cover-actions .ghost-button { min-height: 32px; padding: 6px 11px; font-size: 11px; }
+.work-cover-actions button:disabled { cursor: wait; opacity: .55; }
 .book-add-card { display: grid; place-items: center; align-content: center; aspect-ratio: 3 / 4.25; min-height: 280px; border: 1px dashed #b8ad9c; border-radius: 8px; color: var(--muted); }
 .book-add-card span { display: grid; place-items: center; width: 58px; height: 58px; margin-bottom: 15px; border: 1px solid var(--line); border-radius: 50%; font-size: 34px; color: var(--accent); }
 .book-add-card strong { color: var(--ink); margin-bottom: 8px; }
@@ -2942,6 +2968,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .editor-dialog .markdown-editor-field .vditor-editor-host.vditor { min-height: clamp(420px, 56dvh, 640px) !important; }
 .vditor-editor-host { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .vditor-editor-host.vditor { height: 100% !important; min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink); }
+.vditor-editor-host.vditor { position: relative; }
+.vditor-upload-queue { position: fixed; z-index: 60; right: 12px; bottom: 12px; display: grid; gap: 8px; width: min(360px, calc(100% - 24px)); max-height: min(42vh, 260px); overflow-y: auto; pointer-events: none; }
+.vditor-upload-queue[hidden] { display: none; }
+.vditor-upload-placeholder { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 9px; align-items: center; padding: 9px; border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--surface) 94%, var(--accent)); box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 16%, transparent); }
+.vditor-upload-placeholder .image-upload-placeholder-box { width: 38px; height: 38px; min-width: 38px; min-height: 38px; }
+.vditor-upload-placeholder-copy { display: grid; gap: 4px; min-width: 0; }
+.vditor-upload-placeholder-copy strong { overflow: hidden; color: var(--ink); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.vditor-upload-placeholder-copy small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.vditor-upload-placeholder.is-complete { border-color: color-mix(in srgb, var(--green) 48%, var(--line)); }
+.vditor-upload-placeholder.is-failed { border-color: color-mix(in srgb, var(--accent) 68%, var(--line)); }
 .vditor-editor-host.vditor:not(.vditor--dark) { --border-color: var(--line); --panel-background-color: var(--surface); --toolbar-background-color: var(--surface-soft); --toolbar-icon-color: var(--muted); --toolbar-icon-hover-color: var(--accent-dark); --textarea-background-color: var(--surface); --textarea-text-color: var(--ink); --heading-border-color: var(--line); --blockquote-color: var(--muted); }
 .vditor-editor-host.vditor--dark { --border-color: var(--line); --panel-background-color: var(--surface); --toolbar-background-color: var(--surface-soft); --toolbar-icon-color: var(--muted); --toolbar-icon-hover-color: var(--accent); --textarea-background-color: var(--surface); --textarea-text-color: var(--ink); --heading-border-color: var(--line); --blockquote-color: var(--muted); }
 .vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }
@@ -3238,6 +3274,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .avatar-crop-body { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 14px 16px 4px; }
   .avatar-crop-side { grid-template-columns: auto 1fr; align-items: center; justify-items: start; gap: 10px; padding-top: 0; }
   .avatar-crop-preview { width: 64px; height: 64px; }
+  .image-upload-progress-panel { margin-inline: 16px; }
   .account-settings-form .primary-button { width: 100%; }
   .usage-stat-grid { grid-template-columns: minmax(0, 1fr); }
   .usage-stat { min-height: 104px; }

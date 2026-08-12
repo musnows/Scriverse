@@ -327,8 +327,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260812-image-upload-limit-v3');
-    expect(page.text).toContain('/styles.css?v=20260812-agent-chat-font-size-v1');
+    expect(page.text).toContain('/app.js?v=20260812-scrollbar-autohide-v1');
+    expect(page.text).toContain('/styles.css?v=20260812-scrollbar-autohide-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -429,9 +429,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("imageUploadLimits.attachmentBytes");
     expect(application.text).toContain("封面不支持 GIF 图片");
     expect(application.text).toContain("支持 PNG、JPEG、WebP；文件不超过");
+    expect(application.text).toContain("uploadWithProgress");
+    expect(application.text).toContain("renderAvatarUploadProgress");
+    expect(application.text).toContain("renderWorkCoverUploadProgress");
+    expect(application.text).toContain("showScrollbarWhileScrolling");
+    expect(application.text).toContain("scrollBarHideDelay = 650");
     expect(page.text).toContain('id="cover-file"');
     expect(page.text).toContain('accept="image/png,image/jpeg,image/webp"');
-    expect(application.text).toContain('api("/api/auth/avatar", { method: "PUT", body })');
+    expect(application.text).toContain('uploadWithProgress("/api/auth/avatar", { method: "PUT", body }');
     expect(application.text).toContain('api("/api/auth/avatar", { method: "DELETE" })');
     expect(application.text).toContain("function renderUserAvatar(element, user)");
     expect(styles.text).toContain(".profile-avatar-preview");
@@ -568,8 +573,10 @@ describe("作者完整创作流程", () => {
     expect(vditorCss.text).toContain("Vditor v3.11.2");
     expect(vditorScript.text).toContain("Vditor");
     expect(application.text).toContain('/markdown.js?v=20260731-no-external-images-v1');
+    expect(application.text).toContain('/upload-progress.js?v=20260812-upload-progress-v1');
     expect(application.text).toContain('new window.Vditor');
     expect(application.text).toContain('createVditorUploadHandler');
+    expect(application.text).toContain('createVditorUploadPlaceholder');
     expect(page.text).toContain('id="character-section-editor-view"');
     expect(page.text).toContain('id="knowledge-section-editor-view"');
     expect(application.text).toContain('id="character-section-markdown"');
@@ -588,6 +595,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".message-body .markdown-table-scroll.is-wrapping table");
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table { background: var(--surface); color: var(--ink); }');
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
+    expect(styles.text).toContain(".vditor-upload-queue {");
+    expect(styles.text).toContain(".image-upload-progress-panel {");
+    expect(styles.text).toContain(".is-scrollbar-visible::-webkit-scrollbar {");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
     expect(styles.text).toContain("#character-section-editor-view");
     expect(styles.text).toContain("#knowledge-section-editor-view");
