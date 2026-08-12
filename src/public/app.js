@@ -66,6 +66,7 @@ import { systemStatusPresentation } from "/system-status.js?v=20260801-system-he
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
 import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
+import { buildGlobalReplaceRefreshPlan, resolveGlobalReplaceChapterCount } from "/global-replace-refresh.js?v=20260812-global-replace-tree-v2";
 import {
   clampCropRect,
   containImageRect,
@@ -5127,29 +5128,69 @@ function openGlobalReplaceDialog() {
 async function refreshWorkAfterGlobalReplace(route, result) {
   const workId = state.work?.id;
   if (!workId) return;
+  const previousVolumes = Array.isArray(state.work.volumes) ? state.work.volumes : [];
+  const refreshPlan = buildGlobalReplaceRefreshPlan({
+    volumes: previousVolumes,
+    collapsedVolumeIds: state.collapsedVolumeIds,
+    selectedChapterId: state.chapter?.id,
+    selectedChapterVolumeId: state.chapter?.volumeId,
+    routeChapterId: route.view === "editor" ? route.chapterId : null,
+    scope: String(result?.scope ?? ""),
+    chapterCount: result?.chapterCount,
+    settingCount: result?.settingCount
+  });
   const nextWork = result?.work ?? await api(`/api/works/${encodeURIComponent(workId)}?directory=volumes`);
   if (!nextWork || nextWork.id !== workId) return;
+  const refreshGeneration = refreshPlan.proseChanged ? ++workScopedUiGeneration : workScopedUiGeneration;
+  const previousVolumeById = new Map(previousVolumes.map((volume) => [volume.id, volume]));
   state.work = nextWork;
-  state.work.volumes = state.work.volumes.map((volume) => ({ ...volume, chapters: Array.isArray(volume.chapters) ? volume.chapters : [] }));
+  state.work.volumes = (Array.isArray(state.work.volumes) ? state.work.volumes : []).map((volume) => {
+    const previousVolume = previousVolumeById.get(volume.id);
+    return {
+      ...volume,
+      chapterCount: resolveGlobalReplaceChapterCount(volume, previousVolume),
+      chapters: refreshPlan.proseChanged
+        ? []
+        : Array.isArray(previousVolume?.chapters)
+          ? previousVolume.chapters
+          : Array.isArray(volume.chapters) ? volume.chapters : []
+    };
+  });
   state.works = state.works.map((work) => work.id === workId ? { ...work, ...nextWork } : work);
-  state.settings = [];
-  loadedVolumeChapterIds.clear();
-  volumeChapterLoadingIds.clear();
-  volumeChapterRequests.clear();
-  for (const volume of state.work.volumes) loadedVolumeChapterIds.add(volume.id);
-  state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));
-  if (String(result?.scope) === "prose" || String(result?.scope) === "prose-and-settings") {
-    state.chapter = null;
-    lastSavedChapterSnapshot = null;
+  if (refreshPlan.settingsChanged) state.settings = [];
+  if (refreshPlan.proseChanged) {
+    loadedVolumeChapterIds.clear();
+    volumeChapterLoadingIds.clear();
+    volumeChapterRequests.clear();
   }
+  const expandedVolumeIds = new Set(refreshPlan.expandedVolumeIds);
+  state.collapsedVolumeIds = new Set(state.work.volumes
+    .filter((volume) => !expandedVolumeIds.has(volume.id))
+    .map((volume) => volume.id));
   applyWorkAccessMode();
   showSystemStatus();
   updateDocumentTitle(state.work);
   $("#work-meta").textContent = `${state.work.title}${state.work.author ? ` · ${state.work.author}` : ""} · ${Number(state.work.wordCount ?? 0).toLocaleString("zh-CN")} 字`;
   $("#top-search-button").disabled = !canReadAggregateContent();
   renderTree();
+  if (refreshPlan.proseChanged) {
+    await Promise.all(refreshPlan.reloadVolumeIds.map((volumeId) => loadVolumeChapters(volumeId)));
+    if (state.work?.id !== workId || refreshGeneration !== workScopedUiGeneration) return;
+  }
   if (route.view === "editor" && route.chapterId && canReadModule("editor")) {
+    if (refreshPlan.proseChanged) {
+      state.chapter = null;
+      lastSavedChapterSnapshot = null;
+    }
     await selectChapter(route.chapterId);
+    if (refreshPlan.proseChanged && state.chapter?.volumeId) await loadVolumeChapters(state.chapter.volumeId);
+  } else if (refreshPlan.proseChanged && refreshPlan.selectedChapterId) {
+    const chapter = await api(`/api/chapters/${encodeURIComponent(refreshPlan.selectedChapterId)}`);
+    if (state.work?.id !== workId || refreshGeneration !== workScopedUiGeneration) return;
+    state.chapter = chapter;
+    mergeChapterDirectoryEntry(chapter);
+    lastSavedChapterSnapshot = { chapterId: chapter.id, title: chapter.title, content: chapter.content };
+    await loadVolumeChapters(chapter.volumeId);
   } else if (route.view === "module") {
     await showModule(route.module);
   } else if (route.view === "settings") {
@@ -5200,10 +5241,17 @@ async function submitGlobalReplace(event) {
   const button = $("#replace-submit");
   const route = currentPageRoute();
   const workId = state.work.id;
+  const hadDirtyDraft = state.dirty;
   button.disabled = true;
   button.textContent = "替换中…";
   cancelChapterAutoSave();
   state.dirty = false;
+  let replacementApplied = false;
+  const restoreDraftAfterNoop = () => {
+    if (!hadDirtyDraft) return;
+    if (state.chapter && canEditProse() && !chapterEditorReadOnly) scheduleChapterAutoSave();
+    else state.dirty = true;
+  };
   try {
     const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
       method: "POST",
@@ -5211,16 +5259,20 @@ async function submitGlobalReplace(event) {
       skipOptimisticVersion: true
     });
     $("#replace-dialog").close();
-    if (Number(result.totalMatches) > 0) await refreshWorkAfterGlobalReplace(route, result);
     if (Number(result.totalMatches) > 0) {
+      replacementApplied = true;
+      await refreshWorkAfterGlobalReplace(route, result);
+      if (Number(result.chapterCount) === 0) restoreDraftAfterNoop();
       const changedTargets = [];
       if (Number(result.chapterCount) > 0) changedTargets.push(`${result.chapterCount} 章`);
       if (Number(result.settingCount) > 0) changedTargets.push(`${result.settingCount} 条设定`);
       toast(`全局替换完成：${result.totalMatches} 处，已更新 ${changedTargets.join("、")}`);
     } else {
+      restoreDraftAfterNoop();
       toast("没有找到需要替换的内容");
     }
   } catch (error) {
+    if (!replacementApplied) restoreDraftAfterNoop();
     toast(error.message, "error");
   } finally {
     button.disabled = false;
@@ -5599,9 +5651,11 @@ async function loadVolumeChapters(volumeId) {
         renderTree();
       }
     } finally {
-      volumeChapterLoadingIds.delete(volumeId);
-      volumeChapterRequests.delete(volumeId);
-      if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree();
+      if (volumeChapterRequests.get(volumeId) === request) {
+        volumeChapterLoadingIds.delete(volumeId);
+        volumeChapterRequests.delete(volumeId);
+        if (state.work?.id === workId && generation === workScopedUiGeneration) renderTree();
+      }
     }
   })();
   volumeChapterRequests.set(volumeId, request);
@@ -5609,9 +5663,10 @@ async function loadVolumeChapters(volumeId) {
 }
 
 async function loadAllVolumeChapters(workId) {
+  const generation = workScopedUiGeneration;
   const volumeIds = state.work?.id === workId ? state.work.volumes.map((volume) => volume.id) : [];
   for (const volumeId of volumeIds) {
-    if (state.work?.id !== workId) return;
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
     await loadVolumeChapters(volumeId);
   }
 }
