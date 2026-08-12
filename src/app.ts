@@ -2310,14 +2310,20 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/works/:workId/chat/stream", async (request, response) => {
     const input = parse(z.object({
-      instruction: nonEmpty.max(100_000),
+      instruction: z.string().max(100_000).optional(),
+      continueConversation: z.boolean().optional(),
       scope: contextSchema,
       modelId: identifier.optional(),
       parameters: jsonObject.optional(),
       citations: aiCitationsSchema.optional(),
       conversationId: identifier.optional(),
       currentMessageId: identifier.optional()
+    }).strict().superRefine((body, context) => {
+      if (!body.continueConversation && !body.instruction?.trim()) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["instruction"], message: "缺少指令内容" });
+      }
     }), request.body);
+    const instruction = input.instruction ?? "";
     const citations = input.citations ?? [];
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
@@ -2352,7 +2358,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         workId: request.params.workId,
         modelId: input.modelId,
         scope: input.scope as ContextScope,
-        instruction: instructionWithCitations(input.instruction, citations),
+        instruction: instructionWithCitations(instruction, citations),
         excludeConversationMessageId: input.currentMessageId
       });
       sendEvent("context", {
@@ -2363,18 +2369,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }, permissions)
       });
       if (prepared.action === "warn") return;
-      const userMessage = input.currentMessageId
+      const userMessage = input.currentMessageId || !instruction.trim()
         ? null
         : store.addAiConversationMessage(conversationId, {
           role: "user",
-          content: input.instruction,
+          content: instruction,
           citations
         });
       const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
       if (userMessage) sendEvent("user_message", { message: redactAiConversationMessage(userMessage, permissions) });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
-        instruction: instructionWithCitations(input.instruction, citations),
+        instruction: instructionWithCitations(instruction, citations),
         scope: input.scope as ContextScope,
         signal: controller.signal,
         onToolCall: (toolCall, round) => sendEvent("tool_call", { ...toolCall, round }),

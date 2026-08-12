@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260804-agent-history-search-v1">
+<link rel="stylesheet" href="/styles.css?v=20260813-ai-write-approval-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -908,6 +908,36 @@
       </div>
     </dialog>
 
+    <dialog id="ai-write-plan-dialog" class="dialog wide-dialog ai-write-plan-dialog" aria-labelledby="ai-write-plan-title">
+      <div class="dialog-header">
+        <div><span id="ai-write-plan-status" class="eyebrow">AI 操作审批</span><h2 id="ai-write-plan-title">修改计划详情</h2></div>
+        <button id="ai-write-plan-close" class="dialog-close" aria-label="关闭修改计划详情" type="button">×</button>
+      </div>
+      <div id="ai-write-plan-detail" class="ai-write-plan-detail" aria-live="polite"></div>
+    </dialog>
+
+    <dialog id="ai-question-dialog" class="dialog ai-question-dialog" aria-labelledby="ai-question-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">AI 提问</span><h2 id="ai-question-title">请回答一个问题</h2></div>
+        <button id="ai-question-close" class="dialog-close" aria-label="关闭 AI 提问" type="button">×</button>
+      </div>
+      <div class="ai-question-body">
+        <p id="ai-question-text" class="ai-question-text"></p>
+        <div id="ai-question-options" class="ai-question-options" aria-live="polite"></div>
+        <div class="ai-question-custom">
+          <label for="ai-question-input">自定义回答</label>
+          <div class="ai-question-custom-row">
+            <input id="ai-question-input" type="text" maxlength="2000" placeholder="输入你自己的回答">
+            <button id="ai-question-submit" class="primary-button" type="button">提交自定义回答</button>
+          </div>
+        </div>
+        <div class="ai-question-actions">
+          <button id="ai-question-reject" class="ghost-button" type="button">拒绝回答</button>
+          <small id="ai-question-expires" class="ai-question-expires"></small>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="ai-history-dialog" class="dialog wide-dialog ai-history-dialog" aria-labelledby="ai-history-dialog-title">
       <div class="dialog-header">
         <div><span class="eyebrow">对话管理</span><h2 id="ai-history-dialog-title">历史记录</h2></div>
@@ -954,6 +984,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260804-agent-history-score-sort-v1"></script>
+    <script type="module" src="/app.js?v=20260813-ai-write-approval-v1"></script>
   </body>
 </html>
