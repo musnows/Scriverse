@@ -328,8 +328,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260813-mobile-volume-detail-v1');
-    expect(page.text).toContain('/app.js?v=20260813-mobile-volume-detail-v1');
+    expect(page.text).toContain('/styles.css?v=20260813-reader-volume-mobile-v3');
+    expect(page.text).toContain('/app.js?v=20260813-reader-volume-mobile-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -741,7 +741,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('</svg>AI 分析</button>');
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
-    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(5);
+    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(6);
     expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(16);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');

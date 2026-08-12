@@ -3452,6 +3452,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
     overflow-x: hidden;
     overflow-y: hidden;
   }
+  .app-shell.ai-hidden-mode:not(.shelf-mode) { grid-template-columns: minmax(0, 1fr); }
   .app-shell.shelf-mode {
     grid-template-rows: auto minmax(0, 1fr);
     min-height: 100dvh;
@@ -4034,7 +4035,7 @@ body { font-size: var(--ui-font-size); }
   .reader-settings { grid-column: 2; grid-row: 1; }
   .reader-settings > summary { min-height: 40px; }
   .reader-settings > summary { padding: 7px 10px; }
-  .reader-settings-panel { width: min(250px, calc(100vw - 24px)); }
+  .reader-settings-panel { position: static; width: min(250px, calc(100vw - 24px)); margin-top: 9px; }
   .reader-jump-controls { grid-column: 1 / -1; grid-row: 3; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 7px; }
   .reader-jump-controls label:last-child { grid-column: 1 / -1; }
   .reader-settings-panel select, .reader-jump-controls select { min-height: 40px; font-size: 10px; }

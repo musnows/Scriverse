@@ -53,15 +53,18 @@ import {
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
+  READING_PREFERENCES_VERSION,
   adjacentReadingChapter,
   buildReadingChapterSequence,
   createReadingRequestGate,
   normalizeReadingPosition,
   normalizeReadingPreferences,
+  normalizeStoredReadingPreferences,
   readingPositionStorageKey,
   resolvePagedReadingStep,
+  resolveReadingTheme,
   resolveReadingStart
-} from "/reading-preview.js?v=20260812-reader-preview-v1";
+} from "/reading-preview.js?v=20260813-reader-theme-v2";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
@@ -6374,7 +6377,7 @@ function storedReadingPosition() {
 }
 
 function persistReadingPreferences() {
-  try { localStorage.setItem(READING_PREFERENCES_STORAGE_KEY, JSON.stringify(readingPreferences)); } catch { /* 禁用本地存储时保留本次会话设置 */ }
+  try { localStorage.setItem(READING_PREFERENCES_STORAGE_KEY, JSON.stringify({ ...readingPreferences, version: READING_PREFERENCES_VERSION })); } catch { /* 禁用本地存储时保留本次会话设置 */ }
 }
 
 function readingProgressRatio() {
@@ -6486,7 +6489,7 @@ function renderReadingNavigation() {
 function applyReadingPreferences() {
   const view = $("#reader-view");
   const viewport = $("#reader-viewport");
-  view.dataset.readerTheme = readingPreferences.theme;
+  view.dataset.readerTheme = resolveReadingTheme(readingPreferences.theme, currentColorTheme());
   view.style.setProperty("--reader-font-size", `${readingPreferences.fontSize}px`);
   view.style.setProperty("--reader-line-height", String(readingPreferences.lineHeight));
   viewport.classList.toggle("is-paged", readingPreferences.mode === "paged");
@@ -6742,7 +6745,7 @@ async function openReadingPreview({ chapterId = null, volumeId = null, restorePo
     toast("当前作品还没有可阅读的章节", "error");
     return false;
   }
-  readingPreferences = normalizeReadingPreferences(readReadingStorage(READING_PREFERENCES_STORAGE_KEY));
+  readingPreferences = normalizeStoredReadingPreferences(readReadingStorage(READING_PREFERENCES_STORAGE_KEY));
   const saved = restorePosition ? storedReadingPosition() : null;
   const target = resolveReadingStart(readingSequence, { chapterId, volumeId, storedPosition: saved });
   if (!target) return false;

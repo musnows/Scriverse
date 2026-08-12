@@ -5,8 +5,10 @@ import {
   createReadingRequestGate,
   normalizeReadingPosition,
   normalizeReadingPreferences,
+  normalizeStoredReadingPreferences,
   readingPositionStorageKey,
   resolvePagedReadingStep,
+  resolveReadingTheme,
   resolveReadingStart
 } from "../../src/public/reading-preview.js";
 
@@ -53,7 +55,7 @@ describe("沉浸式阅读状态", () => {
     });
   });
 
-  it("规范化可访问阅读偏好且本地位置键按作品隔离", () => {
+  it("规范化可访问阅读偏好且默认主题跟随工作台", () => {
     expect(normalizeReadingPreferences({ mode: "paged", fontSize: 24, lineHeight: 2.2, theme: "dark" })).toEqual({
       mode: "paged",
       fontSize: 24,
@@ -64,8 +66,13 @@ describe("沉浸式阅读状态", () => {
       mode: "scroll",
       fontSize: 20,
       lineHeight: 1.9,
-      theme: "paper"
+      theme: "auto"
     });
+    expect(resolveReadingTheme("auto", "dark")).toBe("dark");
+    expect(resolveReadingTheme("auto", "light")).toBe("paper");
+    expect(resolveReadingTheme("light", "dark")).toBe("light");
+    expect(normalizeStoredReadingPreferences({ mode: "paged", theme: "paper" }).theme).toBe("auto");
+    expect(normalizeStoredReadingPreferences({ mode: "paged", theme: "paper", version: 2 }).theme).toBe("paper");
     expect(readingPositionStorageKey("work / 1")).toBe("scriverse-reading-position-v1:work%20%2F%201");
   });
 

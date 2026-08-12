@@ -1,17 +1,18 @@
 export const READING_PREFERENCES_STORAGE_KEY = "scriverse-reading-preferences-v1";
 export const READING_POSITION_STORAGE_PREFIX = "scriverse-reading-position-v1:";
+export const READING_PREFERENCES_VERSION = 2;
 
 export const DEFAULT_READING_PREFERENCES = Object.freeze({
   mode: "scroll",
   fontSize: 20,
   lineHeight: 1.9,
-  theme: "paper"
+  theme: "auto"
 });
 
 const readingModes = new Set(["scroll", "paged"]);
 const readingFontSizes = new Set([16, 18, 20, 22, 24]);
 const readingLineHeights = new Set([1.6, 1.8, 1.9, 2, 2.2]);
-const readingThemes = new Set(["paper", "light", "dark"]);
+const readingThemes = new Set(["auto", "paper", "light", "dark"]);
 
 function record(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -27,6 +28,20 @@ export function normalizeReadingPreferences(value) {
     lineHeight: readingLineHeights.has(lineHeight) ? lineHeight : DEFAULT_READING_PREFERENCES.lineHeight,
     theme: readingThemes.has(candidate.theme) ? candidate.theme : DEFAULT_READING_PREFERENCES.theme
   };
+}
+
+export function normalizeStoredReadingPreferences(value) {
+  const candidate = record(value);
+  const legacyTheme = candidate.version === READING_PREFERENCES_VERSION
+    ? candidate.theme
+    : candidate.theme === "paper" ? "auto" : candidate.theme;
+  return normalizeReadingPreferences({ ...candidate, theme: legacyTheme });
+}
+
+export function resolveReadingTheme(theme, colorTheme) {
+  const normalized = readingThemes.has(theme) ? theme : DEFAULT_READING_PREFERENCES.theme;
+  if (normalized === "auto") return colorTheme === "dark" ? "dark" : "paper";
+  return normalized;
 }
 
 export function readingPositionStorageKey(workId) {
