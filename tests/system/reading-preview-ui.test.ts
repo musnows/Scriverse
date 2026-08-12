@@ -23,7 +23,7 @@ describe("沉浸式阅读预览界面", () => {
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
-    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('/app.js?v=20260813-reader-theme-v2');
     expect(page.text).toContain('id="reader-open-button"');
     expect(page.text).toContain('id="chapter-reader-button"');
     expect(page.text).toContain('id="reader-view" class="reader-view hidden"');
@@ -34,12 +34,14 @@ describe("沉浸式阅读预览界面", () => {
     expect(page.text).toContain('id="reader-font-size" aria-label="阅读字号"');
     expect(page.text).toContain('id="reader-line-height" aria-label="阅读行距"');
     expect(page.text).toContain('id="reader-theme" aria-label="阅读主题"');
+    expect(page.text).toContain('<option value="auto">跟随工作台</option>');
 
-    expect(application.text).toContain('from "/reading-preview.js?v=20260812-reader-preview-v1"');
+    expect(application.text).toContain('from "/reading-preview.js?v=20260813-reader-theme-v2"');
     expect(application.text).toContain('api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal })');
     expect(application.text).toContain("readingRequestGate.isCurrent(request)");
     expect(application.text).toContain("readingPositionStorageKey(state.work.id)");
     expect(application.text).toContain('localStorage.setItem(READING_PREFERENCES_STORAGE_KEY');
+    expect(application.text).toContain("resolveReadingTheme(readingPreferences.theme, currentColorTheme())");
     expect(application.text).toContain("function handleReadingKeyboard(event)");
     expect(application.text).toContain("function layoutReadingPages");
     expect(styles.text).toContain(".reader-view {");

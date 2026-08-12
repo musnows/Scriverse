@@ -1,5 +1,6 @@
 export type ReadingMode = "scroll" | "paged";
-export type ReadingTheme = "paper" | "light" | "dark";
+export type ReadingTheme = "auto" | "paper" | "light" | "dark";
+export type ResolvedReadingTheme = Exclude<ReadingTheme, "auto">;
 export type ReadingPreferences = { mode: ReadingMode; fontSize: number; lineHeight: number; theme: ReadingTheme };
 export type ReadingChapter = {
   id: string;
@@ -16,8 +17,11 @@ export type ReadingPosition = { chapterId: string; scrollRatio: number; pageInde
 
 export const READING_PREFERENCES_STORAGE_KEY: string;
 export const READING_POSITION_STORAGE_PREFIX: string;
+export const READING_PREFERENCES_VERSION: number;
 export const DEFAULT_READING_PREFERENCES: Readonly<ReadingPreferences>;
 export function normalizeReadingPreferences(value: unknown): ReadingPreferences;
+export function normalizeStoredReadingPreferences(value: unknown): ReadingPreferences;
+export function resolveReadingTheme(theme: unknown, colorTheme: unknown): ResolvedReadingTheme;
 export function readingPositionStorageKey(workId: unknown): string;
 export function buildReadingChapterSequence(work: unknown): ReadingChapter[];
 export function normalizeReadingPosition(value: unknown, sequence: ReadingChapter[]): ReadingPosition | null;
