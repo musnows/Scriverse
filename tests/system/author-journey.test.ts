@@ -327,7 +327,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260812-ai-conversation-fork-v2');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-failure-v3');
     expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -767,7 +767,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".timeline-list { position: relative; margin-left: 15px; border-left: 1px solid var(--line); }");
     expect(styles.text).toContain(".timeline-item::before { content: \"\"; position: absolute; left: -5px; top: 5px;");
     expect(styles.text).not.toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
-    expect(application.text).toContain("async function streamChat(body)");
+    expect(application.text).toContain("async function streamChat(requestHolder, body)");
     expect(application.text).toContain("createStreamTypewriter");
     expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
     expect(application.text).toContain('class="message-body"');
@@ -818,7 +818,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
     expect(styles.text).toContain(".panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px;");
-    expect(application.text).toContain('$("#ai-send").textContent = "发送中"');
+    expect(application.text).toContain('button.textContent = sending ? "发送中" : switching ? "切换中" : "发送";');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");
