@@ -6,9 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 连通性测试冷却状态。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 88;
+export const DATABASE_SCHEMA_VERSION = 89;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -484,6 +484,26 @@ export class Database {
         updated_at TEXT NOT NULL,
         UNIQUE(provider_id, model_id)
       );
+
+      CREATE TABLE IF NOT EXISTS ai_connectivity_test_states (
+        object_type TEXT NOT NULL CHECK(object_type IN ('provider', 'model')),
+        object_id TEXT NOT NULL,
+        config_fingerprint TEXT NOT NULL CHECK(length(config_fingerprint) = 64),
+        state TEXT NOT NULL CHECK(state IN ('in_progress', 'success', 'failure')),
+        attempt_id TEXT NOT NULL,
+        retry_at_ms INTEGER NOT NULL CHECK(retry_at_ms >= 0),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(object_type, object_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_ai_connectivity_test_states_retry_at ON ai_connectivity_test_states(retry_at_ms);
+      CREATE TRIGGER IF NOT EXISTS ai_connectivity_test_states_provider_delete
+      AFTER DELETE ON providers BEGIN
+        DELETE FROM ai_connectivity_test_states WHERE object_type = 'provider' AND object_id = OLD.id;
+      END;
+      CREATE TRIGGER IF NOT EXISTS ai_connectivity_test_states_model_delete
+      AFTER DELETE ON models BEGIN
+        DELETE FROM ai_connectivity_test_states WHERE object_type = 'model' AND object_id = OLD.id;
+      END;
 
       CREATE TABLE IF NOT EXISTS task_defaults (
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
@@ -3417,6 +3437,36 @@ export class Database {
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (88, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(89)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS ai_connectivity_test_states (
+          object_type TEXT NOT NULL CHECK(object_type IN ('provider', 'model')),
+          object_id TEXT NOT NULL,
+          config_fingerprint TEXT NOT NULL CHECK(length(config_fingerprint) = 64),
+          state TEXT NOT NULL CHECK(state IN ('in_progress', 'success', 'failure')),
+          attempt_id TEXT NOT NULL,
+          retry_at_ms INTEGER NOT NULL CHECK(retry_at_ms >= 0),
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(object_type, object_id)
+        )`);
+        this.run("CREATE INDEX IF NOT EXISTS idx_ai_connectivity_test_states_retry_at ON ai_connectivity_test_states(retry_at_ms)");
+        this.run(`CREATE TRIGGER IF NOT EXISTS ai_connectivity_test_states_provider_delete
+          AFTER DELETE ON providers BEGIN
+            DELETE FROM ai_connectivity_test_states WHERE object_type = 'provider' AND object_id = OLD.id;
+          END`);
+        this.run(`CREATE TRIGGER IF NOT EXISTS ai_connectivity_test_states_model_delete
+          AFTER DELETE ON models BEGIN
+            DELETE FROM ai_connectivity_test_states WHERE object_type = 'model' AND object_id = OLD.id;
+          END`);
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (89, ?)", new Date().toISOString());
       });
     }
   }

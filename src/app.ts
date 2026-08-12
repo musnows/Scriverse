@@ -2522,13 +2522,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ai.deleteProvider(request.params.providerId);
     noContent(response);
   });
-  app.post("/api/providers/:providerId/test", async (request, response) => data(response, await ai.testProvider(request.params.providerId)));
+  app.post("/api/providers/:providerId/test", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await ai.testProvider(request.params.providerId));
+  });
   app.get("/api/providers/:providerId/models", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
   });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
-  app.post("/api/models/:modelId/test", async (request, response) => data(response, await ai.testModel(request.params.modelId)));
+  app.post("/api/models/:modelId/test", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await ai.testModel(request.params.modelId));
+  });
   app.get("/api/models/:modelId", (request, response) => data(response, ai.getModel(request.params.modelId)));
   app.patch("/api/models/:modelId", (request, response) => data(response, ai.updateModel(request.params.modelId, parse(modelSchema.partial(), request.body))));
   app.delete("/api/models/:modelId", (request, response) => {
@@ -2888,7 +2894,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const logFields = { ...commonFields, errorCode: error.code, status: error.status };
       if (error.status >= 500) logger.error("http.request.application_error", logFields);
       else logger.warn("http.request.application_error", logFields);
-      if (error.code === "LOGIN_LOCKED" && error.details && typeof error.details === "object") {
+      if ((error.code === "LOGIN_LOCKED" || error.status === 429) && error.details && typeof error.details === "object") {
         const retryAfterSeconds = Number((error.details as Record<string, unknown>).retryAfterSeconds);
         if (Number.isInteger(retryAfterSeconds) && retryAfterSeconds > 0) {
           response.setHeader("Retry-After", String(retryAfterSeconds));
