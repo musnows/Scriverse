@@ -1,0 +1,52 @@
+import request from "supertest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createRuntime, type Runtime } from "../../src/app.js";
+
+describe("沉浸式阅读预览界面", () => {
+  let runtime: Runtime;
+
+  beforeAll(() => {
+    runtime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "reader-system-test-secret-with-enough-length",
+      disableUserAuth: true,
+      serveUi: true
+    });
+  });
+  afterAll(() => runtime.close());
+
+  it("提供独立路由、阅读入口、可访问控件和本地状态恢复", async () => {
+    const page = await request(runtime.app).get("/").expect(200);
+    const application = await request(runtime.app).get("/app.js").expect(200);
+    const styles = await request(runtime.app).get("/styles.css").expect(200);
+    const readingState = await request(runtime.app).get("/reading-preview.js").expect(200);
+    const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
+
+    expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('id="reader-open-button"');
+    expect(page.text).toContain('id="chapter-reader-button"');
+    expect(page.text).toContain('id="reader-view" class="reader-view hidden"');
+    expect(page.text).toContain('role="dialog" aria-labelledby="reader-title"');
+    expect(page.text).toContain('id="reader-volume" aria-label="从分卷开始阅读"');
+    expect(page.text).toContain('id="reader-chapter" aria-label="快速跳章"');
+    expect(page.text).toContain('id="reader-mode" aria-label="阅读方式"');
+    expect(page.text).toContain('id="reader-font-size" aria-label="阅读字号"');
+    expect(page.text).toContain('id="reader-line-height" aria-label="阅读行距"');
+    expect(page.text).toContain('id="reader-theme" aria-label="阅读主题"');
+
+    expect(application.text).toContain('from "/reading-preview.js?v=20260812-reader-preview-v1"');
+    expect(application.text).toContain('api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal })');
+    expect(application.text).toContain("readingRequestGate.isCurrent(request)");
+    expect(application.text).toContain("readingPositionStorageKey(state.work.id)");
+    expect(application.text).toContain('localStorage.setItem(READING_PREFERENCES_STORAGE_KEY');
+    expect(application.text).toContain("function handleReadingKeyboard(event)");
+    expect(application.text).toContain("function layoutReadingPages");
+    expect(styles.text).toContain(".reader-view {");
+    expect(styles.text).toContain('.reader-view[data-reader-theme="dark"]');
+    expect(styles.text).toContain(".reader-viewport.is-paged .reader-content");
+    expect(styles.text).toContain("@media (max-width: 700px)");
+    expect(readingState.text).toContain("export function createReadingRequestGate()");
+    expect(pageRoute.text).toContain('view === "reader"');
+  });
+});

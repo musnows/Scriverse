@@ -2,6 +2,7 @@ export type RestorableModule = "drafts" | "settings" | "characters" | "races" | 
 export type PageRoute =
   | { view: "shelf" }
   | { view: "editor"; workId: string; chapterId: string | null }
+  | { view: "reader"; workId: string; chapterId: string | null }
   | { view: "module"; workId: string; module: RestorableModule }
   | { view: "welcome"; workId: string }
   | { view: "settings" | "platform-ai"; workId: string | null; returnView?: "shelf" | "editor" | "module" | "welcome"; returnModule?: RestorableModule; returnChapterId?: string };
