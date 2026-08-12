@@ -3992,16 +3992,34 @@ export class AiManager {
     };
   }
 
-  async prepareConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
+  inspectConversationContext(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string }): {
+    action: "ready" | "warn" | "compact";
+    usage: Record<string, unknown>;
+  } {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
     if (!usage.compactRecommended) {
-      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
       return { action: "ready", usage: { ...usage, contextWarningPending: false } };
     }
     if (!conversation.warningPending) {
-      this.store.setAiConversationContextWarning(input.conversationId, true);
       return { action: "warn", usage: { ...usage, contextWarningPending: true } };
+    }
+    return { action: "compact", usage };
+  }
+
+  async prepareConversationContext(
+    input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string },
+    options: { skipWarning?: boolean } = {}
+  ): Promise<Record<string, unknown>> {
+    const inspection = this.inspectConversationContext(input);
+    if (inspection.action === "ready") {
+      const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
+      return inspection;
+    }
+    if (inspection.action === "warn" && !options.skipWarning) {
+      this.store.setAiConversationContextWarning(input.conversationId, true);
+      return inspection;
     }
     const compaction = await this.compactConversation(input);
     const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
@@ -4022,8 +4040,12 @@ export class AiManager {
     return this.mergeInstructionEntityMatches(input.scope, matches);
   }
 
-  async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope"> & { conversationId: string }): Promise<Record<string, unknown>> {
-    const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+  async compactConversation(input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "excludeConversationMessageId"> & { conversationId: string }): Promise<Record<string, unknown>> {
+    const conversation = this.store.getAiConversationContext(
+      input.conversationId,
+      input.workId,
+      input.excludeConversationMessageId
+    );
     const { model } = this.resolveModel(input.workId, "chat", input.modelId);
     const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model);
     const recentTokenBudget = Math.max(128, Math.floor(Number(budget.conversationBudgetTokens) * 0.75));
