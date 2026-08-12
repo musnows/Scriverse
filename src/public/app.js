@@ -1076,6 +1076,7 @@ function applyPanelLayout(persist = false) {
   $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
   $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
+  syncMobileAiPanelSafeTop();
   scheduleChapterLineNumbers();
   if (persist) {
     try { localStorage.setItem(panelLayoutStorageKey, JSON.stringify(panelLayout)); } catch { /* 浏览器禁用存储时仅保留当前布局 */ }
@@ -5954,6 +5955,14 @@ function currentChapterForeshadowReminder() {
   return chapterForeshadowReminders[chapterForeshadowReminderIndex] ?? null;
 }
 
+function syncMobileAiPanelSafeTop() {
+  const container = $("#chapter-foreshadow-reminder");
+  const safeTop = container.classList.contains("hidden")
+    ? 0
+    : Math.ceil(container.getBoundingClientRect().bottom);
+  $("#app").style.setProperty("--mobile-ai-panel-safe-top", `${safeTop}px`);
+}
+
 function renderChapterForeshadowReminder() {
   const container = $("#chapter-foreshadow-reminder");
   const reminder = currentChapterForeshadowReminder();
@@ -5963,6 +5972,7 @@ function renderChapterForeshadowReminder() {
     container.removeAttribute("data-multiple");
     $("#chapter-foreshadow-reminder-details").classList.add("hidden");
     $("#chapter-foreshadow-reminder-details-button").setAttribute("aria-expanded", "false");
+    syncMobileAiPanelSafeTop();
     return;
   }
   const roleLabel = reminder.role === "payoff" ? "回收章" : "提醒章";
@@ -5999,6 +6009,7 @@ function renderChapterForeshadowReminder() {
   resolve.textContent = chapterForeshadowReminderResolveInFlight ? "正在标记" : "标记已回收";
   resolve.setAttribute("aria-label", `将伏笔“${reminder.title}”标记为已回收`);
   container.classList.remove("hidden");
+  syncMobileAiPanelSafeTop();
 }
 
 function clearChapterForeshadowReminders({ invalidateRequest = false } = {}) {
@@ -14153,6 +14164,7 @@ $("#ai-panel-toggle").addEventListener("click", () => {
 setupPanelResize($("#left-panel-resize"), "left");
 setupPanelResize($("#ai-panel-resize"), "ai");
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLineNumbers).observe($("#chapter-content"));
+if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncMobileAiPanelSafeTop).observe($("#chapter-foreshadow-reminder"));
 window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
   applyPanelLayout();

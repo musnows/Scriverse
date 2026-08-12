@@ -3452,13 +3452,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .ai-panel {
     position: fixed;
     z-index: 35;
+    top: max(28dvh, calc(100dvh - 620px), var(--mobile-ai-panel-safe-top, 0px));
     right: 0;
     bottom: 0;
     left: 0;
     grid-column: 1;
     grid-row: 4;
     min-width: 0;
-    height: min(72dvh, 620px);
+    height: auto;
     min-height: 0;
     padding: 12px var(--mobile-gutter) 18px;
     border-top: 1px solid var(--line);
@@ -3469,7 +3470,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   }
   .app-shell.shelf-mode .ai-panel { display: none; }
   .ai-panel > .panel-resize-handle { display: none; }
-  .app-shell.ai-panel-collapsed .ai-panel { height: 58px; padding-block: 8px; transform: translateY(0); }
+  .app-shell.ai-panel-collapsed .ai-panel { top: auto; height: 58px; padding-block: 8px; transform: translateY(0); }
   .app-shell.ai-panel-collapsed .ai-panel > :not(.ai-heading) { display: none; }
   .app-shell.ai-panel-collapsed .ai-heading { display: flex; justify-content: space-between; padding: 0; }
 

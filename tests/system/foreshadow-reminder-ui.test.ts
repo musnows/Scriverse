@@ -20,8 +20,8 @@ describe("编辑器伏笔提醒界面", () => {
       request(runtime.app).get("/foreshadow-reminder.js").expect(200)
     ]);
 
-    expect(page.text).toContain('/styles.css?v=20260812-mobile-main-fill-v1');
-    expect(page.text).toContain('/app.js?v=20260812-foreshadow-reminder-v2');
+    expect(page.text).toContain('/styles.css?v=20260812-mobile-foreshadow-safe-top-v1');
+    expect(page.text).toContain('/app.js?v=20260812-foreshadow-reminder-v3');
     expect(page.text).toContain('id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden"');
     expect(page.text).toContain('aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title"');
     expect(page.text).toContain('id="chapter-foreshadow-reminder-previous"');
@@ -35,6 +35,9 @@ describe("编辑器伏笔提醒界面", () => {
     expect(application.text).toContain("async function loadChapterForeshadowReminders");
     expect(application.text).toContain("foreshadowReminderRequestTargetsState");
     expect(application.text).toContain("visibleForeshadowReminders");
+    expect(application.text).toContain("function syncMobileAiPanelSafeTop()");
+    expect(application.text).toContain('style.setProperty("--mobile-ai-panel-safe-top"');
+    expect(application.text).toContain("new ResizeObserver(syncMobileAiPanelSafeTop)");
     expect(application.text).toContain("snoozeCurrentChapterForeshadowReminder");
     expect(application.text).toContain("resolveCurrentChapterForeshadowReminder");
     expect(application.text).toContain("await loadChapterForeshadowReminders();");
@@ -50,6 +53,8 @@ describe("编辑器伏笔提醒界面", () => {
     expect(styles.text).toContain("grid-template-rows: auto auto minmax(0, 1fr)");
     expect(styles.text).toContain('.chapter-foreshadow-reminder[data-role="payoff"]');
     expect(styles.text).toContain('@container editor-workspace (max-width: 720px)');
+    expect(styles.text).toContain('top: max(28dvh, calc(100dvh - 620px), var(--mobile-ai-panel-safe-top, 0px));');
+    expect(styles.text).toContain('.app-shell.ai-panel-collapsed .ai-panel { top: auto; height: 58px;');
     expect(styles.text).toContain('.chapter-foreshadow-reminder-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }');
     expect(styles.text).toContain("overflow-wrap: anywhere");
   });
