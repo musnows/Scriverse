@@ -984,6 +984,73 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("章节大纲看板按作品与大纲模块权限隔离，且不扩大正文读取权限", async () => {
+    const owner = await register(runtime, "outline_board_owner");
+    const reader = await register(runtime, "outline_board_reader");
+    const outsider = await register(runtime, "outline_board_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "大纲看板权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "第一卷" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "保密章节标题", content: "PROSE_CONTENT_SECRET" })
+      .expect(201);
+    await owner.agent.put(`/api/chapters/${chapter.body.data.id}/outline`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ goal: "OUTLINE_BOARD_SECRET", status: "ready" })
+      .expect(200);
+    const noAccess = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: reader.user.userId, permissions: { ...noAccess, outlines: "read" } })
+      .expect(201);
+
+    const board = await reader.agent.get(`/api/works/${workId}/outline-board`).expect(200);
+    expect(board.body.data.volumes[0].chapters[0]).toMatchObject({
+      id: chapter.body.data.id,
+      title: "保密章节标题",
+      outline: { goal: "OUTLINE_BOARD_SECRET", status: "ready" }
+    });
+    expect(JSON.stringify(board.body.data)).not.toContain("PROSE_CONTENT_SECRET");
+    const proseDenied = await reader.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(403);
+    expect(proseDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const writeDenied = await reader.agent.put(`/api/chapters/${chapter.body.data.id}/outline`)
+      .set("X-CSRF-Token", reader.csrfToken)
+      .send({ goal: "不应写入" })
+      .expect(403);
+    expect(writeDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const outsiderDenied = await outsider.agent.get(`/api/works/${workId}/outline-board`).expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(JSON.stringify(outsiderDenied.body)).not.toContain("OUTLINE_BOARD_SECRET");
+    await owner.agent.patch(`/api/works/${workId}/members/${reader.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: noAccess })
+      .expect(200);
+    const revoked = await reader.agent.get(`/api/works/${workId}/outline-board`).expect(403);
+    expect(revoked.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+  });
+
   it("管理员可按成员配置模块读写权限，并在 API 层拒绝跨模块访问", async () => {
     const owner = await register(runtime, "module_owner");
     const collaborator = await register(runtime, "module_collaborator");

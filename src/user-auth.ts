@@ -812,7 +812,7 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/cli\/session$/u },
   { methods: ["GET", "POST"], path: /^\/api\/works$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
-  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
@@ -1015,7 +1015,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     [/^\/api\/(?:timeline-tracks|timeline)\/[^/]+(?:\/|$)/u, "timeline"],
     [/^\/api\/works\/[^/]+\/relationships(?:\/|$)/u, "relationships"],
     [/^\/api\/relationships\/[^/]+(?:\/|$)/u, "relationships"],
-    [/^\/api\/works\/[^/]+\/(?:outlines|foreshadows)(?:\/|$)/u, "outlines"],
+    [/^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows)(?:\/|$)/u, "outlines"],
     [/^\/api\/(?:foreshadows|foreshadow-occurrences)\/[^/]+(?:\/|$)/u, "outlines"],
     [/^\/api\/works\/[^/]+\/ai-settings(?:\/|$)/u, "ai-settings"],
     [/^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u, "ai-settings"]
