@@ -23,6 +23,50 @@ export const proseReplacementPermissionModules = workPermissionModules.filter(
   (module): module is WorkPermissionModule => module !== "ai-settings"
 );
 
+export const contentPermissionModules = workPermissionModules.filter(
+  (module): module is WorkPermissionModule => !["drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module)
+);
+
+export function relationshipAnalysisReadModules(scope: unknown): WorkPermissionModule[] {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
+  const value = scope as Record<string, unknown>;
+  if (!Array.isArray(value.characterIds) || value.characterIds.length === 0) return [];
+  const modules = new Set<WorkPermissionModule>(["characters"]);
+  if (value.type !== "settings") modules.add("prose");
+  if (value.type === "settings" || value.includeAllSettings === true) {
+    for (const module of ["settings", "races", "organizations", "timeline", "relationships", "outlines", "reviews"] as const) {
+      modules.add(module);
+    }
+  }
+  return [...modules];
+}
+
+const analysisTaskDirectReadModules: Record<string, readonly WorkPermissionModule[]> = {
+  structure: ["prose"],
+  "chapter-analysis": ["prose"],
+  "character-extraction": ["prose", "characters", "races", "organizations"],
+  "character-summary": ["prose", "characters", "races", "organizations"],
+  "character-identity-audit": [...contentPermissionModules, "reviews"],
+  "timeline-analysis": ["prose", "timeline", "characters"],
+  "worldview-analysis": ["prose", "settings"],
+  "setting-extraction": ["prose", "settings"],
+  "consistency-check": [...contentPermissionModules, "reviews"],
+  "book-analysis": ["prose"],
+  "report-update": ["prose"]
+};
+
+export function analysisTaskReadModules(taskType: unknown, scope: unknown): WorkPermissionModule[] {
+  const scopeValue = scope && typeof scope === "object" && !Array.isArray(scope)
+    ? scope as Record<string, unknown>
+    : { type: "book" };
+  const modules = new Set<WorkPermissionModule>(scopeValue.type === "none" ? [] : contentPermissionModules);
+  for (const module of analysisTaskDirectReadModules[String(taskType)] ?? []) modules.add(module);
+  if (taskType === "relationship-analysis") {
+    for (const module of relationshipAnalysisReadModules(scopeValue)) modules.add(module);
+  }
+  return [...modules];
+}
+
 export const workPermissionModuleLabels: Record<WorkPermissionModule, string> = {
   prose: "正文",
   drafts: "想法",

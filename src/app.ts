@@ -32,19 +32,17 @@ import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
 import { APP_VERSION } from "./version.js";
 import { ReleaseUpdateChecker } from "./release-update.js";
-import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
+import { analysisTaskReadModules, canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, relationshipAnalysisReadModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
   CollaborationPresence,
   entityEditorPageKey,
   presencePageKinds
 } from "./collaboration-presence.js";
 import {
-  analysisTaskReadModules,
   clearSessionCookie,
   createCliApiScopeMiddleware,
   createUserSessionMiddleware,
   createWorkAuthorizationMiddleware,
-  relationshipAnalysisReadModules,
   setSessionCookie,
   UserAuthService,
   type AuthUser

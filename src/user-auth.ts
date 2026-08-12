@@ -8,10 +8,13 @@ import { paginated, paginationSql, type PaginatedResult, type Pagination } from 
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 import { normalizeApiPath } from "./security.js";
 import {
+  analysisTaskReadModules,
   canReadWorkModule,
   canWriteWorkModule,
   classifyWorkModulePermissions,
+  contentPermissionModules,
   fullWorkModulePermissions,
+  relationshipAnalysisReadModules,
   settingsEditorModulePermissions,
   storedMembershipForPermissions,
   storedWorkModulePermissions,
@@ -39,20 +42,6 @@ export type UserAvatar = {
   height: number;
   updatedAt: string;
 };
-
-export function relationshipAnalysisReadModules(scope: unknown): WorkPermissionModule[] {
-  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return [];
-  const value = scope as Record<string, unknown>;
-  if (!Array.isArray(value.characterIds) || value.characterIds.length === 0) return [];
-  const modules = new Set<WorkPermissionModule>(["characters"]);
-  if (value.type !== "settings") modules.add("prose");
-  if (value.type === "settings" || value.includeAllSettings === true) {
-    for (const module of ["settings", "races", "organizations", "timeline", "relationships", "outlines", "reviews"] as const) {
-      modules.add(module);
-    }
-  }
-  return [...modules];
-}
 
 export type AuthSession = {
   id: string;
@@ -828,7 +817,6 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
   };
 }
 
-const contentPermissionModules = workPermissionModules.filter((module) => !["drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 const attachmentModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
 
@@ -837,32 +825,6 @@ function requestedAttachmentModule(request: Request): WorkPermissionModule {
   return attachmentModules.includes(module as typeof attachmentModules[number])
     ? module as typeof attachmentModules[number]
     : "settings";
-}
-
-const analysisTaskDirectReadModules: Record<string, readonly WorkPermissionModule[]> = {
-  structure: ["prose"],
-  "chapter-analysis": ["prose"],
-  "character-extraction": ["prose", "characters", "races", "organizations"],
-  "character-summary": ["prose", "characters", "races", "organizations"],
-  "character-identity-audit": [...contentPermissionModules, "reviews"],
-  "timeline-analysis": ["prose", "timeline", "characters"],
-  "worldview-analysis": ["prose", "settings"],
-  "setting-extraction": ["prose", "settings"],
-  "consistency-check": [...contentPermissionModules, "reviews"],
-  "book-analysis": ["prose"],
-  "report-update": ["prose"]
-};
-
-export function analysisTaskReadModules(taskType: unknown, scope: unknown): WorkPermissionModule[] {
-  const scopeValue = scope && typeof scope === "object" && !Array.isArray(scope)
-    ? scope as Record<string, unknown>
-    : { type: "book" };
-  const modules = new Set<WorkPermissionModule>(scopeValue.type === "none" ? [] : contentPermissionModules);
-  for (const module of analysisTaskDirectReadModules[String(taskType)] ?? []) modules.add(module);
-  if (taskType === "relationship-analysis") {
-    for (const module of relationshipAnalysisReadModules(scopeValue)) modules.add(module);
-  }
-  return [...modules];
 }
 
 type WorkAuthorizationRequirements = {
