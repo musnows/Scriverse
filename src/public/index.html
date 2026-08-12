@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260812-agent-chat-font-size-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260812-image-upload-progress-v2">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -950,6 +950,10 @@
           <p>预览</p>
         </aside>
       </div>
+      <div id="avatar-upload-progress" class="image-upload-progress-panel hidden" role="status" aria-live="polite" aria-busy="true">
+        <div class="image-upload-placeholder-box" aria-hidden="true"><span class="image-upload-placeholder-icon">IMG</span><span class="image-upload-placeholder-shine"></span></div>
+        <div class="image-upload-progress-copy"><strong>正在上传头像</strong><small id="avatar-upload-progress-name"></small><div class="image-upload-progress" data-upload-progress data-upload-progress-label="头像上传进度" style="--upload-progress: 0%"><div class="image-upload-progress-heading"><span data-upload-progress-text>上传中 0%</span><output data-upload-progress-value>0%</output></div><div class="image-upload-progress-track" role="progressbar" aria-label="头像上传进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span data-upload-progress-fill></span></div></div></div>
+      </div>
       <div class="dialog-actions">
         <button id="avatar-crop-cancel" class="ghost-button" type="button">取消</button>
         <button id="avatar-crop-confirm" class="primary-button" type="button">确认裁剪</button>
@@ -1048,6 +1052,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260812-image-upload-limit-v3"></script>
+    <script type="module" src="/app.js?v=20260812-image-upload-progress-v1"></script>
   </body>
 </html>

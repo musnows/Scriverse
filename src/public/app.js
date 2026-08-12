@@ -61,6 +61,7 @@ import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-mo
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
 import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";
+import { normalizeUploadProgress, uploadProgressText } from "/upload-progress.js?v=20260812-upload-progress-v1";
 import {
   clampCropRect,
   containImageRect,
@@ -130,6 +131,7 @@ const state = {
   dirty: false,
   pendingImportMeta: null,
   pendingCoverWorkId: null,
+  coverUpload: null,
   uiSettings: { toastPosition: "bottom-right", pageSizes: { ...defaultPageSizes }, galaxyFrameRate: 30 },
   relationshipGraph: null,
   galaxy: null,
@@ -417,6 +419,30 @@ function coverFileSizeMessage(file) {
 
 function assertAttachmentFileSize(file) {
   if (file.size > imageUploadLimits.attachmentBytes) throw new Error(`图片附件不能超过 ${formatUploadLimit(imageUploadLimits.attachmentBytes)}`);
+}
+
+function uploadProgressHtml(label, fileName, progress = 0) {
+  const normalized = normalizeUploadProgress(progress);
+  const value = normalized ?? 0;
+  return `<div class="image-upload-progress" data-upload-progress data-upload-progress-label="${esc(label)}" style="--upload-progress: ${value}%">
+    <div class="image-upload-progress-heading"><span data-upload-progress-text>${esc(uploadProgressText(progress))}</span><output data-upload-progress-value>${normalized === null ? "—" : `${normalized}%`}</output></div>
+    <div class="image-upload-progress-track" role="progressbar" aria-label="${esc(label)}：${esc(fileName)}" aria-valuemin="0" aria-valuemax="100"${normalized === null ? "" : ` aria-valuenow="${normalized}"`}><span data-upload-progress-fill></span></div>
+  </div>`;
+}
+
+function updateUploadProgress(element, progress) {
+  if (!element) return;
+  const normalized = normalizeUploadProgress(progress);
+  element.style.setProperty("--upload-progress", `${normalized ?? 0}%`);
+  element.classList.toggle("is-indeterminate", normalized === null);
+  const text = element.querySelector("[data-upload-progress-text]");
+  if (text) text.textContent = uploadProgressText(progress);
+  const value = element.querySelector("[data-upload-progress-value]");
+  if (value) value.textContent = normalized === null ? "—" : `${normalized}%`;
+  const track = element.querySelector("[role=progressbar]");
+  if (!track) return;
+  if (normalized === null) track.removeAttribute("aria-valuenow");
+  else track.setAttribute("aria-valuenow", String(normalized));
 }
 
 function setAiAssistantStatus(status) {
@@ -2831,6 +2857,61 @@ async function api(path, options = {}) {
   }
   invalidateModuleRequestsAfterMutation(path, method);
   return payload.data;
+}
+
+function uploadWithProgress(path, options = {}, onProgress = () => {}) {
+  const method = String(options.method ?? "GET").toUpperCase();
+  const body = options.skipOptimisticVersion ? options.body : attachOptimisticVersion(path, method, options.body);
+  if (!(body instanceof FormData)) return api(path, options);
+  const headers = { ...(options.headers ?? {}) };
+  if (state.csrfToken && !["GET", "HEAD", "OPTIONS"].includes(method)) headers["X-CSRF-Token"] = state.csrfToken;
+  onProgress(0);
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(method, path, true);
+    request.withCredentials = true;
+    Object.entries(headers).forEach(([name, value]) => request.setRequestHeader(name, String(value)));
+    request.upload.addEventListener("progress", (event) => {
+      onProgress(event.lengthComputable && event.total > 0 ? (event.loaded / event.total) * 100 : null);
+    });
+    request.addEventListener("error", () => {
+      updateSystemHealth({ status: "offline" });
+      reject(new Error("网络连接失败"));
+    });
+    request.addEventListener("abort", () => reject(new Error("上传已取消")));
+    request.addEventListener("load", async () => {
+      const responseStatus = request.status;
+      let payload = null;
+      try {
+        payload = request.responseText ? JSON.parse(request.responseText) : null;
+      } catch {
+        reject(new Error("服务器返回了无效响应"));
+        return;
+      }
+      updateSystemHealth({ status: responseStatus >= 500 ? "degraded" : "ready" });
+      if (responseStatus < 200 || responseStatus >= 300) {
+        if (responseStatus === 401 && !path.startsWith("/api/auth/") && !path.includes("/presence")) {
+          const restarted = await checkSystemBoot(true);
+          if (!restarted) invalidateAuthentication();
+        }
+        const errorPayload = payload?.error;
+        reject(createClientError(errorPayload, `请求失败：${responseStatus}`, responseStatus));
+        return;
+      }
+      if (responseStatus === 204) {
+        invalidateModuleRequestsAfterMutation(path, method);
+        resolve(null);
+        return;
+      }
+      if (!payload || typeof payload !== "object") {
+        reject(new Error("服务器返回了无效响应"));
+        return;
+      }
+      invalidateModuleRequestsAfterMutation(path, method);
+      resolve(payload.data);
+    });
+    request.send(body);
+  });
 }
 
 function createClientError(payload, fallbackMessage, fallbackStatus = null) {
@@ -9223,19 +9304,41 @@ function openWorkDialog() {
 }
 
 function workCoverFieldHtml(work) {
+  const coverUpload = state.coverUpload?.workId === work.id ? state.coverUpload : null;
+  const preview = coverUpload
+    ? `<div class="work-cover-preview is-uploading" data-work-cover-preview role="status" aria-live="polite" aria-busy="true" aria-label="正在上传封面">
+        <div class="image-upload-placeholder-box" aria-hidden="true"><span class="image-upload-placeholder-icon">IMG</span><span class="image-upload-placeholder-shine"></span></div>
+      </div>`
+    : `<div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" data-work-cover-preview aria-hidden="${work.coverUrl ? "false" : "true"}">
+        ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}
+      </div>`;
   return `<section class="work-cover-field" aria-labelledby="work-cover-title">
     <div class="work-cover-copy">
-      <strong id="work-cover-title">封面</strong>
-      <small>用于书架展示。支持 PNG、JPEG、WebP；文件不超过 ${formatUploadLimit(imageUploadLimits.coverBytes)}。</small>
+      <strong id="work-cover-title">${coverUpload ? "正在上传封面" : "封面"}</strong>
+      <small>${coverUpload ? esc(coverUpload.fileName) : `用于书架展示。支持 PNG、JPEG、WebP；文件不超过 ${formatUploadLimit(imageUploadLimits.coverBytes)}。`}</small>
     </div>
-    <div class="work-cover-preview ${work.coverUrl ? "has-cover" : ""}" aria-hidden="${work.coverUrl ? "false" : "true"}">
-      ${work.coverUrl ? `<img src="${esc(work.coverUrl)}" alt="${esc(work.title)} 封面预览">` : "<span>暂无封面</span>"}
-    </div>
+    ${preview}
+    ${coverUpload ? `<div class="work-cover-upload-progress">${uploadProgressHtml("封面上传进度", coverUpload.fileName, coverUpload.progress)}</div>` : ""}
     <div class="work-cover-actions">
-      <button id="work-cover-upload" class="ghost-button" type="button">${work.coverUrl ? "更换封面" : "设置封面"}</button>
-      ${work.coverUrl ? '<button id="work-cover-remove" class="ghost-button" type="button">移除封面</button>' : ""}
+      <button id="work-cover-upload" class="ghost-button" type="button"${coverUpload ? " disabled" : ""}>${coverUpload ? "上传中…" : work.coverUrl ? "更换封面" : "设置封面"}</button>
+      ${work.coverUrl ? `<button id="work-cover-remove" class="ghost-button" type="button"${coverUpload ? " disabled" : ""}>移除封面</button>` : ""}
     </div>
   </section>`;
+}
+
+function renderWorkCoverUploadProgress(workId, progress) {
+  if (state.coverUpload?.workId !== workId) return;
+  state.coverUpload.progress = progress;
+  const field = $("#dialog-fields")?.querySelector(".work-cover-field");
+  if (!field) return;
+  updateUploadProgress(field.querySelector("[data-upload-progress]"), progress);
+}
+
+function refreshWorkCoverField(work) {
+  const field = $("#dialog-fields")?.querySelector(".work-cover-field");
+  if (!field || !$("#form-dialog")?.open) return;
+  field.outerHTML = workCoverFieldHtml(work);
+  bindWorkCoverControls(work);
 }
 
 function bindWorkCoverControls(work) {
@@ -9249,11 +9352,7 @@ function bindWorkCoverControls(work) {
       state.works = (await apiPage("/api/works")).items;
       const updated = state.works.find((item) => item.id === work.id) ?? { ...work, coverUrl: null };
       Object.assign(work, updated);
-      const coverField = $("#dialog-fields")?.querySelector(".work-cover-field");
-      if (coverField) {
-        coverField.outerHTML = workCoverFieldHtml(work);
-        bindWorkCoverControls(work);
-      }
+      refreshWorkCoverField(work);
       renderShelf();
       toast("封面已移除");
     } catch (error) {
@@ -9726,11 +9825,51 @@ function markdownImageLabel(file, fallback = "图片附件") {
   return String(file?.name ?? "").replace(/[\[\]\r\n]/gu, "").trim() || fallback;
 }
 
-async function uploadMarkdownAttachment(file, module = "settings") {
+function createVditorUploadPlaceholder(editor, file) {
+  const host = editor?.vditor?.element;
+  if (!host) return { update: () => {}, complete: () => {}, fail: () => {} };
+  let queue = host.querySelector("[data-vditor-upload-queue]");
+  if (!queue) {
+    queue = document.createElement("div");
+    queue.className = "vditor-upload-queue";
+    queue.dataset.vditorUploadQueue = "";
+    queue.setAttribute("aria-live", "polite");
+    host.append(queue);
+  }
+  queue.hidden = false;
+  const item = document.createElement("article");
+  item.className = "vditor-upload-placeholder";
+  item.setAttribute("role", "status");
+  item.innerHTML = `<div class="image-upload-placeholder-box" aria-hidden="true"><span class="image-upload-placeholder-icon">IMG</span><span class="image-upload-placeholder-shine"></span></div>
+    <div class="vditor-upload-placeholder-copy"><strong data-vditor-upload-status>正在上传图片</strong><small title="${esc(file.name)}">${esc(file.name)}</small>${uploadProgressHtml("图片上传进度", file.name)}</div>`;
+  queue.append(item);
+  const remove = () => {
+    item.remove();
+    if (!queue.children.length) queue.hidden = true;
+  };
+  return {
+    update: (progress) => updateUploadProgress(item.querySelector("[data-upload-progress]"), progress),
+    complete: () => {
+      item.classList.add("is-complete");
+      const status = item.querySelector("[data-vditor-upload-status]");
+      if (status) status.textContent = "图片上传完成";
+      updateUploadProgress(item.querySelector("[data-upload-progress]"), 100);
+      window.setTimeout(remove, 900);
+    },
+    fail: () => {
+      item.classList.add("is-failed");
+      const status = item.querySelector("[data-vditor-upload-status]");
+      if (status) status.textContent = "图片上传失败";
+      window.setTimeout(remove, 3200);
+    }
+  };
+}
+
+async function uploadMarkdownAttachment(file, module = "settings", onProgress = () => {}) {
   assertAttachmentFileSize(file);
   const body = new FormData();
   body.append("file", file);
-  const attachment = await api(`/api/works/${state.work.id}/attachments?module=${encodeURIComponent(module)}`, { method: "POST", body });
+  const attachment = await uploadWithProgress(`/api/works/${state.work.id}/attachments?module=${encodeURIComponent(module)}`, { method: "POST", body }, onProgress);
   if (!attachment.deduplicated) markdownEditorPendingAttachments.push(String(attachment.id));
   return { attachment, imageLabel: markdownImageLabel(file) };
 }
@@ -9739,16 +9878,19 @@ function createVditorUploadHandler(uploadAttachment, getEditor) {
   return async (files) => {
     const selection = window.getSelection();
     const range = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+    const editor = getEditor();
     const insertions = [];
     for (const file of files) {
+      const placeholder = createVditorUploadPlaceholder(editor, file);
       try {
-        const { attachment, imageLabel } = await uploadAttachment(file);
+        const { attachment, imageLabel } = await uploadAttachment(file, (progress) => placeholder.update(progress));
         insertions.push(`![${imageLabel}](attachment://${attachment.id})`);
+        placeholder.complete();
       } catch (error) {
+        placeholder.fail();
         toast(error.message, "error");
       }
     }
-    const editor = getEditor();
     if (editor && insertions.length > 0) {
       if (range && editor.vditor?.element?.contains(range.startContainer)) {
         selection?.removeAllRanges();
@@ -9792,7 +9934,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
       accept: "image/*",
       max: 10 * 1024 * 1024,
       multiple: true,
-      handler: createVditorUploadHandler(uploadAttachment ?? ((file) => uploadMarkdownAttachment(file, attachmentModule)), () => editor)
+      handler: createVditorUploadHandler(uploadAttachment ?? ((file, onProgress) => uploadMarkdownAttachment(file, attachmentModule, onProgress)), () => editor)
     },
     input: (markdown) => {
       normalizeVditorAttachmentImages(editor);
@@ -10034,11 +10176,11 @@ function characterSectionImageLabel(file, fallback = "图片附件") {
   return String(file?.name ?? "").replace(/[\[\]\r\n]/gu, "").trim() || fallback;
 }
 
-async function uploadCharacterSectionAttachment(file) {
+async function uploadCharacterSectionAttachment(file, onProgress = () => {}) {
   assertAttachmentFileSize(file);
   const body = new FormData();
   body.append("file", file);
-  const attachment = await api(`/api/works/${state.work.id}/attachments?module=characters`, { method: "POST", body });
+  const attachment = await uploadWithProgress(`/api/works/${state.work.id}/attachments?module=characters`, { method: "POST", body }, onProgress);
   if (!attachment.deduplicated) characterSectionPendingAttachments.push(String(attachment.id));
   return {
     attachment,
@@ -12331,6 +12473,7 @@ const avatarCropSession = {
   crop: { x: 0, y: 0, size: 0 },
   display: { x: 0, y: 0, width: 0, height: 0, scale: 0 },
   drag: null,
+  fileName: "",
   uploading: false
 };
 
@@ -12351,6 +12494,7 @@ function resetAvatarCropDialog() {
   avatarCropSession.imageWidth = 0;
   avatarCropSession.imageHeight = 0;
   avatarCropSession.crop = { x: 0, y: 0, size: 0 };
+  avatarCropSession.fileName = "";
   const image = $("#avatar-crop-image");
   if (image) image.removeAttribute("src");
   $("#avatar-crop-selection")?.setAttribute("hidden", "");
@@ -12513,6 +12657,16 @@ function exportAvatarCropBlob() {
   });
 }
 
+function renderAvatarUploadProgress(fileName, progress, visible = true) {
+  const panel = $("#avatar-upload-progress");
+  if (!panel) return;
+  panel.classList.toggle("hidden", !visible);
+  if (!visible) return;
+  const name = panel.querySelector("#avatar-upload-progress-name");
+  if (name) name.textContent = fileName;
+  updateUploadProgress(panel.querySelector("[data-upload-progress]"), progress);
+}
+
 $("#avatar-file").addEventListener("change", async (event) => {
   const file = event.target.files[0];
   if (!file) return;
@@ -12522,6 +12676,7 @@ $("#avatar-file").addEventListener("change", async (event) => {
     return;
   }
   try {
+    avatarCropSession.fileName = file.name;
     await openAvatarCropDialog(file);
   } catch (error) {
     toast(error.message, "error");
@@ -12609,11 +12764,12 @@ $("#avatar-crop-confirm").addEventListener("click", async () => {
   $("#avatar-crop-cancel").disabled = true;
   $("#avatar-upload-button").disabled = true;
   $("#avatar-remove-button").disabled = true;
+  renderAvatarUploadProgress(avatarCropSession.fileName || "avatar.png", 0);
   try {
     const blob = await exportAvatarCropBlob();
     const body = new FormData();
     body.append("file", blob, "avatar.png");
-    const updated = await api("/api/auth/avatar", { method: "PUT", body });
+    const updated = await uploadWithProgress("/api/auth/avatar", { method: "PUT", body }, (progress) => renderAvatarUploadProgress(avatarCropSession.fileName || "avatar.png", progress));
     applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
     renderProfileAvatar();
     avatarCropSession.uploading = false;
@@ -12627,6 +12783,7 @@ $("#avatar-crop-confirm").addEventListener("click", async () => {
     $("#avatar-crop-cancel").disabled = false;
     $("#avatar-upload-button").disabled = false;
     $("#avatar-remove-button").disabled = false;
+    renderAvatarUploadProgress("", 0, false);
   }
 });
 
@@ -13300,20 +13457,26 @@ $("#cover-file").addEventListener("change", async (event) => {
   }
   const body = new FormData();
   body.append("file", file);
+  const work = state.works.find((item) => item.id === workId) ?? (state.work?.id === workId ? state.work : null);
+  if (!work) {
+    state.pendingCoverWorkId = null;
+    event.target.value = "";
+    return;
+  }
+  state.coverUpload = { workId, fileName: file.name, progress: 0 };
+  refreshWorkCoverField(work);
   try {
-    await api(`/api/works/${workId}/cover`, { method: "PUT", body });
+    await uploadWithProgress(`/api/works/${workId}/cover`, { method: "PUT", body }, (progress) => renderWorkCoverUploadProgress(workId, progress));
     state.works = (await apiPage("/api/works")).items;
     const updated = state.works.find((item) => item.id === workId);
-    const coverField = $("#dialog-fields")?.querySelector(".work-cover-field");
-    if (updated && coverField && $("#form-dialog")?.open) {
-      coverField.outerHTML = workCoverFieldHtml(updated);
-      bindWorkCoverControls(updated);
-    }
+    if (updated) Object.assign(work, updated);
     renderShelf();
     toast("封面已更新");
   } catch (error) {
     toast(error.message, "error");
   } finally {
+    state.coverUpload = null;
+    refreshWorkCoverField(state.works.find((item) => item.id === workId) ?? work);
     state.pendingCoverWorkId = null;
     event.target.value = "";
   }
