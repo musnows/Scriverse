@@ -11,6 +11,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelCo
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
+import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
@@ -12279,20 +12280,9 @@ async function streamChat(requestHolder, body) {
       const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
       throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
     }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let streamError = null;
-    const consume = async (eventText) => {
+    const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
-      let eventName = "message";
-      const dataLines = [];
-      for (const line of eventText.split(/\r?\n/)) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-      }
-      if (!dataLines.length) return;
-      const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!state.aiPromptSent) setAiContextMeter(payload.usage);
@@ -12395,18 +12385,11 @@ async function streamChat(requestHolder, body) {
         streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
-    while (true) {
-      const chunk = await reader.read();
-      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-      const events = buffer.split(/\r?\n\r?\n/);
-      buffer = events.pop() ?? "";
-      for (const eventText of events) await consume(eventText);
-      if (chunk.done) break;
-    }
-    if (buffer.trim()) await consume(buffer);
+    const { completed: streamCompleted } = await readAiEventStream(response.body, consume);
     await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
     assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
+    assertAiStreamCompleted(streamCompleted);
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
     const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));

@@ -19,7 +19,7 @@ describe("时间轴界面", () => {
       request(runtime.app).get("/styles.css").expect(200)
     ]);
 
-    expect(page.text).toContain('/app.js?v=20260812-ai-stream-idle-v2');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-idle-v3');
 
     const deletionStart = application.text.indexOf("async function deleteTimelineEvent");
     const renderStart = application.text.indexOf("async function renderTimeline", deletionStart);

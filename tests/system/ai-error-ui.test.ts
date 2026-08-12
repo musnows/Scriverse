@@ -101,6 +101,8 @@ describe("AI 错误详情界面", () => {
 
     expect(application).toContain('if (code === "AI_STREAM_IDLE_TIMEOUT") return "网络超时";');
     expect(application).toContain('if (code === "AI_STREAM_UPSTREAM_CLOSED") return "流被关闭";');
+    expect(application).toContain("const { completed: streamCompleted } = await readAiEventStream(response.body, consume);");
+    expect(application).toContain("assertAiStreamCompleted(streamCompleted);");
     expect(application).toContain('metadata?.interrupted === true');
     expect(application).toContain('interruptionMessage: streamFailure.message.slice(0, 500)');
     expect(application).toContain('{ requestId: aiAssistantRequestId(request) }');
