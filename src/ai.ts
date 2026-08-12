@@ -3312,42 +3312,7 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
-    let streamedContent = "";
-    let generated: GenerateResult;
-    try {
-      generated = await this.generate({ ...input, taskType: "chat" }, (delta) => {
-        streamedContent += delta;
-        onDelta(delta);
-      });
-    } catch (error) {
-      if (streamedContent && input.conversationId && input.assistantMessageRequestId) {
-        try {
-          const partialMessage = this.store.addAiConversationMessage(input.conversationId, {
-            role: "assistant",
-            content: streamedContent,
-            requestId: input.assistantMessageRequestId,
-            metadata: {
-              interrupted: true,
-              interruptionCode: error instanceof AppError ? error.code : "AI_STREAM_FAILED"
-            }
-          });
-          logger.info("ai.stream.partial_saved", {
-            workId: input.workId,
-            conversationId: input.conversationId,
-            messageId: partialMessage.id,
-            outputChars: streamedContent.length
-          });
-        } catch (persistError) {
-          logger.error("ai.stream.partial_save_failed", {
-            workId: input.workId,
-            conversationId: input.conversationId,
-            outputChars: streamedContent.length,
-            error: aiErrorForLog(persistError)
-          });
-        }
-      }
-      throw error;
-    }
+    const generated = await this.generate({ ...input, taskType: "chat" }, onDelta);
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3370,7 +3335,6 @@ export class AiManager {
         role: "assistant",
         content: generated.content,
         requestId: input.assistantMessageRequestId,
-        replaceInterrupted: true,
         metadata: {
           ...(modelDisplayName ? { modelDisplayName } : {}),
           outputTokens: generated.outputTokens,

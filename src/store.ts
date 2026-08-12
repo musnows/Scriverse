@@ -432,7 +432,6 @@ type AiConversationMessageInput = {
   content: string;
   citations?: unknown[];
   requestId?: string;
-  replaceInterrupted?: boolean;
   metadata?: {
     mentionCharacterIds?: string[];
     modelDisplayName?: string;
@@ -443,8 +442,6 @@ type AiConversationMessageInput = {
     processSteps?: unknown[];
     reasoningContent?: string;
     anthropicContent?: unknown[];
-    interrupted?: boolean;
-    interruptionCode?: string;
   };
 };
 
@@ -7234,32 +7231,7 @@ export class Store {
         conversationId,
         requestId
       );
-      if (existing) {
-        const existingMetadata = json<Record<string, unknown>>(requiredString(existing, "metadata_json"), {});
-        if (
-          input.replaceInterrupted
-          && input.role === "assistant"
-          && requiredString(existing, "role") === "assistant"
-          && existingMetadata.interrupted === true
-        ) {
-          const timestamp = now();
-          this.db.transaction(() => {
-            this.db.run(
-              "UPDATE ai_conversation_messages SET content = ?, citations_json = ?, metadata_json = ? WHERE id = ?",
-              input.content,
-              JSON.stringify(input.citations ?? []),
-              JSON.stringify(input.metadata ?? {}),
-              requiredString(existing, "id")
-            );
-            this.db.run("UPDATE ai_conversations SET updated_at = ? WHERE id = ?", timestamp, conversationId);
-            this.syncAiHistorySearchShortTermsForSource("message", requiredString(existing, "id"));
-          });
-          const updated = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", requiredString(existing, "id"));
-          if (!updated) throw notFound("AI 对话消息");
-          return this.mapAiConversationMessage(updated);
-        }
-        return this.mapAiConversationMessage(existing);
-      }
+      if (existing) return this.mapAiConversationMessage(existing);
     }
     const messageId = id("message");
     const timestamp = now();
