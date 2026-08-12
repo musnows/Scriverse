@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 74;
+export const DATABASE_SCHEMA_VERSION = 75;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2945,6 +2945,88 @@ export class Database {
       const foreignKeys = this.all("PRAGMA foreign_key_check");
       if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
+    if (!applied.has(75)) {
+      this.transaction(() => {
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS ai_write_plans (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft', 'pending', 'rejected', 'expired', 'invalid', 'executing', 'executed', 'failed')),
+            ai_summary TEXT NOT NULL DEFAULT '',
+            detail_json TEXT NOT NULL DEFAULT '{}',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            failure_json TEXT NOT NULL DEFAULT '[]',
+            invalid_reason TEXT,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            conversation_owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            executed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            rejected_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            executed_at TEXT,
+            rejected_at TEXT,
+            undone_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_write_plans_work
+            ON ai_write_plans(work_id, status, created_at DESC, id DESC);
+          CREATE INDEX IF NOT EXISTS idx_ai_write_plans_conversation
+            ON ai_write_plans(conversation_id, status);
+          CREATE INDEX IF NOT EXISTS idx_ai_write_plans_actor
+            ON ai_write_plans(created_by_user_id, created_at DESC, id DESC);
+          CREATE TABLE IF NOT EXISTS ai_write_plan_operations (
+            id TEXT PRIMARY KEY,
+            plan_id TEXT NOT NULL REFERENCES ai_write_plans(id) ON DELETE CASCADE,
+            op_index INTEGER NOT NULL,
+            op_type TEXT NOT NULL CHECK(op_type IN ('create-entry', 'update-entry', 'create-annotation', 'create-task')),
+            module TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            target_id TEXT,
+            target_version INTEGER,
+            target_label TEXT NOT NULL DEFAULT '',
+            ai_summary TEXT NOT NULL DEFAULT '',
+            before_json TEXT,
+            after_json TEXT,
+            diff_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'executed', 'failed', 'undone')),
+            result_json TEXT NOT NULL DEFAULT '{}',
+            error_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(plan_id, op_index)
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_write_plan_operations_plan
+            ON ai_write_plan_operations(plan_id, op_index);
+          CREATE TABLE IF NOT EXISTS ai_tool_questions (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            question TEXT NOT NULL,
+            options_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'answered', 'rejected', 'expired')),
+            answer TEXT,
+            expires_at TEXT NOT NULL,
+            answered_at TEXT,
+            injected_at TEXT,
+            created_at TEXT NOT NULL,
+            created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_tool_questions_conversation
+            ON ai_tool_questions(conversation_id, status);
+        `);
+        const settingsColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!settingsColumns.has("write_tools_json")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN write_tools_json TEXT NOT NULL DEFAULT '{}'");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
   }
 
   private normalizeCharacterName(value: string): string {
@@ -2973,5 +3055,8 @@ export class Database {
       JSON.stringify([{ message: "服务重启导致任务中断" }]),
       timestamp
     );
+    // AI 生成中断后残留的草稿计划直接丢弃；执行中计划回退为待确认，允许重新发起审批。
+    this.run("DELETE FROM ai_write_plans WHERE status = 'draft'");
+    this.run("UPDATE ai_write_plans SET status = 'pending', updated_at = ? WHERE status = 'executing'", timestamp);
   }
 }

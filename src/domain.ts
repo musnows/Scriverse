@@ -35,6 +35,24 @@ export const ANALYSIS_STATUSES = [
 ] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
+export const AI_WRITE_PLAN_STATUSES = [
+  "draft",
+  "pending",
+  "rejected",
+  "expired",
+  "invalid",
+  "executing",
+  "executed",
+  "failed"
+] as const;
+export type AiWritePlanStatus = (typeof AI_WRITE_PLAN_STATUSES)[number];
+
+export const AI_WRITE_PLAN_OPERATION_STATUSES = ["pending", "executed", "failed", "undone"] as const;
+export type AiWritePlanOperationStatus = (typeof AI_WRITE_PLAN_OPERATION_STATUSES)[number];
+
+export const AI_TOOL_QUESTION_STATUSES = ["pending", "answered", "rejected", "expired"] as const;
+export type AiToolQuestionStatus = (typeof AI_TOOL_QUESTION_STATUSES)[number];
+
 export type ParsedChapter = {
   title: string;
   content: string;
