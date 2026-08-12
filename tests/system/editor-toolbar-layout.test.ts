@@ -108,13 +108,13 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function canReplaceProse(work = state.work)");
     expect(application.text).toContain("正文导入历史");
     expect(page.text).toContain('id="chapter-recycle-bin-dialog"');
-    expect(application.text).toContain("章节回收站");
+    expect(application.text).toContain("正文回收站");
     expect(application.text).toContain("async function openChapterRecycleBin()");
     expect(application.text).toContain("data-restore-deleted-chapter");
     expect(application.text).toContain("data-purge-deleted-chapter");
     expect(application.text).toContain("彻底删除章节");
     expect(application.text).toContain("/permanent`");
-    expect(application.text).toContain('/deleted-chapters`');
+    expect(application.text).toContain('/recycle-bin`');
     expect(application.text).toContain('$("#form-dialog").close();');
     expect(application.text).toContain("resetWorkScopedUiCaches();");
     expect(application.text).toContain("if (state.dirty) scheduleChapterAutoSave();");

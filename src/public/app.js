@@ -9435,15 +9435,19 @@ function openWorkSettingsDialog(work) {
     <button id="work-export-button" class="ghost-button" type="button" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false">导出正文</button>
   </section>`;
   const recycleBinField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="chapter-recycle-bin-settings-title">
-    <div><strong id="chapter-recycle-bin-settings-title">章节回收站</strong><small>恢复已软删除的章节，或彻底删除正文、版本和关联资料。</small></div>
+    <div><strong id="chapter-recycle-bin-settings-title">正文回收站</strong><small>恢复已删除的分卷与章节，或在确认后彻底清理正文、版本和关联资料。</small></div>
     <button id="chapter-recycle-bin-button" class="ghost-button" type="button" aria-controls="chapter-recycle-bin-dialog" aria-haspopup="dialog" ${canEditProse() ? "" : "disabled"}>打开回收站</button>
+  </section>` : "";
+  const deleteField = canManageAccess ? `<section class="work-access-field work-danger-field" aria-labelledby="work-delete-settings-title">
+    <div><strong id="work-delete-settings-title">删除作品</strong><small>作品会先移入回收站并完整保留正文、设定、关联资料与版本历史，默认 30 天后自动清理。</small></div>
+    <button id="work-delete-button" class="danger-button" type="button">移入作品回收站</button>
   </section>` : "";
   const whitespaceField = isCurrentWork ? `<section class="work-access-field" aria-labelledby="whitespace-settings-title">
     <div><strong id="whitespace-settings-title">正文空白符</strong><small>在编辑器正文中显示或隐藏空格、全角空格和 Tab 的可视标记。</small></div>
     <button id="toggle-whitespace-settings" class="ghost-button" data-toggle-whitespace type="button" aria-pressed="${chapterWhitespaceVisible}" title="用点标记半角空格，用方框标记全角空格，用箭头标记 Tab">${chapterWhitespaceVisible ? "隐藏空白符" : "显示空白符"}</button>
   </section>` : "";
   openDialog("作品信息",
-    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + exportField + recycleBinField,
+    workCoverFieldHtml(work) + field("title", "作品名称", "text", work.title) + field("author", "作者", "text", work.author) + field("description", "简介", "textarea", work.description) + whitespaceField + accessField + importHistoryField + exportField + recycleBinField + deleteField,
     async (form) => {
       await api(`/api/works/${work.id}`, { method: "PATCH", body: { title: form.get("title"), author: form.get("author"), description: form.get("description") } });
       state.works = (await apiPage("/api/works")).items;
@@ -9475,10 +9479,43 @@ function openWorkSettingsDialog(work) {
     $("#form-dialog").close();
     void openChapterRecycleBin();
   });
+  $("#work-delete-button")?.addEventListener("click", () => {
+    void deleteWork(work);
+  });
   $("#work-access-manage")?.addEventListener("click", () => {
     $("#form-dialog").close();
     openMembersDialog(work);
   });
+}
+
+async function deleteWork(work) {
+  if (!work || !canManageWork(work)) return toast("仅作品创建者或系统管理员可以删除作品", "error");
+  $("#form-dialog").close();
+  const deletingCurrentWork = state.work?.id === work.id;
+  const unsavedWarning = deletingCurrentWork && state.dirty ? " 当前章节尚有未保存修改，这些本地修改不会进入回收站。" : "";
+  if (!await confirmToast(`将作品“${work.title}”移入回收站吗？正文、设定、关联资料和版本历史会完整保留，默认 30 天内可恢复。${unsavedWarning}`, {
+    title: "删除作品",
+    confirmLabel: "移入回收站"
+  })) return openWorkSettingsDialog(work);
+  if (deletingCurrentWork) cancelChapterAutoSave();
+  try {
+    await api(`/api/works/${encodeURIComponent(work.id)}`, {
+      method: "DELETE",
+      body: { expectedVersionNo: work.versionNo }
+    });
+    if (deletingCurrentWork) {
+      state.dirty = false;
+      resetWorkScopedUiCaches();
+      state.work = null;
+      state.chapter = null;
+    }
+    await loadWorks();
+    toast(`作品“${work.title}”已移入回收站`);
+  } catch (error) {
+    if (deletingCurrentWork && state.dirty) scheduleChapterAutoSave();
+    toast(error.message, "error");
+    openWorkSettingsDialog(work);
+  }
 }
 
 async function openChapterDialog(volumeId = null) {
@@ -9502,8 +9539,8 @@ function openVolumeDialog(item) {
   if (!canEditProse()) return toast("当前权限只能编辑设定资料，不能修改分卷", "error");
   const kindOptions = [["main", "正文卷"], ["prequel", "前传"], ["extra", "番外"], ["epilogue", "后记"], ["appendix", "附录"]];
   const management = item ? `<section class="entity-dialog-management" aria-label="分卷操作">
-    <div><strong>分卷操作</strong><small>仅空分卷可以删除；回收站章节需先彻底删除，或恢复后移动到其他分卷。</small></div>
-    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-volume-delete>删除分卷</button></div>
+    <div><strong>分卷操作</strong><small>分卷会连同其中章节移入回收站，正文、版本和关联资料默认保留 30 天。</small></div>
+    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-volume-delete>移入回收站</button></div>
   </section>` : "";
   openDialog(item ? "编辑分卷" : "新建分卷",
     field("title", "分卷名称", "text", item?.title) +
@@ -9531,16 +9568,16 @@ function openVolumeDialog(item) {
 async function deleteVolume(item) {
   if (!state.work || !item || !canEditProse()) return toast("当前权限不能删除分卷", "error");
   $("#form-dialog").close();
-  if (!await confirmToast(`确认删除空分卷“${item.title}”吗？分卷信息和版本记录仍会保留。`, {
+  if (!await confirmToast(`将分卷“${item.title}”移入回收站吗？其中章节会一并隐藏，正文、版本和关联资料默认保留 30 天。`, {
     title: "删除分卷",
-    confirmLabel: "确认删除"
+    confirmLabel: "移入回收站"
   })) return openVolumeDialog(item);
   try {
     await api(`/api/volumes/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     state.collapsedVolumeIds.delete(item.id);
     state.work = await api(`/api/works/${state.work.id}`);
     renderTree();
-    toast(`已删除分卷“${item.title}”`);
+    toast(`分卷“${item.title}”已移入回收站`);
   } catch (error) {
     toast(error.message, "error");
     openVolumeDialog(item);
@@ -12308,22 +12345,196 @@ async function openImportHistory() {
   }
 }
 
-function renderChapterRecycleBin(chapters) {
-  const host = $("#chapter-recycle-bin-list");
-  if (!chapters.length) {
-    host.innerHTML = '<p class="entity-history-empty">回收站为空，没有可恢复的章节。</p>';
+function recycleBinExpiryLabel(expiresAt) {
+  return expiresAt ? `自动清理时间：${formatDateTime(expiresAt)}` : "按回收站保留期自动清理";
+}
+
+function recycleBinSection(title, count, body) {
+  return `<section class="recycle-bin-section" aria-label="${esc(title)}">
+    <header class="recycle-bin-section-heading"><h3>${esc(title)}</h3><span>${Number(count).toLocaleString("zh-CN")} 项</span></header>
+    <div class="recycle-bin-section-list">${body}</div>
+  </section>`;
+}
+
+function renderWorkRecycleBin(result) {
+  const host = $("#work-recycle-bin-list");
+  const works = Array.isArray(result?.works) ? result.works : [];
+  const retentionDays = Number(result?.retentionDays) || 30;
+  $("#work-recycle-bin-description").textContent = `删除的作品默认保留 ${retentionDays} 天，期间会完整保留正文、层级、设定、关联资料与版本历史。恢复后可继续编辑；彻底删除后无法恢复。`;
+  if (!works.length) {
+    host.innerHTML = '<p class="entity-history-empty">作品回收站为空。</p>';
     return;
   }
-  host.innerHTML = chapters.map((chapter) => `<article class="entity-version-card" data-deleted-chapter="${esc(chapter.id)}">
+  host.innerHTML = works.map((work) => `<article class="entity-version-card recycle-bin-card" data-deleted-work="${esc(work.id)}">
+    <header><strong>${esc(work.title)}</strong><span class="import-history-kind">作品</span></header>
+    <time>${esc(formatDateTime(work.deletedAt))} · ${esc(work.actor)}</time>
+    <p>${esc(work.description || "尚未填写作品简介")}</p>
+    <small>${Number(work.volumeCount ?? 0).toLocaleString("zh-CN")} 卷 · ${Number(work.chapterCount ?? 0).toLocaleString("zh-CN")} 章 · v${Number(work.versionNo)}<br>${esc(recycleBinExpiryLabel(work.expiresAt))}</small>
+    <footer class="entity-version-actions">
+      <button type="button" data-restore-deleted-work="${esc(work.id)}">恢复作品</button>
+      <button class="danger-button" type="button" data-purge-deleted-work="${esc(work.id)}">彻底删除</button>
+    </footer>
+  </article>`).join("");
+  host.querySelectorAll("[data-restore-deleted-work]").forEach((button) => button.addEventListener("click", async () => {
+    const work = works.find((item) => item.id === button.dataset.restoreDeletedWork);
+    if (!work) return;
+    const dialog = $("#work-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`恢复作品“${work.title}”吗？正文、层级、设定、关联资料与版本历史都会回到删除前状态。`, {
+      title: "恢复作品",
+      confirmLabel: "确认恢复"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    try {
+      await api(`/api/recycle-bin/works/${encodeURIComponent(work.id)}/restore`, {
+        method: "POST",
+        body: { expectedVersionNo: work.versionNo }
+      });
+      state.works = (await apiPage("/api/works")).items;
+      showShelf();
+      await loadWorkRecycleBin();
+      dialog.showModal();
+      toast(`已恢复作品“${work.title}”`);
+    } catch (error) {
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
+  host.querySelectorAll("[data-purge-deleted-work]").forEach((button) => button.addEventListener("click", async () => {
+    const work = works.find((item) => item.id === button.dataset.purgeDeletedWork);
+    if (!work) return;
+    const dialog = $("#work-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`彻底删除作品“${work.title}”吗？正文、设定、关联资料、版本历史与附件将无法恢复。`, {
+      title: "彻底删除作品",
+      confirmLabel: "确认彻底删除"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    try {
+      await api(`/api/recycle-bin/works/${encodeURIComponent(work.id)}/permanent`, {
+        method: "DELETE",
+        body: { expectedVersionNo: work.versionNo }
+      });
+      await loadWorkRecycleBin();
+      dialog.showModal();
+      toast(`已彻底删除作品“${work.title}”`);
+    } catch (error) {
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
+}
+
+async function loadWorkRecycleBin() {
+  renderWorkRecycleBin(await api("/api/recycle-bin/works"));
+}
+
+async function openWorkRecycleBin() {
+  $("#work-recycle-bin-list").innerHTML = '<p class="entity-history-empty">正在读取已删除作品…</p>';
+  const dialog = $("#work-recycle-bin-dialog");
+  dialog.showModal();
+  $("#work-recycle-bin-close").focus();
+  try {
+    await loadWorkRecycleBin();
+  } catch (error) {
+    dialog.close();
+    toast(error.message, "error");
+  }
+}
+
+function renderChapterRecycleBin(result) {
+  const host = $("#chapter-recycle-bin-list");
+  const volumes = Array.isArray(result?.volumes) ? result.volumes : [];
+  const chapters = Array.isArray(result?.chapters) ? result.chapters : [];
+  const retentionDays = Number(result?.retentionDays) || 30;
+  $("#chapter-recycle-bin-description").textContent = `删除的分卷与章节默认保留 ${retentionDays} 天。分卷会连同其中章节一起恢复；独立章节会恢复到原分卷。彻底删除会清理正文、版本和关联资料，且无法恢复。`;
+  if (!volumes.length && !chapters.length) {
+    host.innerHTML = '<p class="entity-history-empty">正文回收站为空。</p>';
+    return;
+  }
+  const volumeCards = volumes.map((volume) => `<article class="entity-version-card recycle-bin-card" data-deleted-volume="${esc(volume.id)}">
+    <header><strong>${esc(volume.title)}</strong><span class="import-history-kind">分卷</span></header>
+    <time>${esc(formatDateTime(volume.deletedAt))} · ${esc(volume.actor)}</time>
+    <p>${esc(volume.description || "尚未填写分卷简介")}</p>
+    <small>${Number(volume.chapterCount ?? 0).toLocaleString("zh-CN")} 章 · 删除版本 v${Number(volume.versionNo)}<br>${esc(recycleBinExpiryLabel(volume.expiresAt))}</small>
+    <footer class="entity-version-actions">
+      <button type="button" data-restore-deleted-volume="${esc(volume.id)}">恢复分卷</button>
+      <button class="danger-button" type="button" data-purge-deleted-volume="${esc(volume.id)}">彻底删除</button>
+    </footer>
+  </article>`).join("");
+  const chapterCards = chapters.map((chapter) => `<article class="entity-version-card recycle-bin-card" data-deleted-chapter="${esc(chapter.id)}">
     <header><strong>${esc(chapter.title)}</strong><span class="import-history-kind">${esc(chapter.volumeTitle)}</span></header>
     <time>${esc(formatDateTime(chapter.deletedAt))} · ${esc(chapter.actor)}</time>
     <p>${esc(chapter.contentPreview || "空白章节")}</p>
-    <small>${Number(chapter.wordCount).toLocaleString("zh-CN")} 字 · 删除版本 v${Number(chapter.versionNo)}</small>
+    <small>${Number(chapter.wordCount ?? 0).toLocaleString("zh-CN")} 字 · 删除版本 v${Number(chapter.versionNo)}<br>${esc(recycleBinExpiryLabel(chapter.expiresAt))}</small>
     <footer class="entity-version-actions">
       <button type="button" data-restore-deleted-chapter="${esc(chapter.id)}">恢复章节</button>
       <button class="danger-button" type="button" data-purge-deleted-chapter="${esc(chapter.id)}">彻底删除</button>
     </footer>
   </article>`).join("");
+  host.innerHTML = `${volumes.length ? recycleBinSection("已删除分卷", volumes.length, volumeCards) : ""}${chapters.length ? recycleBinSection("已删除章节", chapters.length, chapterCards) : ""}`;
+  host.querySelectorAll("[data-restore-deleted-volume]").forEach((button) => button.addEventListener("click", async () => {
+    const volume = volumes.find((item) => item.id === button.dataset.restoreDeletedVolume);
+    if (!volume || !state.work) return;
+    const dialog = $("#chapter-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`恢复分卷“${volume.title}”及其中 ${Number(volume.chapterCount ?? 0).toLocaleString("zh-CN")} 个章节吗？`, {
+      title: "恢复分卷",
+      confirmLabel: "确认恢复"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    try {
+      await api(`/api/volumes/${encodeURIComponent(volume.id)}/restore`, {
+        method: "POST",
+        body: { expectedVersionNo: volume.versionNo }
+      });
+      state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+      renderTree();
+      await loadChapterRecycleBin();
+      dialog.showModal();
+      toast(`已恢复分卷“${volume.title}”`);
+    } catch (error) {
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
+  host.querySelectorAll("[data-purge-deleted-volume]").forEach((button) => button.addEventListener("click", async () => {
+    const volume = volumes.find((item) => item.id === button.dataset.purgeDeletedVolume);
+    if (!volume || !state.work) return;
+    const dialog = $("#chapter-recycle-bin-dialog");
+    dialog.close();
+    const confirmed = await confirmToast(`彻底删除分卷“${volume.title}”吗？其中章节的正文、版本和关联资料将无法恢复。`, {
+      title: "彻底删除分卷",
+      confirmLabel: "确认彻底删除"
+    });
+    if (!confirmed) {
+      dialog.showModal();
+      return;
+    }
+    try {
+      await api(`/api/volumes/${encodeURIComponent(volume.id)}/permanent`, {
+        method: "DELETE",
+        body: { expectedVersionNo: volume.versionNo }
+      });
+      state.work = await api(`/api/works/${encodeURIComponent(state.work.id)}`);
+      renderTree();
+      await loadChapterRecycleBin();
+      dialog.showModal();
+      toast(`已彻底删除分卷“${volume.title}”`);
+    } catch (error) {
+      dialog.showModal();
+      toast(error.message, "error");
+    }
+  }));
   host.querySelectorAll("[data-restore-deleted-chapter]").forEach((button) => button.addEventListener("click", async () => {
     const chapter = chapters.find((item) => item.id === button.dataset.restoreDeletedChapter);
     if (!chapter || !state.work) return;
@@ -12337,7 +12548,6 @@ function renderChapterRecycleBin(chapters) {
       dialog.showModal();
       return;
     }
-    button.disabled = true;
     try {
       await api(`/api/chapters/${encodeURIComponent(chapter.id)}/restore`, {
         method: "POST",
@@ -12349,7 +12559,6 @@ function renderChapterRecycleBin(chapters) {
       dialog.showModal();
       toast(`已恢复章节“${chapter.title}”`);
     } catch (error) {
-      button.disabled = false;
       dialog.showModal();
       toast(error.message, "error");
     }
@@ -12367,7 +12576,6 @@ function renderChapterRecycleBin(chapters) {
       dialog.showModal();
       return;
     }
-    button.disabled = true;
     try {
       await api(`/api/chapters/${encodeURIComponent(chapter.id)}/permanent`, {
         method: "DELETE",
@@ -12379,7 +12587,6 @@ function renderChapterRecycleBin(chapters) {
       dialog.showModal();
       toast(`已彻底删除章节“${chapter.title}”`);
     } catch (error) {
-      button.disabled = false;
       dialog.showModal();
       toast(error.message, "error");
     }
@@ -12388,18 +12595,19 @@ function renderChapterRecycleBin(chapters) {
 
 async function loadChapterRecycleBin() {
   if (!state.work) return;
-  const chapters = await api(`/api/works/${encodeURIComponent(state.work.id)}/deleted-chapters`);
-  renderChapterRecycleBin(chapters);
+  renderChapterRecycleBin(await api(`/api/works/${encodeURIComponent(state.work.id)}/recycle-bin`));
 }
 
 async function openChapterRecycleBin() {
   if (!state.work || !canEditProse()) return toast("当前权限不能恢复正文", "error");
-  $("#chapter-recycle-bin-list").innerHTML = '<p class="entity-history-empty">正在读取已删除章节…</p>';
-  $("#chapter-recycle-bin-dialog").showModal();
+  $("#chapter-recycle-bin-list").innerHTML = '<p class="entity-history-empty">正在读取已删除正文…</p>';
+  const dialog = $("#chapter-recycle-bin-dialog");
+  dialog.showModal();
+  $("#chapter-recycle-bin-close").focus();
   try {
     await loadChapterRecycleBin();
   } catch (error) {
-    $("#chapter-recycle-bin-dialog").close();
+    dialog.close();
     toast(error.message, "error");
   }
 }
@@ -13214,6 +13422,7 @@ $("#member-permission-form").addEventListener("submit", async (event) => {
 });
 $("#platform-new-provider").addEventListener("click", () => openProviderDialog());
 $("#shelf-new-work").addEventListener("click", openWorkDialog);
+$("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
 $("#chapter-delete-button").addEventListener("click", () => {
@@ -13243,6 +13452,7 @@ $("#insight-button").addEventListener("click", () => showChapterInsight().catch(
 $("#versions-button").addEventListener("click", showVersions);
 $("#versions-close").addEventListener("click", () => $("#versions-dialog").close());
 $("#import-history-close").addEventListener("click", () => $("#import-history-dialog").close());
+$("#work-recycle-bin-close").addEventListener("click", () => $("#work-recycle-bin-dialog").close());
 $("#chapter-recycle-bin-close").addEventListener("click", () => $("#chapter-recycle-bin-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
