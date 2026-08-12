@@ -18,6 +18,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
+import { chapterDiffSummary, diffChapterLines } from "/chapter-version-diff.js?v=20260812-chapter-version-diff-v1";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260809-global-replace-v1";
 import {
   chapterVersionSourceLabel,
@@ -12102,26 +12103,95 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   return message;
 }
 
+function chapterVersionCompareOption(version) {
+  return `<option value="version:${Number(version.versionNo)}">v${Number(version.versionNo)} · ${esc(chapterVersionSourceLabel(version.source))}</option>`;
+}
+
+function chapterVersionCompareTarget(value, versions) {
+  if (value === "current") {
+    return {
+      label: `当前正文 · v${Number(state.chapter?.versionNo ?? 0)}`,
+      title: state.chapter?.title ?? "",
+      content: state.chapter?.content ?? ""
+    };
+  }
+  const versionNo = Number(String(value).replace("version:", ""));
+  const version = versions.find((item) => Number(item.versionNo) === versionNo);
+  return version ? { label: `历史版本 v${versionNo}`, title: version.title, content: version.content } : null;
+}
+
+function chapterDiffLineContent(content) {
+  return content === "" ? '<span class="chapter-diff-empty">空行</span>' : esc(content);
+}
+
+function renderChapterVersionDiff(versions) {
+  const before = chapterVersionCompareTarget($("#chapter-version-before").value, versions);
+  const after = chapterVersionCompareTarget($("#chapter-version-after").value, versions);
+  if (!before || !after) return;
+  const rows = diffChapterLines(before.content, after.content);
+  const summary = chapterDiffSummary(rows);
+  const titleChanged = before.title !== after.title;
+  $("#chapter-version-diff-summary").textContent = `${before.label} → ${after.label} · ${summary.added} 行新增 · ${summary.deleted} 行删除 · ${summary.modified} 行修改${titleChanged ? ` · 标题由“${before.title}”改为“${after.title}”` : ""}`;
+  $("#chapter-version-diff").innerHTML = rows.map((row) => {
+    if (row.type === "modified") {
+      return `<div class="chapter-diff-row is-modified">
+        <span class="chapter-diff-line-number">${row.beforeLine ?? ""}</span><span class="chapter-diff-marker">−</span><code>${chapterDiffLineContent(row.before)}</code>
+        <span class="chapter-diff-line-number">${row.afterLine ?? ""}</span><span class="chapter-diff-marker">＋</span><code>${chapterDiffLineContent(row.after)}</code>
+      </div>`;
+    }
+    const lineNumber = row.type === "added" ? row.afterLine : row.beforeLine;
+    const marker = row.type === "added" ? "＋" : row.type === "deleted" ? "−" : "";
+    const content = row.type === "added" ? row.after : row.before;
+    return `<div class="chapter-diff-row is-${row.type}"><span class="chapter-diff-line-number">${lineNumber ?? ""}</span><span class="chapter-diff-marker">${marker}</span><code>${chapterDiffLineContent(content)}</code></div>`;
+  }).join("");
+}
+
+function prepareChapterVersionCompare(versions) {
+  const options = versions.map(chapterVersionCompareOption).join("");
+  const previous = versions.find((version) => Number(version.versionNo) !== Number(state.chapter?.versionNo)) ?? versions[0];
+  $("#chapter-version-before").innerHTML = `${options}<option value="current">当前正文</option>`;
+  $("#chapter-version-after").innerHTML = `${options}<option value="current">当前正文</option>`;
+  $("#chapter-version-before").value = previous ? `version:${Number(previous.versionNo)}` : "current";
+  $("#chapter-version-after").value = "current";
+  renderChapterVersionDiff(versions);
+  $("#chapter-version-compare").onclick = () => renderChapterVersionDiff(versions);
+  $("#chapter-version-before").onchange = () => renderChapterVersionDiff(versions);
+  $("#chapter-version-after").onchange = () => renderChapterVersionDiff(versions);
+}
+
 async function showVersions() {
   if (!state.chapter) return;
   const versions = await api(`/api/chapters/${state.chapter.id}/versions`);
   $("#versions-list").innerHTML = versions.map((version) => `<div class="version-row"><div><b>v${version.versionNo}</b><small>${esc(chapterVersionSourceLabel(version.source))} · ${esc(version.actor || "历史数据")}</small></div><p>${esc(version.content.slice(0, 300) || "空白章节")}</p>${canEditProse() ? `<button class="ghost-button" data-restore-version="${version.versionNo}">恢复</button>` : ""}</div>`).join("");
   $("#versions-list").querySelectorAll("[data-restore-version]").forEach((button) => button.addEventListener("click", async () => {
+    const dialog = $("#versions-dialog");
+    dialog.close();
     if (!(await confirmToast(
       `将版本 v${button.dataset.restoreVersion} 恢复为一个新的保存版本？`,
       { title: "恢复历史版本", confirmLabel: "确认恢复" }
-    ))) return;
-    state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
-    lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
-    $("#chapter-title").value = state.chapter.title;
-    $("#chapter-content").value = state.chapter.content;
-    scheduleChapterLineNumbers();
-    updateChapterStats();
-    setSaveState("已保存");
-    $("#versions-dialog").close();
-    toast("历史内容已恢复为新版本");
+    ))) {
+      dialog.showModal();
+      button.focus();
+      return;
+    }
+    try {
+      state.chapter = await api(`/api/chapters/${state.chapter.id}/restore`, { method: "POST", body: { versionNo: Number(button.dataset.restoreVersion) } });
+      lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
+      $("#chapter-title").value = state.chapter.title;
+      $("#chapter-content").value = state.chapter.content;
+      scheduleChapterLineNumbers();
+      updateChapterStats();
+      setSaveState("已保存");
+      toast("历史内容已恢复为新版本");
+    } catch (error) {
+      dialog.showModal();
+      button.focus();
+      toast(error.message, "error");
+    }
   }));
   $("#versions-dialog").showModal();
+  prepareChapterVersionCompare(versions);
+  $("#chapter-version-before").focus();
 }
 
 function importHistoryRecordLabel(version) {

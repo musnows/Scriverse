@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260812-scrollbar-autohide-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260812-chapter-version-diff-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -746,11 +746,18 @@
       </form>
     </dialog>
 
-    <dialog id="versions-dialog" class="dialog wide-dialog">
+    <dialog id="versions-dialog" class="dialog wide-dialog" aria-labelledby="chapter-versions-title" aria-describedby="chapter-version-diff-summary">
       <div class="dialog-header">
-        <div><span class="eyebrow">版本历史</span><h2>章节保存记录</h2></div>
-        <button id="versions-close" class="dialog-close" aria-label="关闭" type="button">×</button>
+        <div><span class="eyebrow">版本历史</span><h2 id="chapter-versions-title">章节保存记录</h2></div>
+        <button id="versions-close" class="dialog-close" aria-label="关闭章节版本历史" type="button">×</button>
       </div>
+      <section class="chapter-version-compare" aria-label="选择要比较的章节版本">
+        <label>较早内容<select id="chapter-version-before" aria-label="选择比较前的版本"></select></label>
+        <button id="chapter-version-compare" class="ghost-button" type="button">比较差异</button>
+        <label>较新内容<select id="chapter-version-after" aria-label="选择比较后的版本"></select></label>
+      </section>
+      <p id="chapter-version-diff-summary" class="chapter-version-diff-summary" aria-live="polite"></p>
+      <div id="chapter-version-diff" class="chapter-version-diff" aria-label="逐行差异结果"></div>
       <div id="versions-list" class="versions-list"></div>
     </dialog>
 
@@ -1052,6 +1059,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260812-scrollbar-autohide-v1"></script>
+    <script type="module" src="/app.js?v=20260812-chapter-version-diff-v2"></script>
   </body>
 </html>

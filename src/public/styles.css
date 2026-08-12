@@ -3155,6 +3155,28 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .versions-list { padding: 18px 24px 28px; max-height: 65vh; overflow: auto; }
 .version-row { display: grid; grid-template-columns: 75px 1fr auto; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); align-items: start; }
 .version-row p { margin: 0; color: var(--muted); font-size: 11px; white-space: pre-wrap; max-height: 70px; overflow: hidden; }
+.chapter-version-compare { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 12px; padding: 18px 24px 10px; }
+.chapter-version-compare label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 10px; }
+.chapter-version-compare select { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.chapter-version-compare select:focus-visible, .chapter-version-compare button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); outline: 0; }
+.chapter-version-compare button { min-height: 36px; white-space: nowrap; }
+.chapter-version-diff-summary { margin: 0; padding: 4px 24px 10px; color: var(--muted); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+.chapter-version-diff { max-height: 36vh; margin: 0 24px; overflow: auto; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.chapter-diff-row { display: grid; grid-template-columns: 42px 24px minmax(0, 1fr); min-width: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent); }
+.chapter-diff-row:last-child { border-bottom: 0; }
+.chapter-diff-row > * { padding: 6px 8px; }
+.chapter-diff-row code { min-width: 0; color: var(--ink); font: 10px/1.55 var(--font-latin), var(--font-cjk), monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chapter-diff-line-number { color: var(--muted); font: 9px/1.7 var(--font-latin), monospace; text-align: right; user-select: none; }
+.chapter-diff-marker { color: var(--muted); font: 10px/1.55 var(--font-latin), monospace; text-align: center; user-select: none; }
+.chapter-diff-row.is-added { background: color-mix(in srgb, var(--green) 10%, var(--surface)); }
+.chapter-diff-row.is-added .chapter-diff-marker { color: var(--green); }
+.chapter-diff-row.is-deleted { background: color-mix(in srgb, var(--toast-error-fg) 9%, var(--surface)); }
+.chapter-diff-row.is-deleted .chapter-diff-marker { color: var(--toast-error-fg); }
+.chapter-diff-row.is-modified { grid-template-rows: auto auto; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.chapter-diff-row.is-modified > :nth-child(n + 4) { border-top: 1px dashed color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.chapter-diff-row.is-modified > :nth-child(2) { color: var(--toast-error-fg); }
+.chapter-diff-row.is-modified > :nth-child(5) { color: var(--green); }
+.chapter-diff-empty { color: var(--muted); font-style: italic; }
 .entity-history-list { display: grid; gap: 10px; padding: 18px 24px 28px; max-height: 65vh; overflow: auto; }
 .import-history-body { min-height: 220px; }
 .import-history-note { margin: 0; padding: 16px 24px 0; color: var(--muted); font-size: 10px; line-height: 1.65; }
@@ -3466,6 +3488,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-header h2 { font-size: 20px; }
   .settings-dialog-header-actions { gap: 6px; }
   .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list, .chapter-annotations-list { padding-inline: 16px; }
+  .chapter-version-compare { grid-template-columns: minmax(0, 1fr); padding-inline: 16px; }
+  .chapter-version-compare button { width: 100%; }
+  .chapter-version-diff-summary { padding-inline: 16px; }
+  .chapter-version-diff { max-height: 32vh; margin-inline: 16px; }
+  .chapter-diff-row { grid-template-columns: 34px 22px minmax(0, 1fr); }
   .replace-dialog-body { padding-inline: 16px; }
   .replace-dialog { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
   .replace-scope-fieldset { grid-template-columns: minmax(0, 1fr); }
