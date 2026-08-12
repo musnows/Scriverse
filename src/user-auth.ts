@@ -7,6 +7,7 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 import { normalizeApiPath } from "./security.js";
+import { escapeSqlLikePattern } from "./utils.js";
 import {
   canReadWorkModule,
   canWriteWorkModule,
@@ -436,7 +437,7 @@ export class UserAuthService {
   }
 
   directory(query: string): Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">[] {
-    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     return this.database.all(
       `SELECT * FROM users WHERE status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
@@ -450,7 +451,7 @@ export class UserAuthService {
   }
 
   directoryPage(query: string, pagination: Pagination): PaginatedResult<Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">> {
-    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     const page = paginationSql(pagination);
     const rows = this.database.all(
@@ -939,6 +940,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
+  if (/^\/api\/works\/[^/]+\/chapters\/[^/]+\/foreshadow-reminders(?:\/[^/]+\/resolve)?$/u.test(pathname)) {
+    return write ? { read: ["prose"], write: ["outlines"] } : { read: ["prose", "outlines"] };
+  }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
     return write ? direct(requestedAttachmentModule(request)) : { anyRead: [...attachmentModules] };
   }

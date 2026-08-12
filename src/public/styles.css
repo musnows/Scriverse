@@ -1355,18 +1355,35 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .welcome-grid span { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
 .hidden { display: none !important; }
-.editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
+.editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }
 .editor-toolbar { display: grid; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
 #chapter-path { grid-area: path; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-title { grid-area: title; display: block; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; font-size: 27px; padding: 0; }
 .chapter-title:focus { box-shadow: none; border-bottom: 1px solid var(--accent); }
 .editor-actions { grid-area: actions; display: flex; align-items: center; gap: 10px; }
 .chapter-stats { color: var(--muted); font-size: 11px; }
+.chapter-foreshadow-reminder { --reminder-color: #80713d; display: grid; grid-template-areas: "summary actions" "details details"; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px 18px; padding: 10px 7%; border-bottom: 1px solid color-mix(in srgb, var(--reminder-color) 32%, var(--line)); background: color-mix(in srgb, var(--reminder-color) 7%, var(--surface)); }
+.chapter-foreshadow-reminder[data-role="payoff"] { --reminder-color: #49745c; }
+.chapter-foreshadow-reminder-summary { grid-area: summary; display: flex; min-width: 0; align-items: center; gap: 10px; }
+.chapter-foreshadow-reminder-summary > div { display: grid; min-width: 0; gap: 2px; }
+.chapter-foreshadow-reminder-summary strong { overflow-wrap: anywhere; color: var(--ink); font-size: 12px; line-height: 1.45; }
+.chapter-foreshadow-reminder-summary span:not(.chapter-foreshadow-reminder-role) { overflow: hidden; color: var(--muted); font-size: 10px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.chapter-foreshadow-reminder-role { flex: 0 0 auto; padding: 3px 7px; border: 1px solid color-mix(in srgb, var(--reminder-color) 58%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--reminder-color) 12%, var(--surface)); color: var(--reminder-color); font-size: 9px; font-weight: 700; }
+.chapter-foreshadow-reminder-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.chapter-foreshadow-reminder-actions button { min-height: 30px; padding: 6px 9px; font-size: 10px; white-space: nowrap; }
+.chapter-foreshadow-reminder-counter { min-width: 32px; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 10px; text-align: center; }
+.chapter-foreshadow-reminder-details { grid-area: details; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 18px; margin: 0; padding: 9px 0 2px; border-top: 1px solid color-mix(in srgb, var(--reminder-color) 24%, var(--line)); }
+.chapter-foreshadow-reminder-details > div { display: grid; min-width: 0; grid-template-columns: max-content minmax(0, 1fr); gap: 7px; }
+.chapter-foreshadow-reminder-details dt { color: var(--reminder-color); font-size: 9px; font-weight: 700; }
+.chapter-foreshadow-reminder-details dd { margin: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 10px; line-height: 1.5; white-space: pre-wrap; }
 @container editor-workspace (max-width: 720px) {
   .editor-toolbar { grid-template-areas: "path" "title" "actions"; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-inline: 6%; }
   .chapter-title { min-height: 36px; }
   .editor-actions { justify-content: flex-end; flex-wrap: wrap; }
   .chapter-stats { display: none; }
+  .chapter-foreshadow-reminder { grid-template-areas: "summary" "actions" "details"; grid-template-columns: minmax(0, 1fr); padding-inline: 6%; }
+  .chapter-foreshadow-reminder-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .chapter-foreshadow-reminder-details { grid-template-columns: minmax(0, 1fr); }
 }
 .editor-body { display: flex; min-height: 0; flex-direction: column; }
 .chapter-editor-frame { position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); flex: 1 1 auto; width: 100%; min-height: 0; margin: 0; overflow: hidden; }
@@ -3428,7 +3445,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
   .main-panel {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 2 / -1;
     min-width: 0;
     min-height: 0;
     overflow: hidden;
@@ -3437,13 +3454,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .ai-panel {
     position: fixed;
     z-index: 35;
+    top: max(28dvh, calc(100dvh - 620px), var(--mobile-ai-panel-safe-top, 0px));
     right: 0;
     bottom: 0;
     left: 0;
     grid-column: 1;
     grid-row: 4;
     min-width: 0;
-    height: min(72dvh, 620px);
+    height: auto;
     min-height: 0;
     padding: 12px var(--mobile-gutter) 18px;
     border-top: 1px solid var(--line);
@@ -3454,7 +3472,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   }
   .app-shell.shelf-mode .ai-panel { display: none; }
   .ai-panel > .panel-resize-handle { display: none; }
-  .app-shell.ai-panel-collapsed .ai-panel { height: 58px; padding-block: 8px; transform: translateY(0); }
+  .app-shell.ai-panel-collapsed .ai-panel { top: auto; height: 58px; padding-block: 8px; transform: translateY(0); }
   .app-shell.ai-panel-collapsed .ai-panel > :not(.ai-heading) { display: none; }
   .app-shell.ai-panel-collapsed .ai-heading { display: flex; justify-content: space-between; padding: 0; }
 
@@ -3477,6 +3495,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .welcome-grid { grid-template-columns: 1fr; margin-top: 34px; }
 
   .editor-toolbar { padding: 18px var(--mobile-gutter) 14px; }
+  .chapter-foreshadow-reminder { padding: 10px var(--mobile-gutter); }
+  .chapter-foreshadow-reminder-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
+  .chapter-foreshadow-reminder-counter { grid-column: 1 / -1; justify-self: start; }
+  .chapter-foreshadow-reminder-actions button { width: 100%; min-width: 0; min-height: 38px; }
+  .chapter-foreshadow-reminder[data-multiple="true"] #chapter-foreshadow-reminder-resolve { grid-column: span 2; }
   .editor-actions { position: fixed; z-index: 34; right: 0; bottom: calc(76px + env(safe-area-inset-bottom)); left: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(300px, 84vw); max-width: none; gap: 6px; padding: 10px; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; background: var(--panel); box-shadow: -12px 0 36px rgba(36, 30, 24, .2); transform: translateX(0); transition: transform .2s ease; }
   .app-shell.left-panel-collapsed .editor-actions { transform: translateX(0); pointer-events: auto; }
   .editor-actions .chapter-stats { grid-column: 1 / -1; }

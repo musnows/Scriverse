@@ -106,12 +106,15 @@ Run `scriverse --help` for all local server, default server, authentication, wor
 | `DATA_DIR` | `<project>/.data` | Default data directory |
 | `DATABASE_PATH` | `<DATA_DIR>/novel.db` | SQLite database path |
 | `AI_NOVEL_MASTER_KEY` | Generated and stored at `<DATA_DIR>/master.key` | Master key used to encrypt AI provider credentials; at least 32 characters when configured manually |
+| `SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` | `30` | Maximum idle time while an interactive AI stream waits for its first or next valid event; valid integers are clamped to `10`–`120`, and invalid values fall back to `30` |
 | `APP_AUTH_USERNAME` | Empty | Optional deployment gateway username; the in-app user system is always enabled |
 | `APP_AUTH_PASSWORD` | Empty | Optional deployment gateway password, at least 12 characters; must be transported over HTTPS |
 | `APP_TRUST_PROXY` | `false` | Set to the trusted proxy hop count (usually `1`) or `true` behind a trusted reverse proxy |
 | `APP_ALLOW_PRIVATE_AI_ENDPOINTS` | `true` in development, `false` in production | Allow AI providers on loopback/private networks; link-local and cloud metadata addresses are always blocked |
 | `APP_ALLOW_REGISTRATION` | `false` | Registration is enabled only when explicitly set to `true`; unset and all other values stay closed, including first-admin setup |
 | `APP_SETUP_TOKEN` | Empty | Required when registration is enabled and must contain at least 32 characters; only the first administrator must enter it |
+
+`SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` is read when the service starts and only controls how long an interactive AI stream may remain without a new event. Every valid stream event restarts the timer, so generation may continue beyond 60 seconds; this setting does not impose a total-duration limit or change timeout behavior for analysis tasks and other AI requests. Restart the service after changing it.
 
 Custom configuration example:
 

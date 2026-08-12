@@ -35,6 +35,26 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain("/api/volumes/${encodeURIComponent(volumeId)}/chapters");
   });
 
+  it("全局替换后只重载正文目录并拒绝旧请求清理新请求状态", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const refreshSource = application.slice(
+      application.indexOf("async function refreshWorkAfterGlobalReplace("),
+      application.indexOf("async function submitGlobalReplace(")
+    );
+    const chapterLoadingSource = application.slice(
+      application.indexOf("async function loadVolumeChapters("),
+      application.indexOf("function mergeChapterDirectoryEntry(")
+    );
+
+    expect(refreshSource).toContain("buildGlobalReplaceRefreshPlan");
+    expect(refreshSource).toContain("chapterCount: resolveGlobalReplaceChapterCount(volume, previousVolume)");
+    expect(refreshSource).toContain("++workScopedUiGeneration");
+    expect(refreshSource).toContain("await Promise.all(refreshPlan.reloadVolumeIds.map((volumeId) => loadVolumeChapters(volumeId)))");
+    expect(refreshSource).not.toContain("state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));");
+    expect(chapterLoadingSource).toContain("volumeChapterRequests.get(volumeId) === request");
+    expect(chapterLoadingSource).toContain("const generation = workScopedUiGeneration;");
+  });
+
   it("子模块和创作助手资源只在首次使用时加载", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const showModuleSource = application.slice(
@@ -95,7 +115,8 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain('moduleApiPage("characters", `/api/works/${state.work.id}/characters`, page, pageSize)');
     expect(application).toContain('moduleApiAllPages("relationships", `/api/works/${state.work.id}/relationships`)');
     expect(application).toContain('moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh })');
-    expect(application).toContain('if (state.chapter?.id !== chapterId) {\n    state.chapter = await api(`/api/chapters/${chapterId}`);\n    mergeChapterDirectoryEntry(state.chapter);\n  }');
+    expect(application).toContain('const selectionRequestId = ++chapterSelectionRequestId;');
+    expect(application).toContain('const chapter = await api(`/api/chapters/${chapterId}`);\n    if (selectionRequestId !== chapterSelectionRequestId) return;\n    state.chapter = chapter;\n    mergeChapterDirectoryEntry(chapter);');
     expect(application).toContain('await renderTasks(taskListPage, { refresh: true });');
     expect(application).toContain("invalidateModuleRequestsAfterMutation(path, method);");
   });

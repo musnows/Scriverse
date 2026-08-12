@@ -55,4 +55,19 @@ describe("publicAiStreamError", () => {
       status: 500
     });
   });
+
+  it("向客户端公开流空闲超时阶段与实际秒数", () => {
+    expect(publicAiStreamError(new AppError(504, "AI_STREAM_IDLE_TIMEOUT", "AI 流已关闭", {
+      callId: "call_timeout",
+      phase: "between_events",
+      idleTimeoutSeconds: 30
+    }))).toEqual({
+      code: "AI_STREAM_IDLE_TIMEOUT",
+      message: "AI 流已关闭",
+      status: 504,
+      callId: "call_timeout",
+      phase: "between_events",
+      idleTimeoutSeconds: 30
+    });
+  });
 });

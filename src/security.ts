@@ -266,6 +266,7 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
     || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
     || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
     || /^\/api\/tasks\/[^/]+\/(?:run|rerun|cancel|relationship-changes\/apply)$/u.test(path)
+    || /^\/api\/(?:providers|models)\/[^/]+\/test$/u.test(path)
   ) {
     return "ai";
   }
