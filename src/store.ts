@@ -4916,7 +4916,13 @@ export class Store {
     }
   }
 
-  createCharacter(workId: string, input: CharacterInput): Record<string, unknown> {
+  createCharacter(
+    workId: string,
+    input: CharacterInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = "建立人物档案"
+  ): Record<string, unknown> {
     this.getWork(workId);
     const characterId = id("character");
     const timestamp = now();
@@ -4953,8 +4959,8 @@ export class Store {
       );
       this.insertCharacterNames(workId, characterId, names.entries);
       this.replaceCharacterOrganizations(characterId, organizationIds);
-      this.insertCharacterVersion(characterId, 1, "create", null, "建立人物档案", timestamp);
-      this.audit(workId, "character.created", "character", characterId);
+      this.insertCharacterVersion(characterId, 1, source, sourceRef, changeNote, timestamp);
+      this.audit(workId, "character.created", "character", characterId, { source, sourceRef });
     });
     return this.getCharacter(characterId);
   }
@@ -8142,6 +8148,7 @@ export class Store {
     let metrics: Record<string, unknown>[] = [];
     let sections: Record<string, unknown>[] = [];
     let relationshipChangePreviewSummary: Record<string, unknown> | null = null;
+    let characterExtractionPreviewSummary: Record<string, unknown> | null = null;
 
     if (taskType === "chapter-analysis") {
       let chapterTitle = String(result.chapterId ?? "指定章节");
@@ -8263,6 +8270,11 @@ export class Store {
         }] : [])
       ];
     } else if (taskType === "character-extraction" || taskType === "character-summary") {
+      const extractedCandidates = this.taskResultObjects(result.characterCandidates);
+      const application = result.characterApplication && typeof result.characterApplication === "object"
+        && !Array.isArray(result.characterApplication)
+        ? result.characterApplication as Record<string, unknown>
+        : null;
       const ids = idList(result.characterIds);
       const characters = ids.flatMap((characterId) => {
         try {
@@ -8281,13 +8293,70 @@ export class Store {
           }];
         } catch { return []; }
       });
-      summary = `识别 ${Number(result.candidateCount ?? characters.length)} 个角色候选，保存 ${characters.length} 个角色档案。`;
       const verification = result.verification && typeof result.verification === "object" && !Array.isArray(result.verification)
         ? result.verification as Record<string, unknown>
         : {};
-      metrics = [metric("保存角色", characters.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount), metric("身份复核", verification.pairCount)];
-      storageTargets.unshift({ label: "角色档案", entity: "角色库", key: "characters", count: characters.length, note: "新角色会创建档案，命中已有角色时会合并可靠信息。" });
-      sections = [section("保存的角色", characters, "没有形成可保存的角色档案。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
+      if (extractedCandidates.length > 0 || application) {
+        const applicationStatus = application?.status === "applied" ? "applied" : "pending";
+        const candidateItems = extractedCandidates.map((candidate) => ({
+          name: String(candidate.name ?? "未命名角色"),
+          aliases: Array.isArray(candidate.aliases) ? candidate.aliases.map(String) : [],
+          identity: String(candidate.identity ?? ""),
+          species: String(candidate.species ?? ""),
+          evidence: candidate.firstEvidence ? [candidate.firstEvidence] : []
+        }));
+        const appliedItems = this.taskResultObjects(application?.items).map((item) => ({
+          title: String(item.characterName ?? item.candidateId ?? "角色候选"),
+          subtitle: item.status === "created" ? "已新建档案"
+            : item.status === "merged" ? "已合并可靠信息"
+              : item.status === "unchanged" ? "已有档案保持不变"
+                : "已跳过",
+          description: Array.isArray(item.conflicts) ? item.conflicts.map(String).join("；") : ""
+        }));
+        const totalCount = Number(application?.totalCount ?? result.candidateCount ?? extractedCandidates.length);
+        const createdCount = Number(application?.createdCount ?? 0);
+        const mergedCount = Number(application?.mergedCount ?? 0);
+        const unchangedCount = Number(application?.unchangedCount ?? 0);
+        const skippedCount = Number(application?.skippedCount ?? 0);
+        characterExtractionPreviewSummary = {
+          status: applicationStatus,
+          totalCount,
+          createdCount,
+          mergedCount,
+          unchangedCount,
+          skippedCount,
+          ...(typeof application?.generatedAt === "string" ? { generatedAt: application.generatedAt } : {}),
+          ...(typeof application?.appliedAt === "string" ? { appliedAt: application.appliedAt } : {})
+        };
+        summary = applicationStatus === "applied"
+          ? `已处理 ${totalCount} 个角色候选：新建 ${createdCount} 个、合并 ${mergedCount} 个、保持不变 ${unchangedCount} 个、跳过 ${skippedCount} 个。`
+          : `识别 ${totalCount} 个角色候选，角色库尚未修改；请预览、勾选并确认新建或合并策略。`;
+        metrics = [
+          metric(applicationStatus === "applied" ? "新建角色" : "待确认", applicationStatus === "applied" ? createdCount : totalCount),
+          metric("合并", mergedCount),
+          metric("跳过", applicationStatus === "applied" ? skippedCount : Array.isArray(result.skipped) ? result.skipped.length : 0),
+          metric("身份复核", verification.pairCount)
+        ];
+        storageTargets.unshift({
+          label: "角色档案",
+          entity: "角色库",
+          key: "characters",
+          count: characters.length,
+          note: applicationStatus === "applied"
+            ? "仅写入用户确认的新建或合并项；冲突字段保留原档案。"
+            : "当前仅保存结构化预览，角色库尚未修改。"
+        });
+        sections = [
+          section(applicationStatus === "applied" ? "抽取的角色候选" : "待确认角色候选", candidateItems, "没有形成可应用的角色候选。"),
+          ...(applicationStatus === "applied" ? [section("应用结果", appliedItems, "没有角色候选被应用。")] : []),
+          section("抽取阶段跳过的候选", result.skipped, "抽取阶段没有候选被跳过。")
+        ];
+      } else {
+        summary = `识别 ${Number(result.candidateCount ?? characters.length)} 个角色候选，保存 ${characters.length} 个角色档案。`;
+        metrics = [metric("保存角色", characters.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount), metric("身份复核", verification.pairCount)];
+        storageTargets.unshift({ label: "角色档案", entity: "角色库", key: "characters", count: characters.length, note: "该历史任务在生成结果时直接写入角色档案。" });
+        sections = [section("保存的角色", characters, "没有形成可保存的角色档案。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
+      }
     } else if (taskType === "book-analysis") {
       const timelineIds = [...new Set([...idList(result.eventIds), ...idList(result.timelineEventIds)])];
       const settingIds = [...new Set([
@@ -8508,7 +8577,8 @@ export class Store {
       metrics,
       storageTargets: productStorageTargets(storageTargets),
       sections,
-      ...(relationshipChangePreviewSummary ? { relationshipChangePreview: relationshipChangePreviewSummary } : {})
+      ...(relationshipChangePreviewSummary ? { relationshipChangePreview: relationshipChangePreviewSummary } : {}),
+      ...(characterExtractionPreviewSummary ? { characterExtractionPreview: characterExtractionPreviewSummary } : {})
     };
   }
 

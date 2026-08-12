@@ -14,6 +14,13 @@ import { aiConversationExportContentDisposition, exportAiConversationMarkdown } 
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
+import {
+  CHARACTER_EXTRACTION_MAX_ALIASES,
+  CHARACTER_EXTRACTION_MAX_CANDIDATES,
+  CHARACTER_EXTRACTION_MAX_IDENTITY_LENGTH,
+  CHARACTER_EXTRACTION_MAX_NAME_LENGTH,
+  CHARACTER_EXTRACTION_MAX_SPECIES_LENGTH
+} from "./character-extraction.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -675,6 +682,36 @@ const analysisTaskSchema = z.union([
     }
   })
 ]);
+
+const characterExtractionSelectionSchema = z.object({
+  candidateId: z.string().trim().min(1).max(100).regex(/^[A-Za-z0-9_-]+$/u),
+  action: z.enum(["create", "merge", "skip"]),
+  targetCharacterId: identifier.optional(),
+  name: z.string().trim().min(1).max(CHARACTER_EXTRACTION_MAX_NAME_LENGTH).optional(),
+  aliases: z.array(z.string().trim().min(1).max(CHARACTER_EXTRACTION_MAX_NAME_LENGTH))
+    .max(CHARACTER_EXTRACTION_MAX_ALIASES).optional(),
+  species: z.string().trim().max(CHARACTER_EXTRACTION_MAX_SPECIES_LENGTH).optional(),
+  attributes: z.object({
+    identity: z.string().trim().max(CHARACTER_EXTRACTION_MAX_IDENTITY_LENGTH).optional()
+  }).strict().optional()
+}).strict().superRefine((selection, context) => {
+  if (selection.action === "merge" && !selection.targetCharacterId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["targetCharacterId"], message: "合并角色候选必须选择目标角色" });
+  }
+  if (selection.action !== "merge" && selection.targetCharacterId !== undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["targetCharacterId"], message: "只有合并操作可以指定目标角色" });
+  }
+});
+
+const characterExtractionApplySchema = z.object({
+  previewToken: z.string().regex(/^[a-f0-9]{64}$/u),
+  selections: z.array(characterExtractionSelectionSchema).min(1).max(CHARACTER_EXTRACTION_MAX_CANDIDATES)
+}).strict().superRefine((input, context) => {
+  const candidateIds = input.selections.map((selection) => selection.candidateId);
+  if (new Set(candidateIds).size !== candidateIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["selections"], message: "角色候选不能重复" });
+  }
+});
 
 export type RuntimeOptions = {
   databasePath: string;
@@ -2214,6 +2251,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response,
     redactTaskCharacterNames(store.getTaskDetail(request.params.taskId), requestPermissions(request))
   ));
+  app.get("/api/tasks/:taskId/character-extraction/preview", (request, response) => {
+    data(response, ai.getCharacterExtractionPreview(request.params.taskId));
+  });
   app.get("/api/tasks/:taskId/result", (request, response) => {
     const task = store.getTaskResultPayload(request.params.taskId);
     const permissions = requestPermissions(request);
@@ -2271,6 +2311,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response,
     redactTaskCharacterNames(ai.cancelTask(request.params.taskId), requestPermissions(request))
   ));
+  app.post("/api/tasks/:taskId/character-extraction/apply", (request, response) => {
+    const input = parse(characterExtractionApplySchema, request.body);
+    const applied = ai.applyCharacterExtractionPreview(request.params.taskId, input.previewToken, input.selections);
+    const characterIds = Array.isArray(applied.characterIds) ? applied.characterIds.filter((value): value is string => typeof value === "string") : [];
+    for (const characterId of characterIds) publishEntityChange(String(store.getTask(request.params.taskId).workId), "character", characterId);
+    data(response, applied);
+  });
   app.post("/api/tasks/:taskId/relationship-changes/apply", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
     const applied = ai.applyRelationshipChangePreview(request.params.taskId);

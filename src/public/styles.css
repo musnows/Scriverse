@@ -1750,6 +1750,46 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-change-preview.is-discarded { color: var(--muted); }
 .relationship-change-preview-warning { padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--ink); }
 .relationship-change-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.character-extraction-preview { display: grid; gap: 11px; min-width: 0; padding: 13px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.character-extraction-preview > div:first-child { display: grid; gap: 3px; }
+.character-extraction-preview h4 { margin: 0; font-size: 14px; }
+.character-extraction-preview small { color: var(--muted); }
+.character-extraction-preview.is-pending { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); background: color-mix(in srgb, var(--accent) 6%, var(--surface)); }
+.character-extraction-preview.is-applied { border-color: color-mix(in srgb, var(--green) 46%, var(--line)); }
+.character-extraction-preview-actions, .character-extraction-apply-actions, .character-extraction-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.character-extraction-loading, .character-extraction-empty { padding: 10px; border: 1px dashed var(--line); border-radius: 5px; color: var(--muted); }
+.character-extraction-editor { display: grid; gap: 10px; min-width: 0; padding-top: 2px; }
+.character-extraction-policy { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px; padding: 9px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.character-extraction-policy strong { color: var(--ink); }
+.character-extraction-policy span { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.character-extraction-editor-toolbar { justify-content: flex-end; }
+.character-extraction-editor-toolbar > span { margin-right: auto; color: var(--accent-dark); font-weight: 600; }
+.character-extraction-editor-toolbar button { padding: 6px 9px; font-size: 9px; }
+.character-extraction-candidate-list { display: grid; gap: 9px; min-width: 0; }
+.character-extraction-candidate { display: grid; gap: 10px; min-width: 0; padding: 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); transition: opacity .15s ease, border-color .15s ease; }
+.character-extraction-candidate.is-skipped { opacity: .7; }
+.character-extraction-candidate > header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; }
+.character-extraction-candidate > header > div { display: grid; gap: 1px; min-width: 0; }
+.character-extraction-candidate > header strong { overflow-wrap: anywhere; color: var(--ink); font-size: 12px; }
+.character-extraction-candidate > header small { color: var(--muted); }
+.character-extraction-candidate-toggle { display: inline-flex; align-items: center; gap: 5px; color: var(--ink); font-size: 9px; white-space: nowrap; }
+.character-extraction-candidate-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.character-extraction-candidate-toggle input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.character-extraction-strategy { padding: 3px 7px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent-dark); font-size: 9px; white-space: nowrap; }
+.character-extraction-candidate-note { padding: 7px 8px; border-radius: 4px; background: var(--surface); color: var(--muted); overflow-wrap: anywhere; }
+.character-extraction-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 11px; min-width: 0; }
+.character-extraction-fields > label { display: grid; align-content: start; gap: 5px; min-width: 0; color: var(--muted); font-size: 9px; }
+.character-extraction-fields input, .character-extraction-fields select, .character-extraction-fields textarea { width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.character-extraction-fields textarea { resize: vertical; line-height: 1.55; }
+.character-extraction-fields input:focus-visible, .character-extraction-fields select:focus-visible, .character-extraction-fields textarea:focus-visible { border-color: var(--accent); outline: 2px solid color-mix(in srgb, var(--accent) 18%, transparent); outline-offset: 1px; }
+.character-extraction-fields .character-extraction-wide-field { grid-column: 1 / -1; }
+.character-extraction-candidate details { border-top: 1px solid var(--line); padding-top: 7px; }
+.character-extraction-candidate summary { width: fit-content; cursor: pointer; color: var(--accent-dark); font-size: 9px; }
+.character-extraction-candidate details p { display: grid; gap: 3px; margin-top: 7px; }
+.character-extraction-candidate details q { color: var(--ink); overflow-wrap: anywhere; }
+.character-extraction-apply-error { padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); border-radius: 5px; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); color: var(--accent-dark); overflow-wrap: anywhere; }
+.character-extraction-apply-actions { padding-top: 2px; }
+.character-extraction-apply-actions small { flex: 1 1 260px; }
 .task-result-section { display: grid; gap: 7px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .task-result-section h4 { margin: 0 0 2px; color: var(--ink); font-size: 13px; }
 .task-result-section code { overflow-wrap: anywhere; }
@@ -3524,6 +3564,16 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .task-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .task-result-item-details, .task-result-json-loader { grid-template-columns: minmax(0, 1fr); }
   .task-result-json-loader button { justify-self: start; }
+  .character-extraction-policy, .character-extraction-fields { grid-template-columns: minmax(0, 1fr); }
+  .character-extraction-fields .character-extraction-wide-field { grid-column: 1; }
+  .character-extraction-candidate > header { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .character-extraction-strategy { grid-column: 2; justify-self: start; }
+  .character-extraction-editor-toolbar { align-items: stretch; }
+  .character-extraction-editor-toolbar > span { width: 100%; margin-right: 0; }
+  .character-extraction-editor-toolbar button { flex: 1 1 auto; min-height: 36px; }
+  .character-extraction-apply-actions { align-items: stretch; flex-direction: column; }
+  .character-extraction-apply-actions button { width: 100%; min-height: 40px; }
+  .character-extraction-apply-actions small { flex: 0 0 auto; }
   .task-trace-heading { align-items: start; flex-direction: column; gap: 5px; }
   .task-trace-heading p { text-align: left; }
   .task-trace-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
