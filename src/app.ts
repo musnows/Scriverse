@@ -21,7 +21,7 @@ import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
+import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -1374,6 +1374,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listWorksPage(pagination) : store.listWorks());
   });
+  app.get("/api/recycle-bin/works", (_request, response) => {
+    data(response, { retentionDays: RECYCLE_BIN_RETENTION_DAYS, works: store.listDeletedWorks() });
+  });
+  app.post("/api/recycle-bin/works/:workId/restore", (request, response) => {
+    if (request.authUser) auth.assertDeletedWorkAccess(request.authUser, request.params.workId, request.authMethod !== "api-key");
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    data(response, store.restoreWork(request.params.workId, input.expectedVersionNo));
+  });
+  app.delete("/api/recycle-bin/works/:workId/permanent", async (request, response) => {
+    if (request.authUser) auth.assertDeletedWorkAccess(request.authUser, request.params.workId, request.authMethod !== "api-key");
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.permanentlyDeleteWork(request.params.workId, input.expectedVersionNo);
+    await cleanupAttachments();
+    noContent(response);
+  });
   app.post("/api/works", (request, response) => data(response, store.createWork(parse(workSchema, request.body)), 201));
   app.post("/api/works/import", upload.single("file"), async (request, response) => {
     if (!request.file) throw new AppError(400, "FILE_REQUIRED", "请选择要导入的 TXT 或 DOCX 文件");
@@ -1457,7 +1472,6 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.delete("/api/works/:workId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
     store.deleteWork(request.params.workId, input.expectedVersionNo);
-    await cleanupAttachments();
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
@@ -1549,6 +1563,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     store.deleteVolume(request.params.volumeId, input.expectedVersionNo);
     noContent(response);
   });
+  app.post("/api/volumes/:volumeId/restore", (request, response) => {
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    data(response, store.restoreVolume(request.params.volumeId, input.expectedVersionNo));
+  });
+  app.delete("/api/volumes/:volumeId/permanent", async (request, response) => {
+    const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
+    store.permanentlyDeleteVolume(request.params.volumeId, input.expectedVersionNo);
+    await cleanupAttachments();
+    noContent(response);
+  });
 
   app.post("/api/works/:workId/chapters", (request, response) => {
     const input = parse(z.object({ volumeId: identifier, title: nonEmpty.max(300), content: z.string().max(2_000_000).optional(), chapterType: chapterTypeSchema.optional() }), request.body);
@@ -1559,6 +1583,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination
       ? store.listDeletedChaptersPage(request.params.workId, pagination)
       : store.listDeletedChapters(request.params.workId));
+  });
+  app.get("/api/works/:workId/recycle-bin", (request, response) => {
+    data(response, store.getRecycleBin(request.params.workId));
   });
   app.get("/api/chapters/:chapterId", (request, response) => data(response, store.getChapter(request.params.chapterId)));
   app.patch("/api/chapters/:chapterId", (request, response) => {

@@ -349,14 +349,16 @@ describe("作品、导入和章节版本 API", () => {
     expect(fileVersions.body.data[0].fileName).toBe("作品（含前传）.txt");
   });
 
-  it("校验空卷删除与跨作品移动规则", async () => {
+  it("软删除非空分卷，并继续拒绝跨作品移动", async () => {
     const first = await request(runtime.app).post("/api/works").send({ title: "A" }).expect(201);
     const second = await request(runtime.app).post("/api/works").send({ title: "B" }).expect(201);
     const firstVolume = await request(runtime.app).post(`/api/works/${first.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
     const secondVolume = await request(runtime.app).post(`/api/works/${second.body.data.id}/volumes`).send({ title: "第二卷" }).expect(201);
     const chapter = await request(runtime.app).post(`/api/works/${first.body.data.id}/chapters`).send({ volumeId: firstVolume.body.data.id, title: "第一章" }).expect(201);
 
-    await request(runtime.app).delete(`/api/volumes/${firstVolume.body.data.id}`).expect(409);
+    await request(runtime.app).delete(`/api/volumes/${firstVolume.body.data.id}`).expect(204);
+    expect((await request(runtime.app).get(`/api/works/${first.body.data.id}`).expect(200)).body.data.volumes).toEqual([]);
+    await request(runtime.app).post(`/api/volumes/${firstVolume.body.data.id}/restore`).send({ expectedVersionNo: 2 }).expect(200);
     await request(runtime.app).post(`/api/chapters/${chapter.body.data.id}/move`).send({ volumeId: secondVolume.body.data.id, sortOrder: 0 }).expect(400);
   });
 
@@ -590,7 +592,7 @@ describe("作品、导入和章节版本 API", () => {
     ]);
   });
 
-  it("阻止删除仍包含回收站章节的分卷", async () => {
+  it("分卷恢复后仍保留此前独立删除的章节", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "分卷删除保护" }).expect(201);
     const volume = await request(runtime.app).post(`/api/works/${work.body.data.id}/volumes`).send({ title: "第一卷" }).expect(201);
     const chapter = await request(runtime.app).post(`/api/works/${work.body.data.id}/chapters`).send({
@@ -605,14 +607,16 @@ describe("作品、导入和章节版本 API", () => {
       .expect(204);
     expect(deleted.body).toEqual({});
 
-    const blocked = await request(runtime.app)
+    await request(runtime.app)
       .delete(`/api/volumes/${volume.body.data.id}`)
       .send({ expectedVersionNo: 1 })
-      .expect(409);
-    expect(blocked.body.error).toMatchObject({
-      code: "VOLUME_HAS_DELETED_CHAPTERS",
-      message: "分卷回收站中仍有章节，请先彻底删除或恢复并移动这些章节"
-    });
+      .expect(204);
+    const recycleBin = await request(runtime.app).get(`/api/works/${work.body.data.id}/recycle-bin`).expect(200);
+    expect(recycleBin.body.data.volumes).toEqual([expect.objectContaining({ id: volume.body.data.id, chapterCount: 1, versionNo: 2 })]);
+    expect(recycleBin.body.data.chapters).toEqual([]);
+    await request(runtime.app).post(`/api/volumes/${volume.body.data.id}/restore`).send({ expectedVersionNo: 2 }).expect(200);
+    expect((await request(runtime.app).get(`/api/works/${work.body.data.id}/deleted-chapters`).expect(200)).body.data)
+      .toEqual([expect.objectContaining({ id: chapter.body.data.id, versionNo: 2 })]);
 
     const restored = await request(runtime.app)
       .post(`/api/chapters/${chapter.body.data.id}/restore`)
@@ -625,7 +629,7 @@ describe("作品、导入和章节版本 API", () => {
     });
   });
 
-  it("彻底删除回收站章节及关联资料后允许删除分卷", async () => {
+  it("彻底删除回收站章节及关联资料后可彻底删除分卷", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "回收站清理" }).expect(201);
     const workId = work.body.data.id;
     const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "待删除卷" }).expect(201);
@@ -667,6 +671,8 @@ describe("作品、导入和章节版本 API", () => {
     expect((await request(runtime.app).get(`/api/works/${workId}/deleted-chapters`).expect(200)).body.data).toEqual([]);
 
     await request(runtime.app).delete(`/api/volumes/${volumeId}`).send({ expectedVersionNo: 1 }).expect(204);
+    expect(runtime.database.get("SELECT id, deleted_at FROM volumes WHERE id = ?", volumeId)).toMatchObject({ id: volumeId, deleted_at: expect.any(String) });
+    await request(runtime.app).delete(`/api/volumes/${volumeId}/permanent`).send({ expectedVersionNo: 2 }).expect(204);
     expect(runtime.database.get("SELECT id FROM volumes WHERE id = ?", volumeId)).toBeUndefined();
   });
 

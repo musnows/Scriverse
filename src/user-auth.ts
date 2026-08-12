@@ -657,7 +657,7 @@ export class UserAuthService {
 
   workRole(user: AuthUser, workId: string, allowAdminAccess = true): WorkAccessRole | null {
     if (allowAdminAccess && user.role === "admin") return "admin";
-    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ? AND deleted_at IS NULL", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return "owner";
     const membership = this.database.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
@@ -666,12 +666,25 @@ export class UserAuthService {
 
   workModulePermissions(user: AuthUser, workId: string, allowAdminAccess = true): WorkModulePermissions | null {
     if (allowAdminAccess && user.role === "admin") return fullWorkModulePermissions();
-    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ? AND deleted_at IS NULL", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return fullWorkModulePermissions();
     const membership = this.database.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
     if (!membership) return null;
     return storedWorkModulePermissions(String(membership.role), membership.permissions_json);
+  }
+
+  assertActiveWork(workId: string): void {
+    if (!this.database.get("SELECT 1 AS present FROM works WHERE id = ? AND deleted_at IS NULL", workId)) throw notFound("作品");
+  }
+
+  assertDeletedWorkAccess(user: AuthUser, workId: string, allowAdminAccess = true): void {
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ? AND deleted_at IS NOT NULL", workId);
+    if (!work) throw notFound("回收站作品");
+    if (allowAdminAccess && user.role === "admin") return;
+    if (String(work.owner_user_id ?? "") !== user.userId) {
+      throw new AppError(403, "WORK_OWNER_REQUIRED", "该操作仅限作品创建者或系统管理员");
+    }
   }
 
   assertWorkAccess(
@@ -918,6 +931,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
     return write ? direct(requestedAttachmentModule(request)) : { anyRead: [...attachmentModules] };
   }
@@ -1069,7 +1083,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
 export function createWorkAuthorizationMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
   return (request, _response, next) => {
     const path = normalizeApiPath(request.path);
-    if (disabled || !path.startsWith("/api/") || path.startsWith("/api/auth/") || path === "/api/health") return next();
+    if (!path.startsWith("/api/") || path.startsWith("/api/auth/") || path === "/api/health") return next();
+    const workId = auth.resolveWorkId(request.path);
+    if (workId) auth.assertActiveWork(workId);
+    if (disabled) return next();
     const user = request.authUser;
     if (!user) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     if (path.startsWith("/api/platform/") || path.startsWith("/api/providers/") || path.startsWith("/api/models/")) {
@@ -1084,7 +1101,6 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
       if (user.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
       return next();
     }
-    const workId = auth.resolveWorkId(request.path);
     if (!workId) return next();
     const write = !["GET", "HEAD", "OPTIONS"].includes(request.method);
     const requirements = workModuleRequirements(request, write);
