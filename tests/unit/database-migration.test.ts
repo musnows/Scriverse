@@ -137,6 +137,20 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
+      "object_type",
+      "object_id",
+      "config_fingerprint",
+      "state",
+      "attempt_id",
+      "retry_at_ms",
+      "updated_at"
+    ]);
+    expect(first.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('providers', 'models')").map((row) => row.name))
+      .toEqual(expect.arrayContaining([
+        "ai_connectivity_test_states_provider_delete",
+        "ai_connectivity_test_states_model_delete"
+      ]));
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_at")).toBe(true);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_via_volume_id")).toBe(true);

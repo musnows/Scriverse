@@ -38,6 +38,7 @@ import {
   structuralToolResultRecords,
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
+import { AiConnectivityTestGate, hashAiConnectivityConfiguration, type AiConnectivityTestClaim } from "./ai-connectivity-test.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
@@ -117,6 +118,21 @@ export function aiErrorForLog(error: unknown): Record<string, unknown> {
   if (httpStatus) return { name: sanitized.name ?? "Error", message: `Provider returned HTTP ${httpStatus}` };
   if (message.includes("returned invalid JSON")) return { name: sanitized.name ?? "Error", message: "Provider returned invalid JSON" };
   return sanitized;
+}
+
+function connectivityTestErrorForLog(error: unknown): Record<string, unknown> {
+  if (error instanceof AppError) {
+    return { category: "application_error", status: error.status, code: error.code };
+  }
+  if (!(error instanceof Error)) return { category: "upstream_failure" };
+  if (error.name === "AbortError") return { category: "timeout" };
+  const httpStatus = error.message.match(/^HTTP ([1-5]\d{2})(?::|$)/u)?.[1];
+  if (httpStatus) return { category: "upstream_http", status: Number(httpStatus) };
+  if (/无效 JSON|响应缺少可用回复|没有返回(?:模型列表|可用模型)/u.test(error.message)) {
+    return { category: "invalid_response" };
+  }
+  if (error instanceof TypeError) return { category: "network_error" };
+  return { category: "upstream_failure" };
 }
 
 const AUTO_RUN_MAX_ATTEMPTS = 3;
@@ -1171,6 +1187,39 @@ function boolValue(row: Row, key: string): boolean {
   return Number(row[key] ?? 0) === 1;
 }
 
+const providerConnectivityConfigurationFields = [
+  "name",
+  "base_url",
+  "protocol",
+  "encrypted_key",
+  "key_iv",
+  "key_tag",
+  "status",
+  "concurrency_limit",
+  "rpm_limit",
+  "max_tokens",
+  "default_model_id",
+  "note"
+] as const;
+
+const modelConnectivityConfigurationFields = [
+  "display_name",
+  "model_id",
+  "purposes_json",
+  "context_note",
+  "context_window",
+  "output_note",
+  "preset_json",
+  "thinking_enabled",
+  "multimodal_enabled",
+  "enabled",
+  "note"
+] as const;
+
+function connectivityConfigurationValues(row: Row, fields: readonly string[]): unknown[] {
+  return fields.map((field) => row[field] ?? null);
+}
+
 function safeJsonObject(value: string): Record<string, unknown> {
   return json<Record<string, unknown>>(value, {});
 }
@@ -1977,6 +2026,7 @@ export class AiManager {
     timer: ReturnType<typeof setTimeout> | null;
   }>();
   private readonly vertexTokenCache = new GoogleVertexTokenCache();
+  private readonly connectivityTestGate: AiConnectivityTestGate;
 
   constructor(
     private readonly store: Store,
@@ -1987,6 +2037,7 @@ export class AiManager {
     private readonly attachmentStorage?: AttachmentStorage,
     options: AiManagerOptions = {}
   ) {
+    this.connectivityTestGate = new AiConnectivityTestGate(store.db);
     this.interactiveStreamIdleTimeoutMs = Number.isSafeInteger(options.interactiveStreamIdleTimeoutMs)
       && Number(options.interactiveStreamIdleTimeoutMs) > 0
       ? Number(options.interactiveStreamIdleTimeoutMs)
@@ -2712,7 +2763,7 @@ export class AiManager {
   }
 
   async testProvider(providerId: string): Promise<Record<string, unknown>> {
-    const row = this.getProviderRow(providerId);
+    const { row, configFingerprint, claim } = this.acquireProviderConnectivityTest(providerId);
     const protocol = providerProtocol(row);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
@@ -2761,48 +2812,69 @@ export class AiManager {
           : `${lastFailure}；也可先添加模型后再测试连接`);
       }
       await this.probeProviderModel(row, accessToken, probeModel, controller.signal);
-      const timestamp = now();
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
-        timestamp,
-        timestamp,
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "success", {
+        isConfigurationCurrent: () => {
+          try {
+            return this.providerConnectivityTestFingerprint(this.getProviderRow(providerId)) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
+            completedAt,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.info("ai.provider_test.completed", {
         providerId,
         protocol,
         ok: true,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         availableModelCount: availableModels.length,
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, availableModels, provider: this.getProvider(providerId) };
+      return { ok: true, availableModels, cooldown, provider: this.getProvider(providerId) };
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
         : "连接失败";
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
-        message,
-        now(),
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "failure", {
+        isConfigurationCurrent: () => {
+          try {
+            return this.providerConnectivityTestFingerprint(this.getProviderRow(providerId)) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
+            message,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.warn("ai.provider_test.completed", {
         providerId,
         protocol,
         ok: false,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
-        error: aiErrorForLog(error)
+        error: connectivityTestErrorForLog(error)
       });
-      return { ok: false, error: message, provider: this.getProvider(providerId) };
+      return { ok: false, error: message, cooldown, provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
     }
   }
 
   async testModel(modelId: string): Promise<Record<string, unknown>> {
-    const model = this.getModelRow(modelId);
-    const providerId = stringValue(model, "provider_id");
-    const provider = this.getProviderRow(providerId);
+    const { model, provider, providerId, configFingerprint, claim } = this.acquireModelConnectivityTest(modelId);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     const startedAt = process.hrtime.bigint();
@@ -2814,40 +2886,67 @@ export class AiManager {
     try {
       ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider));
       await this.probeProviderModel(provider, accessToken, stringValue(model, "model_id"), controller.signal, { multimodal: multimodalTested });
-      const timestamp = now();
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
-        timestamp,
-        timestamp,
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "success", {
+        isConfigurationCurrent: () => {
+          try {
+            const currentModel = this.getModelRow(modelId);
+            const currentProvider = this.getProviderRow(stringValue(currentModel, "provider_id"));
+            return this.modelConnectivityTestFingerprint(currentModel, currentProvider) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'success', last_error = NULL, last_success_at = ?, updated_at = ? WHERE id = ?",
+            completedAt,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.info("ai.model_test.completed", {
         modelId,
         providerId,
         protocol,
         ok: true,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000
       });
-      return { ok: true, multimodalTested, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return { ok: true, multimodalTested, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } catch (error) {
       const message = error instanceof Error
         ? redactProviderSecretsText(error.message, credentialSecret, accessToken)
         : "连接失败";
-      this.store.db.run(
-        "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
-        message,
-        now(),
-        providerId
-      );
+      const cooldown = this.connectivityTestGate.complete(claim, "failure", {
+        isConfigurationCurrent: () => {
+          try {
+            const currentModel = this.getModelRow(modelId);
+            const currentProvider = this.getProviderRow(stringValue(currentModel, "provider_id"));
+            return this.modelConnectivityTestFingerprint(currentModel, currentProvider) === configFingerprint;
+          } catch {
+            return false;
+          }
+        },
+        onApplied: (completedAt) => {
+          this.store.db.run(
+            "UPDATE providers SET connection_status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
+            message,
+            completedAt,
+            providerId
+          );
+        }
+      });
       logger.warn("ai.model_test.completed", {
         modelId,
         providerId,
         protocol,
         ok: false,
+        cooldownApplied: cooldown.reason !== "configuration_changed",
         durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000,
-        error: aiErrorForLog(error)
+        error: connectivityTestErrorForLog(error)
       });
-      return { ok: false, error: message, model: this.getModel(modelId), provider: this.getProvider(providerId) };
+      return { ok: false, error: message, cooldown, model: this.getModel(modelId), provider: this.getProvider(providerId) };
     } finally {
       clearTimeout(timeout);
     }
@@ -9720,6 +9819,70 @@ export class AiManager {
     } catch {
       throw new AppError(500, "CREDENTIAL_DECRYPT_FAILED", "供应商凭据无法解密，请重新填写密钥或服务账号 JSON");
     }
+  }
+
+  private providerConnectivityTestFingerprint(row: ProviderRow): string {
+    const localModels = this.store.db.all(
+      "SELECT * FROM models WHERE provider_id = ? ORDER BY created_at, id",
+      stringValue(row, "id")
+    ).map((model) => [
+      stringValue(model, "id"),
+      connectivityConfigurationValues(model, modelConnectivityConfigurationFields)
+    ]);
+    return hashAiConnectivityConfiguration([
+      "provider-connectivity-v1",
+      connectivityConfigurationValues(row, providerConnectivityConfigurationFields),
+      localModels
+    ]);
+  }
+
+  private acquireProviderConnectivityTest(providerId: string): {
+    row: ProviderRow;
+    configFingerprint: string;
+    claim: AiConnectivityTestClaim;
+  } {
+    const acquired = this.connectivityTestGate.acquireWithConfiguration("provider", providerId, () => {
+      const row = this.getProviderRow(providerId);
+      const configFingerprint = this.providerConnectivityTestFingerprint(row);
+      return { configFingerprint, configuration: row };
+    });
+    return {
+      row: acquired.configuration,
+      configFingerprint: acquired.configFingerprint,
+      claim: acquired.claim
+    };
+  }
+
+  private modelConnectivityTestFingerprint(model: ModelRow, provider: ProviderRow): string {
+    return hashAiConnectivityConfiguration([
+      "model-connectivity-v1",
+      connectivityConfigurationValues(provider, providerConnectivityConfigurationFields),
+      connectivityConfigurationValues(model, modelConnectivityConfigurationFields)
+    ]);
+  }
+
+  private acquireModelConnectivityTest(modelId: string): {
+    model: ModelRow;
+    provider: ProviderRow;
+    providerId: string;
+    configFingerprint: string;
+    claim: AiConnectivityTestClaim;
+  } {
+    const acquired = this.connectivityTestGate.acquireWithConfiguration("model", modelId, () => {
+      const model = this.getModelRow(modelId);
+      const providerId = stringValue(model, "provider_id");
+      const provider = this.getProviderRow(providerId);
+      const configFingerprint = this.modelConnectivityTestFingerprint(model, provider);
+      return {
+        configFingerprint,
+        configuration: { model, provider, providerId }
+      };
+    });
+    return {
+      ...acquired.configuration,
+      configFingerprint: acquired.configFingerprint,
+      claim: acquired.claim
+    };
   }
 
   private getProviderRow(providerId: string): ProviderRow {

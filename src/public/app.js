@@ -8,6 +8,7 @@ import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-num
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
+import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
@@ -3688,6 +3689,8 @@ function toast(message, type = "info") {
   const region = $("#toast-region");
   const element = document.createElement("div");
   element.className = `toast ${type}`;
+  element.setAttribute("role", type === "error" ? "alert" : "status");
+  element.setAttribute("aria-atomic", "true");
   element.textContent = message;
   region.append(element);
   raiseToastRegion();
@@ -8334,12 +8337,24 @@ function renderProviderCards(providers, models) {
 
 function bindPlatformProviderActions(host, providers, models) {
   host.querySelectorAll("[data-test-provider]").forEach((button) => button.addEventListener("click", async () => {
+    const providerId = button.dataset.testProvider;
     button.disabled = true;
     button.textContent = "测试中";
-    const result = await api(`/api/providers/${button.dataset.testProvider}/test`, { method: "POST", body: {} });
-    toast(result.ok ? "连接测试成功" : `连接失败：${result.error}`, result.ok ? "info" : "error");
-    await renderPlatformAiConfig();
-    await loadModels();
+    try {
+      const result = await api(`/api/providers/${providerId}/test`, { method: "POST", body: {} });
+      const notification = connectivityTestResultToast(result, "provider");
+      toast(notification.message, notification.type);
+      await renderPlatformAiConfig();
+      await loadModels();
+    } catch (error) {
+      const notification = connectivityTestErrorToast(error, "provider");
+      toast(notification.message, notification.type);
+    } finally {
+      button.disabled = false;
+      button.textContent = "测试连接";
+      const focusTarget = button.isConnected ? button : host.querySelector(`[data-test-provider="${CSS.escape(providerId)}"]`);
+      focusTarget?.focus({ preventScroll: true });
+    }
   }));
   host.querySelectorAll("[data-add-model]").forEach((button) => button.addEventListener("click", () => openModelDialog(button.dataset.addModel, null, providers.find((provider) => provider.id === button.dataset.addModel))));
   host.querySelectorAll("[data-edit-model]").forEach((button) => button.addEventListener("click", () => {
@@ -11945,6 +11960,7 @@ function openProviderDialog(item) {
       await api(item ? `/api/providers/${item.id}` : "/api/platform/ai/providers", { method: item ? "PATCH" : "POST", body });
       await renderPlatformAiConfig();
       await loadModels();
+      if (item) toast(connectivityConfigurationSavedToast("provider"));
     },
     item ? "协议、限流与凭据" : "OpenAI / Anthropic / Google Vertex"
   );
@@ -11979,6 +11995,7 @@ function openModelDialog(providerId, item = null, provider = null) {
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
+    if (item) toast(connectivityConfigurationSavedToast("model"));
   }, item ? "模型配置" : "供应商模型");
   const modelIdInput = $("#dialog-fields input[name='modelId']");
   const contextWindowInput = $("#model-context-window");
@@ -12016,14 +12033,17 @@ function openModelDialog(providerId, item = null, provider = null) {
     button.textContent = "测试中";
     try {
       const result = await api(`/api/models/${button.dataset.testModel}/test`, { method: "POST", body: {} });
-      toast(result.ok ? (result.multimodalTested ? "模型连接测试成功，图片请求已验证" : "模型连接测试成功") : `模型连接失败：${result.error}`, result.ok ? "info" : "error");
+      const notification = connectivityTestResultToast(result, "model");
+      toast(notification.message, notification.type);
       await renderPlatformAiConfig();
       await loadModels();
     } catch (error) {
-      toast(`模型连接测试失败：${error.message}`, "error");
+      const notification = connectivityTestErrorToast(error, "model");
+      toast(notification.message, notification.type);
     } finally {
       button.disabled = false;
       button.textContent = "测试连接";
+      if (button.isConnected) button.focus({ preventScroll: true });
     }
   });
   syncModelContextWindowGuidance();

@@ -307,6 +307,7 @@ describe("作者完整创作流程", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const analysisTypes = await request(runtime.app).get("/analysis-types.js").expect(200);
     const modelConfig = await request(runtime.app).get("/model-config.js").expect(200);
+    const connectivityTest = await request(runtime.app).get("/ai-connectivity-test.js").expect(200);
     const aiUsage = await request(runtime.app).get("/ai-usage.js").expect(200);
     const graph = await request(runtime.app).get("/relationship-graph.js").expect(200);
     const styles = await request(runtime.app).get("/styles.css").expect(200);
@@ -327,8 +328,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-v1');
     expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-v3');
-    expect(page.text).toContain('/app.js?v=20260812-ai-stream-safety-v4');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -336,7 +337,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="checkbox-field model-capability-option"');
     expect(application.text).toContain('模型供应商配置');
     expect(application.text).toContain('const multimodalFields = imageDefaultSupported ?');
-    expect(application.text).toContain('图片请求已验证');
+    expect(application.text).toContain('/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1');
+    expect(connectivityTest.text).toContain('图片请求已验证');
+    expect(connectivityTest.text).toContain('接下来 2 分钟内不能再次测试');
     expect(application.text).toContain('发送一张测试图片验证图片请求');
     expect(application.text).toContain('id="daily-token-quota" type="number" min="10000"');
     expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled"');
