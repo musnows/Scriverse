@@ -440,6 +440,9 @@ type AiConversationMessageInput = {
     outputTokens?: number;
     cacheHitPercent?: number;
     processDurationMs?: number;
+    interrupted?: boolean;
+    interruptionCode?: string;
+    interruptionMessage?: string;
     toolCalls?: unknown[];
     processSteps?: unknown[];
     reasoningContent?: string;
@@ -7227,13 +7230,30 @@ export class Store {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const requestId = input.requestId?.trim() || null;
+    const persistInterruption = (message: Row): Row => {
+      if (input.role !== "assistant" || input.metadata?.interrupted !== true || requiredString(message, "role") !== "assistant") {
+        return message;
+      }
+      const currentMetadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
+      const nextMetadata = { ...currentMetadata, ...input.metadata, interrupted: true };
+      if (JSON.stringify(currentMetadata) === JSON.stringify(nextMetadata)) return message;
+      this.db.transaction(() => {
+        this.db.run(
+          "UPDATE ai_conversation_messages SET metadata_json = ? WHERE id = ?",
+          JSON.stringify(nextMetadata),
+          requiredString(message, "id")
+        );
+        this.db.run("UPDATE ai_conversations SET updated_at = ? WHERE id = ?", now(), conversationId);
+      });
+      return this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", requiredString(message, "id")) ?? message;
+    };
     if (requestId) {
       const existing = this.db.get(
         "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?",
         conversationId,
         requestId
       );
-      if (existing) return this.mapAiConversationMessage(existing);
+      if (existing) return this.mapAiConversationMessage(persistInterruption(existing));
     }
     const messageId = id("message");
     const timestamp = now();
@@ -7265,7 +7285,7 @@ export class Store {
       ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
       : this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
     if (!message) throw notFound("AI 对话消息");
-    return this.mapAiConversationMessage(message);
+    return this.mapAiConversationMessage(persistInterruption(message));
   }
 
   forkAiConversation(conversationId: string, messageId: string, requestedTitle?: string, requestId?: string): Record<string, unknown> {
