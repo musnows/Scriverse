@@ -3,6 +3,7 @@ import {
   buildHybridSearchSnippet,
   documentParagraphLineRange,
   fuseHybridSearchChannels,
+  normalizeWorkSearchQuery,
   type HybridSearchCandidate
 } from "../../src/hybrid-search.js";
 
@@ -34,6 +35,14 @@ describe("混合检索排序", () => {
     const channel = { weight: 1, candidates: [candidate("a", "exact"), candidate("b", "exact")] };
     expect(fuseHybridSearchChannels([channel], 1)).toHaveLength(1);
     expect(fuseHybridSearchChannels([channel], 0)).toHaveLength(1);
+  });
+});
+
+describe("作品搜索输入边界", () => {
+  it("保留内部换行并把标准化后的查询限制为 100 字符", () => {
+    expect(normalizeWorkSearchQuery("\nＡ北港\n议会\n")).toBe("a北港\n议会");
+    expect(normalizeWorkSearchQuery("界".repeat(100))).toHaveLength(100);
+    expect(normalizeWorkSearchQuery(`${"界".repeat(100)}外`)).toBe("界".repeat(100));
   });
 });
 

@@ -7,6 +7,7 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 import { normalizeApiPath } from "./security.js";
+import { escapeSqlLikePattern } from "./utils.js";
 import {
   canReadWorkModule,
   canWriteWorkModule,
@@ -436,7 +437,7 @@ export class UserAuthService {
   }
 
   directory(query: string): Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">[] {
-    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     return this.database.all(
       `SELECT * FROM users WHERE status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
@@ -450,7 +451,7 @@ export class UserAuthService {
   }
 
   directoryPage(query: string, pagination: Pagination): PaginatedResult<Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">> {
-    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     const page = paginationSql(pagination);
     const rows = this.database.all(
@@ -812,12 +813,13 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/cli\/session$/u },
   { methods: ["GET", "POST"], path: /^\/api\/works$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
-  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/chapters\/batch$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
+  { methods: ["GET"], path: /^\/api\/volumes\/[^/]+\/export$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/chapters\/[^/]+\/(?:versions|outline)$/u },
   { methods: ["GET", "POST"], path: /^\/api\/chapters\/[^/]+\/annotations$/u },
@@ -938,6 +940,9 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
+  if (/^\/api\/works\/[^/]+\/chapters\/[^/]+\/foreshadow-reminders(?:\/[^/]+\/resolve)?$/u.test(pathname)) {
+    return write ? { read: ["prose"], write: ["outlines"] } : { read: ["prose", "outlines"] };
+  }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
     return write ? direct(requestedAttachmentModule(request)) : { anyRead: [...attachmentModules] };
   }
@@ -1015,7 +1020,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     [/^\/api\/(?:timeline-tracks|timeline)\/[^/]+(?:\/|$)/u, "timeline"],
     [/^\/api\/works\/[^/]+\/relationships(?:\/|$)/u, "relationships"],
     [/^\/api\/relationships\/[^/]+(?:\/|$)/u, "relationships"],
-    [/^\/api\/works\/[^/]+\/(?:outlines|foreshadows)(?:\/|$)/u, "outlines"],
+    [/^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows)(?:\/|$)/u, "outlines"],
     [/^\/api\/(?:foreshadows|foreshadow-occurrences)\/[^/]+(?:\/|$)/u, "outlines"],
     [/^\/api\/works\/[^/]+\/ai-settings(?:\/|$)/u, "ai-settings"],
     [/^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u, "ai-settings"]
@@ -1048,6 +1053,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   }
   if (/^\/api\/tasks\/[^/]+\/trace(?:\/calls\/[^/]+)?$/u.test(pathname)) {
     return { read: ["ai-analysis", ...contentPermissionModules] };
+  }
+  if (/^\/api\/tasks\/[^/]+\/character-extraction\/preview$/u.test(pathname)) {
+    return { read: ["ai-analysis", "prose", "characters", "races"] };
+  }
+  if (write && /^\/api\/tasks\/[^/]+\/character-extraction\/apply$/u.test(pathname)) {
+    return { read: ["prose", "characters"], write: ["ai-analysis", "characters", "races"] };
   }
   if (write && /^\/api\/tasks\/[^/]+\/relationship-changes\/apply$/u.test(pathname)) {
     return { write: ["ai-analysis", "relationships"] };

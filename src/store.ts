@@ -7,7 +7,9 @@ import {
   type Row
 } from "./database.js";
 import { exportWorkDocx } from "./docx-export.js";
+import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
+import { normalizeWorkSearchQuery } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -23,6 +25,7 @@ import {
 import {
   countWords,
   documentShortSearchTerms,
+  escapeSqlLikePattern,
   id,
   json,
   normalizeDocumentSearchText,
@@ -381,6 +384,41 @@ type ChapterOutlineInput = {
   status?: "draft" | "ready" | "completed";
 };
 
+type ChapterOutlineBoardForeshadow = {
+  id: string;
+  title: string;
+  status: string;
+  importance: string;
+  roles: Array<"setup" | "reminder" | "payoff">;
+  plannedPayoff: boolean;
+};
+
+type ChapterOutlineBoardChapter = {
+  id: string;
+  title: string;
+  chapterType: string;
+  sortOrder: number;
+  outline: {
+    goal: string;
+    conflict: string;
+    turningPoint: string;
+    notes: string;
+    status: string;
+    truncated: boolean;
+    updatedAt: string | null;
+  } | null;
+  foreshadows: ChapterOutlineBoardForeshadow[];
+};
+
+type ChapterOutlineBoardVolume = {
+  id: string;
+  title: string;
+  sortOrder: number;
+  chapters: ChapterOutlineBoardChapter[];
+};
+
+const CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH = 600;
+
 type ForeshadowOccurrenceInput = {
   chapterId: string;
   role: "setup" | "reminder" | "payoff";
@@ -438,11 +476,62 @@ type AiConversationMessageInput = {
     outputTokens?: number;
     cacheHitPercent?: number;
     processDurationMs?: number;
+    interrupted?: boolean;
+    interruptionCode?: string;
+    interruptionMessage?: string;
     toolCalls?: unknown[];
     processSteps?: unknown[];
     reasoningContent?: string;
     anthropicContent?: unknown[];
   };
+};
+
+export const AI_CONVERSATION_STREAM_REQUEST_LEASE_MS = 3 * 60_000;
+
+export type AiConversationStreamRequestStatus =
+  | "in_progress"
+  | "completed"
+  | "cancelled"
+  | "failed"
+  | "timed_out"
+  | "abandoned";
+
+type BeginAiConversationStreamRequestInput = {
+  workId: string;
+  conversationId: string;
+  actorScope: string;
+  idempotencyKey: string;
+  requestHash: string;
+  userMessage: {
+    content: string;
+    citations?: unknown[];
+    metadata?: { mentionCharacterIds?: string[] };
+    existingMessageId?: string;
+  };
+};
+
+export type AiConversationStreamRequest = {
+  id: string;
+  workId: string;
+  conversationId: string;
+  actorScope: string;
+  idempotencyKey: string;
+  requestHash: string;
+  status: AiConversationStreamRequestStatus;
+  terminalReason: string | null;
+  userMessageId: string | null;
+  assistantMessageId: string | null;
+  leaseExpiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
+export type BeginAiConversationStreamRequestResult = {
+  disposition: "started" | "in_progress" | "terminal";
+  request: AiConversationStreamRequest;
+  userMessage: Record<string, unknown> | null;
+  assistantMessage: Record<string, unknown> | null;
 };
 
 export const aiConversationTaskTypes = ["chat", "roleplay", "continue", "polish"] as const;
@@ -2379,7 +2468,7 @@ export class Store {
       this.getChapter(chapterId);
       return paginated([], pagination);
     }
-    return paginated(rows.slice(pagination.offset, pagination.offset + pagination.limit + 1).map((row) => this.mapChapterVersionRow(row)), pagination);
+    return paginated(rows.map((row) => this.mapChapterVersionRow(row)), pagination);
   }
 
   listChapterInsights(chapterId: string): Record<string, unknown>[] {
@@ -3496,6 +3585,176 @@ export class Store {
     return this.mapChapterOutline(row, chapter);
   }
 
+  getChapterOutlineBoard(workId: string): {
+    workId: string;
+    volumes: ChapterOutlineBoardVolume[];
+    stats: {
+      chapterCount: number;
+      outlinedChapterCount: number;
+      foreshadowCount: number;
+      unresolvedForeshadowCount: number;
+    };
+  } {
+    this.getWork(workId);
+    const previewLength = CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH;
+    const rows = this.db.all(
+      `SELECT volume.id AS volume_id, volume.title AS volume_title, volume.sort_order AS volume_order,
+       chapter.id AS chapter_id, chapter.title AS chapter_title, chapter.chapter_type,
+       chapter.sort_order AS chapter_order,
+       outline.chapter_id AS outline_chapter_id,
+       substr(outline.goal, 1, ?) AS goal, length(outline.goal) > ? AS goal_truncated,
+       substr(outline.conflict, 1, ?) AS conflict, length(outline.conflict) > ? AS conflict_truncated,
+       substr(outline.turning_point, 1, ?) AS turning_point, length(outline.turning_point) > ? AS turning_point_truncated,
+       substr(outline.notes, 1, ?) AS notes, length(outline.notes) > ? AS notes_truncated,
+       outline.status, outline.updated_at AS outline_updated_at
+       FROM volumes volume
+       LEFT JOIN chapters chapter
+         ON chapter.volume_id = volume.id AND chapter.work_id = volume.work_id AND chapter.deleted_at IS NULL
+       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       WHERE volume.work_id = ? AND volume.deleted_at IS NULL
+       ORDER BY volume.sort_order, volume.created_at, volume.id,
+         chapter.sort_order, chapter.created_at, chapter.id`,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      workId
+    );
+
+    const volumeById = new Map<string, ChapterOutlineBoardVolume>();
+    const chapterById = new Map<string, ChapterOutlineBoardChapter>();
+    let outlinedChapterCount = 0;
+    for (const row of rows) {
+      const volumeId = requiredString(row, "volume_id");
+      let volume = volumeById.get(volumeId);
+      if (!volume) {
+        volume = {
+          id: volumeId,
+          title: requiredString(row, "volume_title"),
+          sortOrder: numberValue(row, "volume_order"),
+          chapters: []
+        };
+        volumeById.set(volumeId, volume);
+      }
+      const chapterId = optionalString(row, "chapter_id");
+      if (!chapterId) continue;
+      const hasOutline = optionalString(row, "outline_chapter_id") !== null;
+      if (hasOutline) outlinedChapterCount += 1;
+      const chapter: ChapterOutlineBoardChapter = {
+        id: chapterId,
+        title: requiredString(row, "chapter_title"),
+        chapterType: requiredString(row, "chapter_type") || "正文",
+        sortOrder: numberValue(row, "chapter_order"),
+        outline: hasOutline ? {
+          goal: optionalString(row, "goal") ?? "",
+          conflict: optionalString(row, "conflict") ?? "",
+          turningPoint: optionalString(row, "turning_point") ?? "",
+          notes: optionalString(row, "notes") ?? "",
+          status: optionalString(row, "status") ?? "draft",
+          truncated: ["goal_truncated", "conflict_truncated", "turning_point_truncated", "notes_truncated"]
+            .some((field) => booleanValue(row, field)),
+          updatedAt: optionalString(row, "outline_updated_at")
+        } : null,
+        foreshadows: []
+      };
+      volume.chapters.push(chapter);
+      chapterById.set(chapterId, chapter);
+    }
+
+    type MutableForeshadow = Omit<ChapterOutlineBoardForeshadow, "roles"> & {
+      roles: Set<"setup" | "reminder" | "payoff">;
+    };
+    const associations = new Map<string, Map<string, MutableForeshadow>>();
+    const associate = (
+      chapterId: string | null,
+      source: { id: string; title: string; status: string; importance: string },
+      role?: "setup" | "reminder" | "payoff",
+      plannedPayoff = false
+    ): void => {
+      if (!chapterId || !chapterById.has(chapterId)) return;
+      const byForeshadow = associations.get(chapterId) ?? new Map<string, MutableForeshadow>();
+      const summary = byForeshadow.get(source.id) ?? {
+        ...source,
+        roles: new Set<"setup" | "reminder" | "payoff">(),
+        plannedPayoff: false
+      };
+      if (role) summary.roles.add(role);
+      if (plannedPayoff) summary.plannedPayoff = true;
+      byForeshadow.set(source.id, summary);
+      associations.set(chapterId, byForeshadow);
+    };
+
+    const foreshadowRows = this.db.all(
+      `SELECT foreshadow.id, foreshadow.title, foreshadow.status, foreshadow.importance,
+       occurrence_chapter.id AS occurrence_chapter_id, occurrence_volume.id AS occurrence_volume_id,
+       occurrence.role, payoff_chapter.id AS payoff_chapter_id, payoff_volume.id AS payoff_volume_id
+       FROM foreshadows foreshadow
+       LEFT JOIN foreshadow_occurrences occurrence ON occurrence.foreshadow_id = foreshadow.id
+       LEFT JOIN chapters occurrence_chapter
+         ON occurrence_chapter.id = occurrence.chapter_id
+         AND occurrence_chapter.work_id = foreshadow.work_id
+         AND occurrence_chapter.deleted_at IS NULL
+       LEFT JOIN volumes occurrence_volume
+         ON occurrence_volume.id = occurrence_chapter.volume_id AND occurrence_volume.deleted_at IS NULL
+       LEFT JOIN chapters payoff_chapter
+         ON payoff_chapter.id = foreshadow.planned_payoff_chapter_id
+         AND payoff_chapter.work_id = foreshadow.work_id
+         AND payoff_chapter.deleted_at IS NULL
+       LEFT JOIN volumes payoff_volume
+         ON payoff_volume.id = payoff_chapter.volume_id AND payoff_volume.deleted_at IS NULL
+       WHERE foreshadow.work_id = ?
+       ORDER BY CASE foreshadow.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         foreshadow.created_at, foreshadow.id, occurrence.created_at, occurrence.id`,
+      workId
+    );
+    const foreshadowIds = new Set<string>();
+    const unresolvedForeshadowIds = new Set<string>();
+    for (const row of foreshadowRows) {
+      const source = {
+        id: requiredString(row, "id"),
+        title: requiredString(row, "title"),
+        status: requiredString(row, "status"),
+        importance: requiredString(row, "importance")
+      };
+      foreshadowIds.add(source.id);
+      if (source.status === "planned" || source.status === "planted") unresolvedForeshadowIds.add(source.id);
+      const occurrenceChapterId = optionalString(row, "occurrence_volume_id")
+        ? optionalString(row, "occurrence_chapter_id")
+        : null;
+      const role = optionalString(row, "role");
+      associate(
+        occurrenceChapterId,
+        source,
+        role === "setup" || role === "reminder" || role === "payoff" ? role : undefined
+      );
+      associate(optionalString(row, "payoff_volume_id") ? optionalString(row, "payoff_chapter_id") : null, source, undefined, true);
+    }
+
+    for (const [chapterId, byForeshadow] of associations) {
+      const chapter = chapterById.get(chapterId);
+      if (!chapter) continue;
+      chapter.foreshadows = [...byForeshadow.values()].map((summary) => ({
+        ...summary,
+        roles: [...summary.roles]
+      }));
+    }
+
+    return {
+      workId,
+      volumes: [...volumeById.values()],
+      stats: {
+        chapterCount: chapterById.size,
+        outlinedChapterCount,
+        foreshadowCount: foreshadowIds.size,
+        unresolvedForeshadowCount: unresolvedForeshadowIds.size
+      }
+    };
+  }
+
   listChapterOutlines(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     const rows = this.db.all(
@@ -3726,6 +3985,85 @@ export class Store {
       ...page.params
     );
     return paginated(rows.map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId)), pagination);
+  }
+
+  listChapterForeshadowReminders(workId: string, chapterId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    this.assertChapterInWork(chapterId, workId);
+    const seenForeshadowIds = new Set<string>();
+    return this.db.all(
+      `SELECT occurrence.id AS occurrence_id, occurrence.foreshadow_id, occurrence.role, occurrence.note,
+       foreshadow.title, foreshadow.description, foreshadow.status, foreshadow.importance,
+       foreshadow.updated_at,
+       (SELECT MAX(version.version_no) FROM entity_versions version
+        WHERE version.entity_type = 'foreshadow' AND version.entity_id = foreshadow.id) AS version_no
+       FROM foreshadow_occurrences occurrence
+       JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+       JOIN chapters chapter ON chapter.id = occurrence.chapter_id
+       WHERE foreshadow.work_id = ? AND chapter.work_id = ? AND occurrence.chapter_id = ?
+         AND foreshadow.status IN ('planned', 'planted')
+         AND occurrence.role IN ('reminder', 'payoff')
+       ORDER BY CASE occurrence.role WHEN 'payoff' THEN 0 ELSE 1 END,
+         CASE foreshadow.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         foreshadow.created_at, occurrence.created_at`,
+      workId,
+      workId,
+      chapterId
+    ).flatMap((row) => {
+      const foreshadowId = requiredString(row, "foreshadow_id");
+      if (seenForeshadowIds.has(foreshadowId)) return [];
+      seenForeshadowIds.add(foreshadowId);
+      return [{
+        foreshadowId,
+        occurrenceId: requiredString(row, "occurrence_id"),
+        title: requiredString(row, "title"),
+        description: requiredString(row, "description"),
+        status: requiredString(row, "status"),
+        importance: requiredString(row, "importance"),
+        role: requiredString(row, "role"),
+        note: requiredString(row, "note"),
+        versionNo: numberValue(row, "version_no"),
+        updatedAt: requiredString(row, "updated_at")
+      }];
+    });
+  }
+
+  resolveChapterForeshadowReminder(
+    workId: string,
+    chapterId: string,
+    foreshadowId: string,
+    expectedVersionNo?: number
+  ): Record<string, unknown> {
+    this.getWork(workId);
+    this.assertChapterInWork(chapterId, workId);
+    const reminder = this.db.get(
+      `SELECT occurrence.id AS occurrence_id
+       FROM foreshadow_occurrences occurrence
+       JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+       WHERE foreshadow.id = ? AND foreshadow.work_id = ? AND occurrence.chapter_id = ?
+         AND foreshadow.status IN ('planned', 'planted')
+         AND occurrence.role IN ('reminder', 'payoff')
+       ORDER BY CASE occurrence.role WHEN 'payoff' THEN 0 ELSE 1 END, occurrence.created_at
+       LIMIT 1`,
+      foreshadowId,
+      workId,
+      chapterId
+    );
+    if (!reminder) throw notFound("伏笔提醒");
+    const updated = this.updateForeshadow(
+      foreshadowId,
+      { status: "resolved" },
+      "manual",
+      requiredString(reminder, "occurrence_id"),
+      "在编辑器标记伏笔已回收",
+      expectedVersionNo
+    );
+    return {
+      foreshadowId: String(updated.id),
+      status: String(updated.status),
+      versionNo: Number(updated.versionNo),
+      updatedAt: String(updated.updatedAt)
+    };
   }
 
   updateForeshadow(
@@ -3959,7 +4297,7 @@ export class Store {
     this.getWork(workId);
     const safeLimit = Math.min(30, Math.max(1, Math.trunc(limit)));
     const normalizedQuery = query.normalize("NFKC").trim();
-    const escapedQuery = normalizedQuery.replace(/[\\%_]/gu, "\\$&");
+    const escapedQuery = escapeSqlLikePattern(normalizedQuery);
     const pattern = `%${escapedQuery}%`;
     const rows = normalizedQuery
       ? this.db.all(
@@ -4916,7 +5254,13 @@ export class Store {
     }
   }
 
-  createCharacter(workId: string, input: CharacterInput): Record<string, unknown> {
+  createCharacter(
+    workId: string,
+    input: CharacterInput,
+    source = "create",
+    sourceRef: string | null = null,
+    changeNote = "建立人物档案"
+  ): Record<string, unknown> {
     this.getWork(workId);
     const characterId = id("character");
     const timestamp = now();
@@ -4953,8 +5297,8 @@ export class Store {
       );
       this.insertCharacterNames(workId, characterId, names.entries);
       this.replaceCharacterOrganizations(characterId, organizationIds);
-      this.insertCharacterVersion(characterId, 1, "create", null, "建立人物档案", timestamp);
-      this.audit(workId, "character.created", "character", characterId);
+      this.insertCharacterVersion(characterId, 1, source, sourceRef, changeNote, timestamp);
+      this.audit(workId, "character.created", "character", characterId, { source, sourceRef });
     });
     return this.getCharacter(characterId);
   }
@@ -7225,13 +7569,30 @@ export class Store {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     const requestId = input.requestId?.trim() || null;
+    const persistInterruption = (message: Row): Row => {
+      if (input.role !== "assistant" || input.metadata?.interrupted !== true || requiredString(message, "role") !== "assistant") {
+        return message;
+      }
+      const currentMetadata = json<Record<string, unknown>>(requiredString(message, "metadata_json"), {});
+      const nextMetadata = { ...currentMetadata, ...input.metadata, interrupted: true };
+      if (JSON.stringify(currentMetadata) === JSON.stringify(nextMetadata)) return message;
+      this.db.transaction(() => {
+        this.db.run(
+          "UPDATE ai_conversation_messages SET metadata_json = ? WHERE id = ?",
+          JSON.stringify(nextMetadata),
+          requiredString(message, "id")
+        );
+        this.db.run("UPDATE ai_conversations SET updated_at = ? WHERE id = ?", now(), conversationId);
+      });
+      return this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", requiredString(message, "id")) ?? message;
+    };
     if (requestId) {
       const existing = this.db.get(
         "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?",
         conversationId,
         requestId
       );
-      if (existing) return this.mapAiConversationMessage(existing);
+      if (existing) return this.mapAiConversationMessage(persistInterruption(existing));
     }
     const messageId = id("message");
     const timestamp = now();
@@ -7263,7 +7624,208 @@ export class Store {
       ? this.db.get("SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?", conversationId, requestId)
       : this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
     if (!message) throw notFound("AI 对话消息");
-    return this.mapAiConversationMessage(message);
+    return this.mapAiConversationMessage(persistInterruption(message));
+  }
+
+  beginAiConversationStreamRequest(
+    input: BeginAiConversationStreamRequestInput,
+    referenceTime = new Date()
+  ): BeginAiConversationStreamRequestResult {
+    const timestamp = referenceTime.toISOString();
+    const leaseExpiresAt = new Date(referenceTime.getTime() + AI_CONVERSATION_STREAM_REQUEST_LEASE_MS).toISOString();
+    return this.db.transaction(() => {
+      const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", input.conversationId);
+      if (!conversation) throw notFound("AI 对话");
+      if (requiredString(conversation, "work_id") !== input.workId) {
+        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      }
+      let existing = this.db.get(
+        `SELECT * FROM ai_conversation_stream_requests
+         WHERE actor_scope = ? AND work_id = ? AND idempotency_key = ?`,
+        input.actorScope,
+        input.workId,
+        input.idempotencyKey
+      );
+      if (existing) {
+        if (requiredString(existing, "status") === "in_progress"
+          && String(existing.lease_expires_at ?? "") <= timestamp) {
+          this.expireAiConversationStreamLease(input.conversationId, timestamp);
+          existing = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requiredString(existing, "id"));
+          if (!existing) throw notFound("AI 对话请求");
+        }
+        if (requiredString(existing, "conversation_id") !== input.conversationId
+          || requiredString(existing, "request_hash") !== input.requestHash) {
+          throw new AppError(409, "IDEMPOTENCY_KEY_REUSED", "该请求标识已用于另一项 AI 对话请求");
+        }
+        const request = this.mapAiConversationStreamRequest(existing);
+        return {
+          disposition: request.status === "in_progress" ? "in_progress" : "terminal",
+          request,
+          userMessage: this.aiConversationMessageOrNull(request.userMessageId),
+          assistantMessage: this.aiConversationMessageOrNull(request.assistantMessageId)
+        };
+      }
+      this.expireAiConversationStreamLease(input.conversationId, timestamp);
+      const active = this.db.get(
+        "SELECT id FROM ai_conversation_stream_requests WHERE conversation_id = ? AND status = 'in_progress'",
+        input.conversationId
+      );
+      if (active) {
+        throw new AppError(409, "AI_CONVERSATION_RESPONSE_IN_PROGRESS", "当前对话仍在生成回复，请等待完成或取消后再发送");
+      }
+      const requestId = id("chat_request");
+      const existingMessage = input.userMessage.existingMessageId
+        ? this.db.get(
+          `SELECT * FROM ai_conversation_messages
+           WHERE id = ? AND conversation_id = ? AND role = 'user'`,
+          input.userMessage.existingMessageId,
+          input.conversationId
+        )
+        : undefined;
+      if (input.userMessage.existingMessageId && !existingMessage) {
+        throw new AppError(400, "AI_STREAM_USER_MESSAGE_MISMATCH", "当前用户消息不属于目标 AI 对话");
+      }
+      const messageId = existingMessage ? requiredString(existingMessage, "id") : id("message");
+      const previousTitle = requiredString(conversation, "title");
+      const title = !existingMessage && previousTitle === "新对话"
+        ? defaultAiConversationTitle(input.userMessage.content)
+        : previousTitle;
+      this.db.run(
+        `INSERT INTO ai_conversation_stream_requests
+           (id, work_id, conversation_id, actor_scope, idempotency_key, request_hash, status,
+            lease_expires_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?)`,
+        requestId,
+        input.workId,
+        input.conversationId,
+        input.actorScope,
+        input.idempotencyKey,
+        input.requestHash,
+        leaseExpiresAt,
+        timestamp,
+        timestamp
+      );
+      if (!existingMessage) {
+        this.db.run(
+          `INSERT INTO ai_conversation_messages
+             (id, conversation_id, role, content, citations_json, metadata_json, request_id, created_at, created_by_user_id)
+           VALUES (?, ?, 'user', ?, ?, ?, ?, ?, ?)`,
+          messageId,
+          input.conversationId,
+          input.userMessage.content,
+          JSON.stringify(input.userMessage.citations ?? []),
+          JSON.stringify(input.userMessage.metadata ?? {}),
+          `stream:${requestId}:user`,
+          timestamp,
+          currentRequestActor()?.userId ?? null
+        );
+      }
+      this.db.run("UPDATE ai_conversation_stream_requests SET user_message_id = ? WHERE id = ?", messageId, requestId);
+      if (!existingMessage) {
+        this.db.run("UPDATE ai_conversations SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, input.conversationId);
+        if (title !== previousTitle) this.syncAiHistorySearchShortTermsForSource("conversation", input.conversationId);
+        this.syncAiHistorySearchShortTermsForSource("message", messageId);
+      }
+      const created = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requestId);
+      if (!created) throw notFound("AI 对话请求");
+      return {
+        disposition: "started",
+        request: this.mapAiConversationStreamRequest(created),
+        userMessage: this.aiConversationMessageOrNull(messageId),
+        assistantMessage: null
+      };
+    });
+  }
+
+  findAiConversationStreamRequest(
+    actorScope: string,
+    workId: string,
+    idempotencyKey: string
+  ): AiConversationStreamRequest | null {
+    const request = this.db.get(
+      `SELECT * FROM ai_conversation_stream_requests
+       WHERE actor_scope = ? AND work_id = ? AND idempotency_key = ?`,
+      actorScope,
+      workId,
+      idempotencyKey
+    );
+    return request ? this.mapAiConversationStreamRequest(request) : null;
+  }
+
+  assertAiConversationStreamAvailable(conversationId: string, referenceTime = new Date()): void {
+    const timestamp = referenceTime.toISOString();
+    this.db.transaction(() => {
+      this.expireAiConversationStreamLease(conversationId, timestamp);
+      const active = this.db.get(
+        "SELECT id FROM ai_conversation_stream_requests WHERE conversation_id = ? AND status = 'in_progress'",
+        conversationId
+      );
+      if (active) {
+        throw new AppError(409, "AI_CONVERSATION_RESPONSE_IN_PROGRESS", "当前对话仍在生成回复，请等待完成或取消后再发送");
+      }
+    });
+  }
+
+  touchAiConversationStreamRequest(requestId: string, referenceTime = new Date()): boolean {
+    const timestamp = referenceTime.toISOString();
+    const leaseExpiresAt = new Date(referenceTime.getTime() + AI_CONVERSATION_STREAM_REQUEST_LEASE_MS).toISOString();
+    return this.db.run(
+      `UPDATE ai_conversation_stream_requests SET lease_expires_at = ?, updated_at = ?
+       WHERE id = ? AND status = 'in_progress'`,
+      leaseExpiresAt,
+      timestamp,
+      requestId
+    ).changes === 1;
+  }
+
+  cancelActiveAiConversationStreamRequests(referenceTime = new Date()): number {
+    const timestamp = referenceTime.toISOString();
+    return this.db.run(
+      `UPDATE ai_conversation_stream_requests
+       SET status = 'cancelled', terminal_reason = 'runtime_shutdown', lease_expires_at = NULL,
+           updated_at = ?, completed_at = ?
+       WHERE status = 'in_progress'`,
+      timestamp,
+      timestamp
+    ).changes;
+  }
+
+  finishAiConversationStreamRequest(
+    requestId: string,
+    status: Exclude<AiConversationStreamRequestStatus, "in_progress">,
+    terminalReason: string,
+    assistantMessageId?: string,
+    referenceTime = new Date()
+  ): AiConversationStreamRequest {
+    const timestamp = referenceTime.toISOString();
+    return this.db.transaction(() => {
+      const request = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requestId);
+      if (!request) throw notFound("AI 对话请求");
+      if (assistantMessageId) {
+        const assistant = this.db.get(
+          `SELECT id FROM ai_conversation_messages
+           WHERE id = ? AND conversation_id = ? AND role = 'assistant'`,
+          assistantMessageId,
+          requiredString(request, "conversation_id")
+        );
+        if (!assistant) throw new AppError(400, "AI_STREAM_ASSISTANT_MISMATCH", "AI 回复消息不属于当前对话请求");
+      }
+      this.db.run(
+        `UPDATE ai_conversation_stream_requests
+         SET status = ?, terminal_reason = ?, assistant_message_id = COALESCE(assistant_message_id, ?),
+             lease_expires_at = NULL, updated_at = ?, completed_at = ?
+         WHERE id = ? AND status = 'in_progress'`,
+        status,
+        terminalReason.slice(0, 500),
+        assistantMessageId ?? null,
+        timestamp,
+        timestamp,
+        requestId
+      );
+      const completed = this.db.get("SELECT * FROM ai_conversation_stream_requests WHERE id = ?", requestId);
+      if (!completed) throw notFound("AI 对话请求");
+      return this.mapAiConversationStreamRequest(completed);
+    });
   }
 
   forkAiConversation(conversationId: string, messageId: string, requestedTitle?: string, requestId?: string): Record<string, unknown> {
@@ -7411,6 +7973,62 @@ export class Store {
         : normalizeWorkAgentTools(row.agent_tools_json),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
+    };
+  }
+
+  private aiConversationMessageOrNull(messageId: string | null): Record<string, unknown> | null {
+    if (!messageId) return null;
+    const message = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", messageId);
+    return message ? this.mapAiConversationMessage(message) : null;
+  }
+
+  private expireAiConversationStreamLease(conversationId: string, timestamp: string): void {
+    const expired = this.db.get(
+      `SELECT * FROM ai_conversation_stream_requests
+       WHERE conversation_id = ? AND status = 'in_progress' AND lease_expires_at <= ?`,
+      conversationId,
+      timestamp
+    );
+    if (!expired) return;
+    const userMessageId = optionalString(expired, "user_message_id");
+    const assistant = userMessageId
+      ? this.db.get(
+        `SELECT id FROM ai_conversation_messages
+         WHERE conversation_id = ? AND role = 'assistant' AND request_id = ?`,
+        conversationId,
+        `assistant:${userMessageId}`
+      )
+      : undefined;
+    this.db.run(
+      `UPDATE ai_conversation_stream_requests
+       SET status = ?, terminal_reason = ?, assistant_message_id = ?, lease_expires_at = NULL,
+           updated_at = ?, completed_at = ?
+       WHERE id = ? AND status = 'in_progress'`,
+      assistant ? "completed" : "abandoned",
+      assistant ? "recovered_completed_response" : "lease_expired",
+      assistant ? requiredString(assistant, "id") : null,
+      timestamp,
+      timestamp,
+      requiredString(expired, "id")
+    );
+  }
+
+  private mapAiConversationStreamRequest(row: Row): AiConversationStreamRequest {
+    return {
+      id: requiredString(row, "id"),
+      workId: requiredString(row, "work_id"),
+      conversationId: requiredString(row, "conversation_id"),
+      actorScope: requiredString(row, "actor_scope"),
+      idempotencyKey: requiredString(row, "idempotency_key"),
+      requestHash: requiredString(row, "request_hash"),
+      status: requiredString(row, "status") as AiConversationStreamRequestStatus,
+      terminalReason: optionalString(row, "terminal_reason"),
+      userMessageId: optionalString(row, "user_message_id"),
+      assistantMessageId: optionalString(row, "assistant_message_id"),
+      leaseExpiresAt: optionalString(row, "lease_expires_at"),
+      createdAt: requiredString(row, "created_at"),
+      updatedAt: requiredString(row, "updated_at"),
+      completedAt: optionalString(row, "completed_at")
     };
   }
 
@@ -8142,6 +8760,7 @@ export class Store {
     let metrics: Record<string, unknown>[] = [];
     let sections: Record<string, unknown>[] = [];
     let relationshipChangePreviewSummary: Record<string, unknown> | null = null;
+    let characterExtractionPreviewSummary: Record<string, unknown> | null = null;
 
     if (taskType === "chapter-analysis") {
       let chapterTitle = String(result.chapterId ?? "指定章节");
@@ -8263,6 +8882,11 @@ export class Store {
         }] : [])
       ];
     } else if (taskType === "character-extraction" || taskType === "character-summary") {
+      const extractedCandidates = this.taskResultObjects(result.characterCandidates);
+      const application = result.characterApplication && typeof result.characterApplication === "object"
+        && !Array.isArray(result.characterApplication)
+        ? result.characterApplication as Record<string, unknown>
+        : null;
       const ids = idList(result.characterIds);
       const characters = ids.flatMap((characterId) => {
         try {
@@ -8281,13 +8905,70 @@ export class Store {
           }];
         } catch { return []; }
       });
-      summary = `识别 ${Number(result.candidateCount ?? characters.length)} 个角色候选，保存 ${characters.length} 个角色档案。`;
       const verification = result.verification && typeof result.verification === "object" && !Array.isArray(result.verification)
         ? result.verification as Record<string, unknown>
         : {};
-      metrics = [metric("保存角色", characters.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount), metric("身份复核", verification.pairCount)];
-      storageTargets.unshift({ label: "角色档案", entity: "角色库", key: "characters", count: characters.length, note: "新角色会创建档案，命中已有角色时会合并可靠信息。" });
-      sections = [section("保存的角色", characters, "没有形成可保存的角色档案。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
+      if (extractedCandidates.length > 0 || application) {
+        const applicationStatus = application?.status === "applied" ? "applied" : "pending";
+        const candidateItems = extractedCandidates.map((candidate) => ({
+          name: String(candidate.name ?? "未命名角色"),
+          aliases: Array.isArray(candidate.aliases) ? candidate.aliases.map(String) : [],
+          identity: String(candidate.identity ?? ""),
+          species: String(candidate.species ?? ""),
+          evidence: candidate.firstEvidence ? [candidate.firstEvidence] : []
+        }));
+        const appliedItems = this.taskResultObjects(application?.items).map((item) => ({
+          title: String(item.characterName ?? item.candidateId ?? "角色候选"),
+          subtitle: item.status === "created" ? "已新建档案"
+            : item.status === "merged" ? "已合并可靠信息"
+              : item.status === "unchanged" ? "已有档案保持不变"
+                : "已跳过",
+          description: Array.isArray(item.conflicts) ? item.conflicts.map(String).join("；") : ""
+        }));
+        const totalCount = Number(application?.totalCount ?? result.candidateCount ?? extractedCandidates.length);
+        const createdCount = Number(application?.createdCount ?? 0);
+        const mergedCount = Number(application?.mergedCount ?? 0);
+        const unchangedCount = Number(application?.unchangedCount ?? 0);
+        const skippedCount = Number(application?.skippedCount ?? 0);
+        characterExtractionPreviewSummary = {
+          status: applicationStatus,
+          totalCount,
+          createdCount,
+          mergedCount,
+          unchangedCount,
+          skippedCount,
+          ...(typeof application?.generatedAt === "string" ? { generatedAt: application.generatedAt } : {}),
+          ...(typeof application?.appliedAt === "string" ? { appliedAt: application.appliedAt } : {})
+        };
+        summary = applicationStatus === "applied"
+          ? `已处理 ${totalCount} 个角色候选：新建 ${createdCount} 个、合并 ${mergedCount} 个、保持不变 ${unchangedCount} 个、跳过 ${skippedCount} 个。`
+          : `识别 ${totalCount} 个角色候选，角色库尚未修改；请预览、勾选并确认新建或合并策略。`;
+        metrics = [
+          metric(applicationStatus === "applied" ? "新建角色" : "待确认", applicationStatus === "applied" ? createdCount : totalCount),
+          metric("合并", mergedCount),
+          metric("跳过", applicationStatus === "applied" ? skippedCount : Array.isArray(result.skipped) ? result.skipped.length : 0),
+          metric("身份复核", verification.pairCount)
+        ];
+        storageTargets.unshift({
+          label: "角色档案",
+          entity: "角色库",
+          key: "characters",
+          count: characters.length,
+          note: applicationStatus === "applied"
+            ? "仅写入用户确认的新建或合并项；冲突字段保留原档案。"
+            : "当前仅保存结构化预览，角色库尚未修改。"
+        });
+        sections = [
+          section(applicationStatus === "applied" ? "抽取的角色候选" : "待确认角色候选", candidateItems, "没有形成可应用的角色候选。"),
+          ...(applicationStatus === "applied" ? [section("应用结果", appliedItems, "没有角色候选被应用。")] : []),
+          section("抽取阶段跳过的候选", result.skipped, "抽取阶段没有候选被跳过。")
+        ];
+      } else {
+        summary = `识别 ${Number(result.candidateCount ?? characters.length)} 个角色候选，保存 ${characters.length} 个角色档案。`;
+        metrics = [metric("保存角色", characters.length), metric("跳过", Array.isArray(result.skipped) ? result.skipped.length : 0), metric("覆盖章节", result.coveredChapterCount), metric("身份复核", verification.pairCount)];
+        storageTargets.unshift({ label: "角色档案", entity: "角色库", key: "characters", count: characters.length, note: "该历史任务在生成结果时直接写入角色档案。" });
+        sections = [section("保存的角色", characters, "没有形成可保存的角色档案。"), section("未写入候选", result.skipped, "没有候选被跳过。")];
+      }
     } else if (taskType === "book-analysis") {
       const timelineIds = [...new Set([...idList(result.eventIds), ...idList(result.timelineEventIds)])];
       const settingIds = [...new Set([
@@ -8508,7 +9189,8 @@ export class Store {
       metrics,
       storageTargets: productStorageTargets(storageTargets),
       sections,
-      ...(relationshipChangePreviewSummary ? { relationshipChangePreview: relationshipChangePreviewSummary } : {})
+      ...(relationshipChangePreviewSummary ? { relationshipChangePreview: relationshipChangePreviewSummary } : {}),
+      ...(characterExtractionPreviewSummary ? { characterExtractionPreview: characterExtractionPreviewSummary } : {})
     };
   }
 
@@ -8887,14 +9569,15 @@ export class Store {
 
   search(workId: string, query: string): Record<string, unknown>[] {
     this.getWork(workId);
-    const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    const normalizedQuery = normalizeWorkSearchQuery(query);
+    if (!normalizedQuery) return [];
+    const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
     const chapters = this.db.all(
       "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
       workId,
       pattern,
       pattern
     );
-    const normalizedQuery = query.toLocaleLowerCase("zh-CN");
     const races = this.listRaces(workId).filter((race) => {
       const lineage = race.lineage as Array<{ name: string }>;
       const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
@@ -8944,9 +9627,9 @@ export class Store {
       pattern,
       pattern
     );
-    const characterSections = this.searchCharacterProfileSections(workId, query, 30);
+    const characterSections = this.searchCharacterProfileSections(workId, normalizedQuery, 30);
     const snippet = (content: string): string => {
-      const index = content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+      const index = content.toLocaleLowerCase().indexOf(normalizedQuery);
       const start = Math.max(0, index - 40);
       return content.slice(start, start + 120);
     };
@@ -9035,6 +9718,36 @@ export class Store {
       volumes,
       cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
     });
+  }
+
+  async exportEpub(workId: string, volumeId?: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
+    const tree = this.getWorkTree(workId);
+    const allVolumes = tree.volumes as Record<string, unknown>[];
+    const selectedVolume = volumeId ? allVolumes.find((volume) => String(volume.id) === volumeId) : undefined;
+    if (volumeId && !selectedVolume) throw notFound("分卷");
+    const sourceVolumes = selectedVolume ? [selectedVolume] : allVolumes;
+    const title = selectedVolume ? `${String(tree.title)} - ${String(selectedVolume.title)}` : String(tree.title);
+    const cover = this.findWorkCover(workId);
+    const archive = await createEpubArchive({
+      title,
+      author: String(tree.author ?? ""),
+      description: String(tree.description ?? ""),
+      language: String(tree.language ?? "zh-CN"),
+      volumes: sourceVolumes.map((volume) => ({
+        title: String(volume.title),
+        chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
+          title: String(chapter.title),
+          content: String(chapter.content ?? "")
+        }))
+      })),
+      cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null
+    });
+    return { title, archive };
+  }
+
+  async exportVolumeEpub(volumeId: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
+    const volume = this.getVolume(volumeId);
+    return this.exportEpub(String(volume.workId), volumeId);
   }
 
   listAuditLogs(workId: string): Record<string, unknown>[] {
