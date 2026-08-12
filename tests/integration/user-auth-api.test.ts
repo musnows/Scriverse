@@ -2862,6 +2862,65 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("仅允许具备删除权限的成员查看和操作对应回收站", async () => {
+    const owner = await register(runtime, "recycle_owner");
+    const editor = await register(runtime, "recycle_editor");
+    const viewer = await register(runtime, "recycle_viewer");
+    const outsider = await register(runtime, "recycle_outsider");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "权限回收站" }).expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: editor.user.userId,
+      role: "editor"
+    }).expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: viewer.user.userId,
+      role: "viewer"
+    }).expect(201);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({ title: "第一卷" }).expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "权限边界正文。"
+    }).expect(201);
+
+    await viewer.agent.get(`/api/works/${workId}/recycle-bin`).expect(403);
+    await editor.agent.get(`/api/works/${workId}/recycle-bin`).expect(200);
+    await editor.agent.delete(`/api/chapters/${chapter.body.data.id}`).set("X-CSRF-Token", editor.csrfToken).send({ expectedVersionNo: 1 }).expect(204);
+    const editorRecycleBin = await editor.agent.get(`/api/works/${workId}/recycle-bin`).expect(200);
+    expect(editorRecycleBin.body.data.chapters).toEqual([expect.objectContaining({ id: chapter.body.data.id })]);
+    await viewer.agent.post(`/api/chapters/${chapter.body.data.id}/restore`).set("X-CSRF-Token", viewer.csrfToken).send({
+      versionNo: 2,
+      expectedVersionNo: 2
+    }).expect(403);
+    await editor.agent.post(`/api/chapters/${chapter.body.data.id}/restore`).set("X-CSRF-Token", editor.csrfToken).send({
+      versionNo: 2,
+      expectedVersionNo: 2
+    }).expect(200);
+
+    await editor.agent.delete(`/api/works/${workId}`).set("X-CSRF-Token", editor.csrfToken).send({ expectedVersionNo: 1 }).expect(403);
+    await owner.agent.delete(`/api/works/${workId}`).send({ expectedVersionNo: 1 }).expect(403);
+    await owner.agent.delete(`/api/works/${workId}`).set("X-CSRF-Token", owner.csrfToken).send({ expectedVersionNo: 1 }).expect(204);
+    expect((await owner.agent.get("/api/recycle-bin/works").expect(200)).body.data.works).toEqual([
+      expect.objectContaining({ id: workId })
+    ]);
+    expect((await editor.agent.get("/api/recycle-bin/works").expect(200)).body.data.works).toEqual([]);
+    expect((await outsider.agent.get("/api/recycle-bin/works").expect(200)).body.data.works).toEqual([]);
+    await editor.agent.post(`/api/recycle-bin/works/${workId}/restore`).set("X-CSRF-Token", editor.csrfToken).send({ expectedVersionNo: 2 }).expect(403);
+    await owner.agent.post(`/api/recycle-bin/works/${workId}/restore`).set("X-CSRF-Token", owner.csrfToken).send({ expectedVersionNo: 2 }).expect(200);
+
+    expect(runtime.database.all(
+      "SELECT action, user_id FROM audit_logs WHERE entity_id IN (?, ?) AND action IN ('chapter.deleted', 'chapter.restored', 'work.deleted', 'work.restored') ORDER BY created_at, id",
+      chapter.body.data.id,
+      workId
+    )).toEqual(expect.arrayContaining([
+      { action: "chapter.deleted", user_id: editor.user.userId },
+      { action: "chapter.restored", user_id: editor.user.userId },
+      { action: "work.deleted", user_id: owner.user.userId },
+      { action: "work.restored", user_id: owner.user.userId }
+    ]));
+  });
+
   it("未显式开启注册时连首位管理员注册也会被拒绝", async () => {
     await runtime.close();
     runtime = createUserAuthTestRuntime(false);

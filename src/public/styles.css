@@ -579,6 +579,7 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%; max-width: 1400px; margin: 0 auto 38px; }
 .shelf-header h1 { margin: 0 0 10px; font-size: clamp(30px, 4vw, 52px); font-weight: 560; letter-spacing: -.04em; }
 .shelf-header p { margin: 0; color: var(--muted); }
+.shelf-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
 .settings-detail-actions, .settings-dialog-header-actions { display: flex; align-items: center; gap: 10px; }
 .settings-detail-actions { flex: 0 0 auto; }
 .settings-parent-button { white-space: nowrap; }
@@ -1054,6 +1055,8 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .work-access-field strong { color: var(--ink); font-size: 12px; }
 .work-access-field small { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .work-access-field .ghost-button { flex: 0 0 auto; white-space: nowrap; }
+.work-danger-field { border-color: color-mix(in srgb, var(--accent) 34%, var(--line)); background: color-mix(in srgb, var(--accent) 4%, var(--surface-soft)); }
+.work-danger-field .danger-button { flex: 0 0 auto; white-space: nowrap; }
 .work-access-options { display: flex; flex-wrap: wrap; gap: 5px; }
 .work-access-options span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); color: var(--ink); font-size: 10px; line-height: 1.35; }
 .account-dialog { width: min(640px, 92vw); overflow: hidden; }
@@ -3155,6 +3158,28 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .versions-list { padding: 18px 24px 28px; max-height: 65vh; overflow: auto; }
 .version-row { display: grid; grid-template-columns: 75px 1fr auto; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--line); align-items: start; }
 .version-row p { margin: 0; color: var(--muted); font-size: 11px; white-space: pre-wrap; max-height: 70px; overflow: hidden; }
+.chapter-version-compare { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; gap: 12px; padding: 18px 24px 10px; }
+.chapter-version-compare label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: 10px; }
+.chapter-version-compare select { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.chapter-version-compare select:focus-visible, .chapter-version-compare button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); outline: 0; }
+.chapter-version-compare button { min-height: 36px; white-space: nowrap; }
+.chapter-version-diff-summary { margin: 0; padding: 4px 24px 10px; color: var(--muted); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
+.chapter-version-diff { max-height: 36vh; margin: 0 24px; overflow: auto; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.chapter-diff-row { display: grid; grid-template-columns: 42px 24px minmax(0, 1fr); min-width: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent); }
+.chapter-diff-row:last-child { border-bottom: 0; }
+.chapter-diff-row > * { padding: 6px 8px; }
+.chapter-diff-row code { min-width: 0; color: var(--ink); font: 10px/1.55 var(--font-latin), var(--font-cjk), monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chapter-diff-line-number { color: var(--muted); font: 9px/1.7 var(--font-latin), monospace; text-align: right; user-select: none; }
+.chapter-diff-marker { color: var(--muted); font: 10px/1.55 var(--font-latin), monospace; text-align: center; user-select: none; }
+.chapter-diff-row.is-added { background: color-mix(in srgb, var(--green) 10%, var(--surface)); }
+.chapter-diff-row.is-added .chapter-diff-marker { color: var(--green); }
+.chapter-diff-row.is-deleted { background: color-mix(in srgb, var(--toast-error-fg) 9%, var(--surface)); }
+.chapter-diff-row.is-deleted .chapter-diff-marker { color: var(--toast-error-fg); }
+.chapter-diff-row.is-modified { grid-template-rows: auto auto; background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
+.chapter-diff-row.is-modified > :nth-child(n + 4) { border-top: 1px dashed color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.chapter-diff-row.is-modified > :nth-child(2) { color: var(--toast-error-fg); }
+.chapter-diff-row.is-modified > :nth-child(5) { color: var(--green); }
+.chapter-diff-empty { color: var(--muted); font-style: italic; }
 .entity-history-list { display: grid; gap: 10px; padding: 18px 24px 28px; max-height: 65vh; overflow: auto; }
 .import-history-body { min-height: 220px; }
 .import-history-note { margin: 0; padding: 16px 24px 0; color: var(--muted); font-size: 10px; line-height: 1.65; }
@@ -3177,6 +3202,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .entity-version-card > button:disabled { cursor: default; opacity: .68; }
 .entity-version-actions { display: flex; justify-self: end; gap: 7px; }
 .entity-version-actions button { min-height: 30px; padding: 6px 9px; font-size: 9px; }
+.recycle-bin-list { align-content: start; }
+.recycle-bin-section { display: grid; gap: 9px; min-width: 0; }
+.recycle-bin-section + .recycle-bin-section { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--line); }
+.recycle-bin-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.recycle-bin-section-heading h3 { margin: 0; color: var(--ink); font-size: 13px; }
+.recycle-bin-section-heading span { color: var(--muted); font-size: 9px; }
+.recycle-bin-section-list { display: grid; gap: 10px; min-width: 0; }
+.recycle-bin-card small { line-height: 1.55; }
 .entity-history-empty { margin: 0; padding: 28px 12px; color: var(--muted); font-size: 11px; text-align: center; }
 .relationship-table .relationship-actions { white-space: nowrap; vertical-align: middle; }
 .relationship-table .relationship-actions button { display: inline-block; min-height: 30px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--muted); font: inherit; font-size: 10px; line-height: 1.2; vertical-align: middle; appearance: none; transition: border-color .14s ease, background .14s ease, color .14s ease; }
@@ -3419,6 +3452,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .shelf-header, .module-header { align-items: stretch; flex-direction: column; gap: 14px; margin-bottom: 20px; }
   .shelf-header h1 { font-size: clamp(24px, 7.5vw, 32px); }
   .shelf-header .primary-button { align-self: flex-start; min-width: 150px; min-height: 40px; padding: 10px 18px; }
+  .shelf-header-actions { align-self: flex-start; flex-wrap: wrap; }
   .settings-detail-actions { align-items: stretch; flex-direction: column; }
   .settings-detail-actions .primary-button, .settings-detail-actions .settings-parent-button { align-self: stretch; width: 100%; }
   .module-header-actions { width: 100%; }
@@ -3466,6 +3500,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-header h2 { font-size: 20px; }
   .settings-dialog-header-actions { gap: 6px; }
   .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list, .chapter-annotations-list { padding-inline: 16px; }
+  .chapter-version-compare { grid-template-columns: minmax(0, 1fr); padding-inline: 16px; }
+  .chapter-version-compare button { width: 100%; }
+  .chapter-version-diff-summary { padding-inline: 16px; }
+  .chapter-version-diff { max-height: 32vh; margin-inline: 16px; }
+  .chapter-diff-row { grid-template-columns: 34px 22px minmax(0, 1fr); }
   .replace-dialog-body { padding-inline: 16px; }
   .replace-dialog { height: calc(100dvh - 20px); max-height: calc(100dvh - 20px); }
   .replace-scope-fieldset { grid-template-columns: minmax(0, 1fr); }
@@ -3504,6 +3543,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .access-row { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
   .access-row select, .access-row button, .work-access-field .ghost-button { width: 100%; }
   .work-access-field { align-items: stretch; flex-direction: column; }
+  .work-access-field .danger-button { width: 100%; }
+
+  .recycle-bin-card { grid-template-columns: minmax(0, 1fr); gap: 7px; }
+  .recycle-bin-card time, .recycle-bin-card p, .recycle-bin-card small, .recycle-bin-card .entity-version-actions { grid-column: 1; justify-self: stretch; }
+  .recycle-bin-card time { justify-self: start; }
+  .recycle-bin-card .entity-version-actions button { flex: 1 1 0; min-height: 40px; }
 
   .entity-editor-view { min-width: 0; }
   .entity-editor-header, .character-editor-header { grid-template-columns: auto minmax(0, 1fr); gap: 8px; padding: 12px var(--mobile-gutter); }

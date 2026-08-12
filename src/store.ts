@@ -49,6 +49,11 @@ type WorkListBatch = {
 };
 
 const WORK_LIST_BATCH_SIZE = 500;
+export const RECYCLE_BIN_RETENTION_DAYS = 30;
+
+function recycleBinExpiresAt(deletedAt: string): string {
+  return new Date(new Date(deletedAt).getTime() + RECYCLE_BIN_RETENTION_DAYS * 24 * 60 * 60_000).toISOString();
+}
 
 type ChapterType = "正文" | "设定" | "作者的话" | "其他";
 type ImportMode = "append" | "overwrite";
@@ -595,6 +600,44 @@ function mergeAiInjectedEntities(base: AiInjectedEntities, extra: Partial<AiInje
 export class Store {
   constructor(readonly db: Database) {
     this.migrateEntityVersionBaselines();
+    this.purgeExpiredRecycleBin();
+  }
+
+  purgeExpiredRecycleBin(referenceTime = new Date()): { works: number; volumes: number; chapters: number } {
+    const cutoff = new Date(referenceTime.getTime() - RECYCLE_BIN_RETENTION_DAYS * 24 * 60 * 60_000).toISOString();
+    return this.db.transaction(() => {
+      let works = 0;
+      let volumes = 0;
+      let chapters = 0;
+      for (const work of this.db.all("SELECT * FROM works WHERE deleted_at IS NOT NULL AND deleted_at <= ?", cutoff)) {
+        this.permanentlyRemoveWorkRow(work, "retention-expired");
+        works += 1;
+      }
+      for (const volume of this.db.all(
+        `SELECT volume.* FROM volumes volume JOIN works work ON work.id = volume.work_id
+         WHERE work.deleted_at IS NULL AND volume.deleted_at IS NOT NULL AND volume.deleted_at <= ?`,
+        cutoff
+      )) {
+        this.permanentlyRemoveVolumeRow(volume, "retention-expired");
+        volumes += 1;
+      }
+      for (const chapter of this.db.all(
+        `SELECT chapter.* FROM chapters chapter
+         JOIN works work ON work.id = chapter.work_id
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE work.deleted_at IS NULL AND volume.deleted_at IS NULL
+           AND chapter.deleted_at IS NOT NULL AND chapter.deleted_via_volume_id IS NULL
+           AND chapter.deleted_at <= ?`,
+        cutoff
+      )) {
+        this.permanentlyRemoveChapterRow(chapter, "retention-expired");
+        chapters += 1;
+      }
+      if (works || volumes || chapters) {
+        logger.info("recycle_bin.retention_purged", { works, volumes, chapters, retentionDays: RECYCLE_BIN_RETENTION_DAYS });
+      }
+      return { works, volumes, chapters };
+    });
   }
 
   private currentEntityVersionNo(type: VersionedEntityType, entityId: string): number {
@@ -922,6 +965,9 @@ export class Store {
   }
 
   restoreEntityVersion(type: VersionedEntityType, entityId: string, versionNo: number, expectedVersionNo?: number): Record<string, unknown> {
+    if (type === "volume" && this.db.get("SELECT 1 AS present FROM volumes WHERE id = ? AND deleted_at IS NOT NULL", entityId)) {
+      throw new AppError(409, "ENTITY_IN_RECYCLE_BIN", "分卷位于回收站，请先从回收站恢复");
+    }
     const version = this.db.get(
       "SELECT * FROM entity_versions WHERE entity_type = ? AND entity_id = ? AND version_no = ?",
       type,
@@ -1102,11 +1148,12 @@ export class Store {
   listWorks(): Record<string, unknown>[] {
     const actor = currentRequestActor();
     if (!actor || (actor.role === "admin" && actor.authentication !== "api-key")) {
-      return this.mapWorks(this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC"));
+      return this.mapWorks(this.db.all("SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 AND deleted_at IS NULL ORDER BY updated_at DESC"));
     }
     return this.mapWorks(this.db.all(
       `SELECT DISTINCT work.* FROM works work LEFT JOIN work_memberships membership ON membership.work_id = work.id
-       WHERE COALESCE(work.is_internal, 0) = 0 AND (work.owner_user_id = ? OR membership.user_id = ?)
+       WHERE COALESCE(work.is_internal, 0) = 0 AND work.deleted_at IS NULL
+         AND (work.owner_user_id = ? OR membership.user_id = ?)
        ORDER BY work.updated_at DESC`,
       actor.userId,
       actor.userId
@@ -1117,10 +1164,11 @@ export class Store {
     const actor = currentRequestActor();
     const page = paginationSql(pagination);
     const rows = !actor || (actor.role === "admin" && actor.authentication !== "api-key")
-      ? this.db.all(`SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 ORDER BY updated_at DESC${page.sql}`, ...page.params)
+      ? this.db.all(`SELECT * FROM works WHERE COALESCE(is_internal, 0) = 0 AND deleted_at IS NULL ORDER BY updated_at DESC${page.sql}`, ...page.params)
       : this.db.all(
         `SELECT DISTINCT work.* FROM works work LEFT JOIN work_memberships membership ON membership.work_id = work.id
-         WHERE COALESCE(work.is_internal, 0) = 0 AND (work.owner_user_id = ? OR membership.user_id = ?)
+         WHERE COALESCE(work.is_internal, 0) = 0 AND work.deleted_at IS NULL
+           AND (work.owner_user_id = ? OR membership.user_id = ?)
          ORDER BY work.updated_at DESC${page.sql}`,
         actor.userId,
         actor.userId,
@@ -1130,9 +1178,44 @@ export class Store {
   }
 
   getWork(workId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM works WHERE id = ?", workId);
+    const row = this.db.get("SELECT * FROM works WHERE id = ? AND deleted_at IS NULL", workId);
     if (!row) throw notFound("作品");
     return this.mapWork(row);
+  }
+
+  listDeletedWorks(): Record<string, unknown>[] {
+    const actor = currentRequestActor();
+    const actorRestricted = Boolean(actor && !(actor.role === "admin" && actor.authentication !== "api-key"));
+    const rows = this.db.all(
+      `SELECT work.*,
+        (SELECT COUNT(*) FROM volumes volume WHERE volume.work_id = work.id) AS volume_count,
+        (SELECT COUNT(*) FROM chapters chapter WHERE chapter.work_id = work.id) AS chapter_count,
+        user.display_name AS actor_display_name, user.username AS actor_username
+       FROM works work
+       LEFT JOIN entity_versions version
+         ON version.entity_type = 'work' AND version.entity_id = work.id
+         AND version.version_no = work.version_no AND version.source = 'delete'
+       LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE COALESCE(work.is_internal, 0) = 0 AND work.deleted_at IS NOT NULL
+         ${actorRestricted ? "AND work.owner_user_id = ?" : ""}
+       ORDER BY work.deleted_at DESC, work.id DESC`,
+      ...(actorRestricted ? [actor!.userId] : [])
+    );
+    return rows.map((row) => {
+      const deletedAt = requiredString(row, "deleted_at");
+      return {
+        id: requiredString(row, "id"),
+        title: requiredString(row, "title"),
+        author: requiredString(row, "author"),
+        description: requiredString(row, "description"),
+        versionNo: numberValue(row, "version_no"),
+        volumeCount: numberValue(row, "volume_count"),
+        chapterCount: numberValue(row, "chapter_count"),
+        deletedAt,
+        expiresAt: recycleBinExpiresAt(deletedAt),
+        actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+      };
+    });
   }
 
   getPlatformAiSettings(): Record<string, unknown> {
@@ -1469,25 +1552,82 @@ export class Store {
   }
 
   deleteWork(workId: string, expectedVersionNo?: number): string[] {
-    const work = this.getWork(workId);
-    const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
-      .map((row) => requiredString(row, "storage_key"));
     this.db.transaction(() => {
-      this.db.raw.exec("PRAGMA defer_foreign_keys = ON");
       const current = this.getWork(workId);
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
-      this.recordEntityVersion("work", workId, "delete", null, "删除作品");
-      this.audit(null, "work.deleted", "work", workId, { title: work.title });
-      this.db.run("DELETE FROM characters WHERE work_id = ?", workId);
-      this.db.run("DELETE FROM organizations WHERE work_id = ?", workId);
-      this.db.run("UPDATE races SET parent_race_id = NULL WHERE work_id = ? AND parent_race_id IS NOT NULL", workId);
-      this.db.run("DELETE FROM races WHERE work_id = ?", workId);
-      this.db.run("DELETE FROM works WHERE id = ?", workId);
-      this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
-      for (const storageKey of storageKeys) {
-        if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
-      }
+      const timestamp = now();
+      const versionNo = this.recordEntityVersion("work", workId, "delete", null, "删除作品（可恢复）", timestamp);
+      this.db.run("UPDATE works SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, workId);
+      this.audit(workId, "work.deleted", "work", workId, {
+        title: current.title,
+        versionNo,
+        recoverable: true,
+        expiresAt: recycleBinExpiresAt(timestamp)
+      });
     });
+    return [];
+  }
+
+  restoreWork(workId: string, expectedVersionNo?: number): Record<string, unknown> {
+    const deleted = this.db.get("SELECT * FROM works WHERE id = ? AND deleted_at IS NOT NULL", workId);
+    if (!deleted) throw notFound("回收站作品");
+    this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", numberValue(deleted, "version_no"));
+    this.db.transaction(() => {
+      const locked = this.db.get("SELECT * FROM works WHERE id = ? AND deleted_at IS NOT NULL", workId);
+      if (!locked) throw new AppError(409, "WORK_ALREADY_RESTORED", "作品已经恢复");
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", numberValue(locked, "version_no"));
+      const deletionVersion = this.db.get(
+        "SELECT id FROM entity_versions WHERE entity_type = 'work' AND entity_id = ? AND source = 'delete' ORDER BY version_no DESC LIMIT 1",
+        workId
+      );
+      const timestamp = now();
+      this.db.run("UPDATE works SET deleted_at = NULL, updated_at = ? WHERE id = ?", timestamp, workId);
+      const versionNo = this.recordEntityVersion(
+        "work",
+        workId,
+        "restore",
+        optionalString(deletionVersion ?? {}, "id"),
+        "从回收站恢复作品",
+        timestamp
+      );
+      this.db.run("UPDATE works SET version_no = ? WHERE id = ?", versionNo, workId);
+      this.audit(workId, "work.restored", "work", workId, { versionNo, fromRecycleBin: true });
+    });
+    return this.getWorkDirectory(workId);
+  }
+
+  permanentlyDeleteWork(workId: string, expectedVersionNo?: number, reason = "manual"): string[] {
+    const deleted = this.db.get("SELECT * FROM works WHERE id = ? AND deleted_at IS NOT NULL", workId);
+    if (!deleted) throw new AppError(409, "WORK_NOT_IN_RECYCLE_BIN", "仅回收站中的作品可以彻底删除");
+    this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", numberValue(deleted, "version_no"));
+    return this.db.transaction(() => {
+      const locked = this.db.get("SELECT * FROM works WHERE id = ? AND deleted_at IS NOT NULL", workId);
+      if (!locked) throw new AppError(409, "WORK_NOT_IN_RECYCLE_BIN", "仅回收站中的作品可以彻底删除");
+      this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", numberValue(locked, "version_no"));
+      return this.permanentlyRemoveWorkRow(locked, reason);
+    });
+  }
+
+  private permanentlyRemoveWorkRow(work: Row, reason: string): string[] {
+    const workId = requiredString(work, "id");
+    const storageKeys = this.db.all("SELECT DISTINCT storage_key FROM attachments WHERE work_id = ?", workId)
+      .map((row) => requiredString(row, "storage_key"));
+    this.db.raw.exec("PRAGMA defer_foreign_keys = ON");
+    this.audit(null, "work.purged", "work", workId, {
+      title: requiredString(work, "title"),
+      versionNo: numberValue(work, "version_no"),
+      reason,
+      recoverable: false
+    });
+    this.db.run("DELETE FROM characters WHERE work_id = ?", workId);
+    this.db.run("DELETE FROM organizations WHERE work_id = ?", workId);
+    this.db.run("UPDATE races SET parent_race_id = NULL WHERE work_id = ? AND parent_race_id IS NOT NULL", workId);
+    this.db.run("DELETE FROM races WHERE work_id = ?", workId);
+    this.db.run("DELETE FROM works WHERE id = ?", workId);
+    this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
+    for (const storageKey of storageKeys) {
+      if (!this.attachmentStorageKeyInUse(storageKey)) this.enqueueAttachmentCleanup(storageKey);
+    }
     return storageKeys.filter((storageKey) => !this.attachmentStorageKeyInUse(storageKey));
   }
 
@@ -1553,7 +1693,7 @@ export class Store {
 
   getWorkTree(workId: string): Record<string, unknown> {
     const work = this.getWork(workId);
-    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at", workId);
     const chapterRows = this.db.all("SELECT * FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at", workId);
     const chaptersByVolume = new Map<string, Record<string, unknown>[]>();
     for (const row of chapterRows) {
@@ -1574,7 +1714,7 @@ export class Store {
     const work = this.getWork(workId);
     const permissions = work.modulePermissions as WorkModulePermissions;
     if (permissions.prose === "none") return { ...work, volumes: [] };
-    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at", workId);
     const chapterRows = this.db.all(
       `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
         analysis_status, excluded_from_analysis, created_at, updated_at
@@ -1603,7 +1743,7 @@ export class Store {
     const volumeRows = this.db.all(
       `SELECT volume.*,
         (SELECT COUNT(*) FROM chapters chapter WHERE chapter.volume_id = volume.id AND chapter.deleted_at IS NULL) AS chapter_count
-       FROM volumes volume WHERE volume.work_id = ? ORDER BY volume.sort_order, volume.created_at`,
+       FROM volumes volume WHERE volume.work_id = ? AND volume.deleted_at IS NULL ORDER BY volume.sort_order, volume.created_at`,
       workId
     );
     const volumes = volumeRows.map((row) => ({
@@ -1645,7 +1785,7 @@ export class Store {
     const work = this.getWork(workId);
     const permissions = work.modulePermissions as WorkModulePermissions;
     if (permissions.prose === "none") return { ...work, volumes: [], directoryPage: paginated([], pagination) };
-    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? ORDER BY sort_order, created_at", workId);
+    const volumeRows = this.db.all("SELECT * FROM volumes WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at", workId);
     const page = paginationSql(pagination);
     const chapterRows = this.db.all(
       `SELECT id, work_id, volume_id, title, chapter_type, sort_order, word_count, version_no,
@@ -1744,11 +1884,13 @@ export class Store {
         timestamp,
         currentRequestActor()?.userId ?? null
       );
-      for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
-        this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "替换作品树前保存分卷历史");
+      const activeVolumeIds = this.db.all("SELECT id FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId)
+        .map((row) => requiredString(row, "id"));
+      for (const volumeId of activeVolumeIds) {
+        this.recordEntityVersion("volume", volumeId, "delete", fileVersionId, "替换作品树前保存分卷历史");
       }
-      this.clearDraftVolumeBindings(workId, null, fileVersionId, "恢复文件版本时原分卷已被替换");
-      this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+      this.clearDraftVolumeBindings(workId, activeVolumeIds, fileVersionId, "恢复文件版本时原分卷已被替换");
+      this.db.run("DELETE FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
       for (const volume of volumes) {
         const volumeId = id("volume");
         this.insertVolumeWithId(workId, volumeId, {
@@ -1820,13 +1962,15 @@ export class Store {
     );
     let volumeOrderOffset = 0;
     if (mode === "overwrite") {
-      for (const row of this.db.all("SELECT id FROM volumes WHERE work_id = ?", workId)) {
-        this.recordEntityVersion("volume", requiredString(row, "id"), "delete", fileVersionId, "导入前保存分卷历史");
+      const activeVolumeIds = this.db.all("SELECT id FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId)
+        .map((row) => requiredString(row, "id"));
+      for (const volumeId of activeVolumeIds) {
+        this.recordEntityVersion("volume", volumeId, "delete", fileVersionId, "导入前保存分卷历史");
       }
-      this.clearDraftVolumeBindings(workId, null, fileVersionId, "覆盖导入时原分卷已被替换");
-      this.db.run("DELETE FROM volumes WHERE work_id = ?", workId);
+      this.clearDraftVolumeBindings(workId, activeVolumeIds, fileVersionId, "覆盖导入时原分卷已被替换");
+      this.db.run("DELETE FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
     } else {
-      const lastVolume = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
+      const lastVolume = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
       volumeOrderOffset = numberValue(lastVolume ?? {}, "value") + 1;
     }
     let firstImportedChapterId: string | null = null;
@@ -1877,7 +2021,7 @@ export class Store {
   ): Record<string, unknown> {
     this.getWork(workId);
     const timestamp = now();
-    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ?", workId);
+    const last = this.db.get("SELECT COALESCE(MAX(sort_order), -1) AS value FROM volumes WHERE work_id = ? AND deleted_at IS NULL", workId);
     this.db.run(
       `INSERT INTO volumes (id, work_id, title, kind, source, description, keywords_json, sort_order, version_no, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
@@ -1899,7 +2043,11 @@ export class Store {
   }
 
   getVolume(volumeId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM volumes WHERE id = ?", volumeId);
+    const row = this.db.get(
+      `SELECT volume.* FROM volumes volume JOIN works work ON work.id = volume.work_id
+       WHERE volume.id = ? AND volume.deleted_at IS NULL AND work.deleted_at IS NULL`,
+      volumeId
+    );
     if (!row) throw notFound("卷");
     return this.mapVolume(row);
   }
@@ -1930,23 +2078,130 @@ export class Store {
     this.db.transaction(() => {
       const current = this.getVolume(volumeId);
       this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", Number(current.versionNo));
-      const counts = this.db.get(
-        `SELECT
-          SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END) AS active_count,
-          SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END) AS deleted_count
-        FROM chapters WHERE volume_id = ?`,
+      const timestamp = now();
+      const workId = String(current.workId);
+      const versionNo = this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷（可恢复）", timestamp);
+      const activeChapters = this.db.all("SELECT id FROM chapters WHERE volume_id = ? AND deleted_at IS NULL", volumeId);
+      this.db.run("UPDATE volumes SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, volumeId);
+      for (const chapter of activeChapters) {
+        const chapterId = requiredString(chapter, "id");
+        this.db.run("UPDATE chapters SET deleted_at = ?, deleted_via_volume_id = ?, updated_at = ? WHERE id = ?", timestamp, volumeId, timestamp, chapterId);
+        this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
+      }
+      this.db.run(
+        `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
+         WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
+           AND (json_extract(scope_json, '$.type') = 'book'
+             OR (json_extract(scope_json, '$.type') = 'volume' AND json_extract(scope_json, '$.volumeId') = ?))`,
+        timestamp,
+        workId,
         volumeId
       );
-      if (numberValue(counts ?? {}, "active_count") > 0) {
-        throw new AppError(409, "VOLUME_NOT_EMPTY", "卷内仍有章节，需先移动或删除章节");
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.audit(workId, "volume.deleted", "volume", volumeId, {
+        versionNo,
+        chapterCount: activeChapters.length,
+        recoverable: true,
+        expiresAt: recycleBinExpiresAt(timestamp)
+      });
+    });
+  }
+
+  listDeletedVolumes(workId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    return this.db.all(
+      `SELECT volume.*,
+        (SELECT COUNT(*) FROM chapters chapter WHERE chapter.volume_id = volume.id) AS chapter_count,
+        user.display_name AS actor_display_name, user.username AS actor_username
+       FROM volumes volume
+       LEFT JOIN entity_versions version
+         ON version.entity_type = 'volume' AND version.entity_id = volume.id
+         AND version.version_no = volume.version_no AND version.source = 'delete'
+       LEFT JOIN users user ON user.id = version.created_by_user_id
+       WHERE volume.work_id = ? AND volume.deleted_at IS NOT NULL
+       ORDER BY volume.deleted_at DESC, volume.id DESC`,
+      workId
+    ).map((row) => {
+      const deletedAt = requiredString(row, "deleted_at");
+      return {
+        ...this.mapVolume(row),
+        chapterCount: numberValue(row, "chapter_count"),
+        deletedAt,
+        expiresAt: recycleBinExpiresAt(deletedAt),
+        actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+      };
+    });
+  }
+
+  restoreVolume(volumeId: string, expectedVersionNo?: number): Record<string, unknown> {
+    const deleted = this.db.get("SELECT * FROM volumes WHERE id = ? AND deleted_at IS NOT NULL", volumeId);
+    if (!deleted) throw notFound("回收站分卷");
+    const workId = requiredString(deleted, "work_id");
+    this.getWork(workId);
+    this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", numberValue(deleted, "version_no"));
+    this.db.transaction(() => {
+      const locked = this.db.get("SELECT * FROM volumes WHERE id = ? AND deleted_at IS NOT NULL", volumeId);
+      if (!locked) throw new AppError(409, "VOLUME_ALREADY_RESTORED", "分卷已经恢复");
+      this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", numberValue(locked, "version_no"));
+      const deletionVersion = this.db.get(
+        "SELECT id FROM entity_versions WHERE entity_type = 'volume' AND entity_id = ? AND source = 'delete' ORDER BY version_no DESC LIMIT 1",
+        volumeId
+      );
+      const timestamp = now();
+      this.db.run("UPDATE volumes SET deleted_at = NULL, updated_at = ? WHERE id = ?", timestamp, volumeId);
+      const versionNo = this.recordEntityVersion(
+        "volume",
+        volumeId,
+        "restore",
+        optionalString(deletionVersion ?? {}, "id"),
+        "从回收站恢复分卷",
+        timestamp
+      );
+      this.db.run("UPDATE volumes SET version_no = ? WHERE id = ?", versionNo, volumeId);
+      const chapters = this.db.all("SELECT id, content, version_no FROM chapters WHERE deleted_via_volume_id = ?", volumeId);
+      for (const chapter of chapters) {
+        const chapterId = requiredString(chapter, "id");
+        this.db.run(
+          "UPDATE chapters SET deleted_at = NULL, deleted_via_volume_id = NULL, analysis_status = 'expired', updated_at = ? WHERE id = ?",
+          timestamp,
+          chapterId
+        );
+        this.syncChapterParagraphSearch(workId, chapterId, requiredString(chapter, "content"));
+        this.invalidateChapter(workId, chapterId, numberValue(chapter, "version_no"));
       }
-      if (numberValue(counts ?? {}, "deleted_count") > 0) {
-        throw new AppError(409, "VOLUME_HAS_DELETED_CHAPTERS", "分卷回收站中仍有章节，请先彻底删除或恢复并移动这些章节");
-      }
-      this.recordEntityVersion("volume", volumeId, "delete", null, "删除分卷");
-      this.clearDraftVolumeBindings(String(current.workId), [volumeId], null, "绑定的分卷已删除");
-      this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
-      this.audit(String(current.workId), "volume.deleted", "volume", volumeId, { versionNo: Number(current.versionNo) });
+      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
+      this.audit(workId, "volume.restored", "volume", volumeId, { versionNo, chapterCount: chapters.length, fromRecycleBin: true });
+    });
+    return this.getVolume(volumeId);
+  }
+
+  permanentlyDeleteVolume(volumeId: string, expectedVersionNo?: number, reason = "manual"): void {
+    const deleted = this.db.get("SELECT * FROM volumes WHERE id = ? AND deleted_at IS NOT NULL", volumeId);
+    if (!deleted) throw new AppError(409, "VOLUME_NOT_IN_RECYCLE_BIN", "仅回收站中的分卷可以彻底删除");
+    this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", numberValue(deleted, "version_no"));
+    this.db.transaction(() => {
+      const locked = this.db.get("SELECT * FROM volumes WHERE id = ? AND deleted_at IS NOT NULL", volumeId);
+      if (!locked) throw new AppError(409, "VOLUME_NOT_IN_RECYCLE_BIN", "仅回收站中的分卷可以彻底删除");
+      this.assertExpectedVersion("volume", volumeId, expectedVersionNo, "分卷", numberValue(locked, "version_no"));
+      this.permanentlyRemoveVolumeRow(locked, reason);
+    });
+  }
+
+  private permanentlyRemoveVolumeRow(volume: Row, reason: string): void {
+    const volumeId = requiredString(volume, "id");
+    const workId = requiredString(volume, "work_id");
+    const chapters = this.db.all("SELECT * FROM chapters WHERE volume_id = ?", volumeId);
+    for (const chapter of chapters) this.permanentlyRemoveChapterRow(chapter, reason, false);
+    this.clearDraftVolumeBindings(workId, [volumeId], null, "绑定的分卷已彻底删除");
+    this.db.run("DELETE FROM entity_versions WHERE entity_type = 'volume' AND entity_id = ?", volumeId);
+    this.db.run("DELETE FROM volumes WHERE id = ?", volumeId);
+    this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", now(), workId);
+    this.audit(workId, "volume.purged", "volume", volumeId, {
+      title: requiredString(volume, "title"),
+      chapterCount: chapters.length,
+      versionNo: numberValue(volume, "version_no"),
+      reason,
+      recoverable: false
     });
   }
 
@@ -1972,7 +2227,14 @@ export class Store {
   }
 
   getChapter(chapterId: string): Record<string, unknown> {
-    const row = this.db.get("SELECT * FROM chapters WHERE id = ? AND deleted_at IS NULL", chapterId);
+    const row = this.db.get(
+      `SELECT chapter.* FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       JOIN works work ON work.id = chapter.work_id
+       WHERE chapter.id = ? AND chapter.deleted_at IS NULL
+         AND volume.deleted_at IS NULL AND work.deleted_at IS NULL`,
+      chapterId
+    );
     if (!row) throw notFound("章节");
     return this.mapChapter(row);
   }
@@ -1999,6 +2261,7 @@ export class Store {
          ON version.chapter_id = chapter.id AND version.version_no = chapter.version_no AND version.source = 'delete'
        LEFT JOIN users user ON user.id = version.created_by_user_id
        WHERE chapter.work_id = ? AND chapter.deleted_at IS NOT NULL
+         AND chapter.deleted_via_volume_id IS NULL AND volume.deleted_at IS NULL
        ORDER BY chapter.deleted_at DESC, chapter.id DESC${pageSql}`,
       workId,
       ...pageParams
@@ -2006,6 +2269,7 @@ export class Store {
   }
 
   private mapDeletedChapter(row: Row): Record<string, unknown> {
+    const deletedAt = requiredString(row, "deleted_at");
     return {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
@@ -2015,8 +2279,17 @@ export class Store {
       contentPreview: requiredString(row, "content").slice(0, 300),
       wordCount: numberValue(row, "word_count"),
       versionNo: numberValue(row, "version_no"),
-      deletedAt: requiredString(row, "deleted_at"),
+      deletedAt,
+      expiresAt: recycleBinExpiresAt(deletedAt),
       actor: optionalString(row, "actor_display_name") ?? optionalString(row, "actor_username") ?? "历史数据"
+    };
+  }
+
+  getRecycleBin(workId: string): Record<string, unknown> {
+    return {
+      retentionDays: RECYCLE_BIN_RETENTION_DAYS,
+      volumes: this.listDeletedVolumes(workId),
+      chapters: this.listDeletedChapters(workId)
     };
   }
 
@@ -2414,6 +2687,9 @@ export class Store {
   ): Record<string, unknown> {
     const deleted = this.db.get("SELECT * FROM chapters WHERE id = ? AND deleted_at IS NOT NULL", chapterId);
     if (!deleted) throw notFound("章节");
+    if (optionalString(deleted, "deleted_via_volume_id")) {
+      throw new AppError(409, "CHAPTER_DELETED_WITH_VOLUME", "章节随分卷进入回收站，请先恢复分卷");
+    }
     const currentVersionNo = numberValue(deleted, "version_no");
     this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", currentVersionNo);
     const workId = requiredString(deleted, "work_id");
@@ -2433,12 +2709,15 @@ export class Store {
     ) + 1;
     const timestamp = now();
     this.db.transaction(() => {
-      const locked = this.db.get("SELECT version_no, deleted_at FROM chapters WHERE id = ?", chapterId);
+      const locked = this.db.get("SELECT version_no, deleted_at, deleted_via_volume_id FROM chapters WHERE id = ?", chapterId);
       if (!locked?.deleted_at) throw new AppError(409, "CHAPTER_ALREADY_RESTORED", "章节已经恢复");
+      if (optionalString(locked, "deleted_via_volume_id")) {
+        throw new AppError(409, "CHAPTER_DELETED_WITH_VOLUME", "章节随分卷进入回收站，请先恢复分卷");
+      }
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", numberValue(locked, "version_no"));
       this.db.run(
         `UPDATE chapters SET volume_id = ?, title = ?, content = ?, chapter_type = ?, sort_order = ?, word_count = ?,
-          version_no = ?, analysis_status = 'pending', deleted_at = NULL, updated_at = ? WHERE id = ?`,
+          version_no = ?, analysis_status = 'pending', deleted_at = NULL, deleted_via_volume_id = NULL, updated_at = ? WHERE id = ?`,
         volumeId,
         title,
         content,
@@ -2806,7 +3085,7 @@ export class Store {
         for (const chapter of currentChapters) {
           const chapterId = String(chapter.id);
           const versionNo = Number(chapter.versionNo) + 1;
-          this.db.run("UPDATE chapters SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, chapterId);
+          this.db.run("UPDATE chapters SET version_no = ?, deleted_at = ?, deleted_via_volume_id = NULL, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, chapterId);
           this.insertChapterVersionRow({
             workId,
             chapterId,
@@ -2850,7 +3129,7 @@ export class Store {
     this.db.transaction(() => {
       const lockedChapter = this.getChapter(chapterId);
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", Number(lockedChapter.versionNo));
-      this.db.run("UPDATE chapters SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, chapterId);
+      this.db.run("UPDATE chapters SET version_no = ?, deleted_at = ?, deleted_via_volume_id = NULL, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, chapterId);
       this.insertChapterVersionRow({
         workId: String(chapter.workId),
         chapterId,
@@ -2883,29 +3162,41 @@ export class Store {
     });
   }
 
-  permanentlyDeleteChapter(chapterId: string, expectedVersionNo?: number): void {
+  permanentlyDeleteChapter(chapterId: string, expectedVersionNo?: number, reason = "manual"): void {
     const chapter = this.db.get("SELECT * FROM chapters WHERE id = ?", chapterId);
     if (!chapter) throw notFound("章节");
     if (!chapter.deleted_at) throw new AppError(409, "CHAPTER_NOT_IN_RECYCLE_BIN", "仅回收站中的章节可以彻底删除");
+    if (optionalString(chapter, "deleted_via_volume_id")) {
+      throw new AppError(409, "CHAPTER_DELETED_WITH_VOLUME", "章节随分卷进入回收站，请在分卷条目上操作");
+    }
     this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", numberValue(chapter, "version_no"));
-    const workId = requiredString(chapter, "work_id");
-    const timestamp = now();
     this.db.transaction(() => {
       const locked = this.db.get("SELECT * FROM chapters WHERE id = ?", chapterId);
       if (!locked) throw notFound("章节");
       if (!locked.deleted_at) throw new AppError(409, "CHAPTER_NOT_IN_RECYCLE_BIN", "仅回收站中的章节可以彻底删除");
+      if (optionalString(locked, "deleted_via_volume_id")) {
+        throw new AppError(409, "CHAPTER_DELETED_WITH_VOLUME", "章节随分卷进入回收站，请在分卷条目上操作");
+      }
       this.assertExpectedRevision("chapter", chapterId, expectedVersionNo, "章节", numberValue(locked, "version_no"));
-      this.db.run("DELETE FROM chapter_versions WHERE chapter_id = ?", chapterId);
-      this.db.run("DELETE FROM entity_versions WHERE entity_type = 'chapter-outline' AND entity_id = ?", chapterId);
-      this.db.run("DELETE FROM attachment_references WHERE entity_type = 'chapter' AND entity_id = ?", chapterId);
-      this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
-      this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
-      this.audit(workId, "chapter.purged", "chapter", chapterId, {
-        title: requiredString(locked, "title"),
-        volumeId: requiredString(locked, "volume_id"),
-        versionNo: numberValue(locked, "version_no"),
-        recoverable: false
-      });
+      this.permanentlyRemoveChapterRow(locked, reason);
+    });
+  }
+
+  private permanentlyRemoveChapterRow(chapter: Row, reason: string, recordAudit = true): void {
+    const chapterId = requiredString(chapter, "id");
+    const workId = requiredString(chapter, "work_id");
+    this.db.run("DELETE FROM chapter_versions WHERE chapter_id = ?", chapterId);
+    this.db.run("DELETE FROM entity_versions WHERE entity_type = 'chapter-outline' AND entity_id = ?", chapterId);
+    this.db.run("DELETE FROM attachment_references WHERE entity_type = 'chapter' AND entity_id = ?", chapterId);
+    this.db.run("DELETE FROM chapters WHERE id = ?", chapterId);
+    if (!recordAudit) return;
+    this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", now(), workId);
+    this.audit(workId, "chapter.purged", "chapter", chapterId, {
+      title: requiredString(chapter, "title"),
+      volumeId: requiredString(chapter, "volume_id"),
+      versionNo: numberValue(chapter, "version_no"),
+      reason,
+      recoverable: false
     });
   }
 

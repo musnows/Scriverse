@@ -122,7 +122,9 @@ describe("数据库版本化迁移", () => {
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_merges'")?.name).toBe("character_merges");
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "version_no")).toBe(true);
+    expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "deleted_at")).toBe(true);
     expect(first.all("PRAGMA table_info(volumes)").some((column) => column.name === "version_no")).toBe(true);
+    expect(first.all("PRAGMA table_info(volumes)").some((column) => column.name === "deleted_at")).toBe(true);
     expect(first.all("PRAGMA table_info(work_memberships)").some((column) => column.name === "permissions_json")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
@@ -137,6 +139,13 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_at")).toBe(true);
+    expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_via_volume_id")).toBe(true);
+    expect(first.all("PRAGMA index_list(works)").some((index) => index.name === "idx_works_recycle_bin")).toBe(true);
+    expect(first.all("PRAGMA index_list(volumes)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_volumes_active_work",
+      "idx_volumes_recycle_bin"
+    ]));
+    expect(first.all("PRAGMA index_list(chapters)").some((index) => index.name === "idx_chapters_deleted_via_volume")).toBe(true);
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_annotations'")?.name).toBe("chapter_annotations");
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_annotation_versions'")?.name).toBe("chapter_annotation_versions");
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'writing_goals'")?.name).toBe("writing_goals");

@@ -472,7 +472,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     });
   });
 
-  it("删除包含多级种族树的作品时完整级联清理", async () => {
+  it("删除包含多级种族树的作品时保留资料，彻底删除后完整级联清理", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "待删除种族树作品" }).expect(201);
     const workId = String(work.body.data.id);
     const parent = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "父种族" }).expect(201);
@@ -497,6 +497,11 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
 
     await request(runtime.app).delete(`/api/works/${workId}`).expect(204);
     await request(runtime.app).get(`/api/works/${workId}`).expect(404);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM races WHERE work_id = ?", workId)?.count).toBe(2);
+    await request(runtime.app)
+      .delete(`/api/recycle-bin/works/${workId}/permanent`)
+      .send({ expectedVersionNo: 2 })
+      .expect(204);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM races WHERE work_id = ?", workId)?.count).toBe(0);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });

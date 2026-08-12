@@ -78,16 +78,26 @@ describe("作品和分卷版本锁", () => {
     expect(updated.body.data.versionNo).toBe(2);
     await request(runtime.app).delete(`/api/volumes/${volumeId}`).send({ expectedVersionNo: 2 }).expect(204);
 
+    await request(runtime.app)
+      .post(`/api/volumes/${volumeId}/restore`)
+      .send({ expectedVersionNo: 2 })
+      .expect(409);
+    const recycled = await request(runtime.app)
+      .post(`/api/volumes/${volumeId}/restore`)
+      .send({ expectedVersionNo: 3 })
+      .expect(200);
+    expect(recycled.body.data).toMatchObject({ id: volumeId, title: "待删除卷", versionNo: 4 });
+
     const restored = await request(runtime.app)
       .post(`/api/entity-versions/volume/${volumeId}/restore`)
-      .send({ versionNo: 1, expectedVersionNo: 3 })
+      .send({ versionNo: 1, expectedVersionNo: 4 })
       .expect(200);
-    expect(restored.body.data).toMatchObject({ id: volumeId, title: "待删除卷", versionNo: 4 });
+    expect(restored.body.data).toMatchObject({ id: volumeId, title: "待删除卷", versionNo: 5 });
 
     const changed = await request(runtime.app)
       .patch(`/api/volumes/${volumeId}`)
-      .send({ title: "恢复后继续编辑", expectedVersionNo: 4 })
+      .send({ title: "恢复后继续编辑", expectedVersionNo: 5 })
       .expect(200);
-    expect(changed.body.data.versionNo).toBe(5);
+    expect(changed.body.data.versionNo).toBe(6);
   });
 });

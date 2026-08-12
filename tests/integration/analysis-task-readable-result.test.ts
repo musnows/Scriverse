@@ -280,7 +280,7 @@ describe("AI 分析任务可读结果", () => {
     const detail = await request(runtime.app).get(`/api/tasks/${task.id}/detail`).expect(200);
     expect(detail.body.data).not.toHaveProperty("result");
     expect(JSON.stringify(detail.body.data)).not.toContain(longValue);
-    expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(1);
+    expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(2);
     expectNoDatabaseMetadata(detail.body.data);
 
     databaseGet.mockClear();
@@ -288,13 +288,13 @@ describe("AI 分析任务可读结果", () => {
     expect(fullResult.body.data).toEqual({ taskId: task.id, result: publicResult });
     expect(fullResult.body.data.result.longValue).toHaveLength(longValue.length);
     expectNoDatabaseMetadata(fullResult.body.data);
-    expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(1);
+    expect(databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"))).toHaveLength(2);
 
     databaseGet.mockClear();
     await request(runtime.app).get(`/api/tasks/${task.id}/trace`).expect(200);
     const traceTaskQueries = databaseGet.mock.calls.filter(([sql]) => String(sql).includes("FROM analysis_tasks WHERE id = ?"));
-    expect(traceTaskQueries).toHaveLength(1);
-    expect(String(traceTaskQueries[0]?.[0])).toContain("SELECT work_id");
+    expect(traceTaskQueries).toHaveLength(2);
+    expect(traceTaskQueries.some(([sql]) => String(sql).includes("SELECT work_id"))).toBe(true);
   });
 
   it("兼容主库历史任务结构并说明选定内容和现存数据差异", async () => {

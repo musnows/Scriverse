@@ -131,7 +131,7 @@ describe("作品草稿 API", () => {
     }).expect(400);
   });
 
-  it("删除已绑定分卷后将正文想法回退为全局并记录版本", async () => {
+  it("分卷进入回收站时保留正文想法绑定并在恢复后继续可用", async () => {
     const volume = runtime.store.createVolume(workId, { title: "待删除分卷" });
     const draft = await request(runtime.app).post(`/api/works/${workId}/drafts`).send({
       draftType: "prose",
@@ -141,9 +141,13 @@ describe("作品草稿 API", () => {
     }).expect(201);
 
     await request(runtime.app).delete(`/api/volumes/${volume.id}`).send({ expectedVersionNo: volume.versionNo }).expect(204);
-    const globalDraft = await request(runtime.app).get(`/api/drafts/${draft.body.data.id}`).expect(200);
-    expect(globalDraft.body.data).toMatchObject({ volumeId: null, volumeTitle: null, versionNo: 2 });
+    const retainedDraft = await request(runtime.app).get(`/api/drafts/${draft.body.data.id}`).expect(200);
+    expect(retainedDraft.body.data).toMatchObject({ volumeId: volume.id, volumeTitle: "待删除分卷", versionNo: 1 });
     const versions = await request(runtime.app).get(`/api/entity-versions/draft/${draft.body.data.id}`).expect(200);
-    expect(versions.body.data[0]).toMatchObject({ changeNote: "绑定的分卷已删除", snapshot: { volumeId: null } });
+    expect(versions.body.data).toHaveLength(1);
+    expect(versions.body.data[0]).toMatchObject({ snapshot: { volumeId: volume.id } });
+    await request(runtime.app).post(`/api/volumes/${volume.id}/restore`).send({ expectedVersionNo: 2 }).expect(200);
+    const restoredDraft = await request(runtime.app).get(`/api/drafts/${draft.body.data.id}`).expect(200);
+    expect(restoredDraft.body.data).toMatchObject({ volumeId: volume.id, volumeTitle: "待删除分卷", versionNo: 1 });
   });
 });

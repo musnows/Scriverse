@@ -6,9 +6,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 86;
+export const DATABASE_SCHEMA_VERSION = 87;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -188,6 +188,7 @@ export class Database {
         tags_json TEXT NOT NULL DEFAULT '[]',
         is_internal INTEGER NOT NULL DEFAULT 0,
         version_no INTEGER NOT NULL DEFAULT 1,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -214,6 +215,7 @@ export class Database {
         keywords_json TEXT NOT NULL DEFAULT '[]',
         sort_order INTEGER NOT NULL,
         version_no INTEGER NOT NULL DEFAULT 1,
+        deleted_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -231,6 +233,7 @@ export class Database {
         analysis_status TEXT NOT NULL DEFAULT 'pending',
         excluded_from_analysis INTEGER NOT NULL DEFAULT 0,
         deleted_at TEXT,
+        deleted_via_volume_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -3364,6 +3367,27 @@ export class Database {
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (86, ?)", new Date().toISOString());
       });
+    }
+    if (!applied.has(87)) {
+      this.transaction(() => {
+        const workColumns = new Set(this.all("PRAGMA table_info(works)").map((row) => String(row.name)));
+        if (!workColumns.has("deleted_at")) this.run("ALTER TABLE works ADD COLUMN deleted_at TEXT");
+        const volumeColumns = new Set(this.all("PRAGMA table_info(volumes)").map((row) => String(row.name)));
+        if (!volumeColumns.has("deleted_at")) this.run("ALTER TABLE volumes ADD COLUMN deleted_at TEXT");
+        const chapterColumns = new Set(this.all("PRAGMA table_info(chapters)").map((row) => String(row.name)));
+        if (!chapterColumns.has("deleted_via_volume_id")) this.run("ALTER TABLE chapters ADD COLUMN deleted_via_volume_id TEXT");
+        this.run("CREATE INDEX IF NOT EXISTS idx_works_recycle_bin ON works(deleted_at, owner_user_id)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_volumes_active_work ON volumes(work_id, deleted_at, sort_order)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_volumes_recycle_bin ON volumes(work_id, deleted_at DESC)");
+        this.run("CREATE INDEX IF NOT EXISTS idx_chapters_deleted_via_volume ON chapters(deleted_via_volume_id, deleted_at)");
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (87, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
     }
   }
 
