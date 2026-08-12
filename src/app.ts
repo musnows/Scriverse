@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
+import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
@@ -20,7 +21,7 @@ import { assertSafeDocxArchive } from "./docx-security.js";
 import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
-import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
+import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
@@ -60,6 +61,8 @@ import {
 
 const nonEmpty = z.string().trim().min(1);
 const identifier = z.string().trim().min(1).max(200);
+const idempotencyKeySchema = z.string().trim().min(16).max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u, "幂等键只能包含英文字母、数字、点、下划线、冒号和短横线");
 const optionalStrings = z.array(z.string()).optional();
 const jsonObject = z.record(z.string(), z.unknown());
 const chapterTypeSchema = z.enum(["正文", "设定", "作者的话", "其他"]);
@@ -68,6 +71,18 @@ const versionedEntityTypeSchema = z.enum(versionedEntityTypes);
 const attachmentPermissionModuleSchema = z.enum(attachmentPermissionModules);
 const maximumImportedTextLength = 20_000_000;
 const maximumKnowledgeSectionsLength = 4_000_000;
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
 
 function assertImageUploadSize(byteLength: number, maximumBytes: number, message: string): void {
   if (byteLength <= maximumBytes) return;
@@ -701,6 +716,8 @@ export type RuntimeOptions = {
   developmentServer?: boolean;
   /** 图片上传大小限制；未指定时使用默认值。 */
   uploadLimits?: ImageUploadLimits;
+  /** 交互式 AI 流的事件空闲超时；生产启动值由环境变量解析，测试可注入更短时长。 */
+  aiStreamIdleTimeoutMs?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
   backupOptions?: S3BackupManagerOptions;
 };
@@ -991,6 +1008,8 @@ export function publicAiStreamError(error: unknown): {
   providerId?: string;
   modelId?: string;
   modelRecordId?: string;
+  phase?: string;
+  idleTimeoutSeconds?: number;
 } {
   if (error instanceof AppError) {
     const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
@@ -1005,7 +1024,9 @@ export function publicAiStreamError(error: unknown): {
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
       ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
       ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
-      ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
+      ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {}),
+      ...(typeof details?.phase === "string" ? { phase: details.phase } : {}),
+      ...(typeof details?.idleTimeoutSeconds === "number" ? { idleTimeoutSeconds: details.idleTimeoutSeconds } : {})
     };
   }
   return { code: "AI_STREAM_FAILED", message: "AI 流式调用失败" };
@@ -1166,7 +1187,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
     },
-    attachmentStorage
+    attachmentStorage,
+    { interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS }
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
@@ -2474,6 +2496,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
         cacheHitPercent: z.number().min(0).max(100).optional(),
         processDurationMs: z.number().int().min(0).max(86_400_000).optional(),
+        interrupted: z.boolean().optional(),
+        interruptionCode: z.string().max(100).optional(),
+        interruptionMessage: z.string().max(500).optional(),
         toolCalls: z.array(aiToolCallResultSchema).max(12).optional(),
         processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()
@@ -2535,13 +2560,19 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ai.deleteProvider(request.params.providerId);
     noContent(response);
   });
-  app.post("/api/providers/:providerId/test", async (request, response) => data(response, await ai.testProvider(request.params.providerId)));
+  app.post("/api/providers/:providerId/test", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await ai.testProvider(request.params.providerId));
+  });
   app.get("/api/providers/:providerId/models", (request, response) => {
     const pagination = parsePagination(request.query);
     data(response, pagination ? ai.listModelsPage(request.params.providerId, pagination) : ai.listModels(request.params.providerId));
   });
   app.post("/api/providers/:providerId/models", (request, response) => data(response, ai.createModel(request.params.providerId, parse(modelSchema, request.body)), 201));
-  app.post("/api/models/:modelId/test", async (request, response) => data(response, await ai.testModel(request.params.modelId)));
+  app.post("/api/models/:modelId/test", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await ai.testModel(request.params.modelId));
+  });
   app.get("/api/models/:modelId", (request, response) => data(response, ai.getModel(request.params.modelId)));
   app.patch("/api/models/:modelId", (request, response) => data(response, ai.updateModel(request.params.modelId, parse(modelSchema.partial(), request.body))));
   app.delete("/api/models/:modelId", (request, response) => {
@@ -2602,50 +2633,86 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       conversationId: identifier.optional(),
       currentMessageId: identifier.optional()
     }), request.body);
+    const providedIdempotencyKey = request.get("Idempotency-Key");
+    const idempotencyKey = providedIdempotencyKey
+      ? parse(idempotencyKeySchema, providedIdempotencyKey)
+      : randomUUID();
+    const actorScope = request.authUser ? `user:${request.authUser.userId}` : "auth-disabled";
+    const requestHash = store.hashContent(stableJson({ workId: request.params.workId, ...input }));
     const citations = input.citations ?? [];
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
     const resolvedInstruction = instructionWithCitations(input.instruction, citations);
+    const existingRequest = store.findAiConversationStreamRequest(actorScope, request.params.workId, idempotencyKey);
+    if (existingRequest && input.conversationId && existingRequest.conversationId !== input.conversationId) {
+      throw new AppError(409, "IDEMPOTENCY_KEY_REUSED", "该请求标识已用于另一项 AI 对话请求");
+    }
+    const conversation = existingRequest
+      ? store.getAiConversationSummary(existingRequest.conversationId)
+      : input.conversationId
+        ? store.getAiConversationSummary(input.conversationId)
+        : store.createAiConversation(request.params.workId);
+    if (String(conversation.workId) !== request.params.workId) {
+      throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    }
+    const conversationId = String(conversation.id);
+    const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
     response.on("close", () => {
       if (!response.writableEnded) controller.abort(new Error("浏览器已中断流式请求"));
     });
-    response.status(200);
-    response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    response.setHeader("Cache-Control", "no-cache, no-transform");
-    response.setHeader("Connection", "keep-alive");
-    response.setHeader("X-Accel-Buffering", "no");
-    response.flushHeaders();
+    let streamRequestId: string | null = null;
+    let streamRequestFinished = false;
+    let lastStreamLeaseTouchAt = Date.now();
+    const startStream = (): void => {
+      if (response.headersSent) return;
+      response.status(200);
+      response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      response.setHeader("Cache-Control", "no-cache, no-transform");
+      response.setHeader("Connection", "keep-alive");
+      response.setHeader("X-Accel-Buffering", "no");
+      response.flushHeaders();
+    };
     const sendEvent = (event: string, payload: unknown): void => {
+      if (streamRequestId && Date.now() - lastStreamLeaseTouchAt >= 30_000) {
+        store.touchAiConversationStreamRequest(streamRequestId);
+        lastStreamLeaseTouchAt = Date.now();
+      }
       if (!response.writableEnded && !response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
     };
-    sendEvent("ready", { streaming: true });
     try {
-      const conversation = input.conversationId
-        ? store.getAiConversationSummary(input.conversationId)
-        : store.createAiConversation(request.params.workId);
-      if (String(conversation.workId) !== request.params.workId) {
-        throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+      if (!existingRequest) {
+        store.assertAiConversationStreamAvailable(conversationId);
+        const inspection = ai.inspectConversationContext({
+          conversationId,
+          workId: request.params.workId,
+          modelId: input.modelId,
+          scope: input.scope as ContextScope,
+          instruction: resolvedInstruction,
+          excludeConversationMessageId: input.currentMessageId
+        });
+        if (inspection.action === "warn") {
+          const prepared = await ai.prepareConversationContext({
+            conversationId,
+            workId: request.params.workId,
+            modelId: input.modelId,
+            scope: input.scope as ContextScope,
+            instruction: resolvedInstruction,
+            excludeConversationMessageId: input.currentMessageId
+          });
+          startStream();
+          sendEvent("ready", { streaming: true, idempotencyKey });
+          sendEvent("context", {
+            ...prepared,
+            conversation: redactAiConversation({
+              ...store.getAiConversationSummary(conversationId),
+              contextWarningPending: true
+            }, permissions)
+          });
+          return;
+        }
       }
-      const conversationId = String(conversation.id);
-      const permissions = requestPermissions(request, request.params.workId);
-      const prepared = await ai.prepareConversationContext({
-        conversationId,
-        workId: request.params.workId,
-        modelId: input.modelId,
-        scope: input.scope as ContextScope,
-        instruction: resolvedInstruction,
-        excludeConversationMessageId: input.currentMessageId
-      });
-      sendEvent("context", {
-        ...prepared,
-        conversation: redactAiConversation({
-          ...store.getAiConversationSummary(conversationId),
-          contextWarningPending: prepared.action === "warn"
-        }, permissions)
-      });
-      if (prepared.action === "warn") return;
       const resolvedScope = input.currentMessageId
         ? input.scope as ContextScope
         : ai.resolveInstructionMentions({
@@ -2659,16 +2726,68 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         ...(resolvedScope.characterIds ?? []),
         ...(resolvedScope.mentionCharacterIds ?? [])
       ])];
-      const userMessage = input.currentMessageId
-        ? null
-        : store.addAiConversationMessage(conversationId, {
-          role: "user",
+      const begun = store.beginAiConversationStreamRequest({
+        workId: request.params.workId,
+        conversationId,
+        actorScope,
+        idempotencyKey,
+        requestHash,
+        userMessage: {
           content: input.instruction,
           citations,
+          ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
           ...(mentionCharacterIds.length ? { metadata: { mentionCharacterIds } } : {})
-        });
-      const currentMessageId = input.currentMessageId ?? String(userMessage?.id ?? "");
-      if (userMessage) sendEvent("user_message", { message: redactAiConversationMessage(userMessage, permissions) });
+        }
+      });
+      streamRequestId = begun.request.id;
+      startStream();
+      sendEvent("ready", { streaming: begun.disposition === "started", idempotencyKey });
+      if (begun.disposition !== "started") {
+        streamRequestFinished = true;
+        if (begun.userMessage) {
+          sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions), replayed: true });
+        }
+        if (begun.request.status === "completed" && begun.assistantMessage) {
+          const content = String(begun.assistantMessage.content ?? "");
+          if (content) sendEvent("delta", { delta: content, replayed: true });
+          sendEvent("complete", {
+            replayed: true,
+            conversationId,
+            conversationTitle: store.getAiConversationSummary(conversationId).title,
+            messageId: begun.assistantMessage.id,
+            messageCreatedAt: begun.assistantMessage.createdAt
+          });
+        } else {
+          sendEvent("request_status", {
+            code: begun.request.status === "in_progress"
+              ? "AI_IDEMPOTENT_REQUEST_IN_PROGRESS"
+              : "AI_IDEMPOTENT_REQUEST_TERMINAL",
+            message: begun.request.status === "in_progress"
+              ? "相同请求正在处理中，请等待当前响应结束"
+              : "相同请求已经结束，不会再次调用 AI",
+            status: begun.request.status,
+            terminalReason: begun.request.terminalReason
+          });
+        }
+        return;
+      }
+      const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
+      if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
+      const prepared = await ai.prepareConversationContext({
+        conversationId,
+        workId: request.params.workId,
+        modelId: input.modelId,
+        scope: input.scope as ContextScope,
+        instruction: resolvedInstruction,
+        excludeConversationMessageId: currentMessageId
+      }, { skipWarning: true });
+      sendEvent("context", {
+        ...prepared,
+        conversation: redactAiConversation({
+          ...store.getAiConversationSummary(conversationId),
+          contextWarningPending: prepared.action === "warn"
+        }, permissions)
+      });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,
@@ -2684,6 +2803,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         ...(input.modelId ? { modelId: input.modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
+      const assistantMessageId = typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
+        ? String((suggestion.conversationMessage as Record<string, unknown>).id ?? "")
+        : "";
+      if (!stopping) {
+        store.finishAiConversationStreamRequest(streamRequestId, "completed", "completed", assistantMessageId || undefined);
+      }
+      streamRequestFinished = true;
       sendEvent("complete", {
         suggestionId: suggestion.id,
         callId: suggestion.callId,
@@ -2705,6 +2831,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           : undefined
       });
     } catch (error) {
+      if (streamRequestId && !streamRequestFinished && !stopping) {
+        const code = error instanceof AppError ? error.code : "AI_STREAM_FAILED";
+        const status = code === "AI_STREAM_IDLE_TIMEOUT"
+          ? "timed_out"
+          : code === "AI_STREAM_REQUEST_CANCELLED" || controller.signal.aborted
+            ? "cancelled"
+            : "failed";
+        store.finishAiConversationStreamRequest(streamRequestId, status, code);
+        streamRequestFinished = true;
+      }
+      if (!response.headersSent) throw error;
       if (!controller.signal.aborted) {
         logger.error("ai.stream.failed", {
           workId: request.params.workId,
@@ -2713,7 +2850,12 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         sendEvent("error", publicAiStreamError(error));
       }
     } finally {
-      if (!response.writableEnded && !response.destroyed) response.end();
+      if (streamRequestId && !streamRequestFinished && !stopping) {
+        store.finishAiConversationStreamRequest(streamRequestId, "cancelled", "stream_closed");
+        streamRequestFinished = true;
+      }
+      if (stopping) streamRequestFinished = true;
+      if (response.headersSent && !response.writableEnded && !response.destroyed) response.end();
     }
   });
   app.get("/api/suggestions/:suggestionId", (request, response) => {
@@ -2754,7 +2896,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/search", async (request, response) => {
     const query = parse(z.object({
-      q: z.string().trim().min(1).max(500),
+      q: z.string().trim().min(1).max(MAXIMUM_WORK_SEARCH_QUERY_LENGTH),
       type: z.enum(HYBRID_SEARCH_TYPES).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional()
     }).strict(), request.query);
@@ -2901,7 +3043,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       const logFields = { ...commonFields, errorCode: error.code, status: error.status };
       if (error.status >= 500) logger.error("http.request.application_error", logFields);
       else logger.warn("http.request.application_error", logFields);
-      if (error.code === "LOGIN_LOCKED" && error.details && typeof error.details === "object") {
+      if ((error.code === "LOGIN_LOCKED" || error.status === 429) && error.details && typeof error.details === "object") {
         const retryAfterSeconds = Number((error.details as Record<string, unknown>).retryAfterSeconds);
         if (Number.isInteger(retryAfterSeconds) && retryAfterSeconds > 0) {
           response.setHeader("Retry-After", String(retryAfterSeconds));
@@ -2932,6 +3074,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       logger.info("runtime.closing");
       backups.dispose();
       ai.dispose();
+      const cancelledStreamRequests = store.cancelActiveAiConversationStreamRequests();
+      if (cancelledStreamRequests > 0) logger.info("ai.stream.requests_cancelled", { count: cancelledStreamRequests });
     }
     closePromise = (async () => {
       try {

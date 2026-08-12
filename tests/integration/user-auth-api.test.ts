@@ -1508,6 +1508,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(403);
+    const overlongSearchDenied = await collaborator.agent
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "界".repeat(101) })
+      .expect(403);
+    expect(overlongSearchDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
     const commentReadDenied = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations`).expect(403);
     expect(commentReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
@@ -2263,6 +2268,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
         .expect(403);
       expect(denied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     }
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_stream_requests WHERE work_id = ?",
+      workId
+    )).toEqual({ count: 0 });
   });
 
   it("AI 工具按当前成员模块权限限制正文读取", async () => {
@@ -2740,6 +2749,46 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(403);
     expect(escalateMixed.body.error.code).toBe("ADMIN_REQUIRED");
     expect(runtime.database.get("SELECT role FROM users WHERE id = ?", writer.user.userId)?.role).toBe("user");
+  });
+
+  it("供应商与模型连接测试在外部调用前强制认证、CSRF 和管理员权限", async () => {
+    const admin = await register(runtime, "connectivity_admin");
+    const writer = await register(runtime, "connectivity_writer");
+    const provider = await admin.agent.post("/api/platform/ai/providers")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({
+        name: "权限测试供应商",
+        baseUrl: "https://permission-ai.test/v1",
+        apiKey: "sk-permission-test",
+        status: "enabled"
+      })
+      .expect(201);
+    const providerId = String(provider.body.data.id);
+    const model = await admin.agent.post(`/api/providers/${providerId}/models`)
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ displayName: "权限测试模型", modelId: "permission-model" })
+      .expect(201);
+    const modelId = String(model.body.data.id);
+
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(401);
+    await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(401);
+    const providerDenied = await writer.agent.post(`/api/providers/${providerId}/test`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({})
+      .expect(403);
+    expect(providerDenied.body.error.code).toBe("ADMIN_REQUIRED");
+    const modelDenied = await writer.agent.post(`/api/models/${modelId}/test`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({})
+      .expect(403);
+    expect(modelDenied.body.error.code).toBe("ADMIN_REQUIRED");
+    const providerCsrfDenied = await admin.agent.post(`/api/providers/${providerId}/test`).send({}).expect(403);
+    expect(providerCsrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const modelCsrfDenied = await admin.agent.post(`/api/models/${modelId}/test`).send({}).expect(403);
+    expect(modelCsrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_connectivity_test_states")).toEqual({ count: 0 });
+    expect(runtime.database.get("SELECT connection_status FROM providers WHERE id = ?", providerId)).toEqual({ connection_status: "unchecked" });
   });
 
   it("管理员可统一设置界面与分模块分页，普通用户只能读取", async () => {

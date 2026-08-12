@@ -29,6 +29,6 @@ describe("实体存续状态界面", () => {
     expect(application.text).toContain('entityLifecycleBadge(item.isDissolved, "已解散")');
     expect(styles.text).toContain(".entity-lifecycle-badge");
     expect(page.text).toContain('/styles.css?v=20260812-mobile-foreshadow-safe-top-v1');
-    expect(page.text).toContain('/app.js?v=20260812-foreshadow-reminder-v3');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-v1');
   });
 });

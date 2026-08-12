@@ -36,6 +36,7 @@ services:
       APP_ALLOW_REGISTRATION: "${APP_ALLOW_REGISTRATION:-false}"
       APP_SETUP_TOKEN: "${APP_SETUP_TOKEN:-}"
       APP_TRUST_PROXY: "${APP_TRUST_PROXY:-false}"
+      SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS: "${SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS:-30}"
       SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION: "${SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION:-5}"
       SCRIVERSE_STARTUP_RETRY_LIMIT: "${SCRIVERSE_STARTUP_RETRY_LIMIT:-2}"
     volumes:
@@ -53,6 +54,7 @@ SCRIVERSE_TAG=latest
 APP_ALLOW_REGISTRATION=true
 APP_SETUP_TOKEN=replace-with-at-least-32-random-characters
 APP_TRUST_PROXY=false
+SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS=30
 SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION=5
 SCRIVERSE_STARTUP_RETRY_LIMIT=2
 ```
@@ -85,6 +87,8 @@ Registration is enabled only when `APP_ALLOW_REGISTRATION` is `true` or `1`; `fa
 `SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` controls how many complete pre-migration database backups are retained. It defaults to 5 and is clamped to a minimum of 2. On each startup, the oldest excess complete backups are removed before a new migration backup is created, preventing a failed-migration restart loop from filling the disk.
 
 `SCRIVERSE_STARTUP_RETRY_LIMIT` controls consecutive failed startup attempts and defaults to 2. Once the limit is reached, the service stops repeating initialization and migration, preserving `<DATA_DIR>/.startup-retry.json` for diagnosis. Fix the root cause, remove that file, and restart the service.
+
+`SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` controls how long an interactive AI stream waits for its first or next valid event. It defaults to 30 seconds; valid integers are clamped to 10–120 seconds and invalid values fall back to 30. Each valid event restarts the timer, so this is not a total-duration limit and does not change timeout behavior for analysis tasks or other AI requests. Recreate the container after changing it.
 
 ## Container runtime hardening
 
