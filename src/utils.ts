@@ -7,6 +7,10 @@ export function parseBooleanEnvironmentValue(value: string | undefined): boolean
   return undefined;
 }
 
+export function escapeSqlLikePattern(value: string): string {
+  return value.replace(/[\\%_]/gu, (character) => `\\${character}`);
+}
+
 export function id(prefix: string): string {
   return `${prefix}_${randomUUID().replaceAll("-", "")}`;
 }

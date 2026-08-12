@@ -34,7 +34,7 @@ describe("作品模块权限", () => {
     ];
     expect(exportReadPermissionModules(undefined)).toEqual(completeExportModules);
     expect(exportReadPermissionModules("json")).toEqual(completeExportModules);
-    for (const format of ["txt", "markdown", "docx"]) {
+    for (const format of ["txt", "markdown", "docx", "epub"]) {
       expect(exportReadPermissionModules(format)).toEqual(["prose"]);
     }
   });

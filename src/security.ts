@@ -256,6 +256,7 @@ type ExpensiveApiKind = "ai" | "export" | "search";
 function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null {
   if (method === "GET" && (
     /^\/api\/works\/[^/]+\/export$/u.test(path)
+    || /^\/api\/volumes\/[^/]+\/export$/u.test(path)
     || /^\/api\/ai-conversations\/[^/]+\/export$/u.test(path)
   )) return "export";
   if (method === "GET" && /^\/api\/works\/[^/]+\/search$/u.test(path)) return "search";
@@ -264,7 +265,8 @@ function expensiveApiKind(method: string, path: string): ExpensiveApiKind | null
     /^\/api\/works\/[^/]+\/(?:suggestions|chat\/stream|tasks)(?:\/|$)/u.test(path)
     || /^\/api\/suggestions\/[^/]+\/guard$/u.test(path)
     || /^\/api\/ai-conversations\/[^/]+\/(?:compact|context\/prepare)$/u.test(path)
-    || /^\/api\/tasks\/[^/]+\/(?:run|rerun|cancel|relationship-changes\/apply)$/u.test(path)
+    || /^\/api\/tasks\/[^/]+\/(?:run|rerun|cancel|relationship-changes\/apply|character-extraction\/apply)$/u.test(path)
+    || /^\/api\/(?:providers|models)\/[^/]+\/test$/u.test(path)
   ) {
     return "ai";
   }
