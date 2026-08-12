@@ -1294,8 +1294,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .volume-toggle::before { content: ""; width: 4px; height: 4px; flex: none; border: solid var(--muted); border-width: 0 1px 1px 0; transform: rotate(45deg); margin-right: 8px; }
 .volume-node.is-collapsed .volume-toggle::before { transform: rotate(-45deg); }
 .volume-toggle span:first-child { flex: 1; }
-.volume-export-button { flex: none; }
-.volume-export-button[aria-busy="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent-dark); opacity: 1; }
+.volume-detail-button { display: none; }
 .chapter-add-button { flex: none; }
 .volume-chapters { display: block; }
 .volume-node.is-collapsed .volume-chapters { display: none; }
@@ -3534,7 +3533,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   }
   .module-nav .nav-icon { width: 16px; height: 16px; }
   .module-nav .module-nav-secondary.hidden { display: none !important; }
-  .panel-heading, #novel-tree { display: none; }
+  .panel-heading { display: flex; margin-top: 8px; }
+  #novel-tree { display: block; padding-bottom: 18px; }
+  .volume-detail-button { display: inline-flex; flex: none; align-items: center; min-height: 40px; padding: 7px 9px; font-size: 11px; }
   .app-shell.left-panel-collapsed .left-panel-body { padding: 8px var(--mobile-gutter) 0; }
   .app-shell.left-panel-collapsed .left-actions { display: block; padding: 0; }
 
