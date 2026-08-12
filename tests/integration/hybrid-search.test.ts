@@ -282,6 +282,47 @@ describe("作品混合检索", () => {
     expect(relationshipData.unresolvedCharacters).toEqual([source.id]);
   });
 
+  it("限制查询长度并按字面量搜索 LIKE 特殊字符", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime);
+    const workId = String(seeded.work.id);
+    const backslash = runtime.store.createSetting(workId, { title: String.raw`路径 a\b`, category: "测试", content: "" });
+    runtime.store.createSetting(workId, { title: "路径 ab", category: "测试", content: "" });
+    const combined = runtime.store.createSetting(workId, { title: String.raw`组合 \%_`, category: "测试", content: "" });
+    runtime.store.createSetting(workId, { title: String.raw`组合 \任意_`, category: "测试", content: "" });
+
+    const literalBackslash = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: String.raw`a\b`, type: "setting" })
+      .expect(200);
+    expect(literalBackslash.body.data.map((item: { id: string }) => item.id)).toEqual([backslash.id]);
+
+    const literalCombination = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: String.raw`\%_`, type: "setting" })
+      .expect(200);
+    expect(literalCombination.body.data.map((item: { id: string }) => item.id)).toEqual([combined.id]);
+
+    await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "\n北港\n" })
+      .expect(200);
+    await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "界".repeat(100) })
+      .expect(200);
+    const overlong = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "界".repeat(101) })
+      .expect(400);
+    expect(overlong.body.error.code).toBe("VALIDATION_ERROR");
+    const empty = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "\n \n" })
+      .expect(400);
+    expect(empty.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
   it("拒绝未知类型和越界数量", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime);

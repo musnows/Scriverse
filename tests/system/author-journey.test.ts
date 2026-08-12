@@ -328,7 +328,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/app.js?v=20260812-connectivity-cooldown-v3');
+    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-v1');
     expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -551,6 +551,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".work-audit-time strong { color: var(--ink); font-size: 18px;");
     expect(styles.text).toContain(".work-audit-event-heading strong { color: var(--ink); font-size: 17px;");
     expect(page.text).toContain('id="search-dialog"');
+    expect(page.text).toContain('id="search-query" name="query" type="search" maxlength="100"');
     expect(application.text).toContain('isGlobalSearchShortcut(event)');
     expect(application.text).toContain('const target = resolveGlobalSearchTarget(result);');
     expect(application.text).toContain('await selectChapter(target.id);');
@@ -770,7 +771,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".timeline-list { position: relative; margin-left: 15px; border-left: 1px solid var(--line); }");
     expect(styles.text).toContain(".timeline-item::before { content: \"\"; position: absolute; left: -5px; top: 5px;");
     expect(styles.text).not.toContain(".timeline-kanban { display: grid; grid-auto-flow: column;");
-    expect(application.text).toContain("async function streamChat(requestHolder, body)");
+    expect(application.text).toContain("async function streamChat(requestHolder, body, idempotencyKey)");
     expect(application.text).toContain("createStreamTypewriter");
     expect(application.text).toContain("content.innerHTML = renderMarkdown(text)");
     expect(application.text).toContain('class="message-body"');
