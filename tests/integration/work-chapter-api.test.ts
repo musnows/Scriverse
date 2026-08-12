@@ -822,6 +822,10 @@ describe("作品、导入和章节版本 API", () => {
     const emptyVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "空分卷" }).expect(201);
     await request(runtime.app).put(`/api/works/${workId}/cover`).attach("file", validPng, "封面.png").expect(200);
 
+    await request(runtime.app).head(`/api/works/${workId}/export?format=epub`).expect(204);
+    await request(runtime.app).head(`/api/volumes/${firstVolume.body.data.id}/export?format=epub`).expect(204);
+    await request(runtime.app).head(`/api/works/${workId}/export?format=docx`).expect(400);
+
     const exported = await request(runtime.app)
       .get(`/api/works/${workId}/export?format=epub`)
       .buffer(true)

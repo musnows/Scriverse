@@ -1515,6 +1515,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const outsiderVolumeDenied = await outsider.agent.get(`/api/volumes/${volume.body.data.id}/export?format=epub`).expect(403);
     expect(outsiderVolumeDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
     expect(outsiderVolumeDenied.headers["content-disposition"]).toBeUndefined();
+    await outsider.agent.head(`/api/volumes/${volume.body.data.id}/export?format=epub`).expect(403);
     const otherWork = await outsider.agent.post("/api/works")
       .set("X-CSRF-Token", outsider.csrfToken)
       .send({ title: "其他作品" })
@@ -1584,6 +1585,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .map((file) => file.async("string")))).join("\n");
     expect(epubText).toContain(proseSecret);
     for (const secret of Object.values(reviewSecrets)) expect(epubText).not.toContain(secret);
+    await collaborator.agent.head(`/api/works/${workId}/export?format=epub`).expect(204);
 
     const volumeEpubExport = await collaborator.agent.get(`/api/volumes/${volume.body.data.id}/export?format=epub`)
       .buffer(true)

@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260812-ai-conversation-export-v3">
+    <link rel="stylesheet" href="/styles.css?v=20260812-epub-export-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -219,7 +219,7 @@
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="global-replace-button" class="settings-hub-card" type="button"><span class="settings-card-mark">替</span><strong>全局替换</strong><small>替换已保存正文、设定库或两者内容</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
-            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small></button>
+            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择 Markdown ZIP、DOCX 或 EPUB；不包含角色和设定资料</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
@@ -380,6 +380,10 @@
       <button type="button" role="menuitem" data-export-format="docx">
         <span>导出 DOCX</span>
         <small>Word 正文；有封面时嵌入为首页</small>
+      </button>
+      <button type="button" role="menuitem" data-export-format="epub">
+        <span>导出 EPUB</span>
+        <small>电子书正文；包含元信息、封面和可跳转目录</small>
       </button>
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
@@ -1079,6 +1083,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260812-race-common-settings-v2"></script>
+    <script type="module" src="/app.js?v=20260812-epub-export-v1"></script>
   </body>
 </html>

@@ -1573,6 +1573,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? store.listVolumeChaptersPage(request.params.volumeId, pagination)
       : store.listVolumeChapters(request.params.volumeId));
   });
+  app.head("/api/volumes/:volumeId/export", (request, response) => {
+    parse(z.enum(["epub"]), request.query.format ?? "epub");
+    store.getVolume(request.params.volumeId);
+    noContent(response);
+  });
   app.get("/api/volumes/:volumeId/export", async (request, response) => {
     parse(z.enum(["epub"]), request.query.format ?? "epub");
     const exported = await store.exportVolumeEpub(request.params.volumeId);
@@ -2770,6 +2775,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       limit: query.limit,
       includeAgentHistory: permissions["ai-chat"] !== "none"
     }));
+  });
+  app.head("/api/works/:workId/export", (request, response) => {
+    parse(z.enum(["epub"]), request.query.format ?? "epub");
+    store.getWork(request.params.workId);
+    noContent(response);
   });
   app.get("/api/works/:workId/export", async (request, response) => {
     const format = parse(z.enum(["json", "txt", "markdown", "docx", "epub"]), request.query.format ?? "json");
