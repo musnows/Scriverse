@@ -384,6 +384,41 @@ type ChapterOutlineInput = {
   status?: "draft" | "ready" | "completed";
 };
 
+type ChapterOutlineBoardForeshadow = {
+  id: string;
+  title: string;
+  status: string;
+  importance: string;
+  roles: Array<"setup" | "reminder" | "payoff">;
+  plannedPayoff: boolean;
+};
+
+type ChapterOutlineBoardChapter = {
+  id: string;
+  title: string;
+  chapterType: string;
+  sortOrder: number;
+  outline: {
+    goal: string;
+    conflict: string;
+    turningPoint: string;
+    notes: string;
+    status: string;
+    truncated: boolean;
+    updatedAt: string | null;
+  } | null;
+  foreshadows: ChapterOutlineBoardForeshadow[];
+};
+
+type ChapterOutlineBoardVolume = {
+  id: string;
+  title: string;
+  sortOrder: number;
+  chapters: ChapterOutlineBoardChapter[];
+};
+
+const CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH = 600;
+
 type ForeshadowOccurrenceInput = {
   chapterId: string;
   role: "setup" | "reminder" | "payoff";
@@ -3548,6 +3583,176 @@ export class Store {
     const row = this.db.get("SELECT * FROM chapter_outlines WHERE chapter_id = ?", chapterId);
     if (!row) return null;
     return this.mapChapterOutline(row, chapter);
+  }
+
+  getChapterOutlineBoard(workId: string): {
+    workId: string;
+    volumes: ChapterOutlineBoardVolume[];
+    stats: {
+      chapterCount: number;
+      outlinedChapterCount: number;
+      foreshadowCount: number;
+      unresolvedForeshadowCount: number;
+    };
+  } {
+    this.getWork(workId);
+    const previewLength = CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH;
+    const rows = this.db.all(
+      `SELECT volume.id AS volume_id, volume.title AS volume_title, volume.sort_order AS volume_order,
+       chapter.id AS chapter_id, chapter.title AS chapter_title, chapter.chapter_type,
+       chapter.sort_order AS chapter_order,
+       outline.chapter_id AS outline_chapter_id,
+       substr(outline.goal, 1, ?) AS goal, length(outline.goal) > ? AS goal_truncated,
+       substr(outline.conflict, 1, ?) AS conflict, length(outline.conflict) > ? AS conflict_truncated,
+       substr(outline.turning_point, 1, ?) AS turning_point, length(outline.turning_point) > ? AS turning_point_truncated,
+       substr(outline.notes, 1, ?) AS notes, length(outline.notes) > ? AS notes_truncated,
+       outline.status, outline.updated_at AS outline_updated_at
+       FROM volumes volume
+       LEFT JOIN chapters chapter
+         ON chapter.volume_id = volume.id AND chapter.work_id = volume.work_id AND chapter.deleted_at IS NULL
+       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       WHERE volume.work_id = ? AND volume.deleted_at IS NULL
+       ORDER BY volume.sort_order, volume.created_at, volume.id,
+         chapter.sort_order, chapter.created_at, chapter.id`,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      workId
+    );
+
+    const volumeById = new Map<string, ChapterOutlineBoardVolume>();
+    const chapterById = new Map<string, ChapterOutlineBoardChapter>();
+    let outlinedChapterCount = 0;
+    for (const row of rows) {
+      const volumeId = requiredString(row, "volume_id");
+      let volume = volumeById.get(volumeId);
+      if (!volume) {
+        volume = {
+          id: volumeId,
+          title: requiredString(row, "volume_title"),
+          sortOrder: numberValue(row, "volume_order"),
+          chapters: []
+        };
+        volumeById.set(volumeId, volume);
+      }
+      const chapterId = optionalString(row, "chapter_id");
+      if (!chapterId) continue;
+      const hasOutline = optionalString(row, "outline_chapter_id") !== null;
+      if (hasOutline) outlinedChapterCount += 1;
+      const chapter: ChapterOutlineBoardChapter = {
+        id: chapterId,
+        title: requiredString(row, "chapter_title"),
+        chapterType: requiredString(row, "chapter_type") || "正文",
+        sortOrder: numberValue(row, "chapter_order"),
+        outline: hasOutline ? {
+          goal: optionalString(row, "goal") ?? "",
+          conflict: optionalString(row, "conflict") ?? "",
+          turningPoint: optionalString(row, "turning_point") ?? "",
+          notes: optionalString(row, "notes") ?? "",
+          status: optionalString(row, "status") ?? "draft",
+          truncated: ["goal_truncated", "conflict_truncated", "turning_point_truncated", "notes_truncated"]
+            .some((field) => booleanValue(row, field)),
+          updatedAt: optionalString(row, "outline_updated_at")
+        } : null,
+        foreshadows: []
+      };
+      volume.chapters.push(chapter);
+      chapterById.set(chapterId, chapter);
+    }
+
+    type MutableForeshadow = Omit<ChapterOutlineBoardForeshadow, "roles"> & {
+      roles: Set<"setup" | "reminder" | "payoff">;
+    };
+    const associations = new Map<string, Map<string, MutableForeshadow>>();
+    const associate = (
+      chapterId: string | null,
+      source: { id: string; title: string; status: string; importance: string },
+      role?: "setup" | "reminder" | "payoff",
+      plannedPayoff = false
+    ): void => {
+      if (!chapterId || !chapterById.has(chapterId)) return;
+      const byForeshadow = associations.get(chapterId) ?? new Map<string, MutableForeshadow>();
+      const summary = byForeshadow.get(source.id) ?? {
+        ...source,
+        roles: new Set<"setup" | "reminder" | "payoff">(),
+        plannedPayoff: false
+      };
+      if (role) summary.roles.add(role);
+      if (plannedPayoff) summary.plannedPayoff = true;
+      byForeshadow.set(source.id, summary);
+      associations.set(chapterId, byForeshadow);
+    };
+
+    const foreshadowRows = this.db.all(
+      `SELECT foreshadow.id, foreshadow.title, foreshadow.status, foreshadow.importance,
+       occurrence_chapter.id AS occurrence_chapter_id, occurrence_volume.id AS occurrence_volume_id,
+       occurrence.role, payoff_chapter.id AS payoff_chapter_id, payoff_volume.id AS payoff_volume_id
+       FROM foreshadows foreshadow
+       LEFT JOIN foreshadow_occurrences occurrence ON occurrence.foreshadow_id = foreshadow.id
+       LEFT JOIN chapters occurrence_chapter
+         ON occurrence_chapter.id = occurrence.chapter_id
+         AND occurrence_chapter.work_id = foreshadow.work_id
+         AND occurrence_chapter.deleted_at IS NULL
+       LEFT JOIN volumes occurrence_volume
+         ON occurrence_volume.id = occurrence_chapter.volume_id AND occurrence_volume.deleted_at IS NULL
+       LEFT JOIN chapters payoff_chapter
+         ON payoff_chapter.id = foreshadow.planned_payoff_chapter_id
+         AND payoff_chapter.work_id = foreshadow.work_id
+         AND payoff_chapter.deleted_at IS NULL
+       LEFT JOIN volumes payoff_volume
+         ON payoff_volume.id = payoff_chapter.volume_id AND payoff_volume.deleted_at IS NULL
+       WHERE foreshadow.work_id = ?
+       ORDER BY CASE foreshadow.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         foreshadow.created_at, foreshadow.id, occurrence.created_at, occurrence.id`,
+      workId
+    );
+    const foreshadowIds = new Set<string>();
+    const unresolvedForeshadowIds = new Set<string>();
+    for (const row of foreshadowRows) {
+      const source = {
+        id: requiredString(row, "id"),
+        title: requiredString(row, "title"),
+        status: requiredString(row, "status"),
+        importance: requiredString(row, "importance")
+      };
+      foreshadowIds.add(source.id);
+      if (source.status === "planned" || source.status === "planted") unresolvedForeshadowIds.add(source.id);
+      const occurrenceChapterId = optionalString(row, "occurrence_volume_id")
+        ? optionalString(row, "occurrence_chapter_id")
+        : null;
+      const role = optionalString(row, "role");
+      associate(
+        occurrenceChapterId,
+        source,
+        role === "setup" || role === "reminder" || role === "payoff" ? role : undefined
+      );
+      associate(optionalString(row, "payoff_volume_id") ? optionalString(row, "payoff_chapter_id") : null, source, undefined, true);
+    }
+
+    for (const [chapterId, byForeshadow] of associations) {
+      const chapter = chapterById.get(chapterId);
+      if (!chapter) continue;
+      chapter.foreshadows = [...byForeshadow.values()].map((summary) => ({
+        ...summary,
+        roles: [...summary.roles]
+      }));
+    }
+
+    return {
+      workId,
+      volumes: [...volumeById.values()],
+      stats: {
+        chapterCount: chapterById.size,
+        outlinedChapterCount,
+        foreshadowCount: foreshadowIds.size,
+        unresolvedForeshadowCount: unresolvedForeshadowIds.size
+      }
+    };
   }
 
   listChapterOutlines(workId: string): Record<string, unknown>[] {

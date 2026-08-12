@@ -68,6 +68,11 @@ import {
   normalizeTimelineSortDirection,
   timelineTrackColorIndex
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
+import {
+  normalizeOutlineBoardState,
+  outlineBoardUnresolvedCount,
+  prepareOutlineBoard
+} from "/outline-board.js?v=20260812-outline-board-v1";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
@@ -617,6 +622,7 @@ const aiConversationHistoryPageLimit = 20;
 let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
 let workSelectionRequestGeneration = 0;
+let chapterSelectionRequestGeneration = 0;
 let aiConversationNavigationGeneration = 0;
 let aiConversationNavigationPending = null;
 const loadedVolumeChapterIds = new Set();
@@ -1188,6 +1194,9 @@ const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
 const settingFilters = { keyword: "", category: "", lockState: "all" };
 let settingFiltersPanelOpen = false;
+const outlineBoardFilters = normalizeOutlineBoardState();
+let outlineBoardFiltersPanelOpen = false;
+let outlineBoardRenderRequestId = 0;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
 
@@ -5579,6 +5588,10 @@ function resetWorkScopedUiCaches() {
   settingFilters.category = "";
   settingFilters.lockState = "all";
   settingFiltersPanelOpen = false;
+  Object.assign(outlineBoardFilters, normalizeOutlineBoardState());
+  outlineBoardFiltersPanelOpen = false;
+  outlineBoardRenderRequestId += 1;
+  chapterSelectionRequestGeneration += 1;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
   relationshipFilters.toCharacterIds = [];
@@ -5612,6 +5625,7 @@ function resetWorkScopedUiCaches() {
 }
 
 async function selectWork(workId, preferredChapterId = null) {
+  chapterSelectionRequestGeneration += 1;
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
   const selectionGeneration = ++workSelectionRequestGeneration;
@@ -6249,21 +6263,26 @@ async function resolveCurrentChapterForeshadowReminder() {
 }
 
 async function selectChapter(chapterId, { editMode = false } = {}) {
+  const workId = state.work?.id;
+  if (!workId) return false;
+  const selectionGeneration = ++chapterSelectionRequestGeneration;
   const selectionRequestId = ++chapterSelectionRequestId;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   if (state.chapter?.id !== chapterId && !(await confirmDiscardChanges("当前章节有未保存修改，仍要切换吗？"))) {
     if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
-    return;
+    return false;
   }
-  if (selectionRequestId !== chapterSelectionRequestId) return;
+  if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
   cancelChapterAutoSave();
+  let selectedChapter = state.chapter;
   if (state.chapter?.id !== chapterId) {
-    const chapter = await api(`/api/chapters/${chapterId}`);
-    if (selectionRequestId !== chapterSelectionRequestId) return;
-    state.chapter = chapter;
-    mergeChapterDirectoryEntry(chapter);
+    selectedChapter = await api(`/api/chapters/${encodeURIComponent(chapterId)}`);
+    if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
+    if (String(selectedChapter?.id ?? "") !== String(chapterId) || String(selectedChapter?.workId ?? "") !== String(workId)) return false;
   }
-  if (selectionRequestId !== chapterSelectionRequestId) return;
+  if (!selectedChapter || selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
+  state.chapter = selectedChapter;
+  mergeChapterDirectoryEntry(state.chapter);
   state.collapsedVolumeIds.delete(state.chapter.volumeId);
   lastSavedChapterSnapshot = { chapterId: state.chapter.id, title: state.chapter.title, content: state.chapter.content };
   chapterEditorReadOnly = !canEditProse() || !editMode;
@@ -6292,6 +6311,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   renderTree();
   replacePageRoute({ view: "editor", workId: state.work.id, chapterId: state.chapter.id });
   await loadChapterForeshadowReminders();
+  return true;
 }
 
 function updateChapterStats() {
@@ -6729,6 +6749,17 @@ function mountDraftFilterToggle() {
   $("#module-header-actions").querySelector('[data-module-header-action="draft-filter-toggle"]')?.addEventListener("click", async () => {
     draftFiltersPanelOpen = !draftFiltersPanelOpen;
     await renderDrafts(moduleListPages.drafts);
+  });
+}
+
+function mountOutlineBoardFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="outline-board-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="outline-board-filter-toggle" aria-label="筛选章节大纲看板" aria-controls="outline-board-filter-panel" aria-expanded="${outlineBoardFiltersPanelOpen}" title="筛选章节大纲看板"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  const toggle = $("#module-header-actions").querySelector('[data-module-header-action="outline-board-filter-toggle"]');
+  toggle?.addEventListener("click", () => {
+    outlineBoardFiltersPanelOpen = !outlineBoardFiltersPanelOpen;
+    $("#outline-board-filter-panel")?.classList.toggle("hidden", !outlineBoardFiltersPanelOpen);
+    toggle.setAttribute("aria-expanded", String(outlineBoardFiltersPanelOpen));
   });
 }
 
@@ -7518,21 +7549,163 @@ async function renderTimeline(page = moduleListPages.timeline) {
   });
 }
 
-async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foreshadowPage = moduleListPages.foreshadows) {
+function outlineBoardForeshadowRelation(item) {
+  const roles = (item.roles ?? []).map(occurrenceRoleLabel);
+  if (item.plannedPayoff) roles.push("计划回收");
+  return [...new Set(roles)].join("、") || "关联";
+}
+
+function outlineBoardDialogItem(chapter, volume, outline) {
+  return {
+    chapterId: chapter.id,
+    chapterTitle: chapter.title,
+    volumeId: volume.id,
+    volumeTitle: volume.title,
+    goal: outline?.goal ?? "",
+    conflict: outline?.conflict ?? "",
+    turningPoint: outline?.turningPoint ?? "",
+    notes: outline?.notes ?? "",
+    status: outline?.status ?? "draft",
+    versionNo: outline?.versionNo
+  };
+}
+
+async function loadOutlineBoardDialogItem(chapter, volume) {
+  const workId = state.work?.id;
+  const generation = workScopedUiGeneration;
+  if (!workId) return null;
+  const outline = await api(`/api/chapters/${encodeURIComponent(chapter.id)}/outline`);
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration) return null;
+  return outlineBoardDialogItem(chapter, volume, outline);
+}
+
+async function openOutlineBoardChapter(chapterId, workId) {
+  if (!canReadModule("editor") || state.work?.id !== workId) return;
+  try {
+    await selectChapter(chapterId);
+  } catch (error) {
+    if (state.work?.id === workId) toast(`打开章节失败：${error.message}`, "error");
+  }
+}
+
+function outlineBoardDetailField(label, value) {
+  return `<section class="outline-board-detail-field"><h3>${esc(label)}</h3><p>${esc(value || "未填写")}</p></section>`;
+}
+
+async function openOutlineBoardDetail(chapter, volume) {
+  const workId = state.work?.id;
+  if (!workId) return;
+  try {
+    const item = await loadOutlineBoardDialogItem(chapter, volume);
+    if (!item) return;
+    const canOpenChapter = canReadModule("editor");
+    const canEditOutline = canEditModule("outlines");
+    const foreshadows = chapter.foreshadows ?? [];
+    const foreshadowList = foreshadows.length
+      ? `<ul class="outline-board-detail-foreshadows">${foreshadows.map((foreshadow) => `<li><strong>${esc(foreshadow.title)}</strong><span>${esc(levelLabel(foreshadow.importance))} · ${esc(foreshadowStatusLabel(foreshadow.status))} · ${esc(outlineBoardForeshadowRelation(foreshadow))}</span></li>`).join("")}</ul>`
+      : '<p class="outline-board-detail-empty">本章没有关联伏笔。</p>';
+    const actions = canOpenChapter || canEditOutline
+      ? `<div class="outline-board-detail-actions">${canOpenChapter ? '<button class="primary-button" type="button" data-outline-detail-open>打开章节</button>' : ""}${canEditOutline ? '<button class="ghost-button" type="button" data-outline-detail-edit>编辑大纲</button>' : ""}</div>`
+      : "";
+    openDialog(`${volume.title} / ${chapter.title}`,
+      `<div class="outline-board-detail-grid">${outlineBoardDetailField("本章目标", item.goal)}${outlineBoardDetailField("核心冲突", item.conflict)}${outlineBoardDetailField("关键转折", item.turningPoint)}${outlineBoardDetailField("补充说明", item.notes)}</div>
+      <section class="outline-board-detail-section"><header><h3>关联伏笔</h3><span>${foreshadows.length} 条</span></header>${foreshadowList}</section>
+      ${chapter.outline?.truncated ? '<p class="outline-board-detail-note">看板仅展示摘要，本详情已读取完整大纲。</p>' : ""}${actions}`,
+      async () => {},
+      `${outlineStatusLabel(item.status)} · 章节大纲详情`,
+      { submitLabel: "关闭", hideCancel: true, wide: true }
+    );
+    $("#dialog-fields").querySelector("[data-outline-detail-open]")?.addEventListener("click", () => {
+      $("#form-dialog").close();
+      void openOutlineBoardChapter(chapter.id, workId);
+    });
+    $("#dialog-fields").querySelector("[data-outline-detail-edit]")?.addEventListener("click", () => {
+      $("#form-dialog").close();
+      openOutlineDialog(item);
+    });
+  } catch (error) {
+    toast(`读取章节大纲详情失败：${error.message}`, "error");
+  }
+}
+
+function outlineBoardCard(chapter, volume) {
+  const outline = chapter.outline;
+  const canOpenChapter = canReadModule("editor");
+  const unresolvedCount = outlineBoardUnresolvedCount(chapter);
+  const statusLabel = outline ? outlineStatusLabel(outline.status) : "未规划";
+  const summaryField = (label, value) => `<section><b>${esc(label)}</b><p>${esc(value || "未填写")}</p></section>`;
+  const foreshadows = chapter.foreshadows ?? [];
+  const foreshadowTags = foreshadows.length
+    ? foreshadows.map((item) => `<span class="outline-board-foreshadow" data-status="${esc(item.status)}"><strong>${esc(item.title)}</strong><small>${esc(foreshadowStatusLabel(item.status))} · ${esc(outlineBoardForeshadowRelation(item))}</small></span>`).join("")
+    : '<span class="outline-board-no-foreshadow">无关联伏笔</span>';
+  return `<article class="outline-board-card${outline ? "" : " is-empty-outline"}${outline?.status === "completed" ? " is-complete" : ""}" data-outline-board-card="${esc(chapter.id)}" ${canOpenChapter ? `role="link" tabindex="0" aria-label="打开章节 ${esc(chapter.title)}"` : ""}>
+    <header><div><small>${esc(chapter.chapterType || "正文")} · ${esc(statusLabel)}</small><h3>${esc(chapter.title)}</h3></div>${unresolvedCount ? `<span class="outline-board-unresolved">${unresolvedCount} 个未回收</span>` : ""}</header>
+    <div class="outline-board-card-summary">${summaryField("目标", outline?.goal)}${summaryField("冲突", outline?.conflict)}${summaryField("转折", outline?.turningPoint)}</div>
+    <div class="outline-board-foreshadows" aria-label="${esc(chapter.title)}关联伏笔">${foreshadowTags}</div>
+    ${outline?.truncated ? '<small class="outline-board-truncated">摘要已截断，可查看完整详情</small>' : ""}
+    <div class="outline-board-card-actions"><button type="button" data-outline-board-detail="${esc(chapter.id)}">查看详情</button>${canOpenChapter ? `<button type="button" data-outline-board-open="${esc(chapter.id)}">打开章节</button>` : ""}${canEditModule("outlines") ? `<button type="button" data-edit-outline="${esc(chapter.id)}">编辑大纲</button>` : ""}</div>
+  </article>`;
+}
+
+function bindOutlineBoardCards(board, workId) {
+  const locations = new Map(board.volumes.flatMap((volume) => volume.chapters.map((chapter) => [String(chapter.id), { chapter, volume }])));
+  $("#outline-board-results").querySelectorAll("[data-outline-board-card]").forEach((card) => {
+    if (!canReadModule("editor")) return;
+    const open = () => { void openOutlineBoardChapter(card.dataset.outlineBoardCard, workId); };
+    card.addEventListener("click", (event) => { if (!event.target.closest("button, a")) open(); });
+    card.addEventListener("keydown", (event) => {
+      if (!["Enter", " "].includes(event.key) || event.target.closest("button, a")) return;
+      event.preventDefault();
+      open();
+    });
+  });
+  $("#outline-board-results").querySelectorAll("[data-outline-board-open]").forEach((button) => button.addEventListener("click", () => {
+    void openOutlineBoardChapter(button.dataset.outlineBoardOpen, workId);
+  }));
+  $("#outline-board-results").querySelectorAll("[data-outline-board-detail]").forEach((button) => button.addEventListener("click", () => {
+    const location = locations.get(String(button.dataset.outlineBoardDetail));
+    if (location) void openOutlineBoardDetail(location.chapter, location.volume);
+  }));
+  $("#outline-board-results").querySelectorAll("[data-edit-outline]").forEach((button) => button.addEventListener("click", async () => {
+    const location = locations.get(String(button.dataset.editOutline));
+    if (!location) return;
+    try {
+      const item = await loadOutlineBoardDialogItem(location.chapter, location.volume);
+      if (item) openOutlineDialog(item);
+    } catch (error) {
+      toast(`读取章节大纲失败：${error.message}`, "error");
+    }
+  }));
+}
+
+async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
+  const workId = state.work.id;
+  const generation = workScopedUiGeneration;
+  const requestId = ++outlineBoardRenderRequestId;
   const currentChapterId = state.chapter?.id;
-  const [outlines, foreshadows] = await Promise.all([
-    moduleApiAllPages("outlines", `/api/works/${state.work.id}/outlines`),
-    moduleApiAllPages("outlines", `/api/works/${state.work.id}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
-  ]);
-  mountModuleCount(outlines.length + foreshadows.length);
-  const outlinePageResult = paginateModuleItems(outlines, outlinePage, "outlines");
+  let board;
+  let foreshadows;
+  try {
+    [board, foreshadows] = await Promise.all([
+      moduleApi("outlines", `/api/works/${encodeURIComponent(workId)}/outline-board`),
+      moduleApiAllPages("outlines", `/api/works/${encodeURIComponent(workId)}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
+    ]);
+  } catch (error) {
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== outlineBoardRenderRequestId || state.module !== "outlines") return;
+    throw error;
+  }
+  if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== outlineBoardRenderRequestId || state.module !== "outlines") return;
+
+  if (outlineBoardFilters.volumeId && !board.volumes.some((volume) => String(volume.id) === outlineBoardFilters.volumeId)) {
+    outlineBoardFilters.volumeId = "";
+  }
   const foreshadowPageResult = paginateModuleItems(foreshadows, foreshadowPage, "outlines");
-  moduleListPages.outlinePlans = outlinePageResult.page;
   moduleListPages.foreshadows = foreshadowPageResult.page;
   const layout = readModuleLayout();
   const unresolved = foreshadows.filter((item) => item.unresolved);
   const overdue = unresolved.filter((item) => item.overdue);
-  const foreshadowActions = (item) => `<button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button><button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
+  const canEditOutlines = canEditModule("outlines");
+  const foreshadowActions = (item) => `${canEditOutlines ? `<button data-edit-foreshadow="${esc(item.id)}">编辑伏笔</button>` : ""}<button data-entity-history="foreshadow" data-entity-id="${esc(item.id)}" data-entity-title="${esc(item.title)}">版本历史</button>`;
   const foreshadowCards = () => `<div class="card-grid foreshadow-grid">${foreshadowPageResult.items.map((item) => `
     <article class="record-card foreshadow-card ${item.overdue ? "is-overdue" : ""}">
       <small>${esc(levelLabel(item.importance))} · ${esc(foreshadowStatusLabel(item.status))}${item.overdue ? " · 已逾期" : ""}</small>
@@ -7557,21 +7730,65 @@ async function renderOutlines(outlinePage = moduleListPages.outlinePlans, foresh
     ? `${layout === "rows" ? foreshadowRows() : foreshadowCards()}${renderModulePagination(foreshadowPageResult, "foreshadows", "伏笔列表")}`
     : emptyModule("还没有伏笔", "创建伏笔并关联埋设、提醒与回收章节，未回收项会持续显示。\n");
   if (foreshadows.length) mountModuleLayoutToggle(layout, "伏笔列表样式");
-  const outlineHtml = outlines.length ? `<div class="outline-list">${outlinePageResult.items.map((item) => `
-    <article class="outline-row ${item.status === "completed" ? "is-complete" : ""}">
-      <div><small>${esc(item.volumeTitle)} · ${esc(outlineStatusLabel(item.status))}</small><h3>${esc(item.chapterTitle)}</h3></div>
-      <div><b>目标</b><p>${esc(item.goal || "未填写")}</p></div>
-      <div><b>冲突</b><p>${esc(item.conflict || "未填写")}</p></div>
-      <div><b>转折</b><p>${esc(item.turningPoint || "未填写")}</p></div>
-      <div class="outline-actions">${item.unresolvedForeshadowCount ? `<span>${item.unresolvedForeshadowCount} 个未回收伏笔</span>` : ""}<button data-edit-outline="${esc(item.chapterId)}">编辑</button><button data-entity-history="chapter-outline" data-entity-id="${esc(item.chapterId)}" data-entity-title="${esc(item.chapterTitle)}">版本历史</button></div>
-    </article>`).join("")}</div>${renderModulePagination(outlinePageResult, "outlinePlans", "章节规划")}` : emptyModule("还没有章节", "先创建章节，再为每章维护目标、冲突和转折。\n");
-  $("#module-content").innerHTML = `<div class="outline-summary"><article><strong>${outlines.length}</strong><span>章节规划</span></article><article><strong>${unresolved.length}</strong><span>未回收伏笔</span></article><article class="${overdue.length ? "danger-text" : ""}"><strong>${overdue.length}</strong><span>已逾期</span></article></div><section class="planning-section"><div class="section-title"><div><span class="eyebrow">伏笔追踪</span><h2>尚未回收与历史伏笔</h2></div></div>${foreshadowHtml}</section><section class="planning-section"><div class="section-title"><div><span class="eyebrow">逐章规划</span><h2>章节目标、冲突与转折</h2></div></div>${outlineHtml}</section>`;
-  bindModuleLayoutToggle(() => renderOutlines(outlinePageResult.page, foreshadowPageResult.page));
-  bindModulePagination("foreshadows", (page) => renderOutlines(outlinePageResult.page, page));
-  bindModulePagination("outlinePlans", (page) => renderOutlines(page, foreshadowPageResult.page));
-  $("#module-content").querySelectorAll("[data-edit-outline]").forEach((button) => button.addEventListener("click", () => openOutlineDialog(outlines.find((item) => item.chapterId === button.dataset.editOutline))));
+  else $("#module-header-actions").querySelector('[data-module-header-action="layout-toggle"]')?.remove();
+
+  const filterState = normalizeOutlineBoardState(outlineBoardFilters);
+  Object.assign(outlineBoardFilters, filterState);
+  const volumeOptions = board.volumes.map((volume) => `<option value="${esc(volume.id)}" ${filterState.volumeId === String(volume.id) ? "selected" : ""}>${esc(volume.title)}</option>`).join("");
+  const filterToolbar = `<section id="outline-board-filter-panel" class="character-filter-toolbar outline-board-filter-toolbar${outlineBoardFiltersPanelOpen ? "" : " hidden"}" aria-label="章节大纲看板筛选">
+    <label class="setting-filter-field outline-board-search-field" for="outline-board-search"><span>搜索章节与摘要</span><input id="outline-board-search" type="search" value="${esc(filterState.query)}" placeholder="章节、目标、冲突、转折或伏笔" autocomplete="off"></label>
+    <label class="setting-filter-field" for="outline-board-volume-filter"><span>按分卷筛选</span><select id="outline-board-volume-filter"><option value="">全部分卷</option>${volumeOptions}</select></label>
+    <label class="setting-filter-field" for="outline-board-status-filter"><span>按大纲状态筛选</span><select id="outline-board-status-filter"><option value="all" ${filterState.outlineStatus === "all" ? "selected" : ""}>全部大纲状态</option><option value="empty" ${filterState.outlineStatus === "empty" ? "selected" : ""}>尚未规划</option><option value="draft" ${filterState.outlineStatus === "draft" ? "selected" : ""}>草稿</option><option value="ready" ${filterState.outlineStatus === "ready" ? "selected" : ""}>可执行</option><option value="completed" ${filterState.outlineStatus === "completed" ? "selected" : ""}>已完成</option></select></label>
+    <label class="setting-filter-field" for="outline-board-foreshadow-filter"><span>按伏笔状态筛选</span><select id="outline-board-foreshadow-filter"><option value="all" ${filterState.foreshadowStatus === "all" ? "selected" : ""}>全部伏笔状态</option><option value="none" ${filterState.foreshadowStatus === "none" ? "selected" : ""}>无关联伏笔</option><option value="unresolved" ${filterState.foreshadowStatus === "unresolved" ? "selected" : ""}>有未回收伏笔</option><option value="resolved" ${filterState.foreshadowStatus === "resolved" ? "selected" : ""}>有已回收伏笔</option><option value="abandoned" ${filterState.foreshadowStatus === "abandoned" ? "selected" : ""}>有已放弃伏笔</option></select></label>
+    <label class="setting-filter-field" for="outline-board-sort"><span>卷内排序</span><select id="outline-board-sort"><option value="tree" ${filterState.sort === "tree" ? "selected" : ""}>章节树顺序</option><option value="status" ${filterState.sort === "status" ? "selected" : ""}>大纲状态</option><option value="foreshadows" ${filterState.sort === "foreshadows" ? "selected" : ""}>未回收伏笔优先</option><option value="title" ${filterState.sort === "title" ? "selected" : ""}>章节标题</option></select></label>
+    <div class="character-filter-toolbar-actions"><span id="outline-board-filter-count" class="character-filter-result-count" role="status" aria-live="polite"></span><button id="clear-outline-board-filters" class="ghost-button" type="button">重置筛选</button></div>
+  </section>`;
+  $("#module-content").innerHTML = `${filterToolbar}<div id="outline-board-results"></div><section class="planning-section outline-foreshadow-library"><div class="section-title"><div><span class="eyebrow">伏笔追踪</span><h2>尚未回收与历史伏笔</h2></div></div>${foreshadowHtml}</section>`;
+  mountOutlineBoardFilterToggle();
+
+  const renderOutlineBoardResults = () => {
+    const prepared = prepareOutlineBoard(board, outlineBoardFilters);
+    const controlsActive = prepared.filtersActive || prepared.state.sort !== "tree";
+    const summary = `<div class="outline-summary"><article><strong>${prepared.filtersActive ? prepared.visibleChapterCount : board.stats.chapterCount}</strong><span>${prepared.filtersActive ? `筛选结果 / 共 ${board.stats.chapterCount} 章` : "全书章节"}</span></article><article><strong>${board.stats.outlinedChapterCount}</strong><span>已有章节大纲</span></article><article class="${board.stats.unresolvedForeshadowCount ? "danger-text" : ""}"><strong>${board.stats.unresolvedForeshadowCount}</strong><span>未回收伏笔</span></article></div>`;
+    const boardHtml = prepared.volumes.length
+      ? `<div class="outline-board">${prepared.volumes.map((volume) => `<section class="outline-board-volume" data-outline-board-volume="${esc(volume.id)}" aria-labelledby="outline-board-volume-${esc(volume.id)}"><header><div><span class="eyebrow">分卷</span><h3 id="outline-board-volume-${esc(volume.id)}">${esc(volume.title)}</h3></div><span>${volume.chapters.length} 章</span></header>${volume.chapters.length ? `<div class="outline-board-grid">${volume.chapters.map((chapter) => outlineBoardCard(chapter, volume)).join("")}</div>` : '<div class="outline-board-volume-empty"><b>本卷暂无章节</b><span>空分卷会保留在全书看板中。</span></div>'}</section>`).join("")}</div>`
+      : emptyModule(board.stats.chapterCount ? "没有符合筛选条件的章节" : board.volumes.length ? "当前分卷还没有章节" : "还没有分卷", board.stats.chapterCount ? "可以调整关键词、状态、分卷或排序条件。" : "先在作品目录创建分卷和章节，再维护每章目标、冲突与转折。");
+    $("#outline-board-results").innerHTML = `${summary}<section class="planning-section"><div class="section-title"><div><span class="eyebrow">全书总览</span><h2>章节大纲看板</h2></div><span class="outline-board-result-note">${prepared.visibleChapterCount} / ${board.stats.chapterCount} 章</span></div>${boardHtml}</section>`;
+    $("#outline-board-filter-count").textContent = prepared.filtersActive ? `筛选后剩余 ${prepared.visibleChapterCount} 章` : "";
+    $("#clear-outline-board-filters").disabled = !controlsActive;
+    mountModuleCount(prepared.visibleChapterCount + foreshadows.length);
+    bindOutlineBoardCards(prepared, workId);
+  };
+
+  const updateFilters = () => {
+    Object.assign(outlineBoardFilters, normalizeOutlineBoardState({
+      query: $("#outline-board-search").value,
+      volumeId: $("#outline-board-volume-filter").value,
+      outlineStatus: $("#outline-board-status-filter").value,
+      foreshadowStatus: $("#outline-board-foreshadow-filter").value,
+      sort: $("#outline-board-sort").value
+    }));
+    outlineBoardFiltersPanelOpen = true;
+    renderOutlineBoardResults();
+  };
+  $("#outline-board-search").addEventListener("input", updateFilters);
+  ["#outline-board-volume-filter", "#outline-board-status-filter", "#outline-board-foreshadow-filter", "#outline-board-sort"].forEach((selector) => $(selector).addEventListener("change", updateFilters));
+  $("#clear-outline-board-filters").addEventListener("click", () => {
+    Object.assign(outlineBoardFilters, normalizeOutlineBoardState());
+    $("#outline-board-search").value = "";
+    $("#outline-board-volume-filter").value = "";
+    $("#outline-board-status-filter").value = "all";
+    $("#outline-board-foreshadow-filter").value = "all";
+    $("#outline-board-sort").value = "tree";
+    outlineBoardFiltersPanelOpen = true;
+    renderOutlineBoardResults();
+    $("#outline-board-search").focus();
+  });
+  renderOutlineBoardResults();
+  bindModuleLayoutToggle(() => renderOutlines(foreshadowPageResult.page));
+  bindModulePagination("foreshadows", renderOutlines);
   $("#module-content").querySelectorAll("[data-edit-foreshadow]").forEach((button) => button.addEventListener("click", () => openForeshadowDialog(foreshadows.find((item) => item.id === button.dataset.editForeshadow))));
-  bindEntityHistoryButtons(() => renderOutlines(outlinePageResult.page, foreshadowPageResult.page));
+  bindEntityHistoryButtons(() => renderOutlines(foreshadowPageResult.page));
 }
 
 async function renderRelationships(page = moduleListPages.relationships) {
@@ -11929,7 +12146,7 @@ function openOutlineDialog(item) {
     field("notes", "补充说明", "textarea", item.notes) +
     field("status", "规划状态", "select", item.status ?? "draft", [["draft", "草稿"], ["ready", "可执行"], ["completed", "已完成"]]),
     async (form) => {
-      await api(`/api/chapters/${item.chapterId}/outline`, { method: "PUT", body: {
+      await api(`/api/chapters/${encodeURIComponent(item.chapterId)}/outline`, { method: "PUT", body: {
         goal: form.get("goal"), conflict: form.get("conflict"), turningPoint: form.get("turningPoint"), notes: form.get("notes"), status: form.get("status"), expectedVersionNo: item.versionNo
       } });
       await renderOutlines();

@@ -1751,6 +1751,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listChapterOutlinesPage(request.params.workId, pagination) : store.listChapterOutlines(request.params.workId));
   });
+  app.get("/api/works/:workId/outline-board", (request, response) => {
+    data(response, store.getChapterOutlineBoard(request.params.workId));
+  });
   app.get("/api/chapters/:chapterId/outline", (request, response) => data(response, store.getChapterOutline(request.params.chapterId)));
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
     const { changeNote, expectedVersionNo, ...input } = parse(chapterOutlineSchema.extend({ changeNote: changeNoteSchema, expectedVersionNo: expectedVersionNoSchema }).strict(), request.body);

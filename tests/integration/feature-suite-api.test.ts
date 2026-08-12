@@ -722,6 +722,86 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(exported.body.data.foreshadows[0].occurrences).toHaveLength(2);
   });
 
+  it("按分卷聚合全书大纲看板并只返回有界摘要", async () => {
+    const { workId, chapters } = await seedWork(runtime, "大纲看板作品");
+    const secondVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第二卷" }).expect(201);
+    const fourthChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "第四章 潮门",
+      content: "这一段正文不应出现在只读看板响应中。"
+    }).expect(201);
+    const recycledChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "回收站章节",
+      content: "已删除章节不应出现在看板中。"
+    }).expect(201);
+    await request(runtime.app).put(`/api/chapters/${recycledChapter.body.data.id}/outline`).send({
+      goal: "已删除的大纲",
+      status: "ready"
+    }).expect(200);
+    await request(runtime.app).delete(`/api/chapters/${recycledChapter.body.data.id}`).send({ expectedVersionNo: 1 }).expect(204);
+    const emptyVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "空卷" }).expect(201);
+    const longGoal = `寻找旧港真相${"长".repeat(700)}`;
+    await request(runtime.app).put(`/api/chapters/${chapters[0].id}/outline`).send({
+      goal: longGoal,
+      conflict: "守望会拒绝开放档案",
+      turningPoint: "旧信指向潮门",
+      status: "ready"
+    }).expect(200);
+    await request(runtime.app).put(`/api/chapters/${fourthChapter.body.data.id}/outline`).send({
+      goal: "进入潮门",
+      status: "completed"
+    }).expect(200);
+    const unresolved = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "旧信坐标",
+      status: "planted",
+      importance: "high",
+      plannedPayoffChapterId: fourthChapter.body.data.id,
+      occurrences: [{ chapterId: chapters[0].id, role: "setup" }]
+    }).expect(201);
+    const resolved = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "铜钥匙",
+      status: "resolved",
+      occurrences: [{ chapterId: chapters[0].id, role: "payoff" }]
+    }).expect(201);
+    const beforeRead = {
+      audits: runtime.database.get("SELECT COUNT(*) AS count FROM audit_logs")?.count,
+      versions: runtime.database.get("SELECT COUNT(*) AS count FROM entity_versions")?.count
+    };
+
+    const response = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
+    expect(response.body.data).toMatchObject({
+      workId,
+      stats: { chapterCount: 4, outlinedChapterCount: 2, foreshadowCount: 2, unresolvedForeshadowCount: 1 }
+    });
+    expect(response.body.data.volumes.map((volume: Record<string, unknown>) => volume.title)).toEqual(["第一卷", "第二卷", "空卷"]);
+    expect(response.body.data.volumes[2]).toMatchObject({ id: emptyVolume.body.data.id, chapters: [] });
+    const firstChapter = response.body.data.volumes[0].chapters[0];
+    expect(firstChapter.outline).toMatchObject({ status: "ready", truncated: true });
+    expect(firstChapter.outline.goal).toHaveLength(600);
+    expect(firstChapter.foreshadows).toEqual([
+      expect.objectContaining({ id: unresolved.body.data.id, status: "planted", roles: ["setup"], plannedPayoff: false }),
+      expect.objectContaining({ id: resolved.body.data.id, status: "resolved", roles: ["payoff"], plannedPayoff: false })
+    ]);
+    expect(response.body.data.volumes[1].chapters[0].foreshadows).toEqual([
+      expect.objectContaining({ id: unresolved.body.data.id, roles: [], plannedPayoff: true })
+    ]);
+    expect(JSON.stringify(response.body.data)).not.toContain("回收站章节");
+    expect(JSON.stringify(response.body.data)).not.toContain("这一段正文不应出现在只读看板响应中");
+    const fullOutline = await request(runtime.app).get(`/api/chapters/${chapters[0].id}/outline`).expect(200);
+    expect(fullOutline.body.data.goal).toBe(longGoal);
+    expect({
+      audits: runtime.database.get("SELECT COUNT(*) AS count FROM audit_logs")?.count,
+      versions: runtime.database.get("SELECT COUNT(*) AS count FROM entity_versions")?.count
+    }).toEqual(beforeRead);
+
+    const otherWork = await seedWork(runtime, "隔离作品大纲");
+    await request(runtime.app).put(`/api/chapters/${otherWork.chapters[0].id}/outline`).send({ goal: "CROSS_WORK_OUTLINE_SECRET" }).expect(200);
+    const isolated = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
+    expect(JSON.stringify(isolated.body.data)).not.toContain("CROSS_WORK_OUTLINE_SECRET");
+    await request(runtime.app).get("/api/works/not-a-work/outline-board").expect(404);
+  });
+
   it("按当前章节返回伏笔提醒并通过现有版本与审计链标记回收", async () => {
     const { workId, chapters } = await seedWork(runtime);
     const reminder = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
