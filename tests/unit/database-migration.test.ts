@@ -122,7 +122,9 @@ describe("数据库版本化迁移", () => {
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'character_merges'")?.name).toBe("character_merges");
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "owner_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "version_no")).toBe(true);
+    expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "deleted_at")).toBe(true);
     expect(first.all("PRAGMA table_info(volumes)").some((column) => column.name === "version_no")).toBe(true);
+    expect(first.all("PRAGMA table_info(volumes)").some((column) => column.name === "deleted_at")).toBe(true);
     expect(first.all("PRAGMA table_info(work_memberships)").some((column) => column.name === "permissions_json")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "created_by_user_id")).toBe(true);
     expect(first.all("PRAGMA table_info(chapter_versions)").some((column) => column.name === "work_id")).toBe(true);
@@ -135,8 +137,29 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(relationships)").some((column) => column.name === "keywords_json")).toBe(true);
     expect(first.all("PRAGMA table_info(providers)").filter((column) => ["concurrency_limit", "rpm_limit", "max_tokens"].includes(String(column.name)))).toHaveLength(3);
     expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "protocol" && column.dflt_value === "'openai-chat-completions'")).toBe(true);
+    expect(first.all("PRAGMA table_info(ai_connectivity_test_states)").map((column) => column.name)).toEqual([
+      "object_type",
+      "object_id",
+      "config_fingerprint",
+      "state",
+      "attempt_id",
+      "retry_at_ms",
+      "updated_at"
+    ]);
+    expect(first.all("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('providers', 'models')").map((row) => row.name))
+      .toEqual(expect.arrayContaining([
+        "ai_connectivity_test_states_provider_delete",
+        "ai_connectivity_test_states_model_delete"
+      ]));
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "chapter_type")).toBe(true);
     expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_at")).toBe(true);
+    expect(first.all("PRAGMA table_info(chapters)").some((column) => column.name === "deleted_via_volume_id")).toBe(true);
+    expect(first.all("PRAGMA index_list(works)").some((index) => index.name === "idx_works_recycle_bin")).toBe(true);
+    expect(first.all("PRAGMA index_list(volumes)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_volumes_active_work",
+      "idx_volumes_recycle_bin"
+    ]));
+    expect(first.all("PRAGMA index_list(chapters)").some((index) => index.name === "idx_chapters_deleted_via_volume")).toBe(true);
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_annotations'")?.name).toBe("chapter_annotations");
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'chapter_annotation_versions'")?.name).toBe("chapter_annotation_versions");
     expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'writing_goals'")?.name).toBe("writing_goals");
@@ -1255,6 +1278,80 @@ describe("数据库版本化迁移", () => {
     expect(() => migrated.run("UPDATE work_covers SET mime_type = 'image/gif' WHERE work_id = ?", String(work.id))).not.toThrow();
     expect(() => migrated.run("UPDATE user_avatars SET mime_type = 'image/gif' WHERE user_id = ?", "image-format-user")).not.toThrow();
     expect(migrated.get("SELECT MAX(version) AS version FROM schema_migrations")).toEqual({ version: DATABASE_SCHEMA_VERSION });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 87 创建 AI 对话分支幂等映射并通过完整性检查", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-conversation-fork-"));
+    roots.push(root);
+    const filename = join(root, "conversation-fork.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "对话分支迁移作品" });
+    const conversation = store.createAiConversation(String(work.id), "迁移前对话");
+    const message = store.addAiConversationMessage(String(conversation.id), { role: "user", content: "迁移前消息" });
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("DROP TABLE ai_conversation_forks; DELETE FROM schema_migrations WHERE version = 87");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    const migratedStore = new Store(migrated);
+    const forked = migratedStore.forkAiConversation(
+      String(conversation.id),
+      String(message.id),
+      undefined,
+      "migration-fork-request"
+    );
+    const retried = migratedStore.forkAiConversation(
+      String(conversation.id),
+      String(message.id),
+      undefined,
+      "migration-fork-request"
+    );
+    expect(retried.id).toBe(forked.id);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM ai_conversation_forks")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 87")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 89 创建 AI 对话流请求锁并保持旧对话完整", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-stream-lock-"));
+    roots.push(root);
+    const filename = join(root, "stream-lock.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "流请求锁迁移作品" });
+    const conversation = store.createAiConversation(String(work.id), "迁移前对话");
+    store.addAiConversationMessage(String(conversation.id), { role: "user", content: "迁移前消息" });
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("DROP TABLE ai_conversation_stream_requests; DELETE FROM schema_migrations WHERE version = 89");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    const migratedStore = new Store(migrated);
+    const started = migratedStore.beginAiConversationStreamRequest({
+      workId: String(work.id),
+      conversationId: String(conversation.id),
+      actorScope: "user:migration-author",
+      idempotencyKey: "migration-request-0001",
+      requestHash: "a".repeat(64),
+      userMessage: { content: "迁移后消息" }
+    });
+    expect(started.disposition).toBe("started");
+    expect(migrated.all("PRAGMA index_list(ai_conversation_stream_requests)").map((index) => index.name)).toEqual(expect.arrayContaining([
+      "idx_ai_conversation_stream_requests_active",
+      "idx_ai_conversation_stream_requests_lease"
+    ]));
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 89")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?", String(conversation.id))).toEqual({ count: 2 });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();

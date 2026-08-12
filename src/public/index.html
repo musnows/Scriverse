@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260812-agent-chat-font-size-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -125,6 +125,7 @@
           </div>
           <nav id="module-nav" class="module-nav" aria-label="作品模块">
             <button type="button" data-module="editor" class="active"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>正文</button>
+            <button id="reader-open-button" type="button" aria-label="打开沉浸式阅读预览" title="阅读预览"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H11v16H5.5A2.5 2.5 0 0 0 3 21.5Z"/><path d="M21 5.5A2.5 2.5 0 0 0 18.5 3H13v16h5.5a2.5 2.5 0 0 1 2.5 2.5Z"/></svg>阅读预览</button>
             <button type="button" data-module="drafts"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13.5 6.5 4 4"/></svg>想法</button>
             <button type="button" data-module="settings"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>设定</button>
             <button type="button" data-module="characters"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>角色</button>
@@ -156,7 +157,10 @@
         <section id="shelf-view" class="shelf-view hidden" aria-labelledby="shelf-title">
           <div class="shelf-header">
             <div><span class="eyebrow">我的创作书架</span><h1 id="shelf-title">选择一本书，继续写下去</h1><p>封面、正文、人物关系和创作约束都保存在同一部作品中。</p></div>
-            <button id="shelf-new-work" class="primary-button" type="button">新建作品</button>
+            <div class="shelf-header-actions">
+              <button id="shelf-recycle-bin" class="ghost-button" type="button" aria-controls="work-recycle-bin-dialog" aria-haspopup="dialog">作品回收站</button>
+              <button id="shelf-new-work" class="primary-button" type="button">新建作品</button>
+            </div>
           </div>
           <div id="book-shelf" class="book-shelf" data-testid="book-shelf"></div>
           <footer class="product-footer" data-product-footer aria-label="叙界项目信息">
@@ -216,7 +220,7 @@
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
             <button id="global-replace-button" class="settings-hub-card" type="button"><span class="settings-card-mark">替</span><strong>全局替换</strong><small>替换已保存正文、设定库或两者内容</small></button>
             <button id="appearance-button" class="settings-hub-card" type="button" data-settings-action="appearance"><span class="settings-card-mark">Aa</span><strong>显示设置</strong><small>中文字体、等宽英文字体、字号与行距</small></button>
-            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择导出 Markdown ZIP 或 DOCX；不包含角色和设定资料</small></button>
+            <button id="export-button" class="settings-hub-card" type="button" data-settings-action="export" aria-haspopup="menu" aria-controls="manuscript-export-menu" aria-expanded="false"><span class="settings-card-mark">出</span><strong>导出正文</strong><small>选择 Markdown ZIP、DOCX 或 EPUB；不包含角色和设定资料</small></button>
           </div>
           <p id="settings-work-note" class="settings-work-note"></p>
           <footer class="product-footer settings-product-footer" data-product-footer aria-label="叙界项目信息">
@@ -244,6 +248,7 @@
             <input id="chapter-title" class="chapter-title" aria-label="章节标题" placeholder="章节标题">
             <div class="editor-actions">
               <span id="chapter-stats" class="chapter-stats">0 字 · v0</span>
+              <button id="chapter-reader-button" class="ghost-button" type="button">阅读预览</button>
               <button id="insight-button" class="ghost-button" type="button" aria-controls="chapter-insight-toast" aria-expanded="false">章节概览</button>
               <button id="versions-button" class="ghost-button" type="button">版本</button>
               <button id="chapter-annotations-button" class="ghost-button" type="button">评论</button>
@@ -253,6 +258,28 @@
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
           </div>
+          <section id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden" aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title">
+            <div class="chapter-foreshadow-reminder-summary">
+              <span id="chapter-foreshadow-reminder-role" class="chapter-foreshadow-reminder-role">提醒章</span>
+              <div>
+                <strong id="chapter-foreshadow-reminder-title">本章有伏笔需要留意</strong>
+                <span id="chapter-foreshadow-reminder-context"></span>
+              </div>
+            </div>
+            <div class="chapter-foreshadow-reminder-actions">
+              <span id="chapter-foreshadow-reminder-counter" class="chapter-foreshadow-reminder-counter"></span>
+              <button id="chapter-foreshadow-reminder-previous" class="ghost-button" type="button" aria-label="查看上一条伏笔提醒">上一条</button>
+              <button id="chapter-foreshadow-reminder-next" class="ghost-button" type="button" aria-label="查看下一条伏笔提醒">下一条</button>
+              <button id="chapter-foreshadow-reminder-details-button" class="ghost-button" type="button" aria-controls="chapter-foreshadow-reminder-details" aria-expanded="false">查看详情</button>
+              <button id="chapter-foreshadow-reminder-snooze" class="ghost-button" type="button">暂不处理</button>
+              <button id="chapter-foreshadow-reminder-resolve" class="primary-button" type="button">标记已回收</button>
+            </div>
+            <dl id="chapter-foreshadow-reminder-details" class="chapter-foreshadow-reminder-details hidden">
+              <div id="chapter-foreshadow-reminder-description-row"><dt>伏笔说明</dt><dd id="chapter-foreshadow-reminder-description"></dd></div>
+              <div id="chapter-foreshadow-reminder-note-row"><dt>本章节点</dt><dd id="chapter-foreshadow-reminder-note"></dd></div>
+              <div><dt>重要程度</dt><dd id="chapter-foreshadow-reminder-importance"></dd></div>
+            </dl>
+          </section>
           <div class="editor-body">
             <div class="chapter-editor-frame">
               <aside id="chapter-line-numbers" class="chapter-line-numbers" aria-label="正文行号，可拖拽引用多行"><div id="chapter-line-numbers-inner"></div></aside>
@@ -345,6 +372,55 @@
       </aside>
     </div>
 
+    <section id="reader-view" class="reader-view hidden" data-reader-theme="paper" role="dialog" aria-labelledby="reader-title">
+      <header class="reader-header">
+        <button id="reader-close" class="entity-editor-back" type="button">返回工作台</button>
+        <div class="reader-heading">
+          <span class="eyebrow">沉浸式阅读预览</span>
+          <h1 id="reader-title">阅读预览</h1>
+        </div>
+        <details id="reader-settings" class="reader-settings">
+          <summary>显示设置</summary>
+          <div class="reader-settings-panel">
+            <label>字号<select id="reader-font-size" aria-label="阅读字号">
+              <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
+            </select></label>
+            <label>行距<select id="reader-line-height" aria-label="阅读行距">
+              <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
+            </select></label>
+            <label>主题<select id="reader-theme" aria-label="阅读主题">
+              <option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
+            </select></label>
+          </div>
+        </details>
+        <div class="reader-jump-controls" aria-label="阅读导航与模式">
+          <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
+          <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
+          <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
+        </div>
+      </header>
+      <main id="reader-viewport" class="reader-viewport" tabindex="0" aria-describedby="reader-keyboard-hint">
+        <article id="reader-document" class="reader-document" aria-live="polite">
+          <header class="reader-chapter-header">
+            <span id="reader-volume-title" class="eyebrow">正文</span>
+            <h2 id="reader-chapter-title">请选择章节</h2>
+            <p id="reader-chapter-meta">0 字</p>
+          </header>
+          <div id="reader-page-shell" class="reader-page-shell">
+            <div id="reader-content" class="reader-content"></div>
+          </div>
+          <div id="reader-continuation" class="reader-continuation">
+            <button id="reader-continue" class="ghost-button" type="button">继续下一章</button>
+          </div>
+        </article>
+      </main>
+      <footer class="reader-footer">
+        <button id="reader-previous" class="ghost-button" type="button">上一章</button>
+        <div class="reader-footer-status"><div class="reader-page-actions"><button id="reader-page-previous" class="hidden" type="button" aria-label="上一页">‹</button><strong id="reader-progress" role="status" aria-live="polite">第 0 / 0 章</strong><button id="reader-page-next" class="hidden" type="button" aria-label="下一页">›</button></div><small id="reader-keyboard-hint">Esc 关闭；PageUp/PageDown 或方向键阅读</small></div>
+        <button id="reader-next" class="primary-button" type="button">下一章</button>
+      </footer>
+    </section>
+
     <div id="toast-region" class="toast-region" data-position="bottom-right" aria-live="polite" popover="manual"></div>
     <div id="chapter-type-menu" class="chapter-type-menu hidden" role="menu" aria-label="章节操作" data-testid="chapter-type-menu">
       <strong>标记章节</strong>
@@ -377,6 +453,10 @@
       <button type="button" role="menuitem" data-export-format="docx">
         <span>导出 DOCX</span>
         <small>Word 正文；有封面时嵌入为首页</small>
+      </button>
+      <button type="button" role="menuitem" data-export-format="epub">
+        <span>导出 EPUB</span>
+        <small>电子书正文；包含元信息、封面和可跳转目录</small>
       </button>
     </div>
     <input id="new-import-file" class="hidden" type="file" accept=".txt,.docx">
@@ -616,7 +696,7 @@
       </div>
       <div class="access-dialog-body">
         <form id="search-form" class="search-form">
-          <label>关键词<input id="search-query" name="query" type="search" maxlength="500" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
+          <label>关键词<input id="search-query" name="query" type="search" maxlength="100" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
           <label>资料类型<select id="search-type" name="type">
             <option value="">全部资料</option>
             <option value="chapter">章节</option>
@@ -746,11 +826,18 @@
       </form>
     </dialog>
 
-    <dialog id="versions-dialog" class="dialog wide-dialog">
+    <dialog id="versions-dialog" class="dialog wide-dialog" aria-labelledby="chapter-versions-title" aria-describedby="chapter-version-diff-summary">
       <div class="dialog-header">
-        <div><span class="eyebrow">版本历史</span><h2>章节保存记录</h2></div>
-        <button id="versions-close" class="dialog-close" aria-label="关闭" type="button">×</button>
+        <div><span class="eyebrow">版本历史</span><h2 id="chapter-versions-title">章节保存记录</h2></div>
+        <button id="versions-close" class="dialog-close" aria-label="关闭章节版本历史" type="button">×</button>
       </div>
+      <section class="chapter-version-compare" aria-label="选择要比较的章节版本">
+        <label>较早内容<select id="chapter-version-before" aria-label="选择比较前的版本"></select></label>
+        <button id="chapter-version-compare" class="ghost-button" type="button">比较差异</button>
+        <label>较新内容<select id="chapter-version-after" aria-label="选择比较后的版本"></select></label>
+      </section>
+      <p id="chapter-version-diff-summary" class="chapter-version-diff-summary" aria-live="polite"></p>
+      <div id="chapter-version-diff" class="chapter-version-diff" aria-label="逐行差异结果"></div>
       <div id="versions-list" class="versions-list"></div>
     </dialog>
 
@@ -765,14 +852,25 @@
       </div>
     </dialog>
 
-    <dialog id="chapter-recycle-bin-dialog" class="dialog wide-dialog" aria-labelledby="chapter-recycle-bin-title" aria-describedby="chapter-recycle-bin-description">
+    <dialog id="work-recycle-bin-dialog" class="dialog wide-dialog" aria-labelledby="work-recycle-bin-title" aria-describedby="work-recycle-bin-description">
       <div class="dialog-header">
-        <div><span class="eyebrow">正文安全</span><h2 id="chapter-recycle-bin-title">章节回收站</h2></div>
-        <button id="chapter-recycle-bin-close" class="dialog-close" aria-label="关闭章节回收站" type="button">×</button>
+        <div><span class="eyebrow">作品安全</span><h2 id="work-recycle-bin-title">作品回收站</h2></div>
+        <button id="work-recycle-bin-close" class="dialog-close" aria-label="关闭作品回收站" type="button">×</button>
       </div>
       <div class="import-history-body">
-        <p id="chapter-recycle-bin-description" class="import-history-note">软删除的章节会保留正文、版本和关联资料。可以恢复到原分卷，也可以彻底删除；彻底删除后无法恢复。</p>
-        <div id="chapter-recycle-bin-list" class="entity-history-list" aria-live="polite"></div>
+        <p id="work-recycle-bin-description" class="import-history-note">删除的作品默认保留 30 天，期间会完整保留正文、层级、设定、关联资料与版本历史。恢复后可继续编辑；彻底删除后无法恢复。</p>
+        <div id="work-recycle-bin-list" class="entity-history-list recycle-bin-list" aria-live="polite"></div>
+      </div>
+    </dialog>
+
+    <dialog id="chapter-recycle-bin-dialog" class="dialog wide-dialog" aria-labelledby="chapter-recycle-bin-title" aria-describedby="chapter-recycle-bin-description">
+      <div class="dialog-header">
+        <div><span class="eyebrow">正文安全</span><h2 id="chapter-recycle-bin-title">正文回收站</h2></div>
+        <button id="chapter-recycle-bin-close" class="dialog-close" aria-label="关闭正文回收站" type="button">×</button>
+      </div>
+      <div class="import-history-body">
+        <p id="chapter-recycle-bin-description" class="import-history-note">删除的分卷与章节默认保留 30 天。分卷会连同其中章节一起恢复；独立章节会恢复到原分卷。彻底删除会清理正文、版本和关联资料，且无法恢复。</p>
+        <div id="chapter-recycle-bin-list" class="entity-history-list recycle-bin-list" aria-live="polite"></div>
       </div>
     </dialog>
 
@@ -950,6 +1048,10 @@
           <p>预览</p>
         </aside>
       </div>
+      <div id="avatar-upload-progress" class="image-upload-progress-panel hidden" role="status" aria-live="polite" aria-busy="true">
+        <div class="image-upload-placeholder-box" aria-hidden="true"><span class="image-upload-placeholder-icon">IMG</span><span class="image-upload-placeholder-shine"></span></div>
+        <div class="image-upload-progress-copy"><strong>正在上传头像</strong><small id="avatar-upload-progress-name"></small><div class="image-upload-progress" data-upload-progress data-upload-progress-label="头像上传进度" style="--upload-progress: 0%"><div class="image-upload-progress-heading"><span data-upload-progress-text>上传中 0%</span><output data-upload-progress-value>0%</output></div><div class="image-upload-progress-track" role="progressbar" aria-label="头像上传进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span data-upload-progress-fill></span></div></div></div>
+      </div>
       <div class="dialog-actions">
         <button id="avatar-crop-cancel" class="ghost-button" type="button">取消</button>
         <button id="avatar-crop-confirm" class="primary-button" type="button">确认裁剪</button>
@@ -1015,6 +1117,12 @@
           <button id="ai-history-next" type="button" disabled>下一页</button>
         </nav>
       </div>
+      <div id="ai-history-action-menu" class="ai-history-action-menu hidden" role="menu" aria-label="对话操作">
+        <button type="button" role="menuitem" data-ai-history-action="export">
+          <span>导出 Markdown</span>
+          <small>下载当前对话的角色、时间和消息正文</small>
+        </button>
+      </div>
     </dialog>
 
     <dialog id="relationship-map-dialog" class="relationship-map-dialog" aria-label="放大人物关系图" data-testid="relationship-map-expanded">
@@ -1048,6 +1156,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260812-image-upload-limit-v3"></script>
+    <script type="module" src="/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-outline-reader-v1"></script>
   </body>
 </html>

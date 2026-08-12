@@ -43,7 +43,7 @@ describe("AI 输入框引用气泡", () => {
     expect(application.text).toContain("function clearAiPromptComposer()");
     const sendAiSource = application.text.slice(
       application.text.indexOf("async function sendAi()"),
-      application.text.indexOf("async function streamChat(body)")
+      application.text.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
     );
     expect(sendAiSource).toMatch(/appendMessage\("user"[\s\S]+?clearAiPromptComposer\(\);[\s\S]+?await streamChat/u);
     expect(sendAiSource.match(/clearAiPromptComposer\(\);/gu)).toHaveLength(1);

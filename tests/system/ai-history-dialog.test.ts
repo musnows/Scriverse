@@ -29,6 +29,8 @@ describe("AI 对话历史弹窗", () => {
     expect(page.text).toContain('aria-controls="ai-history-dialog"');
     expect(page.text).toContain('id="ai-history-dialog" class="dialog wide-dialog ai-history-dialog"');
     expect(page.text).toContain('id="ai-history-list" class="ai-history-list"');
+    expect(page.text).toContain('id="ai-history-action-menu" class="ai-history-action-menu hidden" role="menu"');
+    expect(page.text).toContain('data-ai-history-action="export"');
     expect(page.text).toContain('id="ai-history-pagination" class="module-pagination ai-history-pagination hidden"');
     expect(page.text).toContain('id="ai-history-previous"');
     expect(page.text).toContain('id="ai-history-next"');
@@ -38,8 +40,19 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('$("#ai-history-close").addEventListener');
     expect(application.text).toContain('$("#ai-history-previous").addEventListener');
     expect(application.text).toContain('$("#ai-history-next").addEventListener');
+    expect(application.text).toContain('more.setAttribute("aria-haspopup", "menu")');
+    expect(application.text).toContain('/api/ai-conversations/${encodeURIComponent(conversation.id)}/export');
+    expect(application.text).toContain('label.textContent = "下载中"');
+    expect(application.text).toContain('toast(`对话导出失败：${error.message}`, "error")');
+    expect(application.text).toContain('$("#ai-history-dialog").addEventListener("cancel"');
+    expect(application.text).toContain('fork.setAttribute("aria-label", "从此消息续写为新对话")');
+    expect(application.text).toContain("const forkRequestId = crypto.randomUUID()");
+    expect(application.text).toContain("body: { messageId: message.dataset.messageId, requestId: forkRequestId }");
+    expect(application.text).not.toContain('message.classList.contains("assistant-message")');
     expect(styles.text).toContain(".ai-history-dialog-body");
     expect(styles.text).toContain(".ai-heading-action-icon");
+    expect(styles.text).toContain(".ai-history-row { display: grid;");
+    expect(styles.text).toContain(".ai-history-action-menu { position: fixed;");
     expect(styles.text).not.toContain(".ai-history-panel");
   });
 });

@@ -7,6 +7,7 @@ import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { runWithRequestActor, type RequestActor } from "./request-context.js";
 import { normalizeApiPath } from "./security.js";
+import { escapeSqlLikePattern } from "./utils.js";
 import {
   canReadWorkModule,
   canWriteWorkModule,
@@ -436,7 +437,7 @@ export class UserAuthService {
   }
 
   directory(query: string): Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">[] {
-    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     return this.database.all(
       `SELECT * FROM users WHERE status = 'active' AND (username LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')
@@ -450,7 +451,7 @@ export class UserAuthService {
   }
 
   directoryPage(query: string, pagination: Pagination): PaginatedResult<Pick<AuthUser, "userId" | "username" | "displayName" | "avatarUrl">> {
-    const escapedQuery = query.trim().slice(0, 100).replace(/[\\%_]/gu, (character) => `\\${character}`);
+    const escapedQuery = escapeSqlLikePattern(query.trim().slice(0, 100));
     const pattern = `%${escapedQuery}%`;
     const page = paginationSql(pagination);
     const rows = this.database.all(
@@ -657,7 +658,7 @@ export class UserAuthService {
 
   workRole(user: AuthUser, workId: string, allowAdminAccess = true): WorkAccessRole | null {
     if (allowAdminAccess && user.role === "admin") return "admin";
-    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ? AND deleted_at IS NULL", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return "owner";
     const membership = this.database.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
@@ -666,12 +667,25 @@ export class UserAuthService {
 
   workModulePermissions(user: AuthUser, workId: string, allowAdminAccess = true): WorkModulePermissions | null {
     if (allowAdminAccess && user.role === "admin") return fullWorkModulePermissions();
-    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ?", workId);
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ? AND deleted_at IS NULL", workId);
     if (!work) throw notFound("作品");
     if (String(work.owner_user_id ?? "") === user.userId) return fullWorkModulePermissions();
     const membership = this.database.get("SELECT role, permissions_json FROM work_memberships WHERE work_id = ? AND user_id = ?", workId, user.userId);
     if (!membership) return null;
     return storedWorkModulePermissions(String(membership.role), membership.permissions_json);
+  }
+
+  assertActiveWork(workId: string): void {
+    if (!this.database.get("SELECT 1 AS present FROM works WHERE id = ? AND deleted_at IS NULL", workId)) throw notFound("作品");
+  }
+
+  assertDeletedWorkAccess(user: AuthUser, workId: string, allowAdminAccess = true): void {
+    const work = this.database.get("SELECT owner_user_id FROM works WHERE id = ? AND deleted_at IS NOT NULL", workId);
+    if (!work) throw notFound("回收站作品");
+    if (allowAdminAccess && user.role === "admin") return;
+    if (String(work.owner_user_id ?? "") !== user.userId) {
+      throw new AppError(403, "WORK_OWNER_REQUIRED", "该操作仅限作品创建者或系统管理员");
+    }
   }
 
   assertWorkAccess(
@@ -799,12 +813,13 @@ const cliApiRules: Array<{ methods: string[]; path: RegExp }> = [
   { methods: ["GET"], path: /^\/api\/cli\/session$/u },
   { methods: ["GET", "POST"], path: /^\/api\/works$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/works\/[^/]+$/u },
-  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
+  { methods: ["GET"], path: /^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships|chapter-annotations|search|export|audit-logs)$/u },
   { methods: ["GET"], path: /^\/api\/works\/[^/]+\/writing-progress$/u },
   { methods: ["PUT"], path: /^\/api\/works\/[^/]+\/writing-goal$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/(?:volumes|chapters|foreshadows|drafts|settings|characters|races|organizations|timeline-tracks|timeline|relationships)$/u },
   { methods: ["POST"], path: /^\/api\/works\/[^/]+\/chapters\/batch$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/volumes\/[^/]+$/u },
+  { methods: ["GET"], path: /^\/api\/volumes\/[^/]+\/export$/u },
   { methods: ["GET", "PATCH"], path: /^\/api\/chapters\/[^/]+$/u },
   { methods: ["GET"], path: /^\/api\/chapters\/[^/]+\/(?:versions|outline)$/u },
   { methods: ["GET", "POST"], path: /^\/api\/chapters\/[^/]+\/annotations$/u },
@@ -831,6 +846,12 @@ export function createCliApiScopeMiddleware(disabled = false): RequestHandler {
 const contentPermissionModules = workPermissionModules.filter((module) => !["drafts", "reviews", "ai-chat", "ai-analysis", "ai-settings"].includes(module));
 const aiInteractionModules = ["ai-chat", "ai-analysis"] as const satisfies readonly WorkPermissionModule[];
 const attachmentModules = ["prose", "drafts", "settings", "characters", "races", "organizations"] as const satisfies readonly WorkPermissionModule[];
+
+export function exportReadPermissionModules(format: unknown): WorkPermissionModule[] {
+  return format === "json" || format === undefined
+    ? ["drafts", ...contentPermissionModules, "reviews"]
+    : ["prose"];
+}
 
 function requestedAttachmentModule(request: Request): WorkPermissionModule {
   const module = String(request.query.module ?? "settings");
@@ -918,6 +939,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/works\/[^/]+\/audit-logs$/u.test(pathname)) return { ownerOnly: true };
   if (/^\/api\/works\/[^/]+\/(?:writing-progress|writing-goal)$/u.test(pathname)) return direct("prose");
   if (/^\/api\/works\/[^/]+\/chapter-annotations$/u.test(pathname)) return direct("prose");
+  if (/^\/api\/works\/[^/]+\/(?:deleted-chapters|recycle-bin)$/u.test(pathname)) return { write: ["prose"] };
+  if (/^\/api\/works\/[^/]+\/chapters\/[^/]+\/foreshadow-reminders(?:\/[^/]+\/resolve)?$/u.test(pathname)) {
+    return write ? { read: ["prose"], write: ["outlines"] } : { read: ["prose", "outlines"] };
+  }
   if (/^\/api\/works\/[^/]+\/attachments$/u.test(pathname)) {
     return write ? direct(requestedAttachmentModule(request)) : { anyRead: [...attachmentModules] };
   }
@@ -995,7 +1020,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
     [/^\/api\/(?:timeline-tracks|timeline)\/[^/]+(?:\/|$)/u, "timeline"],
     [/^\/api\/works\/[^/]+\/relationships(?:\/|$)/u, "relationships"],
     [/^\/api\/relationships\/[^/]+(?:\/|$)/u, "relationships"],
-    [/^\/api\/works\/[^/]+\/(?:outlines|foreshadows)(?:\/|$)/u, "outlines"],
+    [/^\/api\/works\/[^/]+\/(?:outlines|outline-board|foreshadows)(?:\/|$)/u, "outlines"],
     [/^\/api\/(?:foreshadows|foreshadow-occurrences)\/[^/]+(?:\/|$)/u, "outlines"],
     [/^\/api\/works\/[^/]+\/ai-settings(?:\/|$)/u, "ai-settings"],
     [/^\/api\/works\/[^/]+\/task-defaults(?:\/|$)/u, "ai-settings"]
@@ -1029,6 +1054,12 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/tasks\/[^/]+\/trace(?:\/calls\/[^/]+)?$/u.test(pathname)) {
     return { read: ["ai-analysis", ...contentPermissionModules] };
   }
+  if (/^\/api\/tasks\/[^/]+\/character-extraction\/preview$/u.test(pathname)) {
+    return { read: ["ai-analysis", "prose", "characters", "races"] };
+  }
+  if (write && /^\/api\/tasks\/[^/]+\/character-extraction\/apply$/u.test(pathname)) {
+    return { read: ["prose", "characters"], write: ["ai-analysis", "characters", "races"] };
+  }
   if (write && /^\/api\/tasks\/[^/]+\/relationship-changes\/apply$/u.test(pathname)) {
     return { write: ["ai-analysis", "relationships"] };
   }
@@ -1061,7 +1092,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       : { read: [...contentPermissionModules] };
   }
   if (/^\/api\/works\/[^/]+\/export$/u.test(pathname)) {
-    return { read: request.query.format === "json" || request.query.format === undefined ? ["drafts", ...contentPermissionModules] : ["prose"] };
+    return { read: exportReadPermissionModules(request.query.format) };
   }
   return { ownerOnly: true };
 }
@@ -1069,7 +1100,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
 export function createWorkAuthorizationMiddleware(auth: UserAuthService, disabled = false): RequestHandler {
   return (request, _response, next) => {
     const path = normalizeApiPath(request.path);
-    if (disabled || !path.startsWith("/api/") || path.startsWith("/api/auth/") || path === "/api/health") return next();
+    if (!path.startsWith("/api/") || path.startsWith("/api/auth/") || path === "/api/health") return next();
+    const workId = auth.resolveWorkId(request.path);
+    if (workId) auth.assertActiveWork(workId);
+    if (disabled) return next();
     const user = request.authUser;
     if (!user) throw new AppError(401, "AUTH_REQUIRED", "请先登录");
     if (path.startsWith("/api/platform/") || path.startsWith("/api/providers/") || path.startsWith("/api/models/")) {
@@ -1084,7 +1118,6 @@ export function createWorkAuthorizationMiddleware(auth: UserAuthService, disable
       if (user.role !== "admin") throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
       return next();
     }
-    const workId = auth.resolveWorkId(request.path);
     if (!workId) return next();
     const write = !["GET", "HEAD", "OPTIONS"].includes(request.method);
     const requirements = workModuleRequirements(request, write);

@@ -9,6 +9,7 @@ type JsonObject = Record<string, unknown>;
 type CompletionMessage = { role?: string; tool_call_id?: string; content?: string };
 
 const port = Number(process.env.E2E_BROWSER_PORT ?? 13212);
+const aiStreamIdleTimeoutMs = Number(process.env.E2E_AI_STREAM_IDLE_TIMEOUT_MS ?? 3_000);
 const dataRoot = join(process.cwd(), ".data");
 await mkdir(dataRoot, { recursive: true });
 const isolatedDirectory = await mkdtemp(join(dataRoot, "e2e-browser-ai-"));
@@ -63,6 +64,15 @@ const mockAi = createServer(async (request, response) => {
   if (joined.includes("结构化中文长期记忆")) {
     const sourceMessageIds = [...joined.matchAll(/^\[([^\]]+)\]/gmu)].map((match) => match[1]).filter(Boolean).slice(0, 2);
     sendCompletion(response, { content: `<json>{"authorGoals":[],"confirmedDecisions":[],"storyFacts":[{"text":"最近正在确认燃料状态","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"constraints":[{"text":"必须遵守跃迁冷却规则","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"unresolvedQuestions":[],"importantReferences":[]}</json>` });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器流空闲超时测试")) {
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive"
+    });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "已收到的部分回复会被保留。" } }] })}\n\n`);
     return;
   }
   if (latestUserMessage.includes("浏览器工具测试")) {
@@ -129,6 +139,25 @@ const mockAi = createServer(async (request, response) => {
     }
     await new Promise((resolve) => setTimeout(resolve, 800));
     sendCompletion(response, { content: `滚动测试完成。${"模型输出后应保持对话底部可见。".repeat(20)}` });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器切换竞态测试")) {
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.flushHeaders();
+    response.write('data: {"choices":[{"delta":{"content":"旧请求部分内容"}}]}\n\n');
+    const finishTimer = setTimeout(() => {
+      if (response.destroyed || response.writableEnded) return;
+      response.write('data: {"choices":[{"delta":{"content":"不应进入新对话"},"finish_reason":"stop"}]}\n\n');
+      response.end("data: [DONE]\n\n");
+    }, 15_000);
+    const stop = () => clearTimeout(finishTimer);
+    request.once("aborted", stop);
+    response.once("close", stop);
+    return;
+  }
+  if (latestUserMessage.includes("浏览器网络失败测试")) {
+    response.writeHead(503, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "浏览器模拟上游不可用" } }));
     return;
   }
   if (latestUserMessage.includes("这是什么项目")) {
@@ -207,7 +236,8 @@ if (!mockAddress || typeof mockAddress === "string") throw new Error("Mock AI se
 const runtime = createRuntime({
   databasePath: join(isolatedDirectory, "novel.db"),
   masterSecret: "browser-e2e-master-secret-at-least-32-characters",
-  security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false, apiRateLimit: 10_000 }
+  security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false, apiRateLimit: 10_000 },
+  aiStreamIdleTimeoutMs
 });
 const registered = runtime.auth.register({ username: "browser-e2e", password: "BrowserE2E123!" });
 const fixture = runWithRequestActor(registered.session.user, () => {
@@ -225,6 +255,14 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     volumeId: String(lateVolume.id),
     title: "第二章 北境追击",
     content: `舰队在北境追击敌人。${"后期战斗记录。".repeat(1_200)}`
+  });
+  const secondWork = runtime.store.createWork({ title: "浏览器 AI E2E 第二作品", author: "Codex" });
+  const secondWorkId = String(secondWork.id);
+  const secondVolume = runtime.store.createVolume(secondWorkId, { title: "第二作品卷" });
+  const secondChapter = runtime.store.createChapter(secondWorkId, {
+    volumeId: String(secondVolume.id),
+    title: "第二作品章节",
+    content: "第二作品正文不应收到第一部作品的流式回复。"
   });
   for (const [insightId, targetChapter, summary] of [
     ["browser-insight-early", chapter, "林舟在第一卷发现月蚀密钥并启动跃迁。"],
@@ -256,6 +294,44 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     subtype: "远航搭档",
     confirmationStatus: "confirmed"
   });
+  const characterExtractionTask = runtime.store.createTask(workId, {
+    taskType: "character-extraction",
+    scope: { type: "book" }
+  });
+  runtime.store.updateTask(String(characterExtractionTask.id), {
+    status: "completed",
+    progress: 100,
+    result: {
+      characterIds: [],
+      characterCandidates: [
+        {
+          candidateId: "candidate-1",
+          name: "林舟",
+          aliases: ["北港领航员"],
+          species: "",
+          identity: "远航号领航员",
+          firstChapterId: String(chapter.id),
+          firstEvidence: { chapterId: String(chapter.id), chapterTitle: String(chapter.title), quote: "林舟启动了跃迁" },
+          stableCharacterId: String(navigator.id)
+        },
+        {
+          candidateId: "candidate-2",
+          name: "夏岚",
+          aliases: ["小岚"],
+          species: "",
+          identity: "北港通讯员",
+          firstChapterId: String(chapter.id),
+          firstEvidence: { chapterId: String(chapter.id), chapterTitle: String(chapter.title), quote: "月蚀密钥藏在旧港钟楼" },
+          stableCharacterId: null
+        }
+      ],
+      candidateCount: 2,
+      savedCount: 0,
+      skipped: [{ name: "未命名候选", reason: "角色标准名为空，未进入入库预览" }],
+      coveredChapterCount: 2,
+      characterApplication: { status: "pending", totalCount: 2, generatedAt: new Date().toISOString() }
+    }
+  });
   const provider = runtime.ai.createProvider({
     name: "浏览器 E2E 模型",
     baseUrl: `http://127.0.0.1:${mockAddress.port}/v1`,
@@ -270,8 +346,17 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     contextWindow: 4_096
   });
   runtime.ai.setTaskDefault(workId, "chat", String(model.id));
+  runtime.ai.setTaskDefault(secondWorkId, "chat", String(model.id));
   runtime.store.updateWorkAiSettings(workId, { contextCompactThreshold: 50 });
-  return { workId, chapterId, modelId: String(model.id) };
+  runtime.store.updateWorkAiSettings(secondWorkId, { contextCompactThreshold: 50 });
+  return {
+    workId,
+    chapterId,
+    secondWorkId,
+    secondChapterId: String(secondChapter.id),
+    modelId: String(model.id),
+    characterExtractionTaskId: String(characterExtractionTask.id)
+  };
 });
 
 let compactConversationId = "";

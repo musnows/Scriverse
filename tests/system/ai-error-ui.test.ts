@@ -3,11 +3,40 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("AI 错误详情界面", () => {
+  it("普通流式失败在追加持久化失败消息前移除临时流式消息", async () => {
+    const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
+    const sendAiSource = application.slice(
+      application.indexOf("async function sendAi()"),
+      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
+    );
+    const sendFailureSource = sendAiSource.slice(
+      sendAiSource.lastIndexOf("  } catch (error) {"),
+      sendAiSource.lastIndexOf("  } finally {")
+    );
+    const streamChatSource = application.slice(
+      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey)"),
+      application.indexOf("function appendMessage(role, text")
+    );
+    const streamFailureSource = streamChatSource.slice(streamChatSource.lastIndexOf("  } catch (error) {"));
+    const currentRequestFailureSource = streamFailureSource.slice(
+      streamFailureSource.indexOf("    assertAiRequestCurrent(requestHolder.snapshot);")
+    );
+
+    expect(currentRequestFailureSource).toContain("typewriter.reveal();");
+    expect(currentRequestFailureSource).toContain("revealProcessStepTypewriters();");
+    expect(currentRequestFailureSource).toContain("if (!interruption) {");
+    expect(currentRequestFailureSource).toContain("if (messageMounted) message.remove();");
+    expect(currentRequestFailureSource).not.toContain("mountAssistantMessage();");
+    expect(currentRequestFailureSource).not.toContain("生成中断");
+    expect(sendFailureSource.match(/persistAiConversationMessage\(/gu)).toHaveLength(2);
+    expect(sendFailureSource.match(/appendMessage\("assistant", failureMessage/gu)).toHaveLength(1);
+  });
+
   it("将模型目标和上游失败详情写入带状态标识的助手消息", async () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
-      application.indexOf("async function streamChat(body)")
+      application.indexOf("async function streamChat(requestHolder, body, idempotencyKey)")
     );
 
     expect(application).toContain("function createClientError(payload, fallbackMessage, fallbackStatus = null)");
@@ -29,12 +58,12 @@ describe("AI 错误详情界面", () => {
     expect(sendAiSource).toContain("const failureMessage = formatAiFailureMessage(error);");
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(application).toContain('const isFailure = role === "assistant" && text.startsWith("调用失败：");');
-    expect(application).toContain('message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;');
+    expect(application).toContain('message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;');
     expect(application).toContain('<p class="ai-error-text">${esc(text)}</p>');
-    expect(application).toContain('message.dataset.status = "failed";');
+    expect(application).toContain('message.dataset.status = isInterrupted ? "interrupted" : "failed";');
     expect(application).toContain('failureBadge.className = "ai-message-status is-error";');
-    expect(application).toContain('failureBadge.textContent = "失败";');
-    expect(application).toContain('failureBadge.setAttribute("aria-label", "消息状态：失败");');
+    expect(application).toContain('failureBadge.textContent = isInterrupted ? "中断" : "失败";');
+    expect(application).toContain('failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);');
   });
 
   it("突出失败卡片并让错误正文继承正常助手消息的字体和字号", async () => {
@@ -65,5 +94,20 @@ describe("AI 错误详情界面", () => {
     expect(application).toContain('if (suggestionFailed) setAiAssistantStatus("error");');
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(styles).toContain('.status-dot.is-error { background: var(--accent);');
+  });
+
+  it("区分流超时与断流并持久化已收到的部分内容", async () => {
+    const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
+
+    expect(application).toContain('if (code === "AI_STREAM_IDLE_TIMEOUT") return "网络超时";');
+    expect(application).toContain('if (code === "AI_STREAM_UPSTREAM_CLOSED") return "流被关闭";');
+    expect(application).toContain("const { completed: streamCompleted } = await readAiEventStream(response.body, consume);");
+    expect(application).toContain("assertAiStreamCompleted(streamCompleted);");
+    expect(application).toContain('metadata?.interrupted === true');
+    expect(application).toContain('interruptionMessage: streamFailure.message.slice(0, 500)');
+    expect(application).toContain('{ requestId: aiAssistantRequestId(request) }');
+    expect(application).toContain('persistAiRequestInterruption(request, error?.streamInterruption)');
+    expect(application).toContain('formatAiStreamInterruptionMeta(error.code, persistedContent.length)');
+    expect(application).toContain('toast(`${aiStreamInterruptionLabel(error.code)}：${error.message}`, "error")');
   });
 });

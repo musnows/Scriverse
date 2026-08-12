@@ -16,8 +16,29 @@ import {
   storedMembershipForPermissions,
   storedWorkModulePermissions
 } from "../../src/work-permissions.js";
+import { exportReadPermissionModules } from "../../src/user-auth.js";
 
 describe("作品模块权限", () => {
+  it("JSON 导出必须读取审核模块且正文格式不扩大授权范围", () => {
+    const completeExportModules = [
+      "drafts",
+      "prose",
+      "settings",
+      "characters",
+      "races",
+      "organizations",
+      "timeline",
+      "relationships",
+      "outlines",
+      "reviews"
+    ];
+    expect(exportReadPermissionModules(undefined)).toEqual(completeExportModules);
+    expect(exportReadPermissionModules("json")).toEqual(completeExportModules);
+    for (const format of ["txt", "markdown", "docx", "epub"]) {
+      expect(exportReadPermissionModules(format)).toEqual(["prose"]);
+    }
+  });
+
   it("将旧成员角色映射为等价模块权限", () => {
     const legacySettings = storedWorkModulePermissions("editor", JSON.stringify({ editScope: "settings" }));
     expect(legacySettings).toEqual(settingsEditorModulePermissions());

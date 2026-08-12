@@ -64,6 +64,23 @@ async function configureAi(runtime: Runtime, workId: string) {
   return model.body.data.id as string;
 }
 
+async function applySuggestedCharacterCandidates(runtime: Runtime, taskId: string) {
+  const preview = await request(runtime.app).get(`/api/tasks/${taskId}/character-extraction/preview`).expect(200);
+  const selections = preview.body.data.items.map((item: {
+    candidateId: string;
+    suggestedAction: "create" | "merge" | "skip";
+    matchCandidates: Array<{ characterId: string }>;
+  }) => ({
+    candidateId: item.candidateId,
+    action: item.suggestedAction,
+    ...(item.suggestedAction === "merge" ? { targetCharacterId: item.matchCandidates[0]?.characterId } : {})
+  }));
+  return request(runtime.app).post(`/api/tasks/${taskId}/character-extraction/apply`).send({
+    previewToken: preview.body.data.previewToken,
+    selections
+  }).expect(200);
+}
+
 describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
   let runtime: Runtime;
 
@@ -472,7 +489,7 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     });
   });
 
-  it("删除包含多级种族树的作品时完整级联清理", async () => {
+  it("删除包含多级种族树的作品时保留资料，彻底删除后完整级联清理", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "待删除种族树作品" }).expect(201);
     const workId = String(work.body.data.id);
     const parent = await request(runtime.app).post(`/api/works/${workId}/races`).send({ name: "父种族" }).expect(201);
@@ -497,6 +514,11 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
 
     await request(runtime.app).delete(`/api/works/${workId}`).expect(204);
     await request(runtime.app).get(`/api/works/${workId}`).expect(404);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM races WHERE work_id = ?", workId)?.count).toBe(2);
+    await request(runtime.app)
+      .delete(`/api/recycle-bin/works/${workId}/permanent`)
+      .send({ expectedVersionNo: 2 })
+      .expect(204);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM races WHERE work_id = ?", workId)?.count).toBe(0);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
@@ -699,6 +721,207 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(exported.body.data).toMatchObject({ schemaVersion: 8, races: [] });
     expect(exported.body.data.foreshadows[0].occurrences).toHaveLength(2);
   });
+
+  it("按分卷聚合全书大纲看板并只返回有界摘要", async () => {
+    const { workId, chapters } = await seedWork(runtime, "大纲看板作品");
+    const secondVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第二卷" }).expect(201);
+    const fourthChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "第四章 潮门",
+      content: "这一段正文不应出现在只读看板响应中。"
+    }).expect(201);
+    const recycledChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: secondVolume.body.data.id,
+      title: "回收站章节",
+      content: "已删除章节不应出现在看板中。"
+    }).expect(201);
+    await request(runtime.app).put(`/api/chapters/${recycledChapter.body.data.id}/outline`).send({
+      goal: "已删除的大纲",
+      status: "ready"
+    }).expect(200);
+    await request(runtime.app).delete(`/api/chapters/${recycledChapter.body.data.id}`).send({ expectedVersionNo: 1 }).expect(204);
+    const emptyVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "空卷" }).expect(201);
+    const longGoal = `寻找旧港真相${"长".repeat(700)}`;
+    await request(runtime.app).put(`/api/chapters/${chapters[0].id}/outline`).send({
+      goal: longGoal,
+      conflict: "守望会拒绝开放档案",
+      turningPoint: "旧信指向潮门",
+      status: "ready"
+    }).expect(200);
+    await request(runtime.app).put(`/api/chapters/${fourthChapter.body.data.id}/outline`).send({
+      goal: "进入潮门",
+      status: "completed"
+    }).expect(200);
+    const unresolved = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "旧信坐标",
+      status: "planted",
+      importance: "high",
+      plannedPayoffChapterId: fourthChapter.body.data.id,
+      occurrences: [{ chapterId: chapters[0].id, role: "setup" }]
+    }).expect(201);
+    const resolved = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "铜钥匙",
+      status: "resolved",
+      occurrences: [{ chapterId: chapters[0].id, role: "payoff" }]
+    }).expect(201);
+    const beforeRead = {
+      audits: runtime.database.get("SELECT COUNT(*) AS count FROM audit_logs")?.count,
+      versions: runtime.database.get("SELECT COUNT(*) AS count FROM entity_versions")?.count
+    };
+
+    const response = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
+    expect(response.body.data).toMatchObject({
+      workId,
+      stats: { chapterCount: 4, outlinedChapterCount: 2, foreshadowCount: 2, unresolvedForeshadowCount: 1 }
+    });
+    expect(response.body.data.volumes.map((volume: Record<string, unknown>) => volume.title)).toEqual(["第一卷", "第二卷", "空卷"]);
+    expect(response.body.data.volumes[2]).toMatchObject({ id: emptyVolume.body.data.id, chapters: [] });
+    const firstChapter = response.body.data.volumes[0].chapters[0];
+    expect(firstChapter.outline).toMatchObject({ status: "ready", truncated: true });
+    expect(firstChapter.outline.goal).toHaveLength(600);
+    expect(firstChapter.foreshadows).toEqual([
+      expect.objectContaining({ id: unresolved.body.data.id, status: "planted", roles: ["setup"], plannedPayoff: false }),
+      expect.objectContaining({ id: resolved.body.data.id, status: "resolved", roles: ["payoff"], plannedPayoff: false })
+    ]);
+    expect(response.body.data.volumes[1].chapters[0].foreshadows).toEqual([
+      expect.objectContaining({ id: unresolved.body.data.id, roles: [], plannedPayoff: true })
+    ]);
+    expect(JSON.stringify(response.body.data)).not.toContain("回收站章节");
+    expect(JSON.stringify(response.body.data)).not.toContain("这一段正文不应出现在只读看板响应中");
+    const fullOutline = await request(runtime.app).get(`/api/chapters/${chapters[0].id}/outline`).expect(200);
+    expect(fullOutline.body.data.goal).toBe(longGoal);
+    expect({
+      audits: runtime.database.get("SELECT COUNT(*) AS count FROM audit_logs")?.count,
+      versions: runtime.database.get("SELECT COUNT(*) AS count FROM entity_versions")?.count
+    }).toEqual(beforeRead);
+
+    const otherWork = await seedWork(runtime, "隔离作品大纲");
+    await request(runtime.app).put(`/api/chapters/${otherWork.chapters[0].id}/outline`).send({ goal: "CROSS_WORK_OUTLINE_SECRET" }).expect(200);
+    const isolated = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
+    expect(JSON.stringify(isolated.body.data)).not.toContain("CROSS_WORK_OUTLINE_SECRET");
+    await request(runtime.app).get("/api/works/not-a-work/outline-board").expect(404);
+  });
+
+  it("按当前章节返回伏笔提醒并通过现有版本与审计链标记回收", async () => {
+    const { workId, chapters } = await seedWork(runtime);
+    const reminder = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "旧信上的火漆",
+      description: "火漆纹章指向失踪的议员。",
+      importance: "high",
+      status: "planted",
+      occurrences: [
+        { chapterId: chapters[0].id, role: "setup", note: "旧信首次出现" },
+        { chapterId: chapters[1].id, role: "reminder", note: "再次看见破损火漆" }
+      ]
+    }).expect(201);
+    const secondReminder = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "未兑现的旧约",
+      status: "planned",
+      occurrences: [{ chapterId: chapters[1].id, role: "reminder", note: "主角想起约定" }]
+    }).expect(201);
+    const payoff = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "密钥真相",
+      status: "planted",
+      occurrences: [{ chapterId: chapters[2].id, role: "payoff", note: "密钥开启档案室" }]
+    }).expect(201);
+    const setupOnly = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "仅在本章埋设",
+      status: "planted",
+      occurrences: [{ chapterId: chapters[1].id, role: "setup" }]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "已经回收",
+      status: "resolved",
+      occurrences: [{ chapterId: chapters[1].id, role: "reminder" }]
+    }).expect(201);
+
+    const reminderChapter = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders`)
+      .expect(200);
+    expect(reminderChapter.body.data).toEqual([
+      expect.objectContaining({
+        foreshadowId: reminder.body.data.id,
+        title: "旧信上的火漆",
+        description: "火漆纹章指向失踪的议员。",
+        role: "reminder",
+        note: "再次看见破损火漆",
+        importance: "high",
+        status: "planted",
+        versionNo: reminder.body.data.versionNo
+      }),
+      expect.objectContaining({ foreshadowId: secondReminder.body.data.id, role: "reminder" })
+    ]);
+    expect(reminderChapter.body.data[0]).not.toHaveProperty("occurrences");
+    expect(reminderChapter.body.data[0]).not.toHaveProperty("resolutionNote");
+
+    const payoffChapter = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[2].id}/foreshadow-reminders`)
+      .expect(200);
+    expect(payoffChapter.body.data).toEqual([
+      expect.objectContaining({ foreshadowId: payoff.body.data.id, role: "payoff", note: "密钥开启档案室" })
+    ]);
+    await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[0].id}/foreshadow-reminders`)
+      .expect(200, { data: [] });
+
+    const otherWork = await seedWork(runtime, "其他作品的章节");
+    const crossWork = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${otherWork.chapters[0].id}/foreshadow-reminders`)
+      .expect(400);
+    expect(crossWork.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
+
+    const currentReminder = reminderChapter.body.data[0] as Record<string, unknown>;
+    const resolved = await request(runtime.app)
+      .post(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders/${reminder.body.data.id}/resolve`)
+      .send({ expectedVersionNo: currentReminder.versionNo })
+      .expect(200);
+    expect(resolved.body.data).toMatchObject({
+      foreshadowId: reminder.body.data.id,
+      status: "resolved",
+      versionNo: Number(currentReminder.versionNo) + 1
+    });
+    const remaining = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders`)
+      .expect(200);
+    expect(remaining.body.data).toEqual([
+      expect.objectContaining({ foreshadowId: secondReminder.body.data.id })
+    ]);
+
+    const latestVersion = runtime.database.get(
+      `SELECT source, source_ref, change_note, snapshot_json FROM entity_versions
+       WHERE entity_type = 'foreshadow' AND entity_id = ? ORDER BY version_no DESC LIMIT 1`,
+      reminder.body.data.id
+    );
+    expect(latestVersion).toMatchObject({
+      source: "manual",
+      source_ref: currentReminder.occurrenceId,
+      change_note: "在编辑器标记伏笔已回收"
+    });
+    expect(JSON.parse(String(latestVersion?.snapshot_json))).toMatchObject({ status: "resolved" });
+    const audit = runtime.database.get(
+      "SELECT action, detail_json FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      reminder.body.data.id
+    );
+    expect(audit?.action).toBe("foreshadow.updated");
+    expect(JSON.parse(String(audit?.detail_json))).toMatchObject({
+      fields: ["status"],
+      source: "manual",
+      sourceRef: currentReminder.occurrenceId
+    });
+
+    const stale = await request(runtime.app)
+      .post(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders/${secondReminder.body.data.id}/resolve`)
+      .send({ expectedVersionNo: Number(secondReminder.body.data.versionNo) + 1 })
+      .expect(409);
+    expect(stale.body.error.code).toBe("VERSION_CONFLICT");
+    await request(runtime.app)
+      .post(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders/${setupOnly.body.data.id}/resolve`)
+      .send({ expectedVersionNo: setupOnly.body.data.versionNo })
+      .expect(404);
+    expect(runtime.database.get("SELECT status FROM foreshadows WHERE id = ?", secondReminder.body.data.id)?.status).toBe("planned");
+    expect(runtime.database.get("SELECT status FROM foreshadows WHERE id = ?", setupOnly.body.data.id)?.status).toBe("planted");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
 });
 
 describe("AI 分析目标导航 API", () => {
@@ -760,7 +983,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
 
   afterEach(() => runtime.close());
 
-  it("全书角色抽取会落库人物、合并安全别名并过滤通用称谓", async () => {
+  it("全书角色抽取先生成预览，确认后落库并过滤通用称谓", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens: number };
       const prompt = body.messages[1]?.content ?? "";
@@ -786,17 +1009,27 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(result.body.data.result).toMatchObject({ savedCount: 2, coveredChapterCount: 3, fallbackSegmentCount: 0 });
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 0,
+      candidateCount: 2,
+      coveredChapterCount: 3,
+      fallbackSegmentCount: 0,
+      characterApplication: { status: "pending", totalCount: 2 }
+    });
     const prompts = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).messages[1].content as string);
     expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(1);
     expect(prompts.some((prompt) => prompt.includes('fragment="'))).toBe(true);
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(beforeApply.body.data).toEqual([]);
+    const applied = await applySuggestedCharacterCandidates(runtime, task.body.data.id);
+    expect(applied.body.data).toMatchObject({ createdCount: 2, mergedCount: 0 });
     const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     const byName = new Map(characters.body.data.map((character: { name: string }) => [character.name, character]));
     expect((byName.get("林舟") as { aliases: string[] }).aliases).toEqual(["小舟"]);
     expect((byName.get("沈星") as { aliases: string[] }).aliases).toEqual(["沈博士"]);
   });
 
-  it("角色职称变体在落库前经 AI 确认同一人后合并", async () => {
+  it("角色职称变体在预览前经 AI 确认同一人后形成单一候选", async () => {
     let verificationCalls = 0;
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
@@ -827,11 +1060,15 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({
-      savedCount: 1,
+      savedCount: 0,
       candidateCount: 1,
+      characterApplication: { status: "pending", totalCount: 1 },
       verification: { pairCount: 1, confirmedSameCount: 1, confirmedSeparateCount: 0, unresolvedCount: 0 }
     });
     expect(verificationCalls).toBe(1);
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(beforeApply.body.data).toEqual([]);
+    await applySuggestedCharacterCandidates(runtime, task.body.data.id);
     const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     expect(characters.body.data).toHaveLength(1);
     expect(characters.body.data[0]).toMatchObject({ name: "马克", aliases: ["马克博士"] });
@@ -872,7 +1109,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(characters.body.data).toEqual([]);
   });
 
-  it("角色职称变体命中已有角色时经确认后只更新原档案", async () => {
+  it("角色职称变体命中已有角色时经确认后仅在应用阶段更新原档案", async () => {
     fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content?: string }> };
       const prompt = body.messages[1]?.content ?? "";
@@ -897,7 +1134,17 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const modelId = await configureAi(runtime, workId);
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({ taskType: "character-extraction", scope: { type: "book" } }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
-    expect(result.body.data.result).toMatchObject({ savedCount: 1, verification: { pairCount: 1, confirmedSameCount: 1 } });
+    expect(result.body.data.result).toMatchObject({
+      savedCount: 0,
+      candidateCount: 1,
+      characterApplication: { status: "pending", totalCount: 1 },
+      verification: { pairCount: 1, confirmedSameCount: 1 }
+    });
+    const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
+    expect(beforeApply.body.data).toHaveLength(1);
+    expect(beforeApply.body.data[0]).toMatchObject({ id: existing.body.data.id, name: "马克", aliases: [] });
+    const applied = await applySuggestedCharacterCandidates(runtime, task.body.data.id);
+    expect(applied.body.data).toMatchObject({ createdCount: 0, mergedCount: 1 });
     const characters = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     expect(characters.body.data).toHaveLength(1);
     expect(characters.body.data[0]).toMatchObject({ id: existing.body.data.id, name: "马克", aliases: ["马克博士"] });

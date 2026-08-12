@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import JSZip from "jszip";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
@@ -983,6 +984,73 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("章节大纲看板按作品与大纲模块权限隔离，且不扩大正文读取权限", async () => {
+    const owner = await register(runtime, "outline_board_owner");
+    const reader = await register(runtime, "outline_board_reader");
+    const outsider = await register(runtime, "outline_board_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "大纲看板权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "第一卷" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "保密章节标题", content: "PROSE_CONTENT_SECRET" })
+      .expect(201);
+    await owner.agent.put(`/api/chapters/${chapter.body.data.id}/outline`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ goal: "OUTLINE_BOARD_SECRET", status: "ready" })
+      .expect(200);
+    const noAccess = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: reader.user.userId, permissions: { ...noAccess, outlines: "read" } })
+      .expect(201);
+
+    const board = await reader.agent.get(`/api/works/${workId}/outline-board`).expect(200);
+    expect(board.body.data.volumes[0].chapters[0]).toMatchObject({
+      id: chapter.body.data.id,
+      title: "保密章节标题",
+      outline: { goal: "OUTLINE_BOARD_SECRET", status: "ready" }
+    });
+    expect(JSON.stringify(board.body.data)).not.toContain("PROSE_CONTENT_SECRET");
+    const proseDenied = await reader.agent.get(`/api/chapters/${chapter.body.data.id}`).expect(403);
+    expect(proseDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const writeDenied = await reader.agent.put(`/api/chapters/${chapter.body.data.id}/outline`)
+      .set("X-CSRF-Token", reader.csrfToken)
+      .send({ goal: "不应写入" })
+      .expect(403);
+    expect(writeDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const outsiderDenied = await outsider.agent.get(`/api/works/${workId}/outline-board`).expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(JSON.stringify(outsiderDenied.body)).not.toContain("OUTLINE_BOARD_SECRET");
+    await owner.agent.patch(`/api/works/${workId}/members/${reader.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: noAccess })
+      .expect(200);
+    const revoked = await reader.agent.get(`/api/works/${workId}/outline-board`).expect(403);
+    expect(revoked.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+  });
+
   it("管理员可按成员配置模块读写权限，并在 API 层拒绝跨模块访问", async () => {
     const owner = await register(runtime, "module_owner");
     const collaborator = await register(runtime, "module_collaborator");
@@ -1314,6 +1382,148 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("章节伏笔提醒同时校验正文与大纲权限、CSRF 和对象归属", async () => {
+    const owner = await register(runtime, "reminder_owner");
+    const collaborator = await register(runtime, "reminder_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "伏笔提醒权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "提醒章", content: "主角重新看见火漆。" })
+      .expect(201);
+    const secret = "REMINDER_PERMISSION_SECRET";
+    const foreshadow = await owner.agent.post(`/api/works/${workId}/foreshadows`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: `旧信 ${secret}`,
+        description: `只有获授权成员可读 ${secret}`,
+        status: "planted",
+        occurrences: [{ chapterId: chapter.body.data.id, role: "reminder", note: `节点 ${secret}` }]
+      })
+      .expect(201);
+    const basePermissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions: { ...basePermissions, prose: "read" } })
+      .expect(201);
+
+    const noOutlineRead = await collaborator.agent
+      .get(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders`)
+      .expect(403);
+    expect(noOutlineRead.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(noOutlineRead.body)).not.toContain(secret);
+
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...basePermissions, outlines: "read" } })
+      .expect(200);
+    const noProseRead = await collaborator.agent
+      .get(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders`)
+      .expect(403);
+    expect(noProseRead.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(noProseRead.body)).not.toContain(secret);
+
+    const readPermissions = { ...basePermissions, prose: "read", outlines: "read" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: readPermissions })
+      .expect(200);
+    const visible = await collaborator.agent
+      .get(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders`)
+      .expect(200);
+    expect(visible.body.data).toEqual([
+      expect.objectContaining({ foreshadowId: foreshadow.body.data.id, title: `旧信 ${secret}` })
+    ]);
+    const writeDenied = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${foreshadow.body.data.id}/resolve`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: visible.body.data[0].versionNo })
+      .expect(403);
+    expect(writeDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const writePermissions = { ...basePermissions, prose: "read", outlines: "write" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: writePermissions })
+      .expect(200);
+    const missingCsrf = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${foreshadow.body.data.id}/resolve`)
+      .send({ expectedVersionNo: visible.body.data[0].versionNo })
+      .expect(403);
+    expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+
+    const otherWork = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "未授权的其他作品" })
+      .expect(201);
+    const otherWorkId = String(otherWork.body.data.id);
+    const otherVolume = await owner.agent.post(`/api/works/${otherWorkId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "其他正文" })
+      .expect(201);
+    const otherChapter = await owner.agent.post(`/api/works/${otherWorkId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: otherVolume.body.data.id, title: "其他提醒章" })
+      .expect(201);
+    const otherSecret = "CROSS_WORK_REMINDER_SECRET";
+    const otherForeshadow = await owner.agent.post(`/api/works/${otherWorkId}/foreshadows`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: otherSecret,
+        status: "planted",
+        occurrences: [{ chapterId: otherChapter.body.data.id, role: "payoff", note: otherSecret }]
+      })
+      .expect(201);
+    const otherWorkDenied = await collaborator.agent
+      .get(`/api/works/${otherWorkId}/chapters/${otherChapter.body.data.id}/foreshadow-reminders`)
+      .expect(403);
+    expect(otherWorkDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(JSON.stringify(otherWorkDenied.body)).not.toContain(otherSecret);
+    const foreignForeshadowDenied = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${otherForeshadow.body.data.id}/resolve`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: otherForeshadow.body.data.versionNo })
+      .expect(404);
+    expect(JSON.stringify(foreignForeshadowDenied.body)).not.toContain(otherSecret);
+
+    const resolved = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${foreshadow.body.data.id}/resolve`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: visible.body.data[0].versionNo })
+      .expect(200);
+    expect(resolved.body.data).toMatchObject({ foreshadowId: foreshadow.body.data.id, status: "resolved" });
+    expect(runtime.database.get(
+      "SELECT created_by_user_id FROM entity_versions WHERE entity_type = 'foreshadow' AND entity_id = ? ORDER BY version_no DESC LIMIT 1",
+      foreshadow.body.data.id
+    )?.created_by_user_id).toBe(collaborator.user.userId);
+    expect(runtime.database.get(
+      "SELECT user_id FROM audit_logs WHERE action = 'foreshadow.updated' AND entity_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      foreshadow.body.data.id
+    )?.user_id).toBe(collaborator.user.userId);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("模块权限默认拒绝未知路由，并裁剪跨模块数据与关联写入", async () => {
     const owner = await register(runtime, "boundary_owner");
     const collaborator = await register(runtime, "boundary_collaborator");
@@ -1365,6 +1575,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(403);
+    const overlongSearchDenied = await collaborator.agent
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "界".repeat(101) })
+      .expect(403);
+    expect(overlongSearchDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
     const commentReadDenied = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations`).expect(403);
     expect(commentReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
@@ -1440,6 +1655,184 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     const reviewReadDenied = await collaborator.agent.get(`/api/reviews/${reviewId}`).expect(403);
     expect(reviewReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("JSON 导出拒绝缺少审核读取权限的协作者且正文格式保持可用", async () => {
+    const owner = await register(runtime, "export_review_owner");
+    const collaborator = await register(runtime, "export_review_collaborator");
+    const outsider = await register(runtime, "export_review_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "审核权限导出作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文" })
+      .expect(201);
+    const proseSecret = "EXPORT_PROSE_CONTENT";
+    await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "第一章", content: proseSecret })
+      .expect(201);
+    const reviewSecrets = {
+      title: "EXPORT_REVIEW_TITLE_SECRET",
+      description: "EXPORT_REVIEW_DESCRIPTION_SECRET",
+      evidence: "EXPORT_REVIEW_EVIDENCE_SECRET",
+      suggestion: "EXPORT_REVIEW_SUGGESTION_SECRET",
+      resolutionNote: "EXPORT_REVIEW_RESOLUTION_SECRET"
+    };
+    await owner.agent.post(`/api/works/${workId}/reviews`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        itemType: "timeline-conflict",
+        title: reviewSecrets.title,
+        description: reviewSecrets.description,
+        evidence: [{ excerpt: reviewSecrets.evidence }],
+        suggestion: reviewSecrets.suggestion,
+        resolutionNote: reviewSecrets.resolutionNote
+      })
+      .expect(201);
+    const permissions = {
+      prose: "read",
+      drafts: "read",
+      settings: "read",
+      characters: "read",
+      races: "read",
+      organizations: "read",
+      timeline: "read",
+      relationships: "read",
+      outlines: "read",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions })
+      .expect(201);
+
+    for (const query of ["", "?format=json"]) {
+      const denied = await collaborator.agent.get(`/api/works/${workId}/export${query}`).expect(403);
+      expect(denied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+      expect(denied.headers["content-disposition"]).toBeUndefined();
+      const deniedBody = JSON.stringify(denied.body);
+      for (const secret of Object.values(reviewSecrets)) expect(deniedBody).not.toContain(secret);
+    }
+    const outsiderDenied = await outsider.agent.get(`/api/works/${workId}/export?format=json`).expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    for (const secret of Object.values(reviewSecrets)) {
+      expect(JSON.stringify(outsiderDenied.body)).not.toContain(secret);
+    }
+    const outsiderVolumeDenied = await outsider.agent.get(`/api/volumes/${volume.body.data.id}/export?format=epub`).expect(403);
+    expect(outsiderVolumeDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(outsiderVolumeDenied.headers["content-disposition"]).toBeUndefined();
+    await outsider.agent.head(`/api/volumes/${volume.body.data.id}/export?format=epub`).expect(403);
+    const otherWork = await outsider.agent.post("/api/works")
+      .set("X-CSRF-Token", outsider.csrfToken)
+      .send({ title: "其他作品" })
+      .expect(201);
+    const otherWorkId = String(otherWork.body.data.id);
+    const otherWorkSecret = "CROSS_WORK_REVIEW_SECRET";
+    await outsider.agent.post(`/api/works/${otherWorkId}/reviews`)
+      .set("X-CSRF-Token", outsider.csrfToken)
+      .send({ itemType: "timeline-conflict", title: otherWorkSecret })
+      .expect(201);
+    const crossWorkDenied = await collaborator.agent.get(`/api/works/${otherWorkId}/export?format=json`).expect(403);
+    expect(crossWorkDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(JSON.stringify(crossWorkDenied.body)).not.toContain(otherWorkSecret);
+
+    const textExport = await collaborator.agent.get(`/api/works/${workId}/export?format=txt`)
+      .expect("Content-Type", /text\/plain/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.txt`)
+      .expect(200);
+    expect(textExport.text).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(textExport.text).not.toContain(secret);
+
+    const markdownExport = await collaborator.agent.get(`/api/works/${workId}/export?format=markdown`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/zip/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.zip`)
+      .expect(200);
+    const markdownArchive = await JSZip.loadAsync(markdownExport.body as Buffer);
+    const markdown = await markdownArchive.file(`novel-${workId}.md`)?.async("string");
+    expect(markdown).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(markdown).not.toContain(secret);
+
+    const docxExport = await collaborator.agent.get(`/api/works/${workId}/export?format=docx`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.docx`)
+      .expect(200);
+    const docxArchive = await JSZip.loadAsync(docxExport.body as Buffer);
+    const documentXml = await docxArchive.file("word/document.xml")?.async("string");
+    expect(documentXml).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(documentXml).not.toContain(secret);
+
+    const epubExport = await collaborator.agent.get(`/api/works/${workId}/export?format=epub`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect("Content-Type", /application\/epub\+zip/u)
+      .expect(200);
+    const epubArchive = await JSZip.loadAsync(epubExport.body as Buffer);
+    const epubText = (await Promise.all(Object.values(epubArchive.files)
+      .filter((file) => !file.dir && !/\.(?:png|jpe?g)$/iu.test(file.name))
+      .map((file) => file.async("string")))).join("\n");
+    expect(epubText).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(epubText).not.toContain(secret);
+    await collaborator.agent.head(`/api/works/${workId}/export?format=epub`).expect(204);
+
+    const volumeEpubExport = await collaborator.agent.get(`/api/volumes/${volume.body.data.id}/export?format=epub`)
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => callback(null, Buffer.concat(chunks)));
+        response.on("error", callback);
+      })
+      .expect(200);
+    const volumeEpubArchive = await JSZip.loadAsync(volumeEpubExport.body as Buffer);
+    const volumeChapter = await volumeEpubArchive.file("OEBPS/text/chapter-001-001.xhtml")?.async("string");
+    expect(volumeChapter).toContain(proseSecret);
+    for (const secret of Object.values(reviewSecrets)) expect(volumeChapter).not.toContain(secret);
+
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...permissions, reviews: "read" } })
+      .expect(200);
+    const authorized = await collaborator.agent.get(`/api/works/${workId}/export?format=json`)
+      .expect("Content-Type", /application\/json/u)
+      .expect("Content-Disposition", `attachment; filename=novel-${workId}.json`)
+      .expect(200);
+    expect(authorized.body.data.reviews).toEqual([
+      expect.objectContaining({
+        workId,
+        title: reviewSecrets.title,
+        description: reviewSecrets.description,
+        evidence: [{ excerpt: reviewSecrets.evidence }],
+        suggestion: reviewSecrets.suggestion,
+        resolutionNote: reviewSecrets.resolutionNote
+      })
+    ]);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
@@ -1826,6 +2219,88 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(protectedTraceFull.body)).not.toContain("TOP_SECRET_PROSE");
   });
 
+  it("AI 历史消息续写要求 CSRF、作品权限并保持请求幂等", async () => {
+    const owner = await register(runtime, "fork_owner");
+    const collaborator = await register(runtime, "fork_collaborator");
+    const outsider = await register(runtime, "fork_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "续写权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "read",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const source = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "共享历史对话" })
+      .expect(201);
+    const sourceId = String(source.body.data.id);
+    const message = await owner.agent.post(`/api/ai-conversations/${sourceId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "user", content: "共享历史消息" })
+      .expect(201);
+    const body = { messageId: message.body.data.id, requestId: "authorized-fork-request" };
+
+    const csrfDenied = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/fork`).send(body).expect(403);
+    expect(csrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const first = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/fork`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send(body)
+      .expect(201);
+    const retried = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/fork`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send(body)
+      .expect(201);
+    expect(retried.body.data.id).toBe(first.body.data.id);
+    expect(retried.body.data.messages).toHaveLength(1);
+    const roleplayCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "受限角色" })
+      .expect(201);
+    const roleplaySource = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "受限角色扮演对话" })
+      .expect(201);
+    await owner.agent.patch(`/api/ai-conversations/${roleplaySource.body.data.id}/roleplay`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: roleplayCharacter.body.data.id })
+      .expect(200);
+    const roleplayMessage = await owner.agent.post(`/api/ai-conversations/${roleplaySource.body.data.id}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "user", content: "角色私有上下文" })
+      .expect(201);
+    const characterDenied = await collaborator.agent.post(`/api/ai-conversations/${roleplaySource.body.data.id}/fork`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ messageId: roleplayMessage.body.data.id, requestId: "roleplay-fork-denied" })
+      .expect(403);
+    expect(characterDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const outsiderDenied = await outsider.agent.post(`/api/ai-conversations/${sourceId}/fork`)
+      .set("X-CSRF-Token", outsider.csrfToken)
+      .send(body)
+      .expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks WHERE source_conversation_id = ?", sourceId)).toEqual({ count: 1 });
+  });
+
   it("type none 的显式 AI 引用仍要求对应模块读取权限", async () => {
     const owner = await register(runtime, "ai_explicit_ref_owner");
     const collaborator = await register(runtime, "ai_explicit_ref_collaborator");
@@ -1896,6 +2371,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
         .expect(403);
       expect(denied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     }
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_stream_requests WHERE work_id = ?",
+      workId
+    )).toEqual({ count: 0 });
   });
 
   it("AI 工具按当前成员模块权限限制正文读取", async () => {
@@ -2102,6 +2581,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
   it("AI 建议与对话按成员正文权限脱敏", async () => {
     const owner = await register(runtime, "ai_redact_owner");
     const collaborator = await register(runtime, "ai_redact_reader");
+    const outsider = await register(runtime, "ai_export_outsider");
     const work = await owner.agent.post("/api/works")
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ title: "AI 脱敏作品" })
@@ -2214,6 +2694,12 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(conversation.body.data.messages[0].citations).toEqual([]);
     expect(conversation.body.data.messages[0].metadata).toEqual({ restricted: true });
     expect(JSON.stringify(conversation.body.data)).not.toContain("TOP_SECRET_");
+
+    const exportedConversation = await collaborator.agent.get(`/api/ai-conversations/${conversationId}/export`).expect(200);
+    expect(exportedConversation.text).toContain("（正文读取权限受限）");
+    expect(exportedConversation.text).not.toContain("TOP_SECRET_");
+    const exportDenied = await outsider.agent.get(`/api/ai-conversations/${conversationId}/export`).expect(403);
+    expect(exportDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
 
     const conversations = await collaborator.agent.get(`/api/works/${workId}/ai-conversations`).expect(200);
     expect(conversations.body.data.items[0].title).toBe("（正文读取权限受限）");
@@ -2366,6 +2852,46 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(403);
     expect(escalateMixed.body.error.code).toBe("ADMIN_REQUIRED");
     expect(runtime.database.get("SELECT role FROM users WHERE id = ?", writer.user.userId)?.role).toBe("user");
+  });
+
+  it("供应商与模型连接测试在外部调用前强制认证、CSRF 和管理员权限", async () => {
+    const admin = await register(runtime, "connectivity_admin");
+    const writer = await register(runtime, "connectivity_writer");
+    const provider = await admin.agent.post("/api/platform/ai/providers")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({
+        name: "权限测试供应商",
+        baseUrl: "https://permission-ai.test/v1",
+        apiKey: "sk-permission-test",
+        status: "enabled"
+      })
+      .expect(201);
+    const providerId = String(provider.body.data.id);
+    const model = await admin.agent.post(`/api/providers/${providerId}/models`)
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ displayName: "权限测试模型", modelId: "permission-model" })
+      .expect(201);
+    const modelId = String(model.body.data.id);
+
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(401);
+    await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(401);
+    const providerDenied = await writer.agent.post(`/api/providers/${providerId}/test`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({})
+      .expect(403);
+    expect(providerDenied.body.error.code).toBe("ADMIN_REQUIRED");
+    const modelDenied = await writer.agent.post(`/api/models/${modelId}/test`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({})
+      .expect(403);
+    expect(modelDenied.body.error.code).toBe("ADMIN_REQUIRED");
+    const providerCsrfDenied = await admin.agent.post(`/api/providers/${providerId}/test`).send({}).expect(403);
+    expect(providerCsrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const modelCsrfDenied = await admin.agent.post(`/api/models/${modelId}/test`).send({}).expect(403);
+    expect(modelCsrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_connectivity_test_states")).toEqual({ count: 0 });
+    expect(runtime.database.get("SELECT connection_status FROM providers WHERE id = ?", providerId)).toEqual({ connection_status: "unchecked" });
   });
 
   it("管理员可统一设置界面与分模块分页，普通用户只能读取", async () => {
@@ -2717,6 +3243,65 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .expect(200);
     await request(runtime.app).get("/api/cli/session").set("Authorization", `Bearer ${writerKey}`).expect(401);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("仅允许具备删除权限的成员查看和操作对应回收站", async () => {
+    const owner = await register(runtime, "recycle_owner");
+    const editor = await register(runtime, "recycle_editor");
+    const viewer = await register(runtime, "recycle_viewer");
+    const outsider = await register(runtime, "recycle_outsider");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "权限回收站" }).expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: editor.user.userId,
+      role: "editor"
+    }).expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: viewer.user.userId,
+      role: "viewer"
+    }).expect(201);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`).set("X-CSRF-Token", owner.csrfToken).send({ title: "第一卷" }).expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`).set("X-CSRF-Token", owner.csrfToken).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "权限边界正文。"
+    }).expect(201);
+
+    await viewer.agent.get(`/api/works/${workId}/recycle-bin`).expect(403);
+    await editor.agent.get(`/api/works/${workId}/recycle-bin`).expect(200);
+    await editor.agent.delete(`/api/chapters/${chapter.body.data.id}`).set("X-CSRF-Token", editor.csrfToken).send({ expectedVersionNo: 1 }).expect(204);
+    const editorRecycleBin = await editor.agent.get(`/api/works/${workId}/recycle-bin`).expect(200);
+    expect(editorRecycleBin.body.data.chapters).toEqual([expect.objectContaining({ id: chapter.body.data.id })]);
+    await viewer.agent.post(`/api/chapters/${chapter.body.data.id}/restore`).set("X-CSRF-Token", viewer.csrfToken).send({
+      versionNo: 2,
+      expectedVersionNo: 2
+    }).expect(403);
+    await editor.agent.post(`/api/chapters/${chapter.body.data.id}/restore`).set("X-CSRF-Token", editor.csrfToken).send({
+      versionNo: 2,
+      expectedVersionNo: 2
+    }).expect(200);
+
+    await editor.agent.delete(`/api/works/${workId}`).set("X-CSRF-Token", editor.csrfToken).send({ expectedVersionNo: 1 }).expect(403);
+    await owner.agent.delete(`/api/works/${workId}`).send({ expectedVersionNo: 1 }).expect(403);
+    await owner.agent.delete(`/api/works/${workId}`).set("X-CSRF-Token", owner.csrfToken).send({ expectedVersionNo: 1 }).expect(204);
+    expect((await owner.agent.get("/api/recycle-bin/works").expect(200)).body.data.works).toEqual([
+      expect.objectContaining({ id: workId })
+    ]);
+    expect((await editor.agent.get("/api/recycle-bin/works").expect(200)).body.data.works).toEqual([]);
+    expect((await outsider.agent.get("/api/recycle-bin/works").expect(200)).body.data.works).toEqual([]);
+    await editor.agent.post(`/api/recycle-bin/works/${workId}/restore`).set("X-CSRF-Token", editor.csrfToken).send({ expectedVersionNo: 2 }).expect(403);
+    await owner.agent.post(`/api/recycle-bin/works/${workId}/restore`).set("X-CSRF-Token", owner.csrfToken).send({ expectedVersionNo: 2 }).expect(200);
+
+    expect(runtime.database.all(
+      "SELECT action, user_id FROM audit_logs WHERE entity_id IN (?, ?) AND action IN ('chapter.deleted', 'chapter.restored', 'work.deleted', 'work.restored') ORDER BY created_at, id",
+      chapter.body.data.id,
+      workId
+    )).toEqual(expect.arrayContaining([
+      { action: "chapter.deleted", user_id: editor.user.userId },
+      { action: "chapter.restored", user_id: editor.user.userId },
+      { action: "work.deleted", user_id: owner.user.userId },
+      { action: "work.restored", user_id: owner.user.userId }
+    ]));
   });
 
   it("未显式开启注册时连首位管理员注册也会被拒绝", async () => {

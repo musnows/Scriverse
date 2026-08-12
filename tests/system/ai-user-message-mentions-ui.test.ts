@@ -10,12 +10,12 @@ describe("AI 用户消息角色引用横幅", () => {
       readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('/styles.css?v=20260812-agent-chat-font-size-v1');
-    expect(page).toContain('/app.js?v=20260812-image-upload-limit-v3');
+    expect(page).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-outline-reader-v1');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");
     expect(application).toContain("userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)");
-    expect(application).toContain("ensureAiReferencesLoaded()\n  ]);");
+    expect(application).toContain("ensureAiReferencesLoaded()\n    ]);");
     expect(application).toContain('references.className = "user-message-mentions";');
     expect(application).toContain('label.textContent = "引用角色";');
     expect(styles).toContain(".user-message-mentions { display: flex; align-items: center; flex-wrap: wrap;");
