@@ -66,6 +66,7 @@ describe("安全限速器", () => {
       next();
     });
     expensiveApp.use(createExpensiveApiRateLimitMiddleware(60_000));
+    expensiveApp.get("/api/ai-conversations/:conversationId/export", (_request, response) => response.json({ ok: true }));
     expensiveApp.all("/{*path}", (_request, response) => response.json({ ok: true }));
     const expensiveAgent = request.agent(expensiveApp);
 
@@ -78,7 +79,7 @@ describe("安全限速器", () => {
     await expensiveAgent.post("/api/tasks/task_1/run").expect(429);
     await expensiveAgent.post("/api/tasks/task_1/rerun").expect(429);
 
-    await expensiveAgent.get("/api/works/work_1/export").expect(200);
+    await expensiveAgent.get("/api/ai-conversations/conversation_1/export").expect(200);
     for (let index = 0; index < 9; index += 1) {
       await expensiveAgent.get("/api/works/work_1/export").expect(200);
     }

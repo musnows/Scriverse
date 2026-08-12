@@ -153,6 +153,174 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondPage.body.data.items).toHaveLength(1);
   });
 
+  it("将单个 AI 对话安全导出为与消息顺序一致的 Markdown", async () => {
+    await configureAi();
+    const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      title: "../星海：密谈\r\nX-Evil: injected"
+    }).expect(201);
+    const conversationId = String(created.body.data.id);
+    const userContent = "请保留 @林舟 与特殊字符 *原样*。\n\n```ts\nconst answer = 42;\n```";
+    const assistantContent = "第一行\n第二行\n\n- 列表项";
+    runtime.store.addAiConversationMessage(conversationId, {
+      role: "user",
+      content: userContent,
+      metadata: { mentionCharacterIds: ["character_reference"] }
+    });
+    runtime.store.addAiConversationMessage(conversationId, {
+      role: "assistant",
+      content: assistantContent,
+      metadata: {
+        modelDisplayName: "小说模型",
+        reasoningContent: "INTERNAL_REASONING",
+        anthropicContent: [{ type: "thinking", thinking: "INTERNAL_THINKING" }]
+      }
+    });
+
+    const exported = await request(runtime.app).get(`/api/ai-conversations/${conversationId}/export`).expect(200);
+    expect(exported.headers["content-type"]).toContain("text/markdown");
+    expect(exported.headers["content-disposition"]).toContain(`filename="ai-conversation-${conversationId}.md"`);
+    expect(exported.headers["content-disposition"]).not.toMatch(/[\r\n]/u);
+    expect(exported.headers["content-disposition"]).not.toContain("../");
+    expect(exported.text).toContain("## 作者 · ");
+    expect(exported.text).toContain("## 助手 · ");
+    expect(exported.text).toContain(userContent);
+    expect(exported.text).toContain(assistantContent);
+    expect(exported.text.indexOf(userContent)).toBeLessThan(exported.text.indexOf(assistantContent));
+    expect(exported.text).not.toContain("sk-sensitive-test-value");
+    expect(exported.text).not.toContain("INTERNAL_REASONING");
+    expect(exported.text).not.toContain("INTERNAL_THINKING");
+  });
+
+  it("从所选历史消息事务化幂等续写，并沿用 compact 上下文边界", async () => {
+    let generatedMessages: Array<{ role: string; content: unknown }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const body = JSON.parse(String(init?.body)) as {
+        messages: Array<{ role: string; content: unknown }>;
+        max_tokens?: number;
+      };
+      if (body.max_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      generatedMessages = body.messages;
+      return new Response(JSON.stringify({ choices: [{ message: { content: "分支后的回答" } }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    });
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+
+    const source = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
+      title: "上下文分支源对话"
+    }).expect(201);
+    const sourceId = String(source.body.data.id);
+    const sourceMessages = [];
+    for (const [role, content] of [
+      ["user", "SOURCE_BEFORE_USER"],
+      ["assistant", "SOURCE_BEFORE_ASSISTANT"],
+      ["user", "SOURCE_SELECTED_USER"],
+      ["assistant", "SOURCE_AFTER_ASSISTANT"]
+    ] as const) {
+      const message = await request(runtime.app).post(`/api/ai-conversations/${sourceId}/messages`).send({ role, content }).expect(201);
+      sourceMessages.push(message.body.data);
+    }
+    runtime.store.saveAiConversationCompaction(sourceId, JSON.stringify({
+      authorGoals: [{ text: "COMPACTED_BEFORE_CONTEXT", sourceMessageIds: sourceMessages.slice(0, 2).map((message) => message.id) }],
+      confirmedDecisions: [],
+      storyFacts: [],
+      constraints: [],
+      unresolvedQuestions: [],
+      importantReferences: []
+    }), 2);
+    const sourceBefore = await request(runtime.app).get(`/api/ai-conversations/${sourceId}`).expect(200);
+    const conversationCountBefore = Number(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversations WHERE work_id = ?", workId)?.count ?? 0);
+
+    const requestId = "fork-selected-message-request";
+    const firstFork = await request(runtime.app).post(`/api/ai-conversations/${sourceId}/fork`).send({
+      messageId: sourceMessages[2].id,
+      requestId
+    }).expect(201);
+    const repeatedFork = await request(runtime.app).post(`/api/ai-conversations/${sourceId}/fork`).send({
+      messageId: sourceMessages[2].id,
+      requestId
+    }).expect(201);
+    expect(repeatedFork.body.data.id).toBe(firstFork.body.data.id);
+    expect(repeatedFork.body.data.messages.map((message: Record<string, unknown>) => message.id))
+      .toEqual(firstFork.body.data.messages.map((message: Record<string, unknown>) => message.id));
+    expect(firstFork.body.data.messages.map((message: Record<string, unknown>) => message.content)).toEqual([
+      "SOURCE_BEFORE_USER",
+      "SOURCE_BEFORE_ASSISTANT",
+      "SOURCE_SELECTED_USER"
+    ]);
+    expect(firstFork.body.data.messages.map((message: Record<string, unknown>) => message.id))
+      .not.toEqual(sourceMessages.slice(0, 3).map((message) => message.id));
+    expect(firstFork.body.data).toMatchObject({ compactedMessageCount: 2, hasCompactedSummary: true });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks WHERE source_conversation_id = ?", sourceId)).toEqual({ count: 1 });
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversations WHERE work_id = ?", workId)).toEqual({ count: conversationCountBefore + 1 });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM audit_logs WHERE action = 'ai-conversation.forked' AND entity_id = ?",
+      firstFork.body.data.id
+    )).toEqual({ count: 1 });
+
+    const reusedForAnotherMessage = await request(runtime.app).post(`/api/ai-conversations/${sourceId}/fork`).send({
+      messageId: sourceMessages[3].id,
+      requestId
+    }).expect(409);
+    expect(reusedForAnotherMessage.body.error.code).toBe("IDEMPOTENCY_KEY_REUSED");
+    await request(runtime.app).post(`/api/ai-conversations/${sourceId}/fork`).send({
+      messageId: sourceMessages[2].id,
+      requestId: "fork-strict-input",
+      unexpected: true
+    }).expect(400);
+
+    const forkContext = runtime.store.getAiConversationContext(String(firstFork.body.data.id), workId);
+    expect(forkContext).toMatchObject({ compactedMessageCount: 2, totalMessageCount: 3 });
+    expect(forkContext.summary).toContain("COMPACTED_BEFORE_CONTEXT");
+    expect(forkContext.messages.map((message) => message.content)).toEqual(["SOURCE_SELECTED_USER"]);
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "BRANCH_FIRST_REQUEST",
+      scope: { type: "none" },
+      modelId,
+      conversationId: firstFork.body.data.id
+    }).expect(200);
+    expect(streamed.text).toContain("分支后的回答");
+    const generatedPayload = JSON.stringify(generatedMessages);
+    expect(generatedPayload).toContain("COMPACTED_BEFORE_CONTEXT");
+    expect(generatedPayload).toContain("SOURCE_SELECTED_USER");
+    expect(generatedPayload).toContain("BRANCH_FIRST_REQUEST");
+    expect(generatedPayload).not.toContain("SOURCE_AFTER_ASSISTANT");
+
+    const sourceAfter = await request(runtime.app).get(`/api/ai-conversations/${sourceId}`).expect(200);
+    expect(sourceAfter.body.data).toEqual(sourceBefore.body.data);
+
+    const countsBeforeRollback = {
+      conversations: runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversations WHERE work_id = ?", workId),
+      messages: runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_messages"),
+      forks: runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks")
+    };
+    runtime.database.run(`CREATE TRIGGER reject_conversation_fork_audit BEFORE INSERT ON audit_logs
+      WHEN NEW.action = 'ai-conversation.forked'
+      BEGIN SELECT RAISE(ABORT, 'reject fork audit'); END`);
+    await request(runtime.app).post(`/api/ai-conversations/${sourceId}/fork`).send({
+      messageId: sourceMessages[2].id,
+      requestId: "fork-rollback-request"
+    }).expect(500);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversations WHERE work_id = ?", workId)).toEqual(countsBeforeRollback.conversations);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_messages")).toEqual(countsBeforeRollback.messages);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks")).toEqual(countsBeforeRollback.forks);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("拒绝新增或改为低于 32K 上下文的模型", async () => {
     const { providerId, modelId } = await configureAi();
     const invalidCreate = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
