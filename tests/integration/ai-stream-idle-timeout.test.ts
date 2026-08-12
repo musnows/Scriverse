@@ -181,15 +181,20 @@ describe("交互式 AI 流事件空闲超时", () => {
     await vi.advanceTimersByTimeAsync(30_001);
     await generatedPromise;
 
-    expect(deltas.join("")).toBe("已收到 sk-sensitive-");
-    expect(deltas.join("").match(/sk-sensitive-/gu)).toHaveLength(1);
+    expect(deltas.join("")).toBe("已收到 sk-s*****");
+    expect(deltas.join("")).not.toContain("sk-sensitive-");
+    expect(deltas.join("").match(/sk-s\*{5}/gu)).toHaveLength(1);
     expect(failure).toMatchObject({
       status: 504,
       code: "AI_STREAM_IDLE_TIMEOUT",
       details: { phase: "between_events", idleTimeoutSeconds: 30 }
     });
-    expect(runtime.database.get("SELECT status, failure FROM ai_calls ORDER BY created_at DESC LIMIT 1"))
-      .toMatchObject({ status: "failed", failure: expect.stringContaining("30 秒无新事件") });
+    expect(runtime.database.get("SELECT status, failure, output_chars FROM ai_calls ORDER BY created_at DESC LIMIT 1"))
+      .toMatchObject({
+        status: "failed",
+        failure: expect.stringContaining("30 秒无新事件"),
+        output_chars: "已收到 sk-s*****".length
+      });
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions"))
       .toEqual({ count: 0 });
   });

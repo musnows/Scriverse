@@ -655,7 +655,7 @@ function redactProviderSecrets(value: unknown, secrets: string | string[], depth
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactProviderSecrets(item, list, depth + 1)]));
 }
 
-class ProviderSecretStreamRedactor {
+export class ProviderSecretStreamRedactor {
   private pending = "";
   private readonly secrets: string[];
 
@@ -681,10 +681,17 @@ class ProviderSecretStreamRedactor {
     return retainedLength > 0 ? combined.slice(0, -retainedLength) : combined;
   }
 
-  flush(): string {
-    const value = redactProviderSecretsText(this.pending, ...this.secrets);
+  flush(options: { interrupted?: boolean } = {}): string {
+    const pending = this.pending;
+    const value = redactProviderSecretsText(pending, ...this.secrets);
     this.pending = "";
-    return value;
+    if (!options.interrupted || !pending) return value;
+    const matchingSecrets = this.secrets.filter((secret) => secret.startsWith(pending));
+    if (matchingSecrets.length === 0) return value;
+    const visiblePrefixLength = Math.min(...matchingSecrets.map((secret) => secret.length > 7 ? 4 : 0));
+    if (pending.length <= visiblePrefixLength) return value;
+    if (visiblePrefixLength === 0) return "********";
+    return `${pending.slice(0, visiblePrefixLength)}*****`;
   }
 }
 
@@ -5177,6 +5184,7 @@ export class AiManager {
       toolCount: tools.length
     });
     let activeSecrets: string[] = [];
+    let streamedContent = "";
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -5208,7 +5216,6 @@ export class AiManager {
       let totalCachedInputTokens = 0;
       const processSteps: AiProcessStep[] = [];
       const completionDelivery = new WeakMap<CompletionPayload, "json" | "sse">();
-      let streamedContent = "";
       let streamingGenerationRound = 0;
       type CompletionRequestOptions = {
         messages?: CompletionMessage[];
@@ -5726,11 +5733,12 @@ export class AiManager {
       const failureTarget = aiFailureTargetDetails(provider, model);
       this.store.db.run(
         `UPDATE ai_calls
-         SET status = 'failed', failure = ?, input_tokens = ?, output_tokens = ?,
+         SET status = 'failed', failure = ?, output_chars = ?, input_tokens = ?, output_tokens = ?,
              cached_input_tokens = ?, cache_eligible_input_tokens = ?, cache_usage_available = ?,
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         message,
+        streamedContent.length,
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
@@ -5952,15 +5960,15 @@ export class AiManager {
       return true;
     };
     let redactorsFlushed = false;
-    const flushRedactors = (): void => {
+    const flushRedactors = (interrupted: boolean): void => {
       if (redactorsFlushed) return;
       redactorsFlushed = true;
-      const finalContent = contentRedactor.flush();
+      const finalContent = contentRedactor.flush({ interrupted });
       if (finalContent) {
         content += finalContent;
         onDelta(finalContent);
       }
-      const finalReasoning = reasoningRedactor.flush();
+      const finalReasoning = reasoningRedactor.flush({ interrupted });
       if (finalReasoning) {
         reasoning += finalReasoning;
         onThinkingDelta(finalReasoning);
@@ -6003,11 +6011,12 @@ export class AiManager {
       }
       if (buffer.trim() && consumeEvent(buffer)) onEvent();
     } catch (error) {
-      flushRedactors();
+      flushRedactors(true);
       throw error;
     }
-    flushRedactors();
-    if (readerEnded && !upstreamDone && finishReason === "unknown") {
+    const upstreamClosed = readerEnded && !upstreamDone && finishReason === "unknown";
+    flushRedactors(upstreamClosed);
+    if (upstreamClosed) {
       throw new AppError(502, "AI_STREAM_UPSTREAM_CLOSED", "AI 上游流在正常结束前已关闭，已保留已生成内容");
     }
     const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
