@@ -9,6 +9,7 @@ type JsonObject = Record<string, unknown>;
 type CompletionMessage = { role?: string; tool_call_id?: string; content?: string };
 
 const port = Number(process.env.E2E_BROWSER_PORT ?? 13212);
+const aiStreamIdleTimeoutMs = Number(process.env.E2E_AI_STREAM_IDLE_TIMEOUT_MS ?? 3_000);
 const dataRoot = join(process.cwd(), ".data");
 await mkdir(dataRoot, { recursive: true });
 const isolatedDirectory = await mkdtemp(join(dataRoot, "e2e-browser-ai-"));
@@ -63,6 +64,15 @@ const mockAi = createServer(async (request, response) => {
   if (joined.includes("结构化中文长期记忆")) {
     const sourceMessageIds = [...joined.matchAll(/^\[([^\]]+)\]/gmu)].map((match) => match[1]).filter(Boolean).slice(0, 2);
     sendCompletion(response, { content: `<json>{"authorGoals":[],"confirmedDecisions":[],"storyFacts":[{"text":"最近正在确认燃料状态","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"constraints":[{"text":"必须遵守跃迁冷却规则","sourceMessageIds":${JSON.stringify(sourceMessageIds)}}],"unresolvedQuestions":[],"importantReferences":[]}</json>` });
+    return;
+  }
+  if (latestUserMessage.includes("浏览器流空闲超时测试")) {
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive"
+    });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "已收到的部分回复会被保留。" } }] })}\n\n`);
     return;
   }
   if (latestUserMessage.includes("浏览器工具测试")) {
@@ -226,7 +236,8 @@ if (!mockAddress || typeof mockAddress === "string") throw new Error("Mock AI se
 const runtime = createRuntime({
   databasePath: join(isolatedDirectory, "novel.db"),
   masterSecret: "browser-e2e-master-secret-at-least-32-characters",
-  security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false, apiRateLimit: 10_000 }
+  security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false, apiRateLimit: 10_000 },
+  aiStreamIdleTimeoutMs
 });
 const registered = runtime.auth.register({ username: "browser-e2e", password: "BrowserE2E123!" });
 const fixture = runWithRequestActor(registered.session.user, () => {
