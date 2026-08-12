@@ -38,6 +38,7 @@ import {
   structuralToolResultRecords,
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
+import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
@@ -121,6 +122,77 @@ const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
+const interactiveStreamErrorCodes = new Set([
+  "AI_STREAM_IDLE_TIMEOUT",
+  "AI_STREAM_UPSTREAM_CLOSED",
+  "AI_STREAM_NETWORK_ERROR",
+  "AI_STREAM_REQUEST_CANCELLED"
+]);
+
+type InteractiveStreamWaitPhase = "first_event" | "between_events";
+
+type AiManagerOptions = {
+  interactiveStreamIdleTimeoutMs?: number;
+};
+
+function isInteractiveStreamError(error: unknown): error is AppError {
+  return error instanceof AppError && interactiveStreamErrorCodes.has(error.code);
+}
+
+function interactiveStreamRequestCancelledError(): AppError {
+  return new AppError(499, "AI_STREAM_REQUEST_CANCELLED", "AI 流式请求已取消");
+}
+
+class InteractiveStreamIdleWatchdog {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private completed = false;
+  failure: AppError | null = null;
+
+  constructor(
+    private readonly controller: AbortController,
+    private readonly timeoutMs: number
+  ) {}
+
+  start(): void {
+    this.arm("first_event");
+  }
+
+  receivedEvent(): void {
+    this.arm("between_events");
+  }
+
+  complete(): void {
+    this.completed = true;
+    this.clear();
+  }
+
+  dispose(): void {
+    this.clear();
+  }
+
+  private arm(phase: InteractiveStreamWaitPhase): void {
+    if (this.completed || this.failure) return;
+    this.clear();
+    this.timer = setTimeout(() => {
+      const idleTimeoutSeconds = this.timeoutMs / 1_000;
+      this.failure = new AppError(
+        504,
+        "AI_STREAM_IDLE_TIMEOUT",
+        phase === "first_event"
+          ? `等待 AI 首个流事件超时（${idleTimeoutSeconds} 秒无新事件），流已关闭`
+          : `AI 流已因 ${idleTimeoutSeconds} 秒无新事件而关闭，已保留已生成内容`,
+        { phase, idleTimeoutSeconds }
+      );
+      this.controller.abort(this.failure);
+    }, this.timeoutMs);
+  }
+
+  private clear(): void {
+    if (!this.timer) return;
+    clearTimeout(this.timer);
+    this.timer = null;
+  }
+}
 
 function isAnalysisTaskType(value: string): value is AnalysisTaskType {
   return analysisTaskTypes.has(value);
@@ -1869,6 +1941,7 @@ export class ContextBuilder {
 
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
+  private readonly interactiveStreamIdleTimeoutMs: number;
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1902,8 +1975,13 @@ export class AiManager {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly validateOutboundUrl?: (url: string) => Promise<readonly { address: string; family: 4 | 6 }[] | void>,
     private readonly authorizeTaskRun?: (task: Record<string, unknown>, actor?: TaskRunActor) => void,
-    private readonly attachmentStorage?: AttachmentStorage
+    private readonly attachmentStorage?: AttachmentStorage,
+    options: AiManagerOptions = {}
   ) {
+    this.interactiveStreamIdleTimeoutMs = Number.isSafeInteger(options.interactiveStreamIdleTimeoutMs)
+      && Number(options.interactiveStreamIdleTimeoutMs) > 0
+      ? Number(options.interactiveStreamIdleTimeoutMs)
+      : DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS;
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
     this.autoRunStartupTimer = setTimeout(() => {
@@ -1915,7 +1993,7 @@ export class AiManager {
       this.relationshipIndexTimer = null;
       void this.schedulePendingRelationshipIndexes();
     }, 0);
-    logger.info("ai.manager.ready");
+    logger.info("ai.manager.ready", { interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs });
   }
 
   getPlatformTokenUsage(timezoneOffset: number): Record<string, unknown> {
@@ -5217,7 +5295,14 @@ export class AiManager {
               const forwardAbort = (): void => controller.abort(input.signal?.reason);
               if (input.signal?.aborted) forwardAbort();
               else input.signal?.addEventListener("abort", forwardAbort, { once: true });
-              const timeout = setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(timeoutMs / 1_000)} 秒）`)), timeoutMs);
+              const streamWatchdog = streamResponse
+                ? new InteractiveStreamIdleWatchdog(controller, this.interactiveStreamIdleTimeoutMs)
+                : null;
+              const timeout = streamResponse
+                ? null
+                : setTimeout(() => controller.abort(new Error(`AI 请求超时（${Math.round(timeoutMs / 1_000)} 秒）`)), timeoutMs);
+              let responseReceived = false;
+              streamWatchdog?.start();
               try {
                 const response = await this.outboundFetch(endpoint, {
                   method: "POST",
@@ -5233,6 +5318,7 @@ export class AiManager {
                   })),
                   signal: controller.signal
                 });
+                responseReceived = true;
                 if (!response.ok) {
                   return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
                 }
@@ -5269,16 +5355,26 @@ export class AiManager {
                     }
                     streamedThinkingStep.content += delta;
                     input.onProcessStep?.({ ...streamedThinkingStep, content: delta, append: true });
-                  }
+                  },
+                  () => streamWatchdog?.receivedEvent()
                 );
+                streamWatchdog?.complete();
                 return {
                   ok: true as const,
                   status: response.status,
                   payload: redactProviderSecrets(payload, activeSecrets) as CompletionPayload,
                   delivery: "sse" as const
                 };
+              } catch (error) {
+                if (streamResponse && input.signal?.aborted) throw interactiveStreamRequestCancelledError();
+                if (streamWatchdog?.failure) throw streamWatchdog.failure;
+                if (streamResponse && !responseReceived) {
+                  throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接失败，尚未收到首个事件");
+                }
+                throw error;
               } finally {
-                clearTimeout(timeout);
+                if (timeout) clearTimeout(timeout);
+                streamWatchdog?.dispose();
                 input.signal?.removeEventListener("abort", forwardAbort);
               }
             });
@@ -5325,6 +5421,7 @@ export class AiManager {
             }
           } catch (error) {
             lastFailure = error;
+            if (isInteractiveStreamError(error)) retryable = false;
             if (traceAttempt.status === "running") {
               traceAttempt.completedAt = now();
               traceAttempt.status = "failed";
@@ -5671,7 +5768,11 @@ export class AiManager {
         durationMs: Number(process.hrtime.bigint() - callStartedAt) / 1_000_000,
         error: aiErrorForLog(error)
       });
-      if (error instanceof AppError && (error.code === "CONTEXT_WINDOW_EXCEEDED" || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED")) {
+      if (error instanceof AppError && (
+        error.code === "CONTEXT_WINDOW_EXCEEDED"
+        || error.code === "DAILY_TOKEN_QUOTA_EXCEEDED"
+        || isInteractiveStreamError(error)
+      )) {
         throw new AppError(error.status, error.code, error.message, {
           callId,
           ...(error.details && typeof error.details === "object" ? error.details : {}),
@@ -5687,7 +5788,8 @@ export class AiManager {
     protocol: AiProviderProtocol,
     apiKey: string | string[],
     onDelta: (delta: string) => void,
-    onThinkingDelta: (delta: string) => void
+    onThinkingDelta: (delta: string) => void,
+    onEvent: () => void
   ): Promise<CompletionPayload> {
     const protocolLabel = providerProtocolLabelText(protocol);
     if (!response.body) throw new Error(`${protocolLabel} 流式响应缺少正文`);
@@ -5745,16 +5847,16 @@ export class AiManager {
       finalizedAnthropicToolInputs.set(index, completeInputJson);
       anthropicToolInputJson.delete(index);
     };
-    const consumeEvent = (eventText: string): void => {
+    const consumeEvent = (eventText: string): boolean => {
       const data = eventText.split(/\r?\n/u)
         .filter((line) => line.startsWith("data:"))
         .map((line) => line.slice(5).trimStart())
         .join("\n")
         .trim();
-      if (!data) return;
+      if (!data) return false;
       if (data === "[DONE]") {
         upstreamDone = true;
-        return;
+        return true;
       }
       const payload = JSON.parse(data) as Record<string, unknown>;
       const error = payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)
@@ -5821,7 +5923,7 @@ export class AiManager {
           appendContent(eventDelta.text);
         }
         if (type === "message_stop") upstreamDone = true;
-        return;
+        return true;
       }
       const streamUsage = payload.usage && typeof payload.usage === "object" && !Array.isArray(payload.usage)
         ? payload.usage as Record<string, unknown>
@@ -5867,41 +5969,66 @@ export class AiManager {
       if (typeof delta === "string" && delta.length > 0) {
         appendContent(delta);
       }
+      return true;
+    };
+    let redactorsFlushed = false;
+    const flushRedactors = (): void => {
+      if (redactorsFlushed) return;
+      redactorsFlushed = true;
+      const finalContent = contentRedactor.flush();
+      if (finalContent) {
+        content += finalContent;
+        onDelta(finalContent);
+      }
+      const finalReasoning = reasoningRedactor.flush();
+      if (finalReasoning) {
+        reasoning += finalReasoning;
+        onThinkingDelta(finalReasoning);
+      }
     };
     let receivedBytes = 0;
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.value?.byteLength) {
-        receivedBytes += chunk.value.byteLength;
-        if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+    let readerEnded = false;
+    try {
+      while (true) {
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await reader.read();
+        } catch (error) {
+          if (error instanceof AppError) throw error;
+          throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接中断，已保留已生成内容");
+        }
+        if (chunk.value?.byteLength) {
+          receivedBytes += chunk.value.byteLength;
+          if (receivedBytes > AI_RESPONSE_MAX_BYTES) {
+            await reader.cancel().catch(() => undefined);
+            throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+          }
+        }
+        buffer += decoder.decode(chunk.value, { stream: !chunk.done });
+        const events = buffer.split(/\r?\n\r?\n/u);
+        buffer = events.pop() ?? "";
+        for (const eventText of events) {
+          if (consumeEvent(eventText)) onEvent();
+          if (upstreamDone) break;
+        }
+        if (upstreamDone) {
           await reader.cancel().catch(() => undefined);
-          throw new AppError(502, "AI_RESPONSE_TOO_LARGE", `AI 供应商响应超过 ${AI_RESPONSE_MAX_BYTES} 字节上限`);
+          buffer = "";
+          break;
+        }
+        if (chunk.done) {
+          readerEnded = true;
+          break;
         }
       }
-      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-      const events = buffer.split(/\r?\n\r?\n/u);
-      buffer = events.pop() ?? "";
-      for (const eventText of events) {
-        consumeEvent(eventText);
-        if (upstreamDone) break;
-      }
-      if (upstreamDone) {
-        await reader.cancel().catch(() => undefined);
-        buffer = "";
-        break;
-      }
-      if (chunk.done) break;
+      if (buffer.trim() && consumeEvent(buffer)) onEvent();
+    } catch (error) {
+      flushRedactors();
+      throw error;
     }
-    if (buffer.trim()) consumeEvent(buffer);
-    const finalContent = contentRedactor.flush();
-    if (finalContent) {
-      content += finalContent;
-      onDelta(finalContent);
-    }
-    const finalReasoning = reasoningRedactor.flush();
-    if (finalReasoning) {
-      reasoning += finalReasoning;
-      onThinkingDelta(finalReasoning);
+    flushRedactors();
+    if (readerEnded && !upstreamDone && finishReason === "unknown") {
+      throw new AppError(502, "AI_STREAM_UPSTREAM_CLOSED", "AI 上游流在正常结束前已关闭，已保留已生成内容");
     }
     const sortedOpenAiToolCalls = [...openAiToolCalls.entries()].sort(([left], [right]) => left - right);
     const openAiToolCallsComplete = openAiToolCallsFinalized

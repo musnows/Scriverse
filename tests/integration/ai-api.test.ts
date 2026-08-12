@@ -2121,15 +2121,32 @@ describe("AI 供应商、模型与建议 API", () => {
     const retried = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
       role: "assistant",
       content: "调用失败：客户端未读取到完成事件",
-      requestId: `assistant:${userMessageId}`
+      requestId: `assistant:${userMessageId}`,
+      metadata: {
+        interrupted: true,
+        interruptionCode: "AI_STREAM_UPSTREAM_CLOSED",
+        interruptionMessage: "AI 流在收到完成事件前已关闭，已保留已生成内容"
+      }
     }).expect(201);
-    expect(retried.body.data).toMatchObject({ id: completePayload.messageId, content: "唯一助手回复" });
+    expect(retried.body.data).toMatchObject({
+      id: completePayload.messageId,
+      content: "唯一助手回复",
+      metadata: {
+        interrupted: true,
+        interruptionCode: "AI_STREAM_UPSTREAM_CLOSED",
+        interruptionMessage: "AI 流在收到完成事件前已关闭，已保留已生成内容"
+      }
+    });
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
       { role: "user", content: "验证完成回调幂等" },
       { role: "assistant", content: "唯一助手回复" }
     ]);
+    expect(reloaded.body.data.messages.at(-1)?.metadata).toMatchObject({
+      interrupted: true,
+      interruptionCode: "AI_STREAM_UPSTREAM_CLOSED"
+    });
   });
 
   it("首轮标题生成失败时不影响主回答", async () => {

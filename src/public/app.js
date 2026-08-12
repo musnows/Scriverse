@@ -11,6 +11,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelCo
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
+import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
@@ -2503,15 +2504,18 @@ async function persistAiConversationMessage(conversationId, role, content, citat
   });
 }
 
-async function persistAiRequestInterruption(request) {
+async function persistAiRequestInterruption(request, interruption = null) {
   if (!request.conversationId || !request.userMessageId) return null;
+  const partialContent = typeof interruption?.content === "string" && interruption.content.trim()
+    ? interruption.content
+    : null;
   try {
     const message = await persistAiConversationMessage(
       request.conversationId,
       "assistant",
-      "调用失败：生成已取消，已收到的未完成内容未保存。",
+      partialContent ?? "调用失败：生成已取消，尚未收到可保留的回复内容。",
       [],
-      {},
+      partialContent ? interruption.metadata : {},
       { requestId: aiAssistantRequestId(request) }
     );
     updateAiConversationSummaryFromMessage(message);
@@ -3196,7 +3200,22 @@ function createClientError(payload, fallbackMessage, fallbackStatus = null) {
   error.providerId = typeof source.providerId === "string" ? source.providerId : undefined;
   error.modelId = typeof source.modelId === "string" ? source.modelId : undefined;
   error.modelRecordId = typeof source.modelRecordId === "string" ? source.modelRecordId : undefined;
+  error.phase = typeof source.phase === "string" ? source.phase : undefined;
+  error.idleTimeoutSeconds = typeof source.idleTimeoutSeconds === "number" ? source.idleTimeoutSeconds : undefined;
   return error;
+}
+
+function aiStreamInterruptionLabel(code) {
+  if (code === "AI_STREAM_IDLE_TIMEOUT") return "网络超时";
+  if (code === "AI_STREAM_NETWORK_ERROR") return "网络中断";
+  if (code === "AI_STREAM_UPSTREAM_CLOSED") return "流被关闭";
+  if (code === "AI_STREAM_REQUEST_CANCELLED") return "请求已取消";
+  return "生成中断";
+}
+
+function formatAiStreamInterruptionMeta(code, preservedCharacters) {
+  const label = aiStreamInterruptionLabel(code);
+  return preservedCharacters > 0 ? `${label} · 已保留 ${preservedCharacters} 字` : label;
 }
 
 function formatAiFailureMessage(error) {
@@ -12146,7 +12165,7 @@ async function sendAi() {
   } catch (error) {
     const request = requestHolder.snapshot;
     if (isAiRequestCancellation(error, request) || !aiRequestTargetsCurrentState(request)) {
-      await persistAiRequestInterruption(request);
+      await persistAiRequestInterruption(request, error?.streamInterruption);
       return;
     }
     if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
@@ -12165,6 +12184,38 @@ async function sendAi() {
       return;
     }
     setAiAssistantStatus("error");
+    const interruption = error?.streamInterruption;
+    if (interruption?.content) {
+      try {
+        const persistedAssistantMessage = await persistAiConversationMessage(
+          request.conversationId,
+          "assistant",
+          interruption.content,
+          [],
+          interruption.metadata,
+          { requestId: aiAssistantRequestId(request) }
+        );
+        updateAiConversationSummaryFromMessage(persistedAssistantMessage);
+        const persistedContent = typeof persistedAssistantMessage.content === "string"
+          ? persistedAssistantMessage.content
+          : interruption.content;
+        if (aiRequestTargetsCurrentState(request)) {
+          const messageBody = interruption.message?.querySelector(".message-body");
+          if (messageBody && persistedContent !== interruption.content) messageBody.innerHTML = renderMarkdown(persistedContent);
+          const messageMeta = interruption.message?.querySelector(".message-meta");
+          if (messageMeta) messageMeta.textContent = formatAiStreamInterruptionMeta(error.code, persistedContent.length);
+          attachAssistantCopyAction(interruption.message, persistedContent);
+          updateMessageCreatedAt(interruption.message, persistedAssistantMessage.createdAt);
+          attachMessageIdentity(interruption.message, persistedAssistantMessage.id);
+        }
+      } catch {
+        /* 主请求错误已显示，已收到内容仍保留在当前页面。 */
+      }
+      if (aiRequestTargetsCurrentState(request)) {
+        toast(`${aiStreamInterruptionLabel(error.code)}：${error.message}`, "error");
+      }
+      return;
+    }
     const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
     try {
@@ -12266,20 +12317,9 @@ async function streamChat(requestHolder, body, idempotencyKey) {
       const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
       throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
     }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
     let streamError = null;
-    const consume = async (eventText) => {
+    const consume = async (eventName, payload) => {
       assertAiRequestCurrent(requestHolder.snapshot);
-      let eventName = "message";
-      const dataLines = [];
-      for (const line of eventText.split(/\r?\n/)) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-      }
-      if (!dataLines.length) return;
-      const payload = JSON.parse(dataLines.join("\n"));
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!state.aiPromptSent) setAiContextMeter(payload.usage);
@@ -12384,36 +12424,65 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
-    while (true) {
-      const chunk = await reader.read();
-      buffer += decoder.decode(chunk.value, { stream: !chunk.done });
-      const events = buffer.split(/\r?\n\r?\n/);
-      buffer = events.pop() ?? "";
-      for (const eventText of events) await consume(eventText);
-      if (chunk.done) break;
-    }
-    if (buffer.trim()) await consume(buffer);
+    const { completed: streamCompleted } = await readAiEventStream(response.body, consume);
     await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
     assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
+    assertAiStreamCompleted(streamCompleted);
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
+    const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));
+    const interruptionCode = typeof streamFailure.code === "string" ? streamFailure.code.slice(0, 100) : "AI_STREAM_FAILED";
+    const interruption = streamedText ? {
+      content: streamedText,
+      message,
+      metadata: {
+        interrupted: true,
+        interruptionCode,
+        interruptionMessage: streamFailure.message.slice(0, 500),
+        processDurationMs: Math.min(86_400_000, elapsedProcessTime())
+      }
+    } : null;
+    if (interruption) streamFailure.streamInterruption = interruption;
     if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) {
+      typewriter.reveal();
+      revealProcessStepTypewriters();
       if (messageMounted) message.remove();
-      throw error;
+      throw streamFailure;
     }
     assertAiRequestCurrent(requestHolder.snapshot);
     typewriter.reveal();
     revealProcessStepTypewriters();
-    if (messageMounted) message.remove();
-    throw error;
+    if (!interruption) {
+      if (messageMounted) message.remove();
+      throw streamFailure;
+    }
+    const interruptionLabel = aiStreamInterruptionLabel(interruptionCode);
+    message.classList.remove("is-streaming");
+    message.classList.add("is-error");
+    message.dataset.status = "interrupted";
+    content.setAttribute("aria-busy", "false");
+    const headingRole = message.querySelector(".message-heading > span");
+    headingRole.textContent = aiAssistantLabel(interruptionLabel);
+    const interruptionBadge = document.createElement("strong");
+    interruptionBadge.className = "ai-message-status is-error";
+    interruptionBadge.textContent = "中断";
+    interruptionBadge.setAttribute("aria-label", `消息状态：${interruptionLabel}`);
+    headingRole.append(interruptionBadge);
+    renderStreamingProcessSteps(true, elapsedProcessTime());
+    meta.textContent = formatAiStreamInterruptionMeta(interruptionCode, streamedText.length);
+    if (streamedText) attachAssistantCopyAction(message, streamedText);
+    scrollAiFeedToBottom();
+    throw streamFailure;
   }
 }
 
 function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null) {
   const message = document.createElement("div");
   const isFailure = role === "assistant" && text.startsWith("调用失败：");
-  message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure ? " is-error" : ""}`;
+  const isInterrupted = role === "assistant" && metadata?.interrupted === true;
+  const interruptionCode = typeof metadata?.interruptionCode === "string" ? metadata.interruptionCode : "AI_STREAM_FAILED";
+  message.className = `${role === "user" ? "user-message" : "assistant-message"}${isFailure || isInterrupted ? " is-error" : ""}`;
   const messageBody = isFailure
     ? `<p class="ai-error-text">${esc(text)}</p>${aiToolCallSettingsLinkMarkup(text)}`
     : renderMarkdown(text);
@@ -12422,13 +12491,17 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     event.preventDefault();
     openAiToolCallSettings().catch((error) => toast(`打开 AI 设置失败：${error.message}`, "error"));
   });
-  const heading = attachMessageHeading(message, role === "user" ? "作者" : aiAssistantLabel(), createdAt ?? undefined);
-  if (isFailure) {
-    message.dataset.status = "failed";
+  const heading = attachMessageHeading(
+    message,
+    role === "user" ? "作者" : aiAssistantLabel(isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : ""),
+    createdAt ?? undefined
+  );
+  if (isFailure || isInterrupted) {
+    message.dataset.status = isInterrupted ? "interrupted" : "failed";
     const failureBadge = document.createElement("strong");
     failureBadge.className = "ai-message-status is-error";
-    failureBadge.textContent = "失败";
-    failureBadge.setAttribute("aria-label", "消息状态：失败");
+    failureBadge.textContent = isInterrupted ? "中断" : "失败";
+    failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
   }
   const mentionNames = role === "user"
@@ -12471,7 +12544,9 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     const outputTokens = Number.isFinite(metadata?.outputTokens) ? metadata.outputTokens : estimateAiMessageTokens(text);
     const meta = document.createElement("div");
     meta.className = "message-meta";
-    meta.textContent = formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
+    meta.textContent = isInterrupted
+      ? formatAiStreamInterruptionMeta(interruptionCode, text.length)
+      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
