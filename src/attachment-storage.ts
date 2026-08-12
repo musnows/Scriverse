@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { copyFile, mkdir, open, readFile, rm, stat } from "node:fs/promises";
-import { dirname, join, resolve, sep } from "node:path";
+import { copyFile, mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import sharp, { type Metadata } from "sharp";
 import { AppError } from "./errors.js";
 
@@ -95,6 +95,27 @@ export class AttachmentStorage {
 
   async remove(storageKey: string): Promise<void> {
     await rm(this.resolvedStoragePath(storageKey), { force: true });
+  }
+
+  async listImageStorageKeys(): Promise<string[]> {
+    await this.prepare();
+    const root = resolve(this.rootDirectory);
+    let entries: Array<{ isFile(): boolean; name: string; parentPath?: string; path?: string }>;
+    try {
+      entries = await readdir(root, { recursive: true, withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const keys: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const directory = entry.parentPath ?? entry.path ?? root;
+      const relativePath = relative(root, join(directory, entry.name)).replaceAll("\\", "/");
+      if (relativePath.startsWith(".tmp/")) continue;
+      if (/^[a-f0-9]{2}\/[a-f0-9]{64}\.(?:webp|png|jpe?g|gif)$/u.test(relativePath)) keys.push(relativePath);
+    }
+    return keys.sort();
   }
 
   async ingest(sourcePath: string): Promise<StoredAttachmentFile> {

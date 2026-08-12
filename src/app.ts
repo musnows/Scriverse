@@ -23,13 +23,14 @@ import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
-import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
+import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
 import { assertSafeImportedPlainText, decodeUtf8ImportedText } from "./import-security.js";
 import { InvalidRasterImageError, readRasterImageMetadata } from "./image-metadata.js";
 import { createRequestLoggingMiddleware, sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger, sanitizeError } from "./logger.js";
 import { currentRequestActor, runWithRequestActor } from "./request-context.js";
+import { S3BackupManager } from "./s3-backup.js";
 import { APP_VERSION } from "./version.js";
 import { canReadWorkModule, canWriteWorkModule, fullWorkModulePermissions, proseReplacementPermissionModules, type WorkModulePermissions } from "./work-permissions.js";
 import {
@@ -434,6 +435,28 @@ const platformUiSettingsSchema = z.object({
 }).strict().refine((input) => input.toastPosition !== undefined || input.pageSizes !== undefined, {
   message: "至少需要提供一项界面设置"
 });
+const s3BackupSettingsSchema = z.object({
+  includeImages: z.boolean().optional(),
+  scheduleEnabled: z.boolean().optional(),
+  scheduleTime: z.string().trim().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u).optional(),
+  retentionCount: z.number().int().min(1).max(100).optional()
+}).strict().refine((input) => (
+  input.includeImages !== undefined
+  || input.scheduleEnabled !== undefined
+  || input.scheduleTime !== undefined
+  || input.retentionCount !== undefined
+), { message: "至少需要提供一项备份设置" });
+const s3BackupTargetSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  endpoint: z.string().trim().min(1).max(500),
+  region: z.string().trim().min(1).max(64).optional(),
+  bucket: z.string().trim().min(3).max(63),
+  prefix: z.string().trim().max(200).optional(),
+  forcePathStyle: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  accessKeyId: z.string().trim().min(1).max(200).optional(),
+  secretAccessKey: z.string().min(1).max(500).optional()
+}).strict();
 
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
@@ -599,6 +622,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  s3Backup: S3BackupManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -938,6 +962,15 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const vault = new CredentialVault(options.masterSecret);
+  const s3Backup = new S3BackupManager(
+    store,
+    vault,
+    attachmentStorage,
+    options.fetchImpl ?? fetch,
+    (url) => assertSafeS3Endpoint(url)
+  );
+  s3Backup.start();
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -972,7 +1005,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -2059,6 +2092,25 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.patch("/api/platform/ui-settings", (request, response) => {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
+  app.get("/api/platform/s3-backup", (_request, response) => data(response, s3Backup.getOverview()));
+  app.patch("/api/platform/s3-backup", (request, response) => {
+    data(response, s3Backup.updateSettings(parse(s3BackupSettingsSchema, request.body)));
+  });
+  app.post("/api/platform/s3-backup/targets", async (request, response) => {
+    data(response, await s3Backup.createTarget(parse(s3BackupTargetSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/s3-backup/targets/:targetId", async (request, response) => {
+    data(response, await s3Backup.updateTarget(request.params.targetId, parse(s3BackupTargetSchema, request.body)));
+  });
+  app.delete("/api/platform/s3-backup/targets/:targetId", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    s3Backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/s3-backup/run", async (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, await s3Backup.run("manual"));
+  });
 
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
@@ -2574,8 +2626,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, s3Backup, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    s3Backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });

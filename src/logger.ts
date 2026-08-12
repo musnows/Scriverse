@@ -37,8 +37,8 @@ const levelPriority: Record<LogLevel, number> = {
   silent: 100
 };
 
-const sensitiveField = /^(?:authorization|cookie|setcookie|password|passwordconfirmation|currentpassword|newpassword|secret|mastersecret|token|csrftoken|captchaanswer|apikey|credential|session|sessionid|username|displayname|email|account|userid|encryptedkey|keyiv|keytag)$/iu;
-const sensitiveFieldPart = /(?:password|passwd|secret|authorization|cookie|csrf|captchaanswer|apikey|accesstoken|refreshtoken|sessiontoken|encryptedkey)/iu;
+const sensitiveField = /^(?:authorization|cookie|setcookie|password|passwordconfirmation|currentpassword|newpassword|secret|mastersecret|token|csrftoken|captchaanswer|apikey|credential|session|sessionid|username|displayname|email|account|userid|encryptedkey|keyiv|keytag|accesskeyid|secretaccesskey|secretkey)$/iu;
+const sensitiveFieldPart = /(?:password|passwd|secret|authorization|cookie|csrf|captchaanswer|apikey|accesstoken|refreshtoken|sessiontoken|encryptedkey|accesskeyid|secretaccesskey)/iu;
 
 function scrubString(value: string): string {
   return value

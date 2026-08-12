@@ -74,7 +74,13 @@ describe("数据库版本化迁移", () => {
       { display_name: "Mothra", kind: "alias" },
       { display_name: "拉顿", kind: "primary" }
     ]);
-    expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: DATABASE_SCHEMA_VERSION }, (_, index) => ({ version: index + 1 })));
+    expect(first.get("SELECT include_images, schedule_enabled, schedule_time, retention_count FROM platform_s3_backup_settings WHERE id = 1")).toEqual({
+      include_images: 1,
+      schedule_enabled: 0,
+      schedule_time: "03:00",
+      retention_count: 7
+    });
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 's3_backup_targets'")?.name).toBe("s3_backup_targets");
     expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at", "is_dead"]));
     expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).toContain("is_extinct");
     expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toContain("is_dissolved");

@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -25,8 +25,10 @@ export function readDatabaseSchemaVersion(filename: string): number | null {
 
 export class Database {
   readonly raw: DatabaseSync;
+  readonly filename: string;
 
   constructor(filename: string) {
+    this.filename = filename;
     logger.info("database.opening", { databasePath: filename, inMemory: filename === ":memory:" });
     try {
       if (filename !== ":memory:") mkdirSync(dirname(filename), { recursive: true });
@@ -53,6 +55,13 @@ export class Database {
     logger.info("database.closing");
     this.raw.close();
     logger.info("database.closed");
+  }
+
+  backupTo(targetPath: string): void {
+    if (!targetPath || targetPath.includes("\0") || /['"]/u.test(targetPath)) {
+      throw new Error("SQLite backup path is invalid");
+    }
+    this.raw.exec(`VACUUM INTO '${targetPath}'`);
   }
 
   run(sql: string, ...params: SQLInputValue[]): { changes: number; lastInsertRowid: number | bigint } {
@@ -437,6 +446,42 @@ export class Database {
         id INTEGER PRIMARY KEY CHECK(id = 1),
         toast_position TEXT NOT NULL DEFAULT 'bottom-right' CHECK(toast_position IN ('bottom-right', 'top-right')),
         page_sizes_json TEXT NOT NULL DEFAULT '{"characters":30,"analysisTasks":30,"fileVersions":30}' CHECK(json_valid(page_sizes_json) AND json_type(page_sizes_json) = 'object'),
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS platform_s3_backup_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        include_images INTEGER NOT NULL DEFAULT 1 CHECK(include_images IN (0, 1)),
+        schedule_enabled INTEGER NOT NULL DEFAULT 0 CHECK(schedule_enabled IN (0, 1)),
+        schedule_time TEXT NOT NULL DEFAULT '03:00',
+        retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 100),
+        last_run_at TEXT,
+        last_run_status TEXT NOT NULL DEFAULT 'idle' CHECK(last_run_status IN ('idle', 'running', 'success', 'partial', 'failed')),
+        last_run_error TEXT NOT NULL DEFAULT '',
+        last_run_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_targets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        region TEXT NOT NULL DEFAULT 'us-east-1',
+        bucket TEXT NOT NULL,
+        prefix TEXT NOT NULL DEFAULT '',
+        force_path_style INTEGER NOT NULL DEFAULT 1 CHECK(force_path_style IN (0, 1)),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        encrypted_access_key TEXT NOT NULL,
+        access_key_iv TEXT NOT NULL,
+        access_key_tag TEXT NOT NULL,
+        encrypted_secret_key TEXT NOT NULL,
+        secret_key_iv TEXT NOT NULL,
+        secret_key_tag TEXT NOT NULL,
+        access_key_hint TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        last_success_at TEXT,
+        last_error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
 
@@ -2766,6 +2811,55 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS platform_s3_backup_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          include_images INTEGER NOT NULL DEFAULT 1 CHECK(include_images IN (0, 1)),
+          schedule_enabled INTEGER NOT NULL DEFAULT 0 CHECK(schedule_enabled IN (0, 1)),
+          schedule_time TEXT NOT NULL DEFAULT '03:00',
+          retention_count INTEGER NOT NULL DEFAULT 7 CHECK(retention_count BETWEEN 1 AND 100),
+          last_run_at TEXT,
+          last_run_status TEXT NOT NULL DEFAULT 'idle' CHECK(last_run_status IN ('idle', 'running', 'success', 'partial', 'failed')),
+          last_run_error TEXT NOT NULL DEFAULT '',
+          last_run_json TEXT NOT NULL DEFAULT '{}',
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE TABLE IF NOT EXISTS s3_backup_targets (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          endpoint TEXT NOT NULL,
+          region TEXT NOT NULL DEFAULT 'us-east-1',
+          bucket TEXT NOT NULL,
+          prefix TEXT NOT NULL DEFAULT '',
+          force_path_style INTEGER NOT NULL DEFAULT 1 CHECK(force_path_style IN (0, 1)),
+          enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+          encrypted_access_key TEXT NOT NULL,
+          access_key_iv TEXT NOT NULL,
+          access_key_tag TEXT NOT NULL,
+          encrypted_secret_key TEXT NOT NULL,
+          secret_key_iv TEXT NOT NULL,
+          secret_key_tag TEXT NOT NULL,
+          access_key_hint TEXT NOT NULL DEFAULT '',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          last_success_at TEXT,
+          last_error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(
+          "INSERT INTO platform_s3_backup_settings (id, include_images, schedule_enabled, schedule_time, retention_count, last_run_status, last_run_error, last_run_json, updated_at) VALUES (1, 1, 0, '03:00', 7, 'idle', '', '{}', ?) ON CONFLICT(id) DO NOTHING",
+          new Date().toISOString()
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

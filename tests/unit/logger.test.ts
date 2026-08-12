@@ -18,6 +18,8 @@ describe("结构化日志", () => {
       password: "private-password",
       csrfToken: "private-csrf",
       apiKey: "private-api-key",
+      accessKeyId: "AKIASECRETACCESS",
+      secretAccessKey: "wJalrXUtnFEMI/K7MDENG",
       user_id: "private-user-id",
       nested: { access_token: "private-access-token" },
       message: "Authorization: Bearer bearer-secret; url=https://user:pass@example.com?token=query-secret",
@@ -29,7 +31,7 @@ describe("结构化日志", () => {
     expect(records[0]).not.toHaveProperty("timestamp");
     expect(records[0]).toMatchObject({ svc: "scriverse" });
     expect(records[0]).not.toHaveProperty("service");
-    for (const secret of ["private-account", "private-password", "private-csrf", "private-api-key", "private-user-id", "private-access-token", "bearer-secret", "provider-secret", "query-secret", "user:pass"]) {
+    for (const secret of ["private-account", "private-password", "private-csrf", "private-api-key", "AKIASECRETACCESS", "wJalrXUtnFEMI/K7MDENG", "private-user-id", "private-access-token", "bearer-secret", "provider-secret", "query-secret", "user:pass"]) {
       expect(serialized).not.toContain(secret);
     }
     expect(serialized).toContain("[REDACTED]");

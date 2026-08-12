@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { AppError } from "../../src/errors.js";
-import { assertSafeAiEndpoint, fetchSafeAiEndpoint } from "../../src/security.js";
+import { assertSafeAiEndpoint, assertSafeS3Endpoint, fetchSafeAiEndpoint } from "../../src/security.js";
 
 const safePublicAddress = { address: "93.184.216.34", family: 4 as const };
 const validateTestEndpoint = async (candidate: string) => {
@@ -26,6 +26,17 @@ describe("assertSafeAiEndpoint", () => {
     await expect(assertSafeAiEndpoint("http://93.184.216.34/v1", false)).rejects.toMatchObject({
       code: "INSECURE_PROVIDER_ENDPOINT"
     });
+  });
+});
+
+describe("assertSafeS3Endpoint", () => {
+  it("拒绝公网 HTTP 的 S3 地址，允许本机兼容存储", async () => {
+    await expect(assertSafeS3Endpoint("http://93.184.216.34")).rejects.toMatchObject({
+      code: "INSECURE_S3_ENDPOINT"
+    });
+    await expect(assertSafeS3Endpoint("http://127.0.0.1:9000")).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ address: "127.0.0.1" })
+    ]));
   });
 });
 

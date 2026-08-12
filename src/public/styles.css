@@ -2693,6 +2693,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .pagination-settings-fieldset { display: grid; gap: 10px; margin: 8px 0 0; padding: 14px; border: 1px solid var(--line); border-radius: 6px; }
 .pagination-settings-fieldset legend { padding: 0 6px; color: var(--text); font-weight: 700; }
 .pagination-settings-fieldset > small { color: var(--muted); }
+.s3-backup-schedule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#s3-backup-dialog .access-list { max-height: min(28vh, 260px); }
+#s3-backup-dialog .access-row { grid-template-columns: minmax(0, 1fr) auto; }
+#s3-backup-dialog .access-row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .pagination-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .pagination-settings-grid label { display: grid; gap: 6px; min-width: 0; }
 .entity-editor-view { position: fixed; z-index: 700; inset: 0; overflow: hidden; background: var(--panel); color: var(--ink); }
@@ -3221,6 +3225,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .dialog-header h2 { font-size: 20px; }
   .settings-dialog-header-actions { gap: 6px; }
   .dialog-fields, .appearance-grid, .access-dialog-body, .account-settings-body, .versions-list, .entity-history-list, .chapter-annotations-list { padding-inline: 16px; }
+  .s3-backup-schedule-grid { grid-template-columns: minmax(0, 1fr); }
   .task-detail-overview { grid-template-columns: minmax(0, 1fr); padding: 12px; }
   .task-detail-overview > * { grid-column: 1 !important; }
   .task-result-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
