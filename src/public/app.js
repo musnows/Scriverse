@@ -37,7 +37,7 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260804-agent-history-search-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-ai-write-approvals-v1";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
@@ -149,7 +149,8 @@ const cachedWorkModules = new Set([
   "comments",
   "reviews",
   "tasks",
-  "ai-settings"
+  "ai-settings",
+  "ai-approvals"
 ]);
 
 function createPresenceClientId() {
@@ -310,10 +311,12 @@ function canManageWork(work = state.work) {
 }
 
 function canEditModule(module, work = state.work) {
+  if (module === "ai-approvals") return canWritePermissionModule(work, "ai-chat");
   return canWriteUiModule(work, module);
 }
 
 function canReadModule(module, work = state.work) {
+  if (module === "ai-approvals") return canReadPermissionModule(work, "ai-chat");
   return canReadUiModule(work, module);
 }
 
@@ -340,6 +343,7 @@ function applyWorkAccessMode() {
     if (button) button.classList.toggle("permission-hidden", !canReadModule(item.uiModule));
   }
   $("#module-nav [data-module=\"comments\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("comments"));
+  $("#module-nav [data-module=\"ai-approvals\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("ai-approvals"));
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
@@ -953,8 +957,26 @@ const moduleListPages = {
   foreshadows: 1,
   relationships: 1,
   comments: 1,
-  reviews: 1
+  reviews: 1,
+  "ai-approvals": 1
 };
+const AI_WRITE_TOOL_OPTIONS = [
+  ["write_settings", "世界设定", "允许侧边栏 AI 提交新建或编辑世界设定的修改计划，不能删除。"],
+  ["write_characters", "角色", "允许侧边栏 AI 提交新建或编辑角色的修改计划，不能删除。"],
+  ["write_races", "种族", "允许侧边栏 AI 提交新建或编辑种族的修改计划，不能删除。"],
+  ["write_organizations", "组织", "允许侧边栏 AI 提交新建或编辑组织的修改计划，不能删除。"],
+  ["write_timeline", "时间线", "允许侧边栏 AI 提交新建或编辑时间轴与事件的修改计划，不能删除。"],
+  ["write_relationships", "人物关系", "允许侧边栏 AI 提交新建或编辑人物关系的修改计划，不能删除。"],
+  ["write_outlines", "大纲/伏笔", "允许侧边栏 AI 提交新建或编辑大纲和伏笔的修改计划，不能删除。"],
+  ["write_chapter_annotations", "正文评论/待办", "允许侧边栏 AI 为指定正文位置创建评论或待办，不能修改正文。"],
+  ["write_analysis_tasks", "分析任务", "允许侧边栏 AI 创建已有类型的分析任务，并进入既有任务队列。"],
+  ["ask_user_questions", "向用户提问", "允许侧边栏 AI 一次提出一个单选问题，并等待作者回答。"]
+];
+const shownAiApprovalToastIds = new Set();
+const shownAiQuestionToastIds = new Set();
+let aiApprovalFiltersPanelOpen = false;
+let aiApprovalTypeFilter = "all";
+let aiApprovalStatusFilter = "all";
 const characterFilters = { raceIds: [], organizationIds: [] };
 let characterFiltersPanelOpen = false;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
@@ -2642,6 +2664,7 @@ function invalidateModuleRequestsAfterMutation(path, method) {
   if (path.includes("/relationships")) affected.add("relationships");
   if (path.includes("/chapter-annotations/") || /\/chapters\/[^/]+\/annotations(?:$|\?)/u.test(path)) affected.add("comments");
   if (path.includes("/reviews")) affected.add("reviews");
+  if (path.includes("/ai-write-approvals") || path.includes("/ai-user-questions")) affected.add("ai-approvals");
   if (path.includes("/entity-versions/")) {
     if (path.includes("/draft/")) affected.add("drafts");
     if (path.includes("/setting/")) affected.add("settings");
@@ -3027,7 +3050,7 @@ function persistentToast(message, type = "info") {
   };
 }
 
-function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消" } = {}) {
+function confirmToast(message, { title = "请再次确认", confirmLabel = "确认", cancelLabel = "取消", detailsLabel = "", onDetails } = {}) {
   const region = $("#toast-region");
   const element = document.createElement("section");
   element.className = "toast toast-confirmation";
@@ -3047,6 +3070,14 @@ function confirmToast(message, { title = "请再次确认", confirmLabel = "确�
   confirm.className = "primary-button";
   confirm.type = "button";
   confirm.textContent = confirmLabel;
+  if (detailsLabel && typeof onDetails === "function") {
+    const details = document.createElement("button");
+    details.className = "ghost-button";
+    details.type = "button";
+    details.textContent = detailsLabel;
+    details.addEventListener("click", () => { void onDetails(); });
+    actions.append(details);
+  }
   actions.append(cancel, confirm);
   element.append(heading, description, actions);
   region.append(element);
@@ -3121,6 +3152,207 @@ function inputToast(message, { title = "请输入", inputLabel = title, value = 
       }
     });
   });
+}
+
+function aiApprovalTargetsLabel(approval) {
+  const operations = Array.isArray(approval.operations) ? approval.operations : [];
+  if (!operations.length) return approval.aiSummary || "AI 修改计划";
+  return operations.map((item) => `${item.actionLabel || (item.action === "create" ? "新增" : "编辑")} ${item.targetLabel || item.kindLabel || item.kind}`).join("、");
+}
+
+function renderAiApprovalOperationMarkup(operation) {
+  if (operation.redacted) {
+    return `<article class="ai-approval-diff"><h3>${esc(operation.kindLabel || operation.kind)}</h3><p>你没有查看该操作详情的权限。</p></article>`;
+  }
+  const diffs = Array.isArray(operation.diffs) ? operation.diffs : [];
+  const diffRows = diffs.length
+    ? `<table><thead><tr><th>字段</th><th>修改前</th><th>修改后</th></tr></thead><tbody>${diffs.map((diff) => `<tr><th>${esc(diff.label || diff.field)}</th><td>${esc(diff.beforeText ?? "")}</td><td>${esc(diff.afterText ?? "")}</td></tr>`).join("")}</tbody></table>`
+    : "<p>没有字段差异。</p>";
+  const annotation = operation.annotation;
+  const analysis = operation.analysisTask;
+  const result = operation.result && typeof operation.result === "object" ? operation.result : null;
+  return `<article class="ai-approval-diff">
+    <h3>${esc(operation.actionLabel || "")} · ${esc(operation.kindLabel || operation.kind)} · ${esc(operation.targetLabel || "")}</h3>
+    <p>模块：${esc(operation.toolLabel || operation.module)} · AI 简述：${esc(operation.aiSummary || "")}</p>
+    ${annotation ? `<p>批注类型：${esc(annotation.kind === "todo" ? "待办" : "评论")} · 章节：${esc(annotation.chapterTitle || annotation.chapterId)} · 行号：${esc(String(annotation.startLine))}${annotation.startLine === annotation.endLine ? "" : `-${esc(String(annotation.endLine))}`}</p><pre class="task-detail-result">${esc(annotation.quote || "")}</pre>` : ""}
+    ${analysis ? `<p>任务类型：${esc(analysis.taskType)} · 模型：${esc(analysis.modelLabel || analysis.modelId || "作品默认模型")} · 分析范围：${esc(analysis.scopeLabel || "")}</p>` : ""}
+    ${diffRows}
+    ${result ? `<p>执行结果：${esc(result.id || "")}${result.versionNo ? ` · 版本 v${esc(String(result.versionNo))}` : ""}${result.actor ? ` · 操作者 ${esc(result.actor)}` : ""}</p>` : ""}
+  </article>`;
+}
+
+async function openAiApprovalDetailDialog(approvalId, { confirmable = false } = {}) {
+  const approval = await api(`/api/ai-write-approvals/${encodeURIComponent(approvalId)}`);
+  const operations = Array.isArray(approval.operations) ? approval.operations : [];
+  const failure = approval.failure && typeof approval.failure === "object" ? approval.failure.message : "";
+  const audits = Array.isArray(approval.audits) ? approval.audits : [];
+  const canDecide = confirmable && approval.status === "pending" && canEditModule("ai-approvals");
+  const canRollback = approval.canRollback && canEditModule("ai-approvals");
+  await openDialog("修改详情",
+    `<div class="task-detail ai-approval-diff">
+      <p><strong>${esc(approval.statusLabel || approval.status)}</strong> · ${esc(aiApprovalTargetsLabel(approval))}</p>
+      <p>AI 简述：${esc(approval.aiSummary || "")}</p>
+      ${approval.invalidationReason ? `<p>失效原因：${esc(approval.invalidationReason)}</p>` : ""}
+      ${failure ? `<p>失败原因：${esc(failure)}</p>` : ""}
+      ${operations.map(renderAiApprovalOperationMarkup).join("")}
+      ${audits.length ? `<section><h3>审计记录</h3><ul>${audits.map((item) => `<li>${esc(item.createdAt || "")} · ${esc(item.actor || "")} · ${esc(item.action || "")}${item.entityId ? ` · ${esc(item.entityId)}` : ""}</li>`).join("")}</ul></section>` : ""}
+    </div>`,
+    async () => {
+      if (canDecide) {
+        await api(`/api/ai-write-approvals/${encodeURIComponent(approvalId)}/confirm`, { method: "POST", body: {} });
+        toast("修改计划已确认并执行");
+        if (state.module === "ai-approvals") await renderAiApprovals();
+        return;
+      }
+      if (canRollback) {
+        if (!await confirmToast("撤销只会把本次审批改过的已有词条恢复到审批前版本。AI 新建的词条不会被删除。", {
+          title: "撤销本次审批",
+          confirmLabel: "确认撤销"
+        })) return false;
+        await api(`/api/ai-write-approvals/${encodeURIComponent(approvalId)}/rollback`, { method: "POST", body: {} });
+        toast("已撤销本次审批中的词条编辑");
+        if (state.module === "ai-approvals") await renderAiApprovals();
+      }
+    },
+    "AI 操作审批",
+    {
+      submitLabel: canDecide ? "确认执行" : canRollback ? "撤销本次审批" : "关闭",
+      hideCancel: !canDecide && !canRollback,
+      wide: true,
+      meta: `创建于 ${formatDateTime(approval.createdAt)}`
+    }
+  );
+}
+
+async function showAiWriteApprovalToast(approval) {
+  const id = String(approval.id || "");
+  if (!id || shownAiApprovalToastIds.has(id) || approval.status !== "pending") return;
+  shownAiApprovalToastIds.add(id);
+  const confirmed = await confirmToast(`${aiApprovalTargetsLabel(approval)}\n${approval.aiSummary || ""}`, {
+    title: "AI 请求确认修改",
+    confirmLabel: "确认执行",
+    cancelLabel: "拒绝",
+    detailsLabel: "查看完整修改详情",
+    onDetails: () => openAiApprovalDetailDialog(id, { confirmable: false })
+  });
+  shownAiApprovalToastIds.delete(id);
+  try {
+    if (confirmed) {
+      await api(`/api/ai-write-approvals/${encodeURIComponent(id)}/confirm`, { method: "POST", body: {} });
+      toast("修改计划已确认并执行");
+    } else {
+      await api(`/api/ai-write-approvals/${encodeURIComponent(id)}/reject`, { method: "POST", body: {} });
+      toast("已拒绝该修改计划");
+    }
+    if (state.module === "ai-approvals") await renderAiApprovals();
+  } catch (error) {
+    toast(error.message, "error");
+    if (state.module === "ai-approvals") await renderAiApprovals();
+  }
+}
+
+function showAiUserQuestionToast(question) {
+  const id = String(question.id || "");
+  if (!id || shownAiQuestionToastIds.has(id) || question.status !== "pending") return;
+  shownAiQuestionToastIds.add(id);
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.className = "toast toast-confirmation";
+  element.setAttribute("role", "alertdialog");
+  element.setAttribute("aria-label", "AI 向你提问");
+  const heading = document.createElement("strong");
+  heading.textContent = "AI 向你提问";
+  const description = document.createElement("p");
+  description.textContent = question.question || "";
+  const options = document.createElement("div");
+  options.className = "toast-question-options";
+  const optionList = Array.isArray(question.options) ? question.options : [];
+  optionList.forEach((option, index) => {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `ai-question-${id}`;
+    input.value = option.id;
+    if (index === 0) input.checked = true;
+    const text = document.createElement("span");
+    text.textContent = option.label;
+    label.append(input, text);
+    options.append(label);
+  });
+  let customInput = null;
+  if (question.allowCustom !== false) {
+    customInput = document.createElement("input");
+    customInput.className = "toast-input";
+    customInput.type = "text";
+    customInput.maxLength = 2000;
+    customInput.placeholder = "自定义回答";
+    customInput.setAttribute("aria-label", "自定义回答");
+    customInput.addEventListener("input", () => {
+      if (customInput.value.trim()) {
+        options.querySelectorAll("input[type='radio']").forEach((input) => { input.checked = false; });
+      }
+    });
+    options.querySelectorAll("input[type='radio']").forEach((input) => {
+      input.addEventListener("change", () => { if (input.checked) customInput.value = ""; });
+    });
+  }
+  const actions = document.createElement("div");
+  actions.className = "toast-confirmation-actions";
+  const reject = document.createElement("button");
+  reject.className = "ghost-button";
+  reject.type = "button";
+  reject.textContent = "拒绝回答";
+  const confirm = document.createElement("button");
+  confirm.className = "primary-button";
+  confirm.type = "button";
+  confirm.textContent = "提交回答";
+  actions.append(reject, confirm);
+  element.append(heading, description, options);
+  if (customInput) element.append(customInput);
+  element.append(actions);
+  region.append(element);
+  raiseToastRegion();
+  const finish = async (answered) => {
+    element.remove();
+    shownAiQuestionToastIds.delete(id);
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+    try {
+      if (!answered) {
+        await api(`/api/ai-user-questions/${encodeURIComponent(id)}/reject`, { method: "POST", body: {} });
+        toast("已拒绝该回答");
+        if (state.module === "ai-approvals") await renderAiApprovals();
+        return;
+      }
+      const customAnswer = customInput?.value.trim() ?? "";
+      const selected = options.querySelector("input[type='radio']:checked");
+      const answeredQuestion = await api(`/api/ai-user-questions/${encodeURIComponent(id)}/answer`, {
+        method: "POST",
+        body: customAnswer ? { customAnswer } : { optionId: selected?.value }
+      });
+      toast("已提交回答");
+      if (state.module === "ai-approvals") await renderAiApprovals();
+      const answerText = answeredQuestion.answerText || customAnswer || selected?.parentElement?.textContent || "";
+      if (answerText && canEditModule("ai-approvals")) {
+        setAiPromptText(`作者回答：${String(answerText).replace(/（最推荐）$/u, "").trim()}`);
+        void sendAi();
+      }
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  reject.addEventListener("click", () => { void finish(false); }, { once: true });
+  confirm.addEventListener("click", () => { void finish(true); }, { once: true });
+}
+
+async function restorePendingAiWriteToasts(workId) {
+  if (!workId || !canReadModule("ai-approvals")) return;
+  try {
+    const pending = await api(`/api/works/${encodeURIComponent(workId)}/ai-write-approvals/pending-toasts`);
+    for (const approval of pending.approvals ?? []) void showAiWriteApprovalToast(approval);
+    for (const question of pending.questions ?? []) showAiUserQuestionToast(question);
+  } catch {
+    // 刷新后恢复确认入口失败时不打断进入作品。
+  }
 }
 
 document.addEventListener("toggle", (event) => {
@@ -4302,6 +4534,7 @@ async function selectWork(workId, preferredChapterId = null) {
   else if (state.module === "editor" && canReadModule("editor")) showWelcome(true);
   else if (!canReadModule(state.module)) showWelcome(true);
   else await showModule(state.module);
+  void restorePendingAiWriteToasts(nextWork.id);
   return true;
 }
 
@@ -4783,6 +5016,7 @@ const moduleMeta = {
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
   comments: ["正文协作", "正文评论", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
+  "ai-approvals": ["AI 协作", "AI 操作审批中心", "查看并处理侧边栏 AI 提交的修改计划和提问。刷新或重新登录后仍可继续处理。", ""],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
 };
@@ -4827,7 +5061,7 @@ async function showModule(module) {
   $("#module-description").textContent = meta[2];
   $("#module-header-actions").querySelectorAll("[data-module-header-action]").forEach((action) => action.remove());
   $("#module-create-button").textContent = meta[3];
-  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || module === "comments" || !canEditModule(module));
+  $("#module-create-button").classList.toggle("hidden", module === "ai-settings" || module === "comments" || module === "ai-approvals" || !canEditModule(module));
   $("#module-content").innerHTML = '<div class="empty-state">正在载入……</div>';
   bindModuleContentInteractions();
   try {
@@ -4841,6 +5075,7 @@ async function showModule(module) {
     if (module === "relationships") await renderRelationships();
     if (module === "comments") await renderWorkChapterComments();
     if (module === "reviews") await renderReviews();
+    if (module === "ai-approvals") await renderAiApprovals();
     if (module === "tasks") await renderTasks(taskListPage);
     if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
@@ -6103,6 +6338,145 @@ async function renderReviews(page = moduleListPages.reviews) {
       await api(`/api/reviews/${button.dataset.keepCharactersSeparate}/character-resolution`, { method: "POST", body: { action: "keep-separate" } });
       toast("已确认这两个档案属于不同角色");
       await renderReviews(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+}
+
+async function renderAiApprovals(page = moduleListPages["ai-approvals"]) {
+  const canDecide = canEditModule("ai-approvals");
+  const [approvalsPage, questionsPage] = await Promise.all([
+    moduleApiPage("ai-approvals", `/api/works/${state.work.id}/ai-write-approvals`, 1, 100),
+    moduleApiPage("ai-approvals", `/api/works/${state.work.id}/ai-user-questions`, 1, 100)
+  ]);
+  const approvals = approvalsPage.items ?? approvalsPage;
+  const questions = questionsPage.items ?? questionsPage;
+  const records = [
+    ...approvals.map((item) => ({ ...item, recordType: "approval" })),
+    ...questions.map((item) => ({ ...item, recordType: "question" }))
+  ].sort((left, right) => String(right.createdAt || "").localeCompare(String(left.createdAt || "")));
+  const filtered = records.filter((item) => {
+    if (aiApprovalTypeFilter === "approval" && item.recordType !== "approval") return false;
+    if (aiApprovalTypeFilter === "question" && item.recordType !== "question") return false;
+    if (aiApprovalStatusFilter !== "all" && item.status !== aiApprovalStatusFilter) return false;
+    return true;
+  });
+  mountModuleCount(filtered.length);
+  const pageResult = paginateModuleItems(filtered, page, "ai-approvals");
+  moduleListPages["ai-approvals"] = pageResult.page;
+  const layout = readModuleLayout();
+  if (filtered.length) mountModuleLayoutToggle(layout, "审批列表样式");
+  $("#module-header-actions").querySelector('[data-module-header-action="ai-approval-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="ai-approval-filter-toggle" aria-label="筛选审批" aria-controls="ai-approval-filter-panel" aria-expanded="${aiApprovalFiltersPanelOpen}" title="筛选审批"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="ai-approval-filter-toggle"]')?.addEventListener("click", async () => {
+    aiApprovalFiltersPanelOpen = !aiApprovalFiltersPanelOpen;
+    await renderAiApprovals(pageResult.page);
+  });
+  const filterToolbar = `<section id="ai-approval-filter-panel" class="character-filter-toolbar${aiApprovalFiltersPanelOpen ? "" : " hidden"}" aria-label="审批筛选">
+    <label for="ai-approval-type-filter"><span>按类型筛选</span><select id="ai-approval-type-filter" aria-label="按类型筛选">
+      <option value="all" ${aiApprovalTypeFilter === "all" ? "selected" : ""}>全部类型</option>
+      <option value="approval" ${aiApprovalTypeFilter === "approval" ? "selected" : ""}>修改计划</option>
+      <option value="question" ${aiApprovalTypeFilter === "question" ? "selected" : ""}>提问</option>
+    </select></label>
+    <label for="ai-approval-status-filter"><span>按状态筛选</span><select id="ai-approval-status-filter" aria-label="按状态筛选">
+      ${[["all", "全部状态"], ["pending", "待确认"], ["rejected", "已拒绝"], ["expired", "已过期"], ["invalidated", "已失效"], ["executing", "执行中"], ["succeeded", "执行成功"], ["failed", "执行失败"], ["answered", "已回答"]].map(([value, label]) => `<option value="${value}" ${aiApprovalStatusFilter === value ? "selected" : ""}>${label}</option>`).join("")}
+    </select></label>
+    <div class="character-filter-toolbar-actions"><button id="clear-ai-approval-filters" class="ghost-button" type="button">重置筛选</button></div>
+  </section>`;
+  const card = (item) => {
+    const pending = item.status === "pending";
+    const title = item.recordType === "question" ? (item.question || "AI 提问") : aiApprovalTargetsLabel(item);
+    const actions = pending && canDecide
+      ? item.recordType === "question"
+        ? `<div class="card-actions"><button data-answer-question="${esc(item.id)}">回答</button><button data-reject-question="${esc(item.id)}">拒绝</button></div>`
+        : `<div class="card-actions"><button data-open-approval="${esc(item.id)}">查看详情</button><button data-confirm-approval="${esc(item.id)}">确认</button><button data-reject-approval="${esc(item.id)}">拒绝</button></div>`
+      : item.recordType === "approval"
+        ? `<div class="card-actions"><button data-open-approval="${esc(item.id)}">查看详情</button></div>`
+        : "";
+    return `<article class="record-card preview-record-card">
+      <small>${esc(item.recordType === "question" ? "提问" : "修改计划")} · ${esc(item.statusLabel || item.status)}</small>
+      <h3>${esc(title)}</h3>
+      <p>${esc(item.recordType === "question" ? (item.answerText || "等待作者回答") : (item.aiSummary || ""))}</p>
+      ${item.invalidationReason ? `<p>失效原因：${esc(item.invalidationReason)}</p>` : ""}
+      ${actions}
+    </article>`;
+  };
+  $("#module-content").innerHTML = filterToolbar + (filtered.length
+    ? `${layout === "rows" ? `<div class="module-row-list">${pageResult.items.map(card).join("")}</div>` : `<div class="card-grid">${pageResult.items.map(card).join("")}</div>`}${renderModulePagination(pageResult, "ai-approvals", "审批列表")}`
+    : emptyModule("没有待处理的 AI 操作", "侧边栏 AI 提交的修改计划和提问会保存在这里，刷新后仍可继续处理。"));
+  bindModuleLayoutToggle(() => renderAiApprovals(pageResult.page));
+  bindModulePagination("ai-approvals", renderAiApprovals);
+  $("#ai-approval-type-filter")?.addEventListener("change", async (event) => {
+    aiApprovalTypeFilter = event.currentTarget.value;
+    aiApprovalFiltersPanelOpen = true;
+    moduleListPages["ai-approvals"] = 1;
+    await renderAiApprovals(1);
+  });
+  $("#ai-approval-status-filter")?.addEventListener("change", async (event) => {
+    aiApprovalStatusFilter = event.currentTarget.value;
+    aiApprovalFiltersPanelOpen = true;
+    moduleListPages["ai-approvals"] = 1;
+    await renderAiApprovals(1);
+  });
+  $("#clear-ai-approval-filters")?.addEventListener("click", async () => {
+    aiApprovalTypeFilter = "all";
+    aiApprovalStatusFilter = "all";
+    aiApprovalFiltersPanelOpen = true;
+    moduleListPages["ai-approvals"] = 1;
+    await renderAiApprovals(1);
+  });
+  $("#module-content").querySelectorAll("[data-open-approval]").forEach((button) => button.addEventListener("click", () => {
+    void openAiApprovalDetailDialog(button.dataset.openApproval, { confirmable: true });
+  }));
+  $("#module-content").querySelectorAll("[data-confirm-approval]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await api(`/api/ai-write-approvals/${encodeURIComponent(button.dataset.confirmApproval)}/confirm`, { method: "POST", body: {} });
+      toast("修改计划已确认并执行");
+      await renderAiApprovals(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+  $("#module-content").querySelectorAll("[data-reject-approval]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await api(`/api/ai-write-approvals/${encodeURIComponent(button.dataset.rejectApproval)}/reject`, { method: "POST", body: {} });
+      toast("已拒绝该修改计划");
+      await renderAiApprovals(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+  $("#module-content").querySelectorAll("[data-rollback-approval]").forEach((button) => button.addEventListener("click", async () => {
+    if (!await confirmToast("撤销只会把本次审批改过的已有词条恢复到审批前版本。AI 新建的词条不会被删除。", {
+      title: "撤销本次审批",
+      confirmLabel: "确认撤销"
+    })) return;
+    button.disabled = true;
+    try {
+      await api(`/api/ai-write-approvals/${encodeURIComponent(button.dataset.rollbackApproval)}/rollback`, { method: "POST", body: {} });
+      toast("已撤销本次审批中的词条编辑");
+      await renderAiApprovals(pageResult.page);
+    } catch (error) {
+      toast(error.message, "error");
+      button.disabled = false;
+    }
+  }));
+  $("#module-content").querySelectorAll("[data-answer-question]").forEach((button) => button.addEventListener("click", async () => {
+    const question = questions.find((item) => item.id === button.dataset.answerQuestion);
+    if (question) showAiUserQuestionToast(question);
+  }));
+  $("#module-content").querySelectorAll("[data-reject-question]").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    try {
+      await api(`/api/ai-user-questions/${encodeURIComponent(button.dataset.rejectQuestion)}/reject`, { method: "POST", body: {} });
+      toast("已拒绝该回答");
+      await renderAiApprovals(pageResult.page);
     } catch (error) {
       toast(error.message, "error");
       button.disabled = false;
@@ -7445,6 +7819,10 @@ async function renderBookAiSettings() {
     "beforeend",
     `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
   );
+  host.querySelector(".ai-agent-tools").closest(".config-section").insertAdjacentHTML(
+    "afterend",
+    `<section class="config-section"><div class="config-section-header"><div><h2>AI 可写工具</h2><p>默认为关闭。只有拥有 AI 设置权限的用户可以分别开启。开启后，侧边栏 AI 只能提交修改计划，必须经作者确认后才会写入；不能删除词条，也不能直接修改章节正文。</p></div></div><div class="ai-write-tools">${AI_WRITE_TOOL_OPTIONS.map(([value, label, hint]) => `<label><input name="agent-write-tool" type="checkbox" value="${esc(value)}" ${agentTools.has(value) ? "checked" : ""}><span><strong>${esc(label)}</strong><small>${esc(hint)}</small></span></label>`).join("")}</div><div class="card-actions"><button id="save-agent-write-tools" class="ghost-button config-save-button" type="button">保存可写工具</button></div></section>`
+  );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
     host.querySelectorAll(".agent-tool-call-global-multiplier-toggle button").forEach((button) => { button.disabled = true; });
@@ -7627,9 +8005,22 @@ async function renderBookAiSettings() {
     const button = $("#save-agent-tools");
     button.disabled = true;
     try {
-      const agentTools = [...host.querySelectorAll('input[name="agent-tool"]:checked')].map((input) => input.value);
+      const agentTools = [...host.querySelectorAll('input[name="agent-tool"]:checked, input[name="agent-write-tool"]:checked')].map((input) => input.value);
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { agentTools } });
       toast("AI 查询工具设置已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-agent-write-tools").addEventListener("click", async () => {
+    const button = $("#save-agent-write-tools");
+    button.disabled = true;
+    try {
+      const agentTools = [...host.querySelectorAll('input[name="agent-tool"]:checked, input[name="agent-write-tool"]:checked')].map((input) => input.value);
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { agentTools } });
+      toast("AI 可写工具设置已保存");
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -10520,6 +10911,10 @@ async function streamChat(body) {
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
+      } else if (eventName === "write_approval") {
+        void showAiWriteApprovalToast(payload);
+      } else if (eventName === "ask_user_question") {
+        showAiUserQuestionToast(payload);
       } else if (eventName === "context_compacted") {
         setAiContextMeter(payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";

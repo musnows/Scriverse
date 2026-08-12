@@ -10,7 +10,8 @@ export const RESTORABLE_MODULES = Object.freeze([
   "relationships",
   "reviews",
   "tasks",
-  "ai-settings"
+  "ai-settings",
+  "ai-approvals"
 ]);
 
 const moduleSet = new Set(RESTORABLE_MODULES);

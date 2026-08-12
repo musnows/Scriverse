@@ -1761,10 +1761,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .config-section-header .config-doc-link:hover,
 .config-section-header .config-doc-link:focus-visible { color: var(--accent); }
 .ai-agent-tools { display: grid; gap: 8px; }
-.ai-agent-tools label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; color: var(--muted); font-size: 11px; line-height: 1.45; }
-.ai-agent-tools input { width: 16px; margin-top: 2px; }
-.ai-agent-tools strong { color: var(--ink); font-size: 12px; font-weight: 600; }
-.ai-agent-tools small { display: block; margin-top: 2px; font-size: 10px; }
+.ai-agent-tools label, .ai-write-tools label { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.ai-agent-tools input, .ai-write-tools input { width: 16px; margin-top: 2px; }
+.ai-agent-tools strong, .ai-write-tools strong { color: var(--ink); font-size: 12px; font-weight: 600; }
+.ai-agent-tools small, .ai-write-tools small { display: block; margin-top: 2px; font-size: 10px; }
 .default-model-select { min-width: 260px; padding: 7px 9px; font-size: 11px; }
 .empty-state { padding: 70px 30px; text-align: center; color: var(--muted); border: 1px dashed var(--line); }
 .empty-state b { display: block; color: var(--ink); margin-bottom: 8px; }
@@ -2404,7 +2404,15 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .toast-confirmation strong { font-size: 12px; }
 .toast-confirmation p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; white-space: pre-line; }
 .toast-input { width: 100%; min-height: 34px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 11px; }
-.toast-confirmation-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 3px; }
+.toast-confirmation-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 7px; margin-top: 3px; }
+.toast-question-options { display: grid; gap: 6px; }
+.toast-question-options label { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 12px; line-height: 1.45; }
+.toast-question-options input { margin-top: 3px; }
+.ai-approval-diff { display: grid; gap: 10px; }
+.ai-approval-diff table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ai-approval-diff th, .ai-approval-diff td { border: 1px solid var(--line); padding: 6px 8px; vertical-align: top; text-align: left; white-space: pre-wrap; }
+.ai-approval-diff th { background: var(--surface-soft); font-weight: 600; }
+.ai-write-tools { display: grid; gap: 8px; }
 .toast-confirmation-actions button { min-height: 30px; padding: 6px 10px; }
 .chapter-insight-toast {
   display: grid;
