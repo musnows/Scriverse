@@ -2136,4 +2136,83 @@ describe("用户、作品权限与操作者追踪 API", () => {
       message: "两次输入的密码不一致"
     }));
   });
+
+  it("AI 可写审批要求登录、CSRF，并取当前用户与对话归属用户权限交集", async () => {
+    const owner = await register(runtime, "ai_write_owner");
+    const writer = await register(runtime, "ai_write_writer");
+    const reader = await register(runtime, "ai_write_reader");
+    const outsider = await register(runtime, "ai_write_outsider");
+    const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "可写审批权限作品" }).expect(201);
+    const workId = String(work.body.data.id);
+    const nonePermissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.patch(`/api/works/${workId}/ai-settings`).set("X-CSRF-Token", owner.csrfToken).send({
+      agentTools: ["write_settings"]
+    }).expect(200);
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: writer.user.userId,
+      permissions: { ...nonePermissions, settings: "write", "ai-chat": "write" }
+    }).expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: reader.user.userId,
+      permissions: { ...nonePermissions, settings: "read", "ai-chat": "write" }
+    }).expect(201);
+
+    await reader.agent.patch(`/api/works/${workId}/ai-settings`).set("X-CSRF-Token", reader.csrfToken).send({
+      agentTools: ["write_settings", "write_characters"]
+    }).expect(403);
+
+    const writerConversation = await writer.agent.post(`/api/works/${workId}/ai-conversations`).set("X-CSRF-Token", writer.csrfToken).send({}).expect(201);
+    const readerConversation = await reader.agent.post(`/api/works/${workId}/ai-conversations`).set("X-CSRF-Token", reader.csrfToken).send({}).expect(201);
+    const planInput = {
+      workId,
+      summary: "补充设定",
+      operations: [{ kind: "create_setting" as const, fields: { title: "协作设定", category: "规则", content: "协作写入。" } }],
+      enabledToolIds: ["write_settings"]
+    };
+    await runWithRequestActor({ ...writer.user, authentication: "session" }, () => {
+      expect(() => runtime.ai.writeApprovals.submitPlan({
+        ...planInput,
+        conversationId: readerConversation.body.data.id
+      })).toThrow(/没有执行该写入所需的模块权限/);
+    });
+    await runWithRequestActor({ ...reader.user, authentication: "session" }, () => {
+      expect(() => runtime.ai.writeApprovals.submitPlan({
+        ...planInput,
+        conversationId: readerConversation.body.data.id
+      })).toThrow(/没有执行该写入所需的模块权限/);
+    });
+    const writerPlan = await runWithRequestActor({ ...writer.user, authentication: "session" }, () => runtime.ai.writeApprovals.submitPlan({
+      ...planInput,
+      conversationId: writerConversation.body.data.id
+    }));
+    expect(writerPlan.status).toBe("pending");
+
+    await request(runtime.app).post(`/api/ai-write-approvals/${String(writerPlan.id)}/confirm`).send({}).expect(401);
+    await writer.agent.post(`/api/ai-write-approvals/${String(writerPlan.id)}/confirm`).send({}).expect(403);
+    await outsider.agent.get(`/api/ai-write-approvals/${String(writerPlan.id)}`).expect(403);
+
+    const confirmed = await writer.agent.post(`/api/ai-write-approvals/${String(writerPlan.id)}/confirm`)
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({})
+      .expect(200);
+    expect(confirmed.body.data.status).toBe("succeeded");
+    expect(JSON.stringify(confirmed.body)).not.toContain("sk-");
+    const settings = await owner.agent.get(`/api/works/${workId}/settings`).expect(200);
+    const list = settings.body.data.items ?? settings.body.data;
+    expect(list).toEqual(expect.arrayContaining([expect.objectContaining({ title: "协作设定" })]));
+  });
 });

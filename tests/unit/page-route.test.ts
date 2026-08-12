@@ -9,6 +9,8 @@ describe("页面刷新路由", () => {
     expect(parsePageRoute(draftsHash)).toEqual({ view: "module", workId: "work-1", module: "drafts" });
     const commentsHash = serializePageRoute({ view: "module", workId: "work-1", module: "comments" });
     expect(parsePageRoute(commentsHash)).toEqual({ view: "module", workId: "work-1", module: "comments" });
+    const approvalsHash = serializePageRoute({ view: "module", workId: "work-1", module: "ai-approvals" });
+    expect(parsePageRoute(approvalsHash)).toEqual({ view: "module", workId: "work-1", module: "ai-approvals" });
 
     const editorHash = serializePageRoute({ view: "editor", workId: "work-1", chapterId: "chapter-18" });
     expect(parsePageRoute(editorHash)).toEqual({ view: "editor", workId: "work-1", chapterId: "chapter-18" });

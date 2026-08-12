@@ -47,7 +47,8 @@ describe("AI 分析全流程追踪界面", () => {
     expect(application).not.toContain("target.database");
     expect(application).not.toContain("target.table");
     expect(application).not.toContain("当前作品 SQLite 数据库");
-    expect(application).not.toContain("analysis_tasks");
+    expect(application).not.toMatch(/(?:FROM|INTO|UPDATE|JOIN)\s+analysis_tasks\b/u);
+    expect(application).toContain("write_analysis_tasks");
     expect(application).not.toContain("result_json");
     expect(application).toContain("完整返回 JSON");
     expect(application).toContain("不做字符截断");
