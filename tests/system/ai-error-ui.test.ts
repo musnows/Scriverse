@@ -3,11 +3,39 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("AI 错误详情界面", () => {
+  it("普通流式失败在追加持久化失败消息前移除临时流式消息", async () => {
+    const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
+    const sendAiSource = application.slice(
+      application.indexOf("async function sendAi()"),
+      application.indexOf("async function streamChat(requestHolder, body)")
+    );
+    const sendFailureSource = sendAiSource.slice(
+      sendAiSource.lastIndexOf("  } catch (error) {"),
+      sendAiSource.lastIndexOf("  } finally {")
+    );
+    const streamChatSource = application.slice(
+      application.indexOf("async function streamChat(requestHolder, body)"),
+      application.indexOf("function appendMessage(role, text")
+    );
+    const streamFailureSource = streamChatSource.slice(streamChatSource.lastIndexOf("  } catch (error) {"));
+    const currentRequestFailureSource = streamFailureSource.slice(
+      streamFailureSource.indexOf("    assertAiRequestCurrent(requestHolder.snapshot);")
+    );
+
+    expect(currentRequestFailureSource).toContain("typewriter.reveal();");
+    expect(currentRequestFailureSource).toContain("revealProcessStepTypewriters();");
+    expect(currentRequestFailureSource).toContain("if (messageMounted) message.remove();");
+    expect(currentRequestFailureSource).not.toContain("mountAssistantMessage();");
+    expect(currentRequestFailureSource).not.toContain("生成中断");
+    expect(sendFailureSource.match(/persistAiConversationMessage\(/gu)).toHaveLength(1);
+    expect(sendFailureSource.match(/appendMessage\("assistant", failureMessage/gu)).toHaveLength(1);
+  });
+
   it("将模型目标和上游失败详情写入带状态标识的助手消息", async () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
     const sendAiSource = application.slice(
       application.indexOf("async function sendAi()"),
-      application.indexOf("async function streamChat(body)")
+      application.indexOf("async function streamChat(requestHolder, body)")
     );
 
     expect(application).toContain("function createClientError(payload, fallbackMessage, fallbackStatus = null)");

@@ -131,6 +131,25 @@ const mockAi = createServer(async (request, response) => {
     sendCompletion(response, { content: `滚动测试完成。${"模型输出后应保持对话底部可见。".repeat(20)}` });
     return;
   }
+  if (latestUserMessage.includes("浏览器切换竞态测试")) {
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.flushHeaders();
+    response.write('data: {"choices":[{"delta":{"content":"旧请求部分内容"}}]}\n\n');
+    const finishTimer = setTimeout(() => {
+      if (response.destroyed || response.writableEnded) return;
+      response.write('data: {"choices":[{"delta":{"content":"不应进入新对话"},"finish_reason":"stop"}]}\n\n');
+      response.end("data: [DONE]\n\n");
+    }, 15_000);
+    const stop = () => clearTimeout(finishTimer);
+    request.once("aborted", stop);
+    response.once("close", stop);
+    return;
+  }
+  if (latestUserMessage.includes("浏览器网络失败测试")) {
+    response.writeHead(503, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "浏览器模拟上游不可用" } }));
+    return;
+  }
   if (latestUserMessage.includes("这是什么项目")) {
     const systemPrompt = messages.find((message) => message.role === "system")?.content ?? "";
     if (!systemPrompt.includes("预加载上下文为空或不足时，必须先调用工具主动查询")) {
@@ -226,6 +245,14 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     title: "第二章 北境追击",
     content: `舰队在北境追击敌人。${"后期战斗记录。".repeat(1_200)}`
   });
+  const secondWork = runtime.store.createWork({ title: "浏览器 AI E2E 第二作品", author: "Codex" });
+  const secondWorkId = String(secondWork.id);
+  const secondVolume = runtime.store.createVolume(secondWorkId, { title: "第二作品卷" });
+  const secondChapter = runtime.store.createChapter(secondWorkId, {
+    volumeId: String(secondVolume.id),
+    title: "第二作品章节",
+    content: "第二作品正文不应收到第一部作品的流式回复。"
+  });
   for (const [insightId, targetChapter, summary] of [
     ["browser-insight-early", chapter, "林舟在第一卷发现月蚀密钥并启动跃迁。"],
     ["browser-insight-late", lateChapter, "舰队在第二卷进入北境追击阶段。"]
@@ -270,8 +297,10 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     contextWindow: 4_096
   });
   runtime.ai.setTaskDefault(workId, "chat", String(model.id));
+  runtime.ai.setTaskDefault(secondWorkId, "chat", String(model.id));
   runtime.store.updateWorkAiSettings(workId, { contextCompactThreshold: 50 });
-  return { workId, chapterId, modelId: String(model.id) };
+  runtime.store.updateWorkAiSettings(secondWorkId, { contextCompactThreshold: 50 });
+  return { workId, chapterId, secondWorkId, secondChapterId: String(secondChapter.id), modelId: String(model.id) };
 });
 
 let compactConversationId = "";

@@ -1996,6 +1996,111 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
+  it("浏览器中断流式连接会取消上游且只保留原对话用户消息", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    let upstreamAborted = false;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"不应落库的部分回复"}}]}\n\n'));
+          init?.signal?.addEventListener("abort", () => {
+            upstreamAborted = true;
+            controller.error(init.signal?.reason ?? new Error("aborted"));
+          }, { once: true });
+        },
+        cancel() {
+          upstreamAborted = true;
+        }
+      }), { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    });
+
+    const address = (runtime.app as unknown as { address(): string | { port: number } | null }).address();
+    if (!address || typeof address === "string") throw new Error("测试服务未监听 TCP 端口");
+    const controller = new AbortController();
+    const streamed = await fetch(`http://127.0.0.1:${address.port}/api/works/${workId}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({
+        instruction: "切换对话时取消旧流",
+        scope: { type: "chapter", chapterId },
+        modelId,
+        conversationId
+      }),
+      signal: controller.signal
+    });
+    const reader = streamed.body?.getReader();
+    if (!reader) throw new Error("流式响应缺少正文");
+    const decoder = new TextDecoder();
+    let received = "";
+    while (!received.includes("不应落库的部分回复")) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("未收到流式部分回复")), 1_000))
+      ]);
+      if (chunk.done) break;
+      received += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(received).toContain("event: user_message");
+    expect(received).toContain("不应落库的部分回复");
+
+    controller.abort();
+    await reader.read().catch(() => ({ done: true, value: undefined }));
+    for (let index = 0; index < 50 && !upstreamAborted; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+    expect(upstreamAborted).toBe(true);
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.title).toBe("切换对话时取消旧流");
+    expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
+      { role: "user", content: "切换对话时取消旧流" }
+    ]);
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions WHERE work_id = ?", workId)).toEqual({ count: 0 });
+  });
+
+  it("客户端完成回调重试使用用户消息请求键避免重复 assistant 消息", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = String(conversation.body.data.id);
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      return new Response('data: {"choices":[{"delta":{"content":"唯一助手回复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "验证完成回调幂等",
+      scope: { type: "chapter", chapterId },
+      modelId,
+      conversationId
+    }).expect(200);
+    const userPayload = JSON.parse(streamed.text.match(/event: user_message\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { message?: { id?: string } };
+    const completePayload = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { messageId?: string };
+    const userMessageId = String(userPayload.message?.id ?? "");
+    expect(userMessageId).not.toBe("");
+
+    const retried = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "assistant",
+      content: "调用失败：客户端未读取到完成事件",
+      requestId: `assistant:${userMessageId}`
+    }).expect(201);
+    expect(retried.body.data).toMatchObject({ id: completePayload.messageId, content: "唯一助手回复" });
+
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
+      { role: "user", content: "验证完成回调幂等" },
+      { role: "assistant", content: "唯一助手回复" }
+    ]);
+  });
+
   it("首轮标题生成失败时不影响主回答", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);

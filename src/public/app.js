@@ -3,6 +3,7 @@ import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } f
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
+import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260812-ai-request-snapshot-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
@@ -143,6 +144,7 @@ const state = {
   contextChapterId: null
 };
 
+const aiRequestManager = createAiRequestManager();
 const moduleRequestCache = createModuleRequestCache();
 const cachedWorkModules = new Set([
   "drafts",
@@ -472,6 +474,71 @@ function setAiAssistantStatus(status) {
   dot.title = label;
 }
 
+function aiRequestTargetsCurrentState(request) {
+  return aiRequestManager.isCurrent(request) && aiRequestTargetsState(request, {
+    workId: state.work?.id,
+    conversationId: state.aiConversationId
+  });
+}
+
+function assertAiRequestCurrent(request) {
+  if (!aiRequestTargetsCurrentState(request)) throw createAiRequestAbortError("AI 请求目标已切换");
+  return request;
+}
+
+function aiInteractionBusy() {
+  return aiRequestManager.hasActive() || aiConversationNavigationPending !== null;
+}
+
+function syncAiRequestControls() {
+  const sending = aiRequestManager.hasActive();
+  const switching = aiConversationNavigationPending !== null;
+  const button = $("#ai-send");
+  button.disabled = sending || switching;
+  button.textContent = sending ? "发送中" : switching ? "切换中" : "发送";
+  syncAiTaskOptions();
+  renderAiRoleplayCharacterSelect();
+}
+
+function cancelActiveAiRequest(reason) {
+  const cancelled = aiRequestManager.cancel(reason);
+  syncAiRequestControls();
+  return cancelled;
+}
+
+function beginAiConversationNavigation(reason) {
+  aiConversationNavigationGeneration += 1;
+  aiConversationNavigationPending = aiConversationNavigationGeneration;
+  const navigation = Object.freeze({
+    generation: aiConversationNavigationGeneration,
+    workId: String(state.work?.id ?? "")
+  });
+  cancelActiveAiRequest(reason);
+  return navigation;
+}
+
+function isAiConversationNavigationCurrent(navigation) {
+  return navigation.generation === aiConversationNavigationGeneration
+    && navigation.workId === String(state.work?.id ?? "");
+}
+
+function finishAiConversationNavigation(navigation) {
+  if (aiConversationNavigationPending !== navigation.generation) return false;
+  aiConversationNavigationPending = null;
+  syncAiRequestControls();
+  return true;
+}
+
+function invalidateAiConversationNavigation(reason) {
+  aiConversationNavigationGeneration += 1;
+  aiConversationNavigationPending = null;
+  cancelActiveAiRequest(reason);
+}
+
+function aiAssistantRequestId(request) {
+  return request.userMessageId ? `assistant:${request.userMessageId}` : null;
+}
+
 function userAvatarInitial(user) {
   return Array.from(String(user?.displayName || user?.username || "作"))[0] ?? "作";
 }
@@ -533,6 +600,9 @@ let latestAiContextUsage = null;
 const aiConversationHistoryPageLimit = 20;
 let aiConversationHistoryPage = { page: 1, limit: aiConversationHistoryPageLimit, hasMore: false, nextPage: null };
 let workScopedUiGeneration = 0;
+let workSelectionRequestGeneration = 0;
+let aiConversationNavigationGeneration = 0;
+let aiConversationNavigationPending = null;
 const loadedVolumeChapterIds = new Set();
 const volumeChapterLoadingIds = new Set();
 const volumeChapterRequests = new Map();
@@ -2120,11 +2190,11 @@ function updateAiConversationSummaryFromMessage(message) {
   });
 }
 
-function applyAiConversationTitle(title) {
-  if (!title || !state.aiConversationId) return;
-  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+function applyAiConversationTitle(title, conversationId = state.aiConversationId) {
+  if (!title || !conversationId) return;
+  const current = state.aiConversations.find((conversation) => conversation.id === conversationId);
   if (current) current.title = title;
-  $("#ai-conversation-title").textContent = title;
+  if (state.aiConversationId === conversationId) $("#ai-conversation-title").textContent = title;
   renderAiConversationHistory();
 }
 
@@ -2168,35 +2238,47 @@ async function ensureAiConversationsLoaded() {
 }
 
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
-  const parameters = new URLSearchParams({ page: "1", limit: "100" });
-  if (focusMessageId) parameters.set("messageId", String(focusMessageId));
-  const [conversation] = await Promise.all([
-    api(`/api/ai-conversations/${conversationId}?${parameters}`),
-    ensureAiReferencesLoaded()
-  ]);
-  upsertAiConversationSummary(conversation);
-  state.aiConversationId = conversation.id;
-  state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
-  applyAiConversationTaskType(conversation.taskType);
-  applyAiConversationContextScope(conversation.contextScope);
-  applyAiRoleplayCharacter(conversation.roleplayCharacter);
-  resetAiContextMeter();
-  $("#ai-conversation-title").textContent = conversation.title;
-  resetAiFeed();
-  for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
-  if (conversation.hasCompactedSummary) {
-    renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount);
+  if (!state.work) return null;
+  const navigation = beginAiConversationNavigation("已切换 AI 对话");
+  try {
+    const parameters = new URLSearchParams({ page: "1", limit: "100" });
+    if (focusMessageId) parameters.set("messageId", String(focusMessageId));
+    const [conversation] = await Promise.all([
+      api(`/api/ai-conversations/${conversationId}?${parameters}`),
+      ensureAiReferencesLoaded()
+    ]);
+    if (!isAiConversationNavigationCurrent(navigation)) return null;
+    if (String(conversation.workId ?? "") !== navigation.workId) throw new Error("AI 对话不属于当前作品");
+    upsertAiConversationSummary(conversation);
+    state.aiConversationId = conversation.id;
+    state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
+    applyAiConversationTaskType(conversation.taskType);
+    applyAiConversationContextScope(conversation.contextScope);
+    applyAiRoleplayCharacter(conversation.roleplayCharacter);
+    resetAiContextMeter();
+    $("#ai-conversation-title").textContent = conversation.title;
+    resetAiFeed();
+    for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
+    if (conversation.hasCompactedSummary) {
+      renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount);
+    }
+    state.aiCitations = [];
+    state.aiReferences = [];
+    setAiPromptText("");
+    renderAiCitations();
+    renderAiReferences();
+    renderAiQuickActions();
+    renderAiConversationHistory();
+    if (conversation.contextWarningPending) showAiContextWarning();
+    else hideAiContextWarning();
+    if (hideHistory) setAiHistoryVisible(false);
+    return conversation;
+  } catch (error) {
+    if (!isAiConversationNavigationCurrent(navigation)) return null;
+    throw error;
+  } finally {
+    finishAiConversationNavigation(navigation);
   }
-  state.aiCitations = [];
-  state.aiReferences = [];
-  setAiPromptText("");
-  renderAiCitations();
-  renderAiReferences();
-  renderAiQuickActions();
-  renderAiConversationHistory();
-  if (conversation.contextWarningPending) showAiContextWarning();
-  else hideAiContextWarning();
-  if (hideHistory) setAiHistoryVisible(false);
 }
 
 function focusAiConversationMessage(messageId) {
@@ -2208,9 +2290,7 @@ function focusAiConversationMessage(messageId) {
   window.setTimeout(() => message.classList.remove("is-search-target"), 1800);
 }
 
-async function createNewAiConversation(taskType = "chat") {
-  if (!state.work) return;
-  const conversation = await api(`/api/works/${state.work.id}/ai-conversations`, { method: "POST", body: { taskType } });
+function applyNewAiConversation(conversation) {
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
   state.aiPromptSent = false;
@@ -2223,6 +2303,23 @@ async function createNewAiConversation(taskType = "chat") {
   resetAiContextMeter();
   renderAiQuickActions();
   setAiHistoryVisible(false);
+}
+
+async function createNewAiConversation(taskType = "chat") {
+  if (!state.work) return null;
+  const navigation = beginAiConversationNavigation("已新建 AI 对话");
+  try {
+    const conversation = await api(`/api/works/${navigation.workId}/ai-conversations`, { method: "POST", body: { taskType } });
+    if (!isAiConversationNavigationCurrent(navigation)) return null;
+    if (String(conversation.workId ?? "") !== navigation.workId) throw new Error("新对话不属于当前作品");
+    applyNewAiConversation(conversation);
+    return conversation;
+  } catch (error) {
+    if (!isAiConversationNavigationCurrent(navigation)) return null;
+    throw error;
+  } finally {
+    finishAiConversationNavigation(navigation);
+  }
 }
 
 function renderAiRoleplayCharacterSelect() {
@@ -2246,7 +2343,7 @@ function renderAiRoleplayCharacterSelect() {
   const canSelectCharacter = Boolean(state.work)
     && canReadModule("characters")
     && canWritePermissionModule(state.work, "ai-chat");
-  select.disabled = !canSelectCharacter || state.aiPromptSent;
+  select.disabled = aiInteractionBusy() || !canSelectCharacter || state.aiPromptSent;
   select.title = canSelectCharacter
     ? "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
     : "当前账户没有角色模块读取权限";
@@ -2254,13 +2351,14 @@ function renderAiRoleplayCharacterSelect() {
 
 function syncAiTaskOptions() {
   const roleplaySelected = $("#ai-task").value === "roleplay";
+  const interactionBusy = aiInteractionBusy();
   $("#ai-scope").classList.toggle("hidden", roleplaySelected);
   $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
   $("#ai-roleplay-character").classList.toggle("hidden", !roleplaySelected);
   $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
-  $("#ai-task").disabled = state.aiPromptSent;
+  $("#ai-task").disabled = interactionBusy || state.aiPromptSent;
   $("#ai-task").title = state.aiPromptSent ? "对话开始后不能切换任务类型" : "";
-  $("#ai-scope").disabled = roleplaySelected || state.aiPromptSent;
+  $("#ai-scope").disabled = interactionBusy || roleplaySelected || state.aiPromptSent;
   $("#ai-scope").title = state.aiPromptSent
     ? "对话开始后不能切换上下文引用"
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
@@ -2350,12 +2448,72 @@ async function persistAiConversationContextScope(scope) {
   return conversation;
 }
 
-async function persistAiConversationMessage(role, content, citations = [], metadata = {}) {
-  const conversationId = await ensureAiConversation();
+async function prepareAiRequestConversation(requestHolder, taskType, scope) {
+  let request = assertAiRequestCurrent(requestHolder.snapshot);
+  if (!request.conversationId) {
+    const conversation = await api(`/api/works/${encodeURIComponent(request.workId)}/ai-conversations`, {
+      method: "POST",
+      body: { taskType },
+      signal: request.signal
+    });
+    assertAiRequestCurrent(request);
+    if (String(conversation.workId ?? "") !== request.workId) throw new Error("新对话不属于请求作品");
+    applyNewAiConversation(conversation);
+    requestHolder.snapshot = aiRequestManager.bind(request, { conversationId: conversation.id });
+    request = requestHolder.snapshot;
+  }
+  const taskConversation = await api(`/api/ai-conversations/${encodeURIComponent(request.conversationId)}/task-type`, {
+    method: "PATCH",
+    body: { taskType },
+    signal: request.signal
+  });
+  assertAiRequestCurrent(request);
+  upsertAiConversationSummary(taskConversation);
+  applyAiConversationTaskType(taskConversation.taskType);
+  applyAiRoleplayCharacter(taskConversation.roleplayCharacter);
+
+  const scopedConversation = await api(`/api/ai-conversations/${encodeURIComponent(request.conversationId)}/context-scope`, {
+    method: "PATCH",
+    body: { scope },
+    signal: request.signal
+  });
+  assertAiRequestCurrent(request);
+  upsertAiConversationSummary(scopedConversation);
+  applyAiConversationContextScope(scopedConversation.contextScope);
+  return request;
+}
+
+async function persistAiConversationMessage(conversationId, role, content, citations = [], metadata = {}, options = {}) {
   if (!conversationId) throw new Error("无法创建 AI 对话");
-  const message = await api(`/api/ai-conversations/${conversationId}/messages`, { method: "POST", body: { role, content, citations, metadata } });
-  updateAiConversationSummaryFromMessage(message);
-  return message;
+  return api(`/api/ai-conversations/${encodeURIComponent(conversationId)}/messages`, {
+    method: "POST",
+    body: {
+      role,
+      content,
+      citations,
+      metadata,
+      ...(options.requestId ? { requestId: options.requestId } : {})
+    },
+    ...(options.signal ? { signal: options.signal } : {})
+  });
+}
+
+async function persistAiRequestInterruption(request) {
+  if (!request.conversationId || !request.userMessageId) return null;
+  try {
+    const message = await persistAiConversationMessage(
+      request.conversationId,
+      "assistant",
+      "调用失败：生成已取消，已收到的未完成内容未保存。",
+      [],
+      {},
+      { requestId: aiAssistantRequestId(request) }
+    );
+    updateAiConversationSummaryFromMessage(message);
+    return message;
+  } catch {
+    return null;
+  }
 }
 
 function promptTextFromNode(node, root = node) {
@@ -2919,7 +3077,7 @@ async function api(path, options = {}) {
       body: body && typeof body !== "string" ? JSON.stringify(body) : body
     });
   } catch (error) {
-    updateSystemHealth({ status: "offline" });
+    if (!isAiRequestCancellation(error)) updateSystemHealth({ status: "offline" });
     throw error;
   }
   updateSystemHealth({ status: response.status >= 500 ? "degraded" : "ready" });
@@ -5270,6 +5428,7 @@ function renderShelf() {
 }
 
 function resetWorkScopedUiCaches() {
+  invalidateAiConversationNavigation("已切换作品");
   stopBackgroundTaskCenter();
   workScopedUiGeneration += 1;
   loadedAiModelsWorkId = null;
@@ -5333,6 +5492,8 @@ function resetWorkScopedUiCaches() {
 async function selectWork(workId, preferredChapterId = null) {
   const discarding = state.work?.id !== workId && state.dirty;
   if (discarding && !(await confirmDiscardChanges())) return false;
+  const selectionGeneration = ++workSelectionRequestGeneration;
+  invalidateAiConversationNavigation(state.work?.id === workId ? "已重新载入作品" : "已切换作品");
   if (state.work?.id === workId) {
     workScopedUiGeneration += 1;
     loadedVolumeChapterIds.clear();
@@ -5340,6 +5501,7 @@ async function selectWork(workId, preferredChapterId = null) {
     volumeChapterRequests.clear();
   }
   const nextWork = await api(`/api/works/${workId}?directory=volumes`);
+  if (selectionGeneration !== workSelectionRequestGeneration) return false;
   if (state.work?.id !== nextWork.id) resetWorkScopedUiCaches();
   showSystemStatus();
   $("#app").classList.remove("shelf-mode");
@@ -11825,14 +11987,6 @@ function openModelDialog(providerId, item = null, provider = null) {
 
 async function sendAi() {
   if (!state.work) return toast("请先选择作品", "error");
-  try {
-    await ensureAiModelsLoaded();
-  } catch (error) {
-    setAiAssistantStatus("error");
-    return toast(`创作助手加载失败：${error.message}`, "error");
-  }
-  const modelId = $("#ai-model").value;
-  if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
   const instruction = aiPromptText().trim();
   if (!instruction) return toast("请输入指令", "error");
   if ($("#ai-task").value === "roleplay" && !state.aiRoleplayCharacter) return toast("请先选择角色卡", "error");
@@ -11840,48 +11994,86 @@ async function sendAi() {
   if (!requestScope) return toast("请先选择章节", "error");
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
-  try {
-    await persistAiConversationTaskType($("#ai-task").value);
-    await persistAiConversationContextScope(requestScope.conversationScope);
-  } catch (error) {
-    return toast(`对话配置锁定失败：${error.message}`, "error");
-  }
-  setAiAssistantStatus("ready");
   const citations = state.aiCitations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
-  let persistedUserMessage = null;
-  if (taskType !== "chat") {
-    try {
-      persistedUserMessage = await persistAiConversationMessage("user", instruction, citations);
-    } catch (error) {
-      setAiAssistantStatus("error");
-      return toast(`对话记录创建失败：${error.message}`, "error");
-    }
-    state.aiPromptSent = true;
-    syncAiTaskOptions();
-    renderAiRoleplayCharacterSelect();
-    renderAiQuickActions();
-    appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
-    clearAiPromptComposer();
-  }
-  $("#ai-send").disabled = true;
-  $("#ai-send").textContent = "发送中";
-  $("#ai-roleplay-character").disabled = true;
+  const requestHolder = {
+    snapshot: aiRequestManager.begin({
+      workId: state.work.id,
+      conversationId: state.aiConversationId
+    })
+  };
+  syncAiRequestControls();
   try {
+    try {
+      await ensureAiModelsLoaded();
+    } catch (error) {
+      if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
+      setAiAssistantStatus("error");
+      return toast(`创作助手加载失败：${error.message}`, "error");
+    }
+    assertAiRequestCurrent(requestHolder.snapshot);
+    const modelId = $("#ai-model").value;
+    if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
+    try {
+      await prepareAiRequestConversation(requestHolder, $("#ai-task").value, requestScope.conversationScope);
+    } catch (error) {
+      if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
+      return toast(`对话配置锁定失败：${error.message}`, "error");
+    }
+    setAiAssistantStatus("ready");
+    if (taskType !== "chat") {
+      try {
+        const request = assertAiRequestCurrent(requestHolder.snapshot);
+        const persistedUserMessage = await persistAiConversationMessage(
+          request.conversationId,
+          "user",
+          instruction,
+          citations,
+          {},
+          { signal: request.signal }
+        );
+        assertAiRequestCurrent(request);
+        updateAiConversationSummaryFromMessage(persistedUserMessage);
+        requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
+        state.aiPromptSent = true;
+        syncAiTaskOptions();
+        renderAiRoleplayCharacterSelect();
+        renderAiQuickActions();
+        appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
+        clearAiPromptComposer();
+      } catch (error) {
+        if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
+        setAiAssistantStatus("error");
+        return toast(`对话记录创建失败：${error.message}`, "error");
+      }
+    }
     let assistantContent = "";
     let assistantMessage;
     let assistantMetadata = {};
     let persistedStreamMessage = null;
     let suggestion = null;
     if (taskType === "chat") {
-      const streamed = await streamChat({ instruction, scope, modelId, citations, conversationId: state.aiConversationId || undefined });
+      const streamed = await streamChat(requestHolder, {
+        instruction,
+        scope,
+        modelId,
+        citations,
+        conversationId: requestHolder.snapshot.conversationId
+      });
+      const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (streamed.action === "warn") return;
       assistantContent = streamed.content;
       assistantMessage = streamed.message;
       assistantMetadata = streamed.metadata;
       persistedStreamMessage = streamed.messageId ? { id: streamed.messageId, createdAt: streamed.createdAt } : null;
-      applyAiConversationTitle(streamed.conversationTitle);
+      applyAiConversationTitle(streamed.conversationTitle, request.conversationId);
     } else {
-      suggestion = await api(`/api/works/${state.work.id}/suggestions`, { method: "POST", body: { taskType, instruction, scope, modelId, citations } });
+      const request = assertAiRequestCurrent(requestHolder.snapshot);
+      suggestion = await api(`/api/works/${encodeURIComponent(request.workId)}/suggestions`, {
+        method: "POST",
+        body: { taskType, instruction, scope, modelId, citations },
+        signal: request.signal
+      });
+      assertAiRequestCurrent(request);
       const suggestionFailed = suggestion.guard?.status === "failed"
         || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
         || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
@@ -11891,9 +12083,10 @@ async function sendAi() {
       assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
     }
     try {
+      const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (persistedStreamMessage) {
         updateAiConversationSummaryFromMessage({
-          conversationId: state.aiConversationId,
+          conversationId: request.conversationId,
           role: "assistant",
           content: assistantContent,
           createdAt: persistedStreamMessage.createdAt
@@ -11901,31 +12094,57 @@ async function sendAi() {
         updateMessageCreatedAt(assistantMessage, persistedStreamMessage.createdAt);
         attachMessageIdentity(assistantMessage, persistedStreamMessage.id);
       } else {
-        const persistedAssistantMessage = await persistAiConversationMessage("assistant", assistantContent, [], assistantMetadata);
+        const persistedAssistantMessage = await persistAiConversationMessage(
+          request.conversationId,
+          "assistant",
+          assistantContent,
+          [],
+          assistantMetadata,
+          { signal: request.signal, requestId: aiAssistantRequestId(request) }
+        );
+        assertAiRequestCurrent(request);
+        updateAiConversationSummaryFromMessage(persistedAssistantMessage);
         if (assistantMessage) {
           updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
           attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
         } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
       }
     } catch (error) {
+      if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
       setAiAssistantStatus("error");
       if (suggestion) appendSuggestion(suggestion);
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
   } catch (error) {
+    const request = requestHolder.snapshot;
+    if (isAiRequestCancellation(error, request) || !aiRequestTargetsCurrentState(request)) {
+      await persistAiRequestInterruption(request);
+      return;
+    }
     setAiAssistantStatus("error");
     const failureMessage = formatAiFailureMessage(error);
     let persistedFailureMessage = null;
-    try { persistedFailureMessage = await persistAiConversationMessage("assistant", failureMessage); } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
-    appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id);
+    try {
+      persistedFailureMessage = await persistAiConversationMessage(
+        request.conversationId,
+        "assistant",
+        failureMessage,
+        [],
+        {},
+        { requestId: aiAssistantRequestId(request) }
+      );
+      updateAiConversationSummaryFromMessage(persistedFailureMessage);
+    } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
+    if (aiRequestTargetsCurrentState(request)) {
+      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id);
+    }
   } finally {
-    $("#ai-send").disabled = false;
-    $("#ai-send").textContent = "发送";
-    renderAiRoleplayCharacterSelect();
+    aiRequestManager.finish(requestHolder.snapshot);
+    syncAiRequestControls();
   }
 }
 
-async function streamChat(body) {
+async function streamChat(requestHolder, body) {
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
@@ -11934,15 +12153,17 @@ async function streamChat(body) {
   const meta = message.querySelector(".message-meta");
   let messageMounted = false;
   const mountAssistantMessage = () => {
-    if (messageMounted) return;
+    if (messageMounted) return true;
+    if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return false;
     attachMessageHeading(message, aiAssistantLabel("正在生成"));
     $("#ai-feed").append(message);
     messageMounted = true;
     scrollAiFeedToBottom();
+    return true;
   };
   const typewriter = createStreamTypewriter({
     onRender: (text, progress) => {
-      mountAssistantMessage();
+      if (!aiRequestTargetsCurrentState(requestHolder.snapshot) || !mountAssistantMessage()) return;
       content.innerHTML = renderMarkdown(text);
       const receivedCharacters = progress.visibleCharacters + progress.pendingCharacters;
       meta.textContent = progress.pendingCharacters > 0
@@ -11967,6 +12188,7 @@ async function streamChat(body) {
   const processStepTypewriters = new Map();
   const processStepVisibleContents = new Map();
   const renderStreamingProcessSteps = (completed, durationMs = elapsedProcessTime()) => {
+    if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
     renderAiProcessSteps(message, processSteps, completed, durationMs, processStepVisibleContents);
   };
   const processStepTypewriter = (step) => {
@@ -11975,6 +12197,7 @@ async function streamChat(body) {
     processStepVisibleContents.set(step, "");
     const typewriter = createStreamTypewriter({
       onRender: (text) => {
+        if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
         renderStreamingProcessSteps(finalAnswerStarted);
         scrollAiFeedToBottom();
@@ -11988,11 +12211,14 @@ async function streamChat(body) {
     for (const typewriter of processStepTypewriters.values()) typewriter.reveal();
   };
   try {
-    const response = await fetch(`/api/works/${state.work.id}/chat/stream`, {
+    const request = assertAiRequestCurrent(requestHolder.snapshot);
+    const response = await fetch(`/api/works/${encodeURIComponent(request.workId)}/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream", "X-CSRF-Token": state.csrfToken },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: request.signal
     });
+    assertAiRequestCurrent(requestHolder.snapshot);
     if (!response.ok || !response.body) {
       const payload = await response.json().catch(() => ({ error: { message: `请求失败：${response.status}` } }));
       throw createClientError(payload.error, `请求失败：${response.status}`, response.status);
@@ -12002,6 +12228,7 @@ async function streamChat(body) {
     let buffer = "";
     let streamError = null;
     const consume = async (eventText) => {
+      assertAiRequestCurrent(requestHolder.snapshot);
       let eventName = "message";
       const dataLines = [];
       for (const line of eventText.split(/\r?\n/)) {
@@ -12014,9 +12241,11 @@ async function streamChat(body) {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
         if (!state.aiPromptSent) setAiContextMeter(payload.usage);
         if (payload.conversation?.id) {
-          state.aiConversationId = payload.conversation.id;
+          if (String(payload.conversation.id) !== requestHolder.snapshot.conversationId) {
+            throw new Error("流式上下文返回了其他对话");
+          }
           upsertAiConversationSummary(payload.conversation);
-          $("#ai-conversation-title").textContent = payload.conversation.title;
+          applyAiConversationTitle(payload.conversation.title, requestHolder.snapshot.conversationId);
         }
         if (contextAction === "warn") showAiContextWarning(payload.usage);
         else {
@@ -12029,7 +12258,10 @@ async function streamChat(body) {
       } else if (eventName === "user_message") {
         persistedUserMessage = payload.message;
         if (persistedUserMessage?.id) {
-          state.aiConversationId = persistedUserMessage.conversationId;
+          if (String(persistedUserMessage.conversationId ?? "") !== requestHolder.snapshot.conversationId) {
+            throw new Error("流式用户消息返回了其他对话");
+          }
+          requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id });
           updateAiConversationSummaryFromMessage(persistedUserMessage);
           state.aiPromptSent = true;
           syncAiTaskOptions();
@@ -12090,6 +12322,7 @@ async function streamChat(body) {
         const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
         setAiContextMeter(payload.contextUsage, announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
+        assertAiRequestCurrent(requestHolder.snapshot);
         message.classList.remove("is-streaming");
         content.setAttribute("aria-busy", "false");
         message.querySelector(".message-heading > span").textContent = "助手";
@@ -12116,18 +12349,18 @@ async function streamChat(body) {
     }
     if (buffer.trim()) await consume(buffer);
     await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
+    assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
     return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
-    mountAssistantMessage();
+    if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) {
+      if (messageMounted) message.remove();
+      throw error;
+    }
+    assertAiRequestCurrent(requestHolder.snapshot);
     typewriter.reveal();
     revealProcessStepTypewriters();
-    message.classList.remove("is-streaming");
-    content.setAttribute("aria-busy", "false");
-    message.querySelector(".message-heading > span").textContent = aiAssistantLabel("生成中断");
-    renderStreamingProcessSteps(true, elapsedProcessTime());
-    meta.textContent = "生成中断";
-    scrollAiFeedToBottom();
+    if (messageMounted) message.remove();
     throw error;
   }
 }
