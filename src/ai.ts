@@ -5344,7 +5344,7 @@ export class AiManager {
                   delivery: "sse" as const
                 };
               } catch (error) {
-                if (input.signal?.aborted) throw interactiveStreamRequestCancelledError();
+                if (streamResponse && input.signal?.aborted) throw interactiveStreamRequestCancelledError();
                 if (streamWatchdog?.failure) throw streamWatchdog.failure;
                 if (streamResponse && !responseReceived) {
                   throw new AppError(502, "AI_STREAM_NETWORK_ERROR", "AI 上游流连接失败，尚未收到首个事件");

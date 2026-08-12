@@ -264,4 +264,34 @@ describe("交互式 AI 流事件空闲超时", () => {
       code: "AI_STREAM_REQUEST_CANCELLED"
     });
   });
+
+  it("非流式请求取消时保留通用 AI 调用失败语义", async () => {
+    let requestStarted: (() => void) | null = null;
+    const started = new Promise<void>((resolve) => { requestStarted = resolve; });
+    fetchMock.mockImplementation(async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      requestStarted?.();
+      init?.signal?.addEventListener("abort", () => {
+        reject(init.signal?.reason ?? new Error("非流式调用已取消"));
+      }, { once: true });
+    }));
+    const controller = new AbortController();
+    const generatedPromise = runtime.ai.generate({
+      workId,
+      taskType: "chat",
+      instruction: "取消非流式请求",
+      scope: { type: "none" },
+      modelId,
+      maxAttempts: 1,
+      signal: controller.signal
+    });
+
+    await started;
+    controller.abort(new Error("非流式调用已取消"));
+
+    await expect(generatedPromise).rejects.toMatchObject({
+      status: 502,
+      code: "AI_CALL_FAILED",
+      details: { failure: "非流式调用已取消" }
+    });
+  });
 });
