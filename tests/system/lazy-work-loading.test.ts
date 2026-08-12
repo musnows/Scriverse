@@ -35,6 +35,25 @@ describe("作品工作台按需加载", () => {
     expect(application).toContain("/api/volumes/${encodeURIComponent(volumeId)}/chapters");
   });
 
+  it("全局替换后只重载正文目录并拒绝旧请求清理新请求状态", async () => {
+    const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
+    const refreshSource = application.slice(
+      application.indexOf("async function refreshWorkAfterGlobalReplace("),
+      application.indexOf("async function submitGlobalReplace(")
+    );
+    const chapterLoadingSource = application.slice(
+      application.indexOf("async function loadVolumeChapters("),
+      application.indexOf("function mergeChapterDirectoryEntry(")
+    );
+
+    expect(refreshSource).toContain("buildGlobalReplaceRefreshPlan");
+    expect(refreshSource).toContain("++workScopedUiGeneration");
+    expect(refreshSource).toContain("await Promise.all(refreshPlan.reloadVolumeIds.map((volumeId) => loadVolumeChapters(volumeId)))");
+    expect(refreshSource).not.toContain("state.collapsedVolumeIds = new Set(state.work.volumes.map((volume) => volume.id));");
+    expect(chapterLoadingSource).toContain("volumeChapterRequests.get(volumeId) === request");
+    expect(chapterLoadingSource).toContain("const generation = workScopedUiGeneration;");
+  });
+
   it("子模块和创作助手资源只在首次使用时加载", async () => {
     const application = await readFile(join(process.cwd(), "src/public/app.js"), "utf8");
     const showModuleSource = application.slice(
