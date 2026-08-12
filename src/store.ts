@@ -438,6 +438,9 @@ type AiConversationMessageInput = {
     outputTokens?: number;
     cacheHitPercent?: number;
     processDurationMs?: number;
+    interrupted?: boolean;
+    interruptionCode?: string;
+    interruptionMessage?: string;
     toolCalls?: unknown[];
     processSteps?: unknown[];
     reasoningContent?: string;

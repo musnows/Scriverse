@@ -2240,7 +2240,8 @@ describe("AI 供应商、模型与建议 API", () => {
 
     expect(streamedDeltas(streamed.text)).toBe("安全前缀 sk-s*****");
     expect(streamed.text).toContain("event: error");
-    expect(streamed.text).toContain('"code":"AI_CALL_FAILED"');
+    expect(streamed.text).toContain('"code":"AI_STREAM_NETWORK_ERROR"');
+    expect(streamed.text).toContain('"status":502');
     expect(streamed.text).not.toContain("event: complete");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).not.toContain("sk-sensitive-");
@@ -2284,8 +2285,8 @@ describe("AI 供应商、模型与建议 API", () => {
     });
 
     await expect(call).rejects.toMatchObject({
-      code: "AI_CALL_FAILED",
-      details: { failure: "用户取消流式请求" }
+      status: 499,
+      code: "AI_STREAM_REQUEST_CANCELLED"
     });
     const assistantMessages = runtime.database.all<{ content: string }>(
       "SELECT content FROM ai_conversation_messages WHERE conversation_id = ? AND role = 'assistant'",
