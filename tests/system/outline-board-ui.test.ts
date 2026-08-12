@@ -20,8 +20,8 @@ describe("章节大纲看板界面", () => {
       request(runtime.app).get("/outline-board.js").expect(200)
     ]);
 
-    expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-mobile-foreshadow-epub-character-extraction-outline-reader-v1');
-    expect(page.text).toContain('/app.js?v=20260812-ai-stream-connectivity-global-replace-foreshadow-epub-character-extraction-outline-reader-v1');
+    expect(page.text).toContain('/styles.css?v=20260813-volume-detail-export-v1');
+    expect(page.text).toContain('/app.js?v=20260813-volume-detail-export-v1');
     expect(application.text).toContain('/outline-board.js?v=20260812-outline-board-v1');
     expect(application.text).toContain('/api/works/${encodeURIComponent(workId)}/outline-board');
     expect(application.text).toContain('aria-label="筛选章节大纲看板"');
