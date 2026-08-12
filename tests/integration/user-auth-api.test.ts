@@ -1366,6 +1366,11 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(403);
+    const overlongSearchDenied = await collaborator.agent
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "界".repeat(101) })
+      .expect(403);
+    expect(overlongSearchDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
     const commentReadDenied = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations`).expect(403);
     expect(commentReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");

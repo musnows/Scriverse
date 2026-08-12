@@ -20,7 +20,7 @@ import { assertSafeDocxArchive } from "./docx-security.js";
 import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
-import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
+import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
@@ -2741,7 +2741,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
 
   app.get("/api/works/:workId/search", async (request, response) => {
     const query = parse(z.object({
-      q: z.string().trim().min(1).max(500),
+      q: z.string().trim().min(1).max(MAXIMUM_WORK_SEARCH_QUERY_LENGTH),
       type: z.enum(HYBRID_SEARCH_TYPES).optional(),
       limit: z.coerce.number().int().min(1).max(100).optional()
     }).strict(), request.query);

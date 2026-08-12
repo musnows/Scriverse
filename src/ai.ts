@@ -51,9 +51,11 @@ import {
 } from "./google-vertex-auth.js";
 import {
   HYBRID_SEARCH_TYPES,
+  MAXIMUM_WORK_SEARCH_QUERY_LENGTH,
   buildHybridSearchSnippet,
   documentParagraphLineRange,
   fuseHybridSearchChannels,
+  normalizeWorkSearchQuery,
   type HybridSearchCandidate,
   type HybridSearchMatchKind,
   type HybridSearchType
@@ -703,7 +705,7 @@ const grepArguments = z.object({
   cursor: agentToolCursor
 }).strict();
 const searchStoryEntitiesArguments = z.object({
-  query: z.string().trim().min(1).max(200),
+  query: z.string().trim().min(1).max(MAXIMUM_WORK_SEARCH_QUERY_LENGTH),
   categories: z.array(z.enum(["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"])).max(8).default([]),
   limit: z.number().int().min(1).max(30).default(30),
   cursor: agentToolCursor
@@ -769,7 +771,7 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
     function: {
       name: "search_story_entities",
       description: "按短关键词在结构化作品实体中进行元数据、精确全文和拼音混合检索：设定、人物（含 Markdown 档案章节）、种族、组织、时间线、关系、大纲和伏笔。人物、种族、组织结果分别包含权威布尔状态 isDead、isExtinct、isDissolved；只有值为 true 才能判定该角色已死亡、该种族已灭绝或该组织已解散，字段为 false 时必须视为仍存活、未灭绝或未解散，禁止根据正文情节自行改判。不是语义问答；请传入实体名、别名、标题、拼音或短关键词，不要传入自然语言整句。结果按综合相关度排序；人物结果含 sectionId 时可再调用 read_character_sections 精读。无匹配时改用更短关键词，或改用 story_index / grep。",
-      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
+      parameters: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: MAXIMUM_WORK_SEARCH_QUERY_LENGTH }, categories: { type: "array", items: { type: "string", enum: ["setting", "character", "race", "organization", "timeline", "relationship", "outline", "foreshadow"] }, maxItems: 8 }, limit: { type: "integer", minimum: 1, maximum: 30, default: 30 }, cursor: agentToolCursorParameter }, required: ["query"], additionalProperties: false }
     }
   },
   read_character_sections: {
@@ -1961,7 +1963,7 @@ export class AiManager {
     options: { type?: HybridSearchType; limit?: number; includeAgentHistory?: boolean } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
-    const normalizedQuery = normalizeRelationshipSearchText(query).trim();
+    const normalizedQuery = normalizeWorkSearchQuery(query);
     if (!normalizedQuery) return [];
     const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
     if (options.includeAgentHistory === false) requestedTypes.delete("agent-history");
