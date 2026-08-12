@@ -106,7 +106,7 @@ describe("实体版本基线一次性迁移", () => {
 
     new Store(database);
 
-    expect(allSpy).not.toHaveBeenCalled();
+    expect(entityScans(allSpy.mock.calls)).toEqual([]);
     expect(getSpy.mock.calls).toHaveLength(1);
     expect(String(getSpy.mock.calls[0]?.[0])).toContain("schema_migrations");
     expect(database.get("SELECT COUNT(*) AS count FROM entity_versions")).toEqual({ count: 0 });
@@ -137,7 +137,7 @@ describe("实体版本基线一次性迁移", () => {
 
     new Store(database);
 
-    expect(allSpy).not.toHaveBeenCalled();
+    expect(entityScans(allSpy.mock.calls)).toEqual([]);
     expect(getSpy.mock.calls).toHaveLength(1);
     expect(String(getSpy.mock.calls[0]?.[0])).toContain("schema_migrations");
     expect(database.get("SELECT COUNT(*) AS count FROM entity_versions")).toEqual({ count: 1 });

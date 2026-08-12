@@ -107,7 +107,7 @@ describe("人物 Markdown 章节与附件", () => {
     });
   });
 
-  it("删除作品时清理不再被其他作品使用的附件文件", async () => {
+  it("作品在回收站时保留附件，彻底删除后清理不再使用的附件文件", async () => {
     const work = await createWork(runtime);
     const png = await sharp({
       create: { width: 96, height: 96, channels: 3, background: { r: 60, g: 120, b: 180 } }
@@ -119,6 +119,13 @@ describe("人物 Markdown 章节与附件", () => {
     expect(existsSync(storagePath)).toBe(true);
 
     await request(runtime.app).delete(`/api/works/${String(work.id)}`).expect(204);
+    expect(existsSync(storagePath)).toBe(true);
+    const recycleBin = await request(runtime.app).get("/api/recycle-bin/works").expect(200);
+    const deletedWork = recycleBin.body.data.works.find((item: { id: string }) => item.id === String(work.id));
+    await request(runtime.app)
+      .delete(`/api/recycle-bin/works/${String(work.id)}/permanent`)
+      .send({ expectedVersionNo: deletedWork.versionNo })
+      .expect(204);
     expect(existsSync(storagePath)).toBe(false);
   });
 
