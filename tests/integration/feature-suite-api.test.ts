@@ -704,6 +704,127 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     expect(exported.body.data).toMatchObject({ schemaVersion: 8, races: [] });
     expect(exported.body.data.foreshadows[0].occurrences).toHaveLength(2);
   });
+
+  it("按当前章节返回伏笔提醒并通过现有版本与审计链标记回收", async () => {
+    const { workId, chapters } = await seedWork(runtime);
+    const reminder = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "旧信上的火漆",
+      description: "火漆纹章指向失踪的议员。",
+      importance: "high",
+      status: "planted",
+      occurrences: [
+        { chapterId: chapters[0].id, role: "setup", note: "旧信首次出现" },
+        { chapterId: chapters[1].id, role: "reminder", note: "再次看见破损火漆" }
+      ]
+    }).expect(201);
+    const secondReminder = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "未兑现的旧约",
+      status: "planned",
+      occurrences: [{ chapterId: chapters[1].id, role: "reminder", note: "主角想起约定" }]
+    }).expect(201);
+    const payoff = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "密钥真相",
+      status: "planted",
+      occurrences: [{ chapterId: chapters[2].id, role: "payoff", note: "密钥开启档案室" }]
+    }).expect(201);
+    const setupOnly = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "仅在本章埋设",
+      status: "planted",
+      occurrences: [{ chapterId: chapters[1].id, role: "setup" }]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "已经回收",
+      status: "resolved",
+      occurrences: [{ chapterId: chapters[1].id, role: "reminder" }]
+    }).expect(201);
+
+    const reminderChapter = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders`)
+      .expect(200);
+    expect(reminderChapter.body.data).toEqual([
+      expect.objectContaining({
+        foreshadowId: reminder.body.data.id,
+        title: "旧信上的火漆",
+        description: "火漆纹章指向失踪的议员。",
+        role: "reminder",
+        note: "再次看见破损火漆",
+        importance: "high",
+        status: "planted",
+        versionNo: reminder.body.data.versionNo
+      }),
+      expect.objectContaining({ foreshadowId: secondReminder.body.data.id, role: "reminder" })
+    ]);
+    expect(reminderChapter.body.data[0]).not.toHaveProperty("occurrences");
+    expect(reminderChapter.body.data[0]).not.toHaveProperty("resolutionNote");
+
+    const payoffChapter = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[2].id}/foreshadow-reminders`)
+      .expect(200);
+    expect(payoffChapter.body.data).toEqual([
+      expect.objectContaining({ foreshadowId: payoff.body.data.id, role: "payoff", note: "密钥开启档案室" })
+    ]);
+    await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[0].id}/foreshadow-reminders`)
+      .expect(200, { data: [] });
+
+    const otherWork = await seedWork(runtime, "其他作品的章节");
+    const crossWork = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${otherWork.chapters[0].id}/foreshadow-reminders`)
+      .expect(400);
+    expect(crossWork.body.error.code).toBe("CHAPTER_WORK_MISMATCH");
+
+    const currentReminder = reminderChapter.body.data[0] as Record<string, unknown>;
+    const resolved = await request(runtime.app)
+      .post(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders/${reminder.body.data.id}/resolve`)
+      .send({ expectedVersionNo: currentReminder.versionNo })
+      .expect(200);
+    expect(resolved.body.data).toMatchObject({
+      foreshadowId: reminder.body.data.id,
+      status: "resolved",
+      versionNo: Number(currentReminder.versionNo) + 1
+    });
+    const remaining = await request(runtime.app)
+      .get(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders`)
+      .expect(200);
+    expect(remaining.body.data).toEqual([
+      expect.objectContaining({ foreshadowId: secondReminder.body.data.id })
+    ]);
+
+    const latestVersion = runtime.database.get(
+      `SELECT source, source_ref, change_note, snapshot_json FROM entity_versions
+       WHERE entity_type = 'foreshadow' AND entity_id = ? ORDER BY version_no DESC LIMIT 1`,
+      reminder.body.data.id
+    );
+    expect(latestVersion).toMatchObject({
+      source: "manual",
+      source_ref: currentReminder.occurrenceId,
+      change_note: "在编辑器标记伏笔已回收"
+    });
+    expect(JSON.parse(String(latestVersion?.snapshot_json))).toMatchObject({ status: "resolved" });
+    const audit = runtime.database.get(
+      "SELECT action, detail_json FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      reminder.body.data.id
+    );
+    expect(audit?.action).toBe("foreshadow.updated");
+    expect(JSON.parse(String(audit?.detail_json))).toMatchObject({
+      fields: ["status"],
+      source: "manual",
+      sourceRef: currentReminder.occurrenceId
+    });
+
+    const stale = await request(runtime.app)
+      .post(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders/${secondReminder.body.data.id}/resolve`)
+      .send({ expectedVersionNo: Number(secondReminder.body.data.versionNo) + 1 })
+      .expect(409);
+    expect(stale.body.error.code).toBe("VERSION_CONFLICT");
+    await request(runtime.app)
+      .post(`/api/works/${workId}/chapters/${chapters[1].id}/foreshadow-reminders/${setupOnly.body.data.id}/resolve`)
+      .send({ expectedVersionNo: setupOnly.body.data.versionNo })
+      .expect(404);
+    expect(runtime.database.get("SELECT status FROM foreshadows WHERE id = ?", secondReminder.body.data.id)?.status).toBe("planned");
+    expect(runtime.database.get("SELECT status FROM foreshadows WHERE id = ?", setupOnly.body.data.id)?.status).toBe("planted");
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
 });
 
 describe("AI 分析目标导航 API", () => {

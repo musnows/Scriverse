@@ -1315,6 +1315,148 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("章节伏笔提醒同时校验正文与大纲权限、CSRF 和对象归属", async () => {
+    const owner = await register(runtime, "reminder_owner");
+    const collaborator = await register(runtime, "reminder_collaborator");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "伏笔提醒权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "正文" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "提醒章", content: "主角重新看见火漆。" })
+      .expect(201);
+    const secret = "REMINDER_PERMISSION_SECRET";
+    const foreshadow = await owner.agent.post(`/api/works/${workId}/foreshadows`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: `旧信 ${secret}`,
+        description: `只有获授权成员可读 ${secret}`,
+        status: "planted",
+        occurrences: [{ chapterId: chapter.body.data.id, role: "reminder", note: `节点 ${secret}` }]
+      })
+      .expect(201);
+    const basePermissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: collaborator.user.userId, permissions: { ...basePermissions, prose: "read" } })
+      .expect(201);
+
+    const noOutlineRead = await collaborator.agent
+      .get(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders`)
+      .expect(403);
+    expect(noOutlineRead.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(noOutlineRead.body)).not.toContain(secret);
+
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: { ...basePermissions, outlines: "read" } })
+      .expect(200);
+    const noProseRead = await collaborator.agent
+      .get(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders`)
+      .expect(403);
+    expect(noProseRead.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(noProseRead.body)).not.toContain(secret);
+
+    const readPermissions = { ...basePermissions, prose: "read", outlines: "read" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: readPermissions })
+      .expect(200);
+    const visible = await collaborator.agent
+      .get(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders`)
+      .expect(200);
+    expect(visible.body.data).toEqual([
+      expect.objectContaining({ foreshadowId: foreshadow.body.data.id, title: `旧信 ${secret}` })
+    ]);
+    const writeDenied = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${foreshadow.body.data.id}/resolve`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: visible.body.data[0].versionNo })
+      .expect(403);
+    expect(writeDenied.body.error.code).toBe("WORK_MODULE_WRITE_DENIED");
+
+    const writePermissions = { ...basePermissions, prose: "read", outlines: "write" };
+    await owner.agent.patch(`/api/works/${workId}/members/${collaborator.user.userId}`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ permissions: writePermissions })
+      .expect(200);
+    const missingCsrf = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${foreshadow.body.data.id}/resolve`)
+      .send({ expectedVersionNo: visible.body.data[0].versionNo })
+      .expect(403);
+    expect(missingCsrf.body.error.code).toBe("CSRF_TOKEN_INVALID");
+
+    const otherWork = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "未授权的其他作品" })
+      .expect(201);
+    const otherWorkId = String(otherWork.body.data.id);
+    const otherVolume = await owner.agent.post(`/api/works/${otherWorkId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "其他正文" })
+      .expect(201);
+    const otherChapter = await owner.agent.post(`/api/works/${otherWorkId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: otherVolume.body.data.id, title: "其他提醒章" })
+      .expect(201);
+    const otherSecret = "CROSS_WORK_REMINDER_SECRET";
+    const otherForeshadow = await owner.agent.post(`/api/works/${otherWorkId}/foreshadows`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        title: otherSecret,
+        status: "planted",
+        occurrences: [{ chapterId: otherChapter.body.data.id, role: "payoff", note: otherSecret }]
+      })
+      .expect(201);
+    const otherWorkDenied = await collaborator.agent
+      .get(`/api/works/${otherWorkId}/chapters/${otherChapter.body.data.id}/foreshadow-reminders`)
+      .expect(403);
+    expect(otherWorkDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(JSON.stringify(otherWorkDenied.body)).not.toContain(otherSecret);
+    const foreignForeshadowDenied = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${otherForeshadow.body.data.id}/resolve`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: otherForeshadow.body.data.versionNo })
+      .expect(404);
+    expect(JSON.stringify(foreignForeshadowDenied.body)).not.toContain(otherSecret);
+
+    const resolved = await collaborator.agent
+      .post(`/api/works/${workId}/chapters/${chapter.body.data.id}/foreshadow-reminders/${foreshadow.body.data.id}/resolve`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ expectedVersionNo: visible.body.data[0].versionNo })
+      .expect(200);
+    expect(resolved.body.data).toMatchObject({ foreshadowId: foreshadow.body.data.id, status: "resolved" });
+    expect(runtime.database.get(
+      "SELECT created_by_user_id FROM entity_versions WHERE entity_type = 'foreshadow' AND entity_id = ? ORDER BY version_no DESC LIMIT 1",
+      foreshadow.body.data.id
+    )?.created_by_user_id).toBe(collaborator.user.userId);
+    expect(runtime.database.get(
+      "SELECT user_id FROM audit_logs WHERE action = 'foreshadow.updated' AND entity_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+      foreshadow.body.data.id
+    )?.user_id).toBe(collaborator.user.userId);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
   it("模块权限默认拒绝未知路由，并裁剪跨模块数据与关联写入", async () => {
     const owner = await register(runtime, "boundary_owner");
     const collaborator = await register(runtime, "boundary_collaborator");

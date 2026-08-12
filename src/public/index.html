@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260812-ai-conversation-export-v3">
+    <link rel="stylesheet" href="/styles.css?v=20260812-foreshadow-reminder-v2">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -256,6 +256,28 @@
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
           </div>
+          <section id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden" aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title">
+            <div class="chapter-foreshadow-reminder-summary">
+              <span id="chapter-foreshadow-reminder-role" class="chapter-foreshadow-reminder-role">提醒章</span>
+              <div>
+                <strong id="chapter-foreshadow-reminder-title">本章有伏笔需要留意</strong>
+                <span id="chapter-foreshadow-reminder-context"></span>
+              </div>
+            </div>
+            <div class="chapter-foreshadow-reminder-actions">
+              <span id="chapter-foreshadow-reminder-counter" class="chapter-foreshadow-reminder-counter"></span>
+              <button id="chapter-foreshadow-reminder-previous" class="ghost-button" type="button" aria-label="查看上一条伏笔提醒">上一条</button>
+              <button id="chapter-foreshadow-reminder-next" class="ghost-button" type="button" aria-label="查看下一条伏笔提醒">下一条</button>
+              <button id="chapter-foreshadow-reminder-details-button" class="ghost-button" type="button" aria-controls="chapter-foreshadow-reminder-details" aria-expanded="false">查看详情</button>
+              <button id="chapter-foreshadow-reminder-snooze" class="ghost-button" type="button">暂不处理</button>
+              <button id="chapter-foreshadow-reminder-resolve" class="primary-button" type="button">标记已回收</button>
+            </div>
+            <dl id="chapter-foreshadow-reminder-details" class="chapter-foreshadow-reminder-details hidden">
+              <div id="chapter-foreshadow-reminder-description-row"><dt>伏笔说明</dt><dd id="chapter-foreshadow-reminder-description"></dd></div>
+              <div id="chapter-foreshadow-reminder-note-row"><dt>本章节点</dt><dd id="chapter-foreshadow-reminder-note"></dd></div>
+              <div><dt>重要程度</dt><dd id="chapter-foreshadow-reminder-importance"></dd></div>
+            </dl>
+          </section>
           <div class="editor-body">
             <div class="chapter-editor-frame">
               <aside id="chapter-line-numbers" class="chapter-line-numbers" aria-label="正文行号，可拖拽引用多行"><div id="chapter-line-numbers-inner"></div></aside>
@@ -1079,6 +1101,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260812-race-common-settings-v2"></script>
+    <script type="module" src="/app.js?v=20260812-foreshadow-reminder-v2"></script>
   </body>
 </html>

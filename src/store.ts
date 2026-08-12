@@ -3728,6 +3728,85 @@ export class Store {
     return paginated(rows.map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId)), pagination);
   }
 
+  listChapterForeshadowReminders(workId: string, chapterId: string): Record<string, unknown>[] {
+    this.getWork(workId);
+    this.assertChapterInWork(chapterId, workId);
+    const seenForeshadowIds = new Set<string>();
+    return this.db.all(
+      `SELECT occurrence.id AS occurrence_id, occurrence.foreshadow_id, occurrence.role, occurrence.note,
+       foreshadow.title, foreshadow.description, foreshadow.status, foreshadow.importance,
+       foreshadow.updated_at,
+       (SELECT MAX(version.version_no) FROM entity_versions version
+        WHERE version.entity_type = 'foreshadow' AND version.entity_id = foreshadow.id) AS version_no
+       FROM foreshadow_occurrences occurrence
+       JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+       JOIN chapters chapter ON chapter.id = occurrence.chapter_id
+       WHERE foreshadow.work_id = ? AND chapter.work_id = ? AND occurrence.chapter_id = ?
+         AND foreshadow.status IN ('planned', 'planted')
+         AND occurrence.role IN ('reminder', 'payoff')
+       ORDER BY CASE occurrence.role WHEN 'payoff' THEN 0 ELSE 1 END,
+         CASE foreshadow.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         foreshadow.created_at, occurrence.created_at`,
+      workId,
+      workId,
+      chapterId
+    ).flatMap((row) => {
+      const foreshadowId = requiredString(row, "foreshadow_id");
+      if (seenForeshadowIds.has(foreshadowId)) return [];
+      seenForeshadowIds.add(foreshadowId);
+      return [{
+        foreshadowId,
+        occurrenceId: requiredString(row, "occurrence_id"),
+        title: requiredString(row, "title"),
+        description: requiredString(row, "description"),
+        status: requiredString(row, "status"),
+        importance: requiredString(row, "importance"),
+        role: requiredString(row, "role"),
+        note: requiredString(row, "note"),
+        versionNo: numberValue(row, "version_no"),
+        updatedAt: requiredString(row, "updated_at")
+      }];
+    });
+  }
+
+  resolveChapterForeshadowReminder(
+    workId: string,
+    chapterId: string,
+    foreshadowId: string,
+    expectedVersionNo?: number
+  ): Record<string, unknown> {
+    this.getWork(workId);
+    this.assertChapterInWork(chapterId, workId);
+    const reminder = this.db.get(
+      `SELECT occurrence.id AS occurrence_id
+       FROM foreshadow_occurrences occurrence
+       JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+       WHERE foreshadow.id = ? AND foreshadow.work_id = ? AND occurrence.chapter_id = ?
+         AND foreshadow.status IN ('planned', 'planted')
+         AND occurrence.role IN ('reminder', 'payoff')
+       ORDER BY CASE occurrence.role WHEN 'payoff' THEN 0 ELSE 1 END, occurrence.created_at
+       LIMIT 1`,
+      foreshadowId,
+      workId,
+      chapterId
+    );
+    if (!reminder) throw notFound("伏笔提醒");
+    const updated = this.updateForeshadow(
+      foreshadowId,
+      { status: "resolved" },
+      "manual",
+      requiredString(reminder, "occurrence_id"),
+      "在编辑器标记伏笔已回收",
+      expectedVersionNo
+    );
+    return {
+      foreshadowId: String(updated.id),
+      status: String(updated.status),
+      versionNo: Number(updated.versionNo),
+      updatedAt: String(updated.updatedAt)
+    };
+  }
+
   updateForeshadow(
     foreshadowId: string,
     input: Partial<ForeshadowInput>,
