@@ -741,7 +741,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('</svg>AI 分析</button>');
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
-    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(5);
+    expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(6);
     expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(16);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
