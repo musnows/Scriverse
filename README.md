@@ -114,6 +114,7 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 | `SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` | `5` | 启动迁移备份最多保留的完整版本数；小于 `2` 时按 `2` 处理，启动时清理最旧的超额备份 |
 | `SCRIVERSE_STARTUP_RETRY_LIMIT` | `2` | 连续启动失败最多允许的次数；达到上限后停止重复初始化，修复问题并删除 `<DATA_DIR>/.startup-retry.json` 后才能重新启动 |
 | `AI_NOVEL_MASTER_KEY` | 自动生成并保存在 `<DATA_DIR>/master.key` | 加密 AI 供应商密钥的主密钥；手动配置时至少 32 个字符 |
+| `SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` | `30` | 交互式 AI 流等待首个或下一个有效事件的最长空闲秒数；有效整数按 `10`–`120` 钳制，非法值回退为 `30` |
 | `APP_AUTH_USERNAME` | 空 | 可选的部署网关账号；应用内用户系统始终启用 |
 | `APP_AUTH_PASSWORD` | 空 | 可选的部署网关密码，至少 12 个字符；必须通过 HTTPS 传输 |
 | `APP_TRUST_PROXY` | `false` | 位于可信反向代理后时设为代理跳数（通常为 `1`）或 `true` |
@@ -127,6 +128,8 @@ CLI 会按服务器保存登录凭据。所有连接服务的数据命令都可�
 布尔环境变量统一接受 `true`/`1` 表示开启、`false`/`0` 表示关闭；其他数字不会被解析为布尔值。`APP_TRUST_PROXY` 例外，其 `0`–`10` 数字表示可信代理跳数。
 
 上述三个图片大小限制均使用字节配置；非法、小于 1 或超过 1 GiB 的值会回退到默认值或按 1 GiB 处理。
+
+`SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` 在服务启动时读取，只控制交互式 AI 流连续没有新事件的等待时间。每收到一个有效流事件都会重新计时，持续生成超过 60 秒不会因此中断；该配置不设置总时长上限，也不改变分析任务等其他 AI 请求的超时策略。修改后需重启服务生效。
 
 自定义示例：
 

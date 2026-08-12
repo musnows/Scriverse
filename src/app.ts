@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
+import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { resolveMaxAgentToolCallLimit } from "./ai-tool-results.js";
@@ -701,6 +702,8 @@ export type RuntimeOptions = {
   developmentServer?: boolean;
   /** 图片上传大小限制；未指定时使用默认值。 */
   uploadLimits?: ImageUploadLimits;
+  /** 交互式 AI 流的事件空闲超时；生产启动值由环境变量解析，测试可注入更短时长。 */
+  aiStreamIdleTimeoutMs?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
   backupOptions?: S3BackupManagerOptions;
 };
@@ -991,6 +994,8 @@ export function publicAiStreamError(error: unknown): {
   providerId?: string;
   modelId?: string;
   modelRecordId?: string;
+  phase?: string;
+  idleTimeoutSeconds?: number;
 } {
   if (error instanceof AppError) {
     const details = error.details && typeof error.details === "object" && !Array.isArray(error.details)
@@ -1005,7 +1010,9 @@ export function publicAiStreamError(error: unknown): {
       ...(typeof details?.providerName === "string" ? { providerName: details.providerName } : {}),
       ...(typeof details?.providerId === "string" ? { providerId: details.providerId } : {}),
       ...(typeof details?.modelId === "string" ? { modelId: details.modelId } : {}),
-      ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {})
+      ...(typeof details?.modelRecordId === "string" ? { modelRecordId: details.modelRecordId } : {}),
+      ...(typeof details?.phase === "string" ? { phase: details.phase } : {}),
+      ...(typeof details?.idleTimeoutSeconds === "number" ? { idleTimeoutSeconds: details.idleTimeoutSeconds } : {})
     };
   }
   return { code: "AI_STREAM_FAILED", message: "AI 流式调用失败" };
@@ -1166,7 +1173,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
     },
-    attachmentStorage
+    attachmentStorage,
+    { interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS }
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
@@ -2461,6 +2469,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
         cacheHitPercent: z.number().min(0).max(100).optional(),
         processDurationMs: z.number().int().min(0).max(86_400_000).optional(),
+        interrupted: z.boolean().optional(),
+        interruptionCode: z.string().max(100).optional(),
+        interruptionMessage: z.string().max(500).optional(),
         toolCalls: z.array(aiToolCallResultSchema).max(12).optional(),
         processSteps: z.array(aiProcessStepSchema).max(50).optional()
       }).optional()
