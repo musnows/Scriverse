@@ -26,6 +26,7 @@ describe("沉浸式阅读预览界面", () => {
     expect(page.text).toContain('/app.js?v=20260813-reader-theme-v2');
     expect(page.text).toContain('id="reader-open-button" class="module-nav-secondary hidden"');
     expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="reader-open-button"[\s\S]*data-module="comments"/u);
+    expect(page.text).not.toMatch(/data-module="editor"[\s\S]*id="reader-open-button"[\s\S]*data-module="drafts"/u);
     expect(page.text).toContain('id="chapter-reader-button"');
     expect(page.text).toContain('id="reader-view" class="reader-view hidden"');
     expect(page.text).toContain('role="dialog" aria-labelledby="reader-title"');
@@ -43,6 +44,12 @@ describe("沉浸式阅读预览界面", () => {
     expect(application.text).toContain("readingPositionStorageKey(state.work.id)");
     expect(application.text).toContain('localStorage.setItem(READING_PREFERENCES_STORAGE_KEY');
     expect(application.text).toContain("resolveReadingTheme(readingPreferences.theme, currentColorTheme())");
+    expect(application.text).toContain('$("#module-more-button").setAttribute("aria-expanded", String(expanded))');
+    expect(application.text).toContain('querySelectorAll(".module-nav-secondary").forEach((button) => button.classList.toggle("hidden", !expanded))');
+    expect(application.text).toContain('$("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded))');
+    expect(application.text).toContain('$("#reader-open-button").classList.toggle("permission-hidden", proseHidden)');
+    expect(application.text).toContain('$("#reader-open-button").disabled = !canReadModule("editor") || count === 0');
+    expect(application.text).toContain('const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")]');
     expect(application.text).toContain("function handleReadingKeyboard(event)");
     expect(application.text).toContain("function layoutReadingPages");
     expect(styles.text).toContain(".reader-view {");
