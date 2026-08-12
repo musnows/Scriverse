@@ -40,7 +40,18 @@ import {
   timelineStatusLabel,
   characterStateFieldLabel
 } from "/display-labels.js?v=20260809-global-replace-v1";
-import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260731-work-comments-v2";
+import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
+import {
+  READING_PREFERENCES_STORAGE_KEY,
+  adjacentReadingChapter,
+  buildReadingChapterSequence,
+  createReadingRequestGate,
+  normalizeReadingPosition,
+  normalizeReadingPreferences,
+  readingPositionStorageKey,
+  resolvePagedReadingStep,
+  resolveReadingStart
+} from "/reading-preview.js?v=20260812-reader-preview-v1";
 import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelationshipKeywords } from "/relationship-keywords.js?v=20260720-relationship-keyword-chips";
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
@@ -183,6 +194,18 @@ let workAuditRecords = [];
 let workAuditNextPage = null;
 const chapterBatchSelectedIds = new Set();
 let chapterMovePending = false;
+const readingRequestGate = createReadingRequestGate();
+let readingSequence = [];
+let readingTargetChapter = null;
+let readingLoadedChapter = null;
+let readingPreferences = normalizeReadingPreferences();
+let readingPageIndex = 0;
+let readingPageCount = 1;
+let readingLoading = false;
+let readingReturnRoute = null;
+let readingPreviousFocus = null;
+let readingPositionSaveTimer = null;
+let readingResizeFrame = null;
 
 let timelineMultiSelectEnabled = false;
 let timelineActiveTrackId = null;
@@ -364,6 +387,7 @@ function applyWorkAccessMode() {
   }
   $("#module-nav [data-module=\"comments\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("comments"));
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
+  $("#reader-open-button").classList.toggle("permission-hidden", proseHidden);
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
@@ -815,6 +839,7 @@ function replacePageRoute(route) {
 
 function presencePageForRoute(route = currentPageRoute()) {
   if (!state.work || route.view === "shelf" || route.view === "platform-ai" || route.view === "platform-usage") return null;
+  if (route.view === "reader") return { kind: "welcome" };
   if (relationshipPresenceId) return { kind: "entity-editor", module: "relationship", resourceId: relationshipPresenceId };
   if (route.view === "editor") return { kind: "editor", resourceId: String(route.chapterId ?? "") || undefined };
   if (route.view === "entity-editor") return { kind: "entity-editor", module: route.entity, resourceId: String(route.entityId ?? "") || undefined };
@@ -1003,6 +1028,9 @@ async function confirmConcurrentSave() {
 
 function currentPageRoute() {
   const workId = state.work?.id ?? null;
+  if (!$("#reader-view").classList.contains("hidden") && workId) {
+    return { view: "reader", workId, chapterId: readingTargetChapter?.id ?? null };
+  }
   if (!$("#entity-editor-view").classList.contains("hidden") && workId && entityEditorType) {
     const entityId = entityEditorType === "setting" ? settingEditorItem?.id : entityEditorType === "character" ? characterEditorItem?.id : knowledgeEditorItem?.id;
     return { view: "entity-editor", workId, entity: entityEditorType, entityId: entityId ?? null, entityMode: entityEditorReadOnly ? "read" : "edit" };
@@ -1207,6 +1235,7 @@ function applyChapterEditorMode() {
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
+  $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -4092,6 +4121,10 @@ async function initializePage() {
       await selectWork(requestedWork.id, route.view === "editor" ? route.chapterId : null);
     }
 
+    if (route.view === "reader") {
+      await openReadingPreview({ chapterId: route.chapterId, restorePosition: true });
+      return;
+    }
     if (route.view === "editor") {
       if (route.chapterId && state.chapter?.id !== route.chapterId) await selectChapter(route.chapterId);
       if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);
@@ -5605,6 +5638,7 @@ function renderTree() {
   const count = state.work.volumes.reduce((total, volume) => total + Number(volume.chapterCount ?? volume.chapters?.length ?? 0), 0);
   const proseEditable = canEditProse();
   $("#chapter-count").textContent = `${count} 章`;
+  $("#reader-open-button").disabled = !canReadModule("editor") || count === 0;
   $("#novel-tree").classList.remove("empty-copy");
   $("#novel-tree").innerHTML = state.work.volumes.map((volume) => {
     const collapsed = state.collapsedVolumeIds.has(volume.id);
@@ -5965,6 +5999,485 @@ function updateChapterStats() {
   const text = $("#chapter-content").value;
   const count = Array.from(text.replace(/\s/g, "")).length;
   $("#chapter-stats").textContent = `${count} 字 · v${state.chapter.versionNo}`;
+}
+
+function readReadingStorage(key) {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storedReadingPosition() {
+  if (!state.work) return null;
+  return normalizeReadingPosition(readReadingStorage(readingPositionStorageKey(state.work.id)), readingSequence);
+}
+
+function persistReadingPreferences() {
+  try { localStorage.setItem(READING_PREFERENCES_STORAGE_KEY, JSON.stringify(readingPreferences)); } catch { /* 禁用本地存储时保留本次会话设置 */ }
+}
+
+function readingProgressRatio() {
+  if (readingPreferences.mode === "paged") {
+    return readingPageCount > 1 ? readingPageIndex / (readingPageCount - 1) : 0;
+  }
+  const viewport = $("#reader-viewport");
+  const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  return maximum > 0 ? Math.min(1, Math.max(0, viewport.scrollTop / maximum)) : 0;
+}
+
+function persistReadingPosition() {
+  if (
+    !state.work
+    || !readingTargetChapter
+    || readingLoading
+    || readingLoadedChapter?.id !== readingTargetChapter.id
+    || $("#reader-view").classList.contains("hidden")
+  ) return;
+  const value = {
+    chapterId: readingTargetChapter.id,
+    scrollRatio: readingPreferences.mode === "scroll" ? readingProgressRatio() : 0,
+    pageIndex: readingPreferences.mode === "paged" ? readingPageIndex : 0
+  };
+  try { localStorage.setItem(readingPositionStorageKey(state.work.id), JSON.stringify(value)); } catch { /* 阅读位置只做本地尽力保存 */ }
+}
+
+function scheduleReadingPositionSave() {
+  if (readingLoading || readingLoadedChapter?.id !== readingTargetChapter?.id) return;
+  if (readingPositionSaveTimer !== null) clearTimeout(readingPositionSaveTimer);
+  readingPositionSaveTimer = setTimeout(() => {
+    readingPositionSaveTimer = null;
+    persistReadingPosition();
+  }, 120);
+}
+
+function setSelectOptions(select, items, selectedValue) {
+  const options = items.map(({ value, label }) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    return option;
+  });
+  select.replaceChildren(...options);
+  select.value = selectedValue ?? "";
+}
+
+function renderReadingSelectors() {
+  const selectedId = readingTargetChapter?.id ?? "";
+  const volumeItems = (state.work?.volumes ?? [])
+    .filter((volume) => readingSequence.some((chapter) => chapter.volumeId === volume.id))
+    .map((volume) => ({ value: String(volume.id), label: String(volume.title || "正文") }));
+  setSelectOptions($("#reader-volume"), volumeItems, readingTargetChapter?.volumeId ?? volumeItems[0]?.value);
+
+  const chapterSelect = $("#reader-chapter");
+  const groups = [];
+  for (const volume of state.work?.volumes ?? []) {
+    const chapters = readingSequence.filter((chapter) => chapter.volumeId === volume.id);
+    if (!chapters.length) continue;
+    const group = document.createElement("optgroup");
+    group.label = String(volume.title || "正文");
+    for (const chapter of chapters) {
+      const option = document.createElement("option");
+      option.value = chapter.id;
+      option.textContent = chapter.title;
+      group.append(option);
+    }
+    groups.push(group);
+  }
+  chapterSelect.replaceChildren(...groups);
+  chapterSelect.value = selectedId;
+}
+
+function renderReadingNavigation() {
+  const current = readingTargetChapter;
+  const index = current ? readingSequence.findIndex((chapter) => chapter.id === current.id) : -1;
+  const previous = current ? adjacentReadingChapter(readingSequence, current.id, -1) : null;
+  const next = current ? adjacentReadingChapter(readingSequence, current.id, 1) : null;
+  $("#reader-previous").disabled = !previous || readingLoading;
+  $("#reader-next").disabled = !next || readingLoading;
+  $("#reader-continue").disabled = !next || readingLoading;
+  $("#reader-continue").textContent = next ? `继续下一章 · ${next.title}` : "已读到全书末尾";
+  const paged = readingPreferences.mode === "paged";
+  const previousPage = current && paged ? resolvePagedReadingStep({
+    sequence: readingSequence,
+    chapterId: current.id,
+    pageIndex: readingPageIndex,
+    pageCount: readingPageCount
+  }, -1) : null;
+  const nextPage = current && paged ? resolvePagedReadingStep({
+    sequence: readingSequence,
+    chapterId: current.id,
+    pageIndex: readingPageIndex,
+    pageCount: readingPageCount
+  }, 1) : null;
+  $("#reader-page-previous").disabled = !previousPage || readingLoading;
+  $("#reader-page-next").disabled = !nextPage || readingLoading;
+  const compact = window.matchMedia("(max-width: 700px)").matches;
+  const chapterProgress = index >= 0
+    ? compact ? `${index + 1}/${readingSequence.length} 章` : `第 ${index + 1} / ${readingSequence.length} 章`
+    : compact ? `0/${readingSequence.length} 章` : `第 0 / ${readingSequence.length} 章`;
+  $("#reader-progress").textContent = paged
+    ? compact
+      ? `${chapterProgress} · ${readingPageIndex + 1}/${readingPageCount} 页`
+      : `${chapterProgress} · 第 ${readingPageIndex + 1} / ${readingPageCount} 页`
+    : chapterProgress;
+}
+
+function applyReadingPreferences() {
+  const view = $("#reader-view");
+  const viewport = $("#reader-viewport");
+  view.dataset.readerTheme = readingPreferences.theme;
+  view.style.setProperty("--reader-font-size", `${readingPreferences.fontSize}px`);
+  view.style.setProperty("--reader-line-height", String(readingPreferences.lineHeight));
+  viewport.classList.toggle("is-paged", readingPreferences.mode === "paged");
+  $("#reader-mode").value = readingPreferences.mode;
+  $("#reader-font-size").value = String(readingPreferences.fontSize);
+  $("#reader-line-height").value = String(readingPreferences.lineHeight);
+  $("#reader-theme").value = readingPreferences.theme;
+  $("#reader-continuation").classList.toggle("hidden", readingPreferences.mode === "paged");
+  $("#reader-page-previous").classList.toggle("hidden", readingPreferences.mode !== "paged");
+  $("#reader-page-next").classList.toggle("hidden", readingPreferences.mode !== "paged");
+}
+
+function resetReadingPageLayout() {
+  const view = $("#reader-view");
+  const content = $("#reader-content");
+  view.style.removeProperty("--reader-page-width");
+  view.style.removeProperty("--reader-page-height");
+  content.style.removeProperty("width");
+  content.style.removeProperty("height");
+  content.style.removeProperty("transform");
+  readingPageCount = 1;
+  readingPageIndex = 0;
+}
+
+function setReadingPageIndex(pageIndex) {
+  const view = $("#reader-view");
+  const content = $("#reader-content");
+  const shell = $("#reader-page-shell");
+  const styles = getComputedStyle(content);
+  const gap = Number.parseFloat(styles.columnGap) || 0;
+  const width = Math.max(1, shell.clientWidth);
+  readingPageIndex = Math.min(readingPageCount - 1, Math.max(0, Math.floor(Number(pageIndex) || 0)));
+  content.style.transform = `translate3d(${-readingPageIndex * (width + gap)}px, 0, 0)`;
+  renderReadingNavigation();
+  scheduleReadingPositionSave();
+  view.dataset.readerPage = String(readingPageIndex + 1);
+}
+
+function layoutReadingPages({ pageIndex = readingPageIndex, progressRatio = null } = {}) {
+  if (readingPreferences.mode !== "paged" || !readingLoadedChapter) return;
+  const view = $("#reader-view");
+  const shell = $("#reader-page-shell");
+  const content = $("#reader-content");
+  const width = Math.max(1, shell.clientWidth);
+  const height = Math.max(1, shell.clientHeight);
+  view.style.setProperty("--reader-page-width", `${width}px`);
+  view.style.setProperty("--reader-page-height", `${height}px`);
+  content.style.width = `${width}px`;
+  content.style.height = `${height}px`;
+  content.style.transform = "none";
+  const gap = Number.parseFloat(getComputedStyle(content).columnGap) || 0;
+  readingPageCount = Math.max(1, Math.ceil((content.scrollWidth + gap) / (width + gap)));
+  const target = progressRatio === null
+    ? pageIndex < 0 ? readingPageCount - 1 : pageIndex
+    : Math.round(Math.min(1, Math.max(0, progressRatio)) * (readingPageCount - 1));
+  setReadingPageIndex(target);
+}
+
+function appendReadingParagraph(parent, text) {
+  const paragraph = document.createElement("p");
+  const lines = text.split("\n");
+  lines.forEach((line, index) => {
+    if (index > 0) paragraph.append(document.createElement("br"));
+    paragraph.append(document.createTextNode(line));
+  });
+  parent.append(paragraph);
+}
+
+function renderReadingContent(content) {
+  const host = $("#reader-content");
+  host.replaceChildren();
+  const normalized = String(content ?? "").replace(/\r\n?/gu, "\n").trim();
+  if (!normalized) {
+    const empty = document.createElement("p");
+    empty.className = "reader-empty";
+    empty.textContent = "本章暂无正文。";
+    host.append(empty);
+    return;
+  }
+  normalized.split(/\n{2,}/gu).forEach((paragraph) => appendReadingParagraph(host, paragraph));
+}
+
+function renderReadingStatus(message, className = "reader-loading") {
+  const status = document.createElement("p");
+  status.className = className;
+  status.textContent = message;
+  $("#reader-content").replaceChildren(status);
+}
+
+function renderReadingError(error, chapterId) {
+  const status = document.createElement("div");
+  status.className = "reader-error";
+  const message = document.createElement("span");
+  message.textContent = `章节载入失败：${error instanceof Error ? error.message : "网络请求失败"}`;
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.textContent = "重试本章";
+  retry.addEventListener("click", () => void loadReadingChapter(chapterId, { restorePosition: true }));
+  status.append(message, retry);
+  $("#reader-content").replaceChildren(status);
+}
+
+function nextReaderFrame() {
+  return new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
+}
+
+async function restoreReadingViewport({ scrollRatio = 0, pageIndex = 0 } = {}) {
+  await nextReaderFrame();
+  if (readingPreferences.mode === "paged") {
+    layoutReadingPages({ pageIndex });
+    return;
+  }
+  resetReadingPageLayout();
+  await nextReaderFrame();
+  const viewport = $("#reader-viewport");
+  const maximum = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+  viewport.scrollTop = maximum * Math.min(1, Math.max(0, Number(scrollRatio) || 0));
+  renderReadingNavigation();
+}
+
+async function loadReadingChapter(chapterId, { scrollRatio = null, pageIndex = null, restorePosition = false } = {}) {
+  const target = readingSequence.find((chapter) => chapter.id === chapterId);
+  if (!target || !state.work) return false;
+  const saved = restorePosition ? storedReadingPosition() : null;
+  const targetScrollRatio = scrollRatio ?? (saved?.chapterId === target.id ? saved.scrollRatio : 0);
+  const targetPageIndex = pageIndex ?? (saved?.chapterId === target.id ? saved.pageIndex : 0);
+  const request = readingRequestGate.begin(target.id);
+  readingTargetChapter = target;
+  readingLoadedChapter = null;
+  readingLoading = true;
+  readingPageIndex = 0;
+  readingPageCount = 1;
+  renderReadingSelectors();
+  renderReadingNavigation();
+  $("#reader-volume-title").textContent = target.volumeTitle;
+  $("#reader-chapter-title").textContent = target.title;
+  $("#reader-chapter-meta").textContent = "正在载入正文";
+  $("#reader-title").textContent = `${state.work.title} · ${target.title}`;
+  $("#reader-document").setAttribute("aria-busy", "true");
+  renderReadingStatus("正在载入章节……");
+  replacePageRoute({ view: "reader", workId: state.work.id, chapterId: target.id });
+  try {
+    const chapter = await api(`/api/chapters/${encodeURIComponent(target.id)}`, { signal: request.signal });
+    if (!readingRequestGate.isCurrent(request)) return false;
+    if (String(chapter?.id ?? "") !== target.id || String(chapter?.workId ?? "") !== String(state.work.id)) {
+      throw new Error("章节响应与当前作品不匹配");
+    }
+    readingLoadedChapter = chapter;
+    renderReadingContent(chapter.content);
+    $("#reader-chapter-title").textContent = String(chapter.title || target.title);
+    $("#reader-chapter-meta").textContent = `${Number(chapter.wordCount ?? Array.from(String(chapter.content ?? "").replace(/\s/gu, "")).length).toLocaleString("zh-CN")} 字 · ${target.chapterType}`;
+    updateDocumentTitle({ title: `${state.work.title} · ${target.title} · 阅读预览` });
+    await restoreReadingViewport({ scrollRatio: targetScrollRatio, pageIndex: targetPageIndex });
+    if (!readingRequestGate.isCurrent(request)) return false;
+    readingLoading = false;
+    $("#reader-document").removeAttribute("aria-busy");
+    renderReadingNavigation();
+    persistReadingPosition();
+    return true;
+  } catch (error) {
+    if (!readingRequestGate.isCurrent(request) || error?.name === "AbortError") return false;
+    readingLoading = false;
+    readingLoadedChapter = null;
+    $("#reader-document").removeAttribute("aria-busy");
+    $("#reader-chapter-meta").textContent = "正文载入失败";
+    renderReadingError(error, target.id);
+    renderReadingNavigation();
+    return false;
+  } finally {
+    if (readingRequestGate.isCurrent(request)) readingRequestGate.finish(request);
+  }
+}
+
+async function navigateReadingChapter(direction, { continueFromBoundary = false } = {}) {
+  if (!readingTargetChapter || readingLoading) return false;
+  const target = adjacentReadingChapter(readingSequence, readingTargetChapter.id, direction);
+  if (!target) {
+    toast(direction < 0 ? "已经是全书第一章" : "已经是全书最后一章");
+    return false;
+  }
+  persistReadingPosition();
+  const previousBoundary = direction < 0 && continueFromBoundary;
+  return loadReadingChapter(target.id, {
+    scrollRatio: previousBoundary && readingPreferences.mode === "scroll" ? 1 : 0,
+    pageIndex: previousBoundary && readingPreferences.mode === "paged" ? -1 : 0
+  });
+}
+
+async function stepReadingPage(direction) {
+  if (!readingTargetChapter || readingLoading) return;
+  if (readingPreferences.mode !== "paged") {
+    const viewport = $("#reader-viewport");
+    const atBoundary = direction > 0
+      ? viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2
+      : viewport.scrollTop <= 2;
+    if (atBoundary) {
+      await navigateReadingChapter(direction, { continueFromBoundary: true });
+      return;
+    }
+    viewport.scrollBy({ top: direction * viewport.clientHeight * .86, behavior: "smooth" });
+    return;
+  }
+  const step = resolvePagedReadingStep({
+    sequence: readingSequence,
+    chapterId: readingTargetChapter.id,
+    pageIndex: readingPageIndex,
+    pageCount: readingPageCount
+  }, direction);
+  if (!step) {
+    toast(direction < 0 ? "已经是全书第一页" : "已经是全书最后一页");
+    return;
+  }
+  if (step.chapterChanged) {
+    persistReadingPosition();
+    await loadReadingChapter(step.chapterId, { pageIndex: step.pageIndex });
+  } else {
+    setReadingPageIndex(step.pageIndex);
+  }
+}
+
+function updateReadingPreference(patch) {
+  const progressRatio = readingProgressRatio();
+  const previousMode = readingPreferences.mode;
+  readingPreferences = normalizeReadingPreferences({ ...readingPreferences, ...patch });
+  persistReadingPreferences();
+  applyReadingPreferences();
+  if (!readingLoadedChapter) return;
+  if (readingPreferences.mode === "paged") {
+    $("#reader-viewport").scrollTop = 0;
+    window.requestAnimationFrame(() => layoutReadingPages({
+      progressRatio: previousMode === "scroll" ? progressRatio : null,
+      pageIndex: readingPageIndex
+    }));
+  } else {
+    resetReadingPageLayout();
+    window.requestAnimationFrame(() => {
+      const viewport = $("#reader-viewport");
+      viewport.scrollTop = progressRatio * Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      renderReadingNavigation();
+      scheduleReadingPositionSave();
+    });
+  }
+}
+
+async function openReadingPreview({ chapterId = null, volumeId = null, restorePosition = true } = {}) {
+  if (!state.work) return toast("请先打开一部作品", "error");
+  if (!canReadModule("editor")) return toast("当前账户没有正文读取权限", "error");
+  const workId = state.work.id;
+  await loadAllVolumeChapters(workId);
+  if (state.work?.id !== workId) return false;
+  readingSequence = buildReadingChapterSequence(state.work);
+  if (!readingSequence.length) {
+    toast("当前作品还没有可阅读的章节", "error");
+    return false;
+  }
+  readingPreferences = normalizeReadingPreferences(readReadingStorage(READING_PREFERENCES_STORAGE_KEY));
+  const saved = restorePosition ? storedReadingPosition() : null;
+  const target = resolveReadingStart(readingSequence, { chapterId, volumeId, storedPosition: saved });
+  if (!target) return false;
+  const view = $("#reader-view");
+  if (view.classList.contains("hidden")) {
+    readingReturnRoute = currentPageRoute();
+    readingPreviousFocus = document.activeElement;
+  }
+  view.classList.remove("hidden");
+  view.setAttribute("aria-modal", "true");
+  $("#app").inert = true;
+  document.body.classList.add("reader-open");
+  applyReadingPreferences();
+  renderReadingSelectors();
+  await loadReadingChapter(target.id, { restorePosition: restorePosition && saved?.chapterId === target.id });
+  $("#reader-viewport").focus({ preventScroll: true });
+  return true;
+}
+
+function closeReadingPreview() {
+  const view = $("#reader-view");
+  if (view.classList.contains("hidden")) return;
+  persistReadingPosition();
+  readingRequestGate.cancel();
+  readingLoading = false;
+  if (readingPositionSaveTimer !== null) clearTimeout(readingPositionSaveTimer);
+  readingPositionSaveTimer = null;
+  if (readingResizeFrame !== null) window.cancelAnimationFrame(readingResizeFrame);
+  readingResizeFrame = null;
+  view.classList.add("hidden");
+  view.removeAttribute("aria-modal");
+  $("#reader-settings").open = false;
+  $("#app").inert = false;
+  document.body.classList.remove("reader-open");
+  updateDocumentTitle(state.work);
+  const returnRoute = readingReturnRoute ?? (state.work ? { view: "welcome", workId: state.work.id } : { view: "shelf" });
+  readingReturnRoute = null;
+  replacePageRoute(returnRoute);
+  const focus = readingPreviousFocus;
+  readingPreviousFocus = null;
+  const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")];
+  for (const candidate of focusCandidates) {
+    if (!(candidate instanceof HTMLElement) || !candidate.isConnected || candidate.matches(":disabled")) continue;
+    const rect = candidate.getBoundingClientRect();
+    if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= window.innerHeight || rect.left >= window.innerWidth) continue;
+    candidate.focus({ preventScroll: true });
+    if (document.activeElement === candidate) return;
+  }
+  restoreToastFocus(null);
+}
+
+function handleReadingKeyboard(event) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeReadingPreview();
+    return;
+  }
+  if (event.target.closest("button, select, summary")) return;
+  const paged = readingPreferences.mode === "paged";
+  if (["PageDown", "ArrowRight"].includes(event.key) || (event.key === " " && !event.shiftKey)) {
+    event.preventDefault();
+    void stepReadingPage(1);
+    return;
+  }
+  if (["PageUp", "ArrowLeft"].includes(event.key) || (event.key === " " && event.shiftKey)) {
+    event.preventDefault();
+    void stepReadingPage(-1);
+    return;
+  }
+  if (!paged && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+    event.preventDefault();
+    $("#reader-viewport").scrollBy({ top: event.key === "ArrowDown" ? 72 : -72, behavior: "smooth" });
+    return;
+  }
+  if (!paged && ["Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    const viewport = $("#reader-viewport");
+    viewport.scrollTo({ top: event.key === "Home" ? 0 : viewport.scrollHeight, behavior: "smooth" });
+  }
+}
+
+function handleReadingWheel(event) {
+  if (readingPreferences.mode !== "scroll" || readingLoading || Math.abs(event.deltaY) < 2) return;
+  const viewport = $("#reader-viewport");
+  const atEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2;
+  const atStart = viewport.scrollTop <= 2;
+  if (event.deltaY > 0 && atEnd) {
+    event.preventDefault();
+    void navigateReadingChapter(1, { continueFromBoundary: true });
+  } else if (event.deltaY < 0 && atStart) {
+    event.preventDefault();
+    void navigateReadingChapter(-1, { continueFromBoundary: true });
+  }
 }
 
 async function saveChapter() {
@@ -14405,6 +14918,38 @@ $("#manuscript-export-menu").addEventListener("click", (event) => {
   closeManuscriptExportMenu();
   downloadWorkManuscript(work, format);
 });
+$("#reader-open-button").addEventListener("click", () => {
+  void openReadingPreview({ restorePosition: true });
+});
+$("#chapter-reader-button").addEventListener("click", () => {
+  void openReadingPreview({ chapterId: state.chapter?.id ?? null, restorePosition: true });
+});
+$("#reader-close").addEventListener("click", closeReadingPreview);
+$("#reader-previous").addEventListener("click", () => void navigateReadingChapter(-1));
+$("#reader-next").addEventListener("click", () => void navigateReadingChapter(1));
+$("#reader-continue").addEventListener("click", () => void navigateReadingChapter(1, { continueFromBoundary: true }));
+$("#reader-page-previous").addEventListener("click", () => void stepReadingPage(-1));
+$("#reader-page-next").addEventListener("click", () => void stepReadingPage(1));
+$("#reader-volume").addEventListener("change", (event) => {
+  const first = readingSequence.find((chapter) => chapter.volumeId === event.currentTarget.value);
+  if (first) {
+    persistReadingPosition();
+    void loadReadingChapter(first.id);
+  }
+});
+$("#reader-chapter").addEventListener("change", (event) => {
+  persistReadingPosition();
+  void loadReadingChapter(event.currentTarget.value);
+});
+$("#reader-mode").addEventListener("change", (event) => updateReadingPreference({ mode: event.currentTarget.value }));
+$("#reader-font-size").addEventListener("change", (event) => updateReadingPreference({ fontSize: Number(event.currentTarget.value) }));
+$("#reader-line-height").addEventListener("change", (event) => updateReadingPreference({ lineHeight: Number(event.currentTarget.value) }));
+$("#reader-theme").addEventListener("change", (event) => updateReadingPreference({ theme: event.currentTarget.value }));
+$("#reader-view").addEventListener("keydown", handleReadingKeyboard);
+$("#reader-viewport").addEventListener("wheel", handleReadingWheel, { passive: false });
+$("#reader-viewport").addEventListener("scroll", () => {
+  if (readingPreferences.mode === "scroll") scheduleReadingPositionSave();
+}, { passive: true });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (state.user && !systemRestartDetected) scheduleSystemBootCheck(0);
@@ -14419,6 +14964,14 @@ window.addEventListener("online", () => {
   void refreshSystemHealth();
 });
 window.addEventListener("offline", () => updateSystemHealth({ status: "offline" }));
+window.addEventListener("resize", () => {
+  if ($("#reader-view").classList.contains("hidden") || readingPreferences.mode !== "paged") return;
+  if (readingResizeFrame !== null) window.cancelAnimationFrame(readingResizeFrame);
+  readingResizeFrame = window.requestAnimationFrame(() => {
+    readingResizeFrame = null;
+    layoutReadingPages({ progressRatio: readingProgressRatio() });
+  });
+});
 
 initializePage().catch((error) => {
   restoringPageRoute = false;

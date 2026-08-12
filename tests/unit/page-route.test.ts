@@ -12,6 +12,9 @@ describe("页面刷新路由", () => {
 
     const editorHash = serializePageRoute({ view: "editor", workId: "work-1", chapterId: "chapter-18" });
     expect(parsePageRoute(editorHash)).toEqual({ view: "editor", workId: "work-1", chapterId: "chapter-18" });
+
+    const readerHash = serializePageRoute({ view: "reader", workId: "work-1", chapterId: "chapter-18" });
+    expect(parsePageRoute(readerHash)).toEqual({ view: "reader", workId: "work-1", chapterId: "chapter-18" });
   });
 
   it("保存设置页面及其返回位置", () => {

@@ -327,8 +327,8 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260812-ai-conversation-export-v3');
-    expect(page.text).toContain('/app.js?v=20260812-race-common-settings-v2');
+    expect(page.text).toContain('/styles.css?v=20260812-reader-preview-v4');
+    expect(page.text).toContain('/app.js?v=20260812-reader-preview-v5');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -342,7 +342,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('<label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled"');
     expect(application.text).toContain('后端部署时区（${esc(quotaTimezone)}）');
     expect(application.text).toContain('body: { dailyTokenQuota: enabled ? quota : null }');
-    expect(application.text).toContain('/page-route.js?v=20260731-work-comments-v2');
+    expect(application.text).toContain('/page-route.js?v=20260812-reader-preview-v1');
     expect(application.text).toContain("本书 Token 用量");
     expect(application.text).toContain('"work-usage-calendar-title"}">每日用量</h3>');
     expect(application.text).toContain("calendar.scrollLeft = calendar.scrollWidth");
@@ -731,7 +731,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="module-more-button"');
     expect(page.text).toContain('<span class="nav-label">更多</span>');
     expect(page.text.match(/class="module-nav-secondary hidden"/gu)).toHaveLength(5);
-    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(15);
+    expect(page.text.match(/class="nav-icon"/gu)).toHaveLength(16);
     expect(page.text).toContain('data-module="ai-settings"');
     expect(page.text).toContain('data-work-settings');
     expect(page.text).toContain(">作品设置</button>");

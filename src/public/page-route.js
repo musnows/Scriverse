@@ -40,6 +40,10 @@ export function serializePageRoute(route = {}) {
     params.set("view", "editor");
     params.set("work", workId);
     if (route.chapterId) params.set("chapter", String(route.chapterId));
+  } else if (view === "reader" && workId) {
+    params.set("view", "reader");
+    params.set("work", workId);
+    if (route.chapterId) params.set("chapter", String(route.chapterId));
   } else if (view === "module" && workId && moduleSet.has(route.module)) {
     params.set("view", "module");
     params.set("work", workId);
@@ -72,6 +76,10 @@ export function parsePageRoute(hash = "") {
   if (view === "login") return { view: "login" };
 
   if (view === "editor" && workId) {
+    const chapterId = value(params, "chapter");
+    return { view, workId, chapterId: chapterId || null };
+  }
+  if (view === "reader" && workId) {
     const chapterId = value(params, "chapter");
     return { view, workId, chapterId: chapterId || null };
   }
