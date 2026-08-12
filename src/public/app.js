@@ -3332,7 +3332,7 @@ function renderAiWriteOperationCard(operation, plan) {
     const before = operation.before ?? {};
     detailHtml = `
       <dl class="ai-write-plan-fields">
-        <div><dt>批注类型</dt><dd>${esc(before.kind === "todo" ? "待办" : "评论")}</dd></div>
+        <div><dt>批注类型</dt><dd>${esc((operation.after ?? {}).kind === "todo" ? "待办" : "评论")}</dd></div>
         <div><dt>行号</dt><dd>第 ${esc(String(before.startLine))}–${esc(String(before.endLine))} 行</dd></div>
         <div><dt>引用正文</dt><dd><blockquote class="ai-write-plan-quote">${esc(String(before.quote ?? ""))}</blockquote></dd></div>
         <div><dt>批注内容</dt><dd>${esc(String((operation.after ?? {}).note ?? ""))}</dd></div>

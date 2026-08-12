@@ -2348,6 +2348,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       if (!response.writableEnded && !response.destroyed) response.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
     };
     sendEvent("ready", { streaming: true });
+    let conversationId = "";
     try {
       const conversation = input.conversationId
         ? store.getAiConversationSummary(input.conversationId)
@@ -2355,7 +2356,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       if (String(conversation.workId) !== request.params.workId) {
         throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
       }
-      const conversationId = String(conversation.id);
+      conversationId = String(conversation.id);
       // 将对话内已过期的提问标记为过期并注入通知，模型不会基于未回答的问题继续写操作。
       store.expireConversationAiToolQuestions(conversationId);
       const permissions = requestPermissions(request, request.params.workId);
@@ -2436,8 +2437,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           : undefined
       });
     } catch (error) {
-      // 生成失败或中断时丢弃本次生成未提交的修改计划草稿。
-      if (input.conversationId) store.discardDraftAiWritePlan(String(input.conversationId));
+      // 生成失败或中断时丢弃本次生成未提交的修改计划草稿；
+      // 使用路由内解析出的对话 ID，覆盖首轮消息由服务端新建对话的场景。
+      store.discardDraftAiWritePlan(conversationId);
       if (!controller.signal.aborted) {
         logger.error("ai.stream.failed", {
           workId: request.params.workId,
@@ -2460,7 +2462,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       : undefined;
     store.markExpiredAiWritePlans(request.params.workId);
     const userId = String(request.authUser?.userId ?? "");
-    data(response, store.listAiWritePlansPage(request.params.workId, userId, parsePagination(request) ?? { page: 1, limit: 30, offset: 0 }, status));
+    data(response, store.listAiWritePlansPage(request.params.workId, userId, parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 }, status));
   });
   app.get("/api/works/:workId/ai-write-plans/:planId", (request, response) => {
     const plan = store.getAiWritePlan(request.params.planId);
@@ -2495,6 +2497,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const conversation = store.getAiConversationSummary(conversationId);
     if (String(conversation.workId) !== request.params.workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     const question = store.getPendingAiToolQuestion(conversationId);
+    if (question) {
+      const userId = String(request.authUser?.userId ?? "");
+      const ownerUserId = store.getAiConversationOwnerUserId(conversationId);
+      if (userId !== question.createdByUserId && userId !== ownerUserId) {
+        throw new AppError(403, "QUESTION_ACTOR_DENIED", "只有提问发起用户或 AI 对话归属用户可以查看该问题");
+      }
+    }
     data(response, { question });
   });
   app.get("/api/ai-questions/:questionId", (request, response) => {

@@ -449,6 +449,34 @@ describe("AI 修改计划与执行引擎", () => {
     expect(runtime.store.getAiWritePlan(String(plan.id)).undoneAt).toBeNull();
   });
 
+  it("权限被回收后无法撤销审批", async () => {
+    const work = await createWork(runtime);
+    seedWorkOwner(runtime, String(work.id), "user-owner");
+    const conversation = runtime.store.createAiConversation(String(work.id));
+    runtime.database.run("UPDATE ai_conversations SET created_by_user_id = 'user-owner' WHERE id = ?", String(conversation.id));
+    enableWriteTools(runtime, String(work.id), { settings: true });
+    const setting = runtime.store.createSetting(String(work.id), { title: "旧设定", category: "地理", content: "旧内容" });
+    const plan = createPendingPlan(runtime, String(work.id), String(conversation.id), "user-owner", "user-owner", [
+      {
+        opType: "update-entry",
+        module: "settings",
+        entityType: "setting",
+        targetId: String(setting.id),
+        targetVersion: Number(setting.versionNo),
+        targetLabel: "世界设定「旧设定」",
+        aiSummary: "修改设定标题",
+        before: { title: "旧设定" },
+        after: { title: "新设定" },
+        diff: [{ field: "title", label: "标题", before: "旧设定", after: "新设定" }]
+      }
+    ]);
+    await runWithRequestActor(testActor as never, () => runtime.ai.executeAiWritePlan(String(plan.id), "user-owner"));
+    // 回收权限:计划记录的对话归属用户失去作品权限
+    runtime.database.run("UPDATE ai_write_plans SET conversation_owner_user_id = 'user-member' WHERE id = ?", String(plan.id));
+    await expectPlanError(testActor, () => runtime.ai.undoAiWritePlan(String(plan.id), "user-owner"), "PLAN_UNDO_DENIED");
+    expect(String(runtime.store.getSetting(String(setting.id)).title)).toBe("新设定");
+  });
+
   it("目标未被后续修改时撤销成功且不可重复撤销", async () => {
     const work = await createWork(runtime);
     seedWorkOwner(runtime, String(work.id), "user-owner");
@@ -560,6 +588,43 @@ describe("AI 修改计划与执行引擎", () => {
     runtime.store.createDraftAiWritePlan(String(work.id), String(conversation.id), "user-owner", "user-owner");
     expect(runtime.store.submitDraftAiWritePlan(String(conversation.id))).toBeNull();
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_write_plans")?.count).toBe(0);
+  });
+
+  it("草稿计划在生成中断后不会混入下一轮计划", async () => {
+    const work = await createWork(runtime);
+    seedWorkOwner(runtime, String(work.id), "user-owner");
+    const conversation = runtime.store.createAiConversation(String(work.id));
+    runtime.database.run("UPDATE ai_conversations SET created_by_user_id = 'user-owner' WHERE id = ?", String(conversation.id));
+    enableWriteTools(runtime, String(work.id), { settings: true });
+    // 第一轮:加入一条操作后模拟生成中断,丢弃草稿
+    const plan = runtime.store.createDraftAiWritePlan(String(work.id), String(conversation.id), "user-owner", "user-owner");
+    runtime.store.addAiWritePlanOperation(String(plan.id), {
+      opType: "create-entry",
+      module: "settings",
+      entityType: "setting",
+      targetLabel: "世界设定「失败轮设定」",
+      aiSummary: "失败轮操作",
+      before: null,
+      after: { title: "失败轮设定", category: "地理", content: "内容" },
+      diff: []
+    } as never);
+    runtime.store.discardDraftAiWritePlan(String(conversation.id));
+    // 第二轮:新草稿只包含本轮操作
+    const nextPlan = runtime.store.createDraftAiWritePlan(String(work.id), String(conversation.id), "user-owner", "user-owner");
+    runtime.store.addAiWritePlanOperation(String(nextPlan.id), {
+      opType: "create-entry",
+      module: "settings",
+      entityType: "setting",
+      targetLabel: "世界设定「本轮设定」",
+      aiSummary: "本轮操作",
+      before: null,
+      after: { title: "本轮设定", category: "地理", content: "内容" },
+      diff: []
+    } as never);
+    const submitted = runtime.store.submitDraftAiWritePlan(String(conversation.id));
+    const operations = submitted?.operations as Record<string, unknown>[];
+    expect(operations).toHaveLength(1);
+    expect(String(operations[0]?.targetLabel)).toBe("世界设定「本轮设定」");
   });
 
   it("可写工具启用受开关与权限交集约束", async () => {
@@ -788,6 +853,22 @@ describe("AI 修改计划 API 与安全边界", () => {
     await owner.agent.post(`/api/ai-questions/${String(question.id)}/answer`)
       .set("X-CSRF-Token", owner.csrfToken).send({ answer: "西方" }).expect(200);
     expect(runtime.store.getAiToolQuestion(String(question.id)).answer).toBe("西方");
+  });
+
+  it("非参与者访问待回答提问列表被拒绝", async () => {
+    const owner = await register("plan_owner");
+    const outsider = await register("plan_outsider");
+    const { workId } = await createAuthWork(owner);
+    // 授予 outsider 读权限使其能访问作品,但不是提问相关用户
+    await owner.agent.post(`/api/works/${workId}/members`).set("X-CSRF-Token", owner.csrfToken).send({
+      userId: outsider.user.userId,
+      permissions: { prose: "read", settings: "read", characters: "read", races: "read", organizations: "read", timeline: "read", relationships: "read", outlines: "read", drafts: "read", reviews: "read", "ai-chat": "read", "ai-analysis": "read", "ai-settings": "read" }
+    }).expect(201);
+    const { conversationId } = await createAuthConversation(owner, workId);
+    runtime.store.createAiToolQuestion(workId, conversationId, "敏感问题?", ["甲", "乙"]);
+    await outsider.agent.get(`/api/works/${workId}/ai-questions?conversationId=${conversationId}`).expect(403);
+    const pending = await owner.agent.get(`/api/works/${workId}/ai-questions?conversationId=${conversationId}`).expect(200);
+    expect(pending.body.data.question.question).toBe("敏感问题?");
   });
 
   it("待回答提问可跨请求恢复，回答后注入结果", async () => {

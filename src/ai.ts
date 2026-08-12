@@ -5477,6 +5477,11 @@ export class AiManager {
       if (!canWriteWorkModule(intersection, module)) {
         return failed("WRITE_TOOL_PERMISSION_DENIED", `当前用户与 AI 对话归属用户均无「${workPermissionModuleLabels[module]}」写权限`);
       }
+      // 工具调用时同步重查开关，流进行中关闭开关后尽早失败
+      const switchKey = writeToolSwitchKey(module as AiWriteOperationModule);
+      if (this.store.getWorkAiWriteTools(workId)[switchKey] !== true) {
+        return failed("WRITE_TOOL_SWITCH_DISABLED", `作品设置已关闭「${AI_WRITE_TOOL_SWITCH_LABELS[switchKey]}」可写工具`);
+      }
       const operation = this.buildAiWriteOperation(workId, toolId, args);
       const actor = currentRequestActor();
       const ownerUserId = this.store.getAiConversationOwnerUserId(conversationId);
@@ -5619,12 +5624,14 @@ export class AiManager {
       } else {
         const current = this.store.getChapterOutline(targetId);
         if (!current) throw new AppError(404, "OUTLINE_NOT_FOUND", "该章节还没有大纲，请使用 create 建立");
-        before = current;
+        // 只保留参与 diff 的实体字段
+        before = applyEntryChanges("chapter-outline", current, {});
         targetVersion = this.store.aiWriteTargetVersion(workId, "chapter-outline", targetId);
       }
     } else if (!isCreate) {
       const entityId = String(args[idField ?? ""]);
-      before = this.readEntryCurrent(workId, entityType, entityId);
+      // 只保留参与 diff 的实体字段，避免元数据字段被虚假展示为删除
+      before = applyEntryChanges(entityType, this.readEntryCurrent(workId, entityType, entityId), {});
       targetId = entityId;
       targetVersion = this.store.aiWriteTargetVersion(workId, entityType, entityId);
       if (targetVersion === null) throw new AppError(404, "ENTRY_NOT_FOUND", "目标词条不存在或不属于当前作品");
@@ -5889,6 +5896,25 @@ export class AiManager {
       const operations = (plan.operations as Record<string, unknown>[])
         .filter((op) => op.opType === "update-entry" && op.status === "executed");
       if (operations.length === 0) throw new AppError(409, "PLAN_UNDO_NOT_APPLICABLE", "该审批没有可撤销的编辑操作；AI 新建的词条不支持通过撤销自动删除");
+      // 撤销同样是一次写操作：重新校验权限交集与工具开关
+      const planOwnerUserId = typeof plan.conversationOwnerUserId === "string" ? plan.conversationOwnerUserId : null;
+      if (!planOwnerUserId) throw new AppError(409, "PLAN_UNDO_DENIED", "AI 对话缺少归属用户，无法撤销");
+      const executorPermissions = this.store.userWorkModulePermissions(executorUserId, workId);
+      const ownerPermissions = this.store.userWorkModulePermissions(planOwnerUserId, workId);
+      if (!executorPermissions || !ownerPermissions) {
+        throw new AppError(403, "PLAN_UNDO_DENIED", "当前用户或 AI 对话归属用户已失去作品访问权限，无法撤销");
+      }
+      const intersection = this.store.intersectWorkPermissions(executorPermissions, ownerPermissions);
+      const writeTools = this.store.getWorkAiWriteTools(workId);
+      for (const op of operations) {
+        const opModule = String(op.module) as AiWriteOperationModule;
+        if (!writeTools[writeToolSwitchKey(opModule)]) {
+          throw new AppError(403, "PLAN_UNDO_DENIED", `作品设置已关闭「${AI_WRITE_TOOL_SWITCH_LABELS[writeToolSwitchKey(opModule)]}」可写工具，无法撤销`);
+        }
+        if (!canWriteWorkModule(intersection, opModule)) {
+          throw new AppError(403, "PLAN_UNDO_DENIED", `当前用户与 AI 对话归属用户均无「${workPermissionModuleLabels[opModule]}」写权限，无法撤销`);
+        }
+      }
       for (const op of operations) {
         const entityType = String(op.entityType) as AiWriteEntityType;
         const targetId = String(op.targetId);
