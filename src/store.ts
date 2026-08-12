@@ -6975,9 +6975,23 @@ export class Store {
     return this.mapAiConversationMessage(message);
   }
 
-  forkAiConversation(conversationId: string, messageId: string, requestedTitle?: string): Record<string, unknown> {
+  forkAiConversation(conversationId: string, messageId: string, requestedTitle?: string, requestId?: string): Record<string, unknown> {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
+    const normalizedRequestId = requestId?.trim() || null;
+    if (normalizedRequestId) {
+      const existingFork = this.db.get(
+        "SELECT source_message_id, conversation_id FROM ai_conversation_forks WHERE source_conversation_id = ? AND request_id = ?",
+        conversationId,
+        normalizedRequestId
+      );
+      if (existingFork) {
+        if (requiredString(existingFork, "source_message_id") !== messageId) {
+          throw new AppError(409, "IDEMPOTENCY_KEY_REUSED", "该续写请求标识已用于另一条历史消息");
+        }
+        return this.getAiConversation(requiredString(existingFork, "conversation_id"));
+      }
+    }
     const messages = this.db.all(
       "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
       conversationId
@@ -6986,6 +7000,7 @@ export class Store {
     if (targetIndex < 0) throw notFound("AI 对话消息");
     const forkId = id("conversation");
     const timestamp = now();
+    const workId = requiredString(conversation, "work_id");
     const sourceTitle = requiredString(conversation, "title");
     const title = requestedTitle?.trim() || `${sourceTitle} · 分支`;
     const sourceCompactedCount = Math.max(0, numberValue(conversation, "compacted_message_count"));
@@ -6998,7 +7013,7 @@ export class Store {
       this.db.run(
         "INSERT INTO ai_conversations (id, work_id, roleplay_character_id, task_type, context_scope_json, title, compacted_summary, compacted_message_count, agent_tools_json, injected_entities_json, system_clock_text, created_at, updated_at, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         forkId,
-        requiredString(conversation, "work_id"),
+        workId,
         optionalString(conversation, "roleplay_character_id"),
         optionalString(conversation, "task_type"),
         optionalString(conversation, "context_scope_json"),
@@ -7006,7 +7021,7 @@ export class Store {
         forkSummary,
         forkCompactedCount,
         conversation.agent_tools_json == null
-          ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(requiredString(conversation, "work_id")).agentTools))
+          ? JSON.stringify(normalizeWorkAgentTools(this.getWorkAiSettings(workId).agentTools))
           : String(conversation.agent_tools_json),
         injectedEntitiesJson,
         systemClockText,
@@ -7028,7 +7043,22 @@ export class Store {
           currentRequestActor()?.userId ?? null
         );
       }
+      if (normalizedRequestId) {
+        this.db.run(
+          "INSERT INTO ai_conversation_forks (source_conversation_id, source_message_id, request_id, conversation_id, created_at) VALUES (?, ?, ?, ?, ?)",
+          conversationId,
+          messageId,
+          normalizedRequestId,
+          forkId,
+          timestamp
+        );
+      }
       this.syncAiHistorySearchShortTermsForConversation(forkId);
+      this.audit(workId, "ai-conversation.forked", "ai-conversation", forkId, {
+        sourceConversationId: conversationId,
+        sourceMessageId: messageId,
+        messageCount: targetIndex + 1
+      });
     });
     return this.getAiConversation(forkId);
   }

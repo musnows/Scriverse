@@ -1826,6 +1826,88 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(JSON.stringify(protectedTraceFull.body)).not.toContain("TOP_SECRET_PROSE");
   });
 
+  it("AI 历史消息续写要求 CSRF、作品权限并保持请求幂等", async () => {
+    const owner = await register(runtime, "fork_owner");
+    const collaborator = await register(runtime, "fork_collaborator");
+    const outsider = await register(runtime, "fork_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "续写权限作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: collaborator.user.userId,
+        permissions: {
+          prose: "read",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "write",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const source = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "共享历史对话" })
+      .expect(201);
+    const sourceId = String(source.body.data.id);
+    const message = await owner.agent.post(`/api/ai-conversations/${sourceId}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "user", content: "共享历史消息" })
+      .expect(201);
+    const body = { messageId: message.body.data.id, requestId: "authorized-fork-request" };
+
+    const csrfDenied = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/fork`).send(body).expect(403);
+    expect(csrfDenied.body.error.code).toBe("CSRF_TOKEN_INVALID");
+    const first = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/fork`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send(body)
+      .expect(201);
+    const retried = await collaborator.agent.post(`/api/ai-conversations/${sourceId}/fork`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send(body)
+      .expect(201);
+    expect(retried.body.data.id).toBe(first.body.data.id);
+    expect(retried.body.data.messages).toHaveLength(1);
+    const roleplayCharacter = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "受限角色" })
+      .expect(201);
+    const roleplaySource = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "受限角色扮演对话" })
+      .expect(201);
+    await owner.agent.patch(`/api/ai-conversations/${roleplaySource.body.data.id}/roleplay`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ characterId: roleplayCharacter.body.data.id })
+      .expect(200);
+    const roleplayMessage = await owner.agent.post(`/api/ai-conversations/${roleplaySource.body.data.id}/messages`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ role: "user", content: "角色私有上下文" })
+      .expect(201);
+    const characterDenied = await collaborator.agent.post(`/api/ai-conversations/${roleplaySource.body.data.id}/fork`)
+      .set("X-CSRF-Token", collaborator.csrfToken)
+      .send({ messageId: roleplayMessage.body.data.id, requestId: "roleplay-fork-denied" })
+      .expect(403);
+    expect(characterDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    const outsiderDenied = await outsider.agent.post(`/api/ai-conversations/${sourceId}/fork`)
+      .set("X-CSRF-Token", outsider.csrfToken)
+      .send(body)
+      .expect(403);
+    expect(outsiderDenied.body.error.code).toBe("WORK_ACCESS_DENIED");
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_conversation_forks WHERE source_conversation_id = ?", sourceId)).toEqual({ count: 1 });
+  });
+
   it("type none 的显式 AI 引用仍要求对应模块读取权限", async () => {
     const owner = await register(runtime, "ai_explicit_ref_owner");
     const collaborator = await register(runtime, "ai_explicit_ref_collaborator");

@@ -1725,16 +1725,20 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
+  if (message.dataset.messageId) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
-    fork.setAttribute("aria-label", "从此消息 Fork 新对话");
-    fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>分支</span>';
+    fork.setAttribute("aria-label", "从此消息续写为新对话");
+    fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>从此续写</span>';
+    const forkRequestId = crypto.randomUUID();
     fork.addEventListener("click", async () => {
       fork.disabled = true;
       try {
-        const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, { method: "POST", body: { messageId: message.dataset.messageId } });
+        const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, {
+          method: "POST",
+          body: { messageId: message.dataset.messageId, requestId: forkRequestId }
+        });
         upsertAiConversationSummary(conversation);
         await openAiConversation(conversation.id);
         toast("已从所选消息创建分支对话");

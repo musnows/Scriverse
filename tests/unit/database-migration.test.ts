@@ -1259,4 +1259,41 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
+
+  it("迁移 87 创建 AI 对话分支幂等映射并通过完整性检查", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-conversation-fork-"));
+    roots.push(root);
+    const filename = join(root, "conversation-fork.db");
+    const current = new Database(filename);
+    const store = new Store(current);
+    const work = store.createWork({ title: "对话分支迁移作品" });
+    const conversation = store.createAiConversation(String(work.id), "迁移前对话");
+    const message = store.addAiConversationMessage(String(conversation.id), { role: "user", content: "迁移前消息" });
+    current.close();
+
+    const legacy = new DatabaseSync(filename);
+    legacy.exec("DROP TABLE ai_conversation_forks; DELETE FROM schema_migrations WHERE version = 87");
+    legacy.close();
+
+    const migrated = new Database(filename);
+    const migratedStore = new Store(migrated);
+    const forked = migratedStore.forkAiConversation(
+      String(conversation.id),
+      String(message.id),
+      undefined,
+      "migration-fork-request"
+    );
+    const retried = migratedStore.forkAiConversation(
+      String(conversation.id),
+      String(message.id),
+      undefined,
+      "migration-fork-request"
+    );
+    expect(retried.id).toBe(forked.id);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM ai_conversation_forks")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 87")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
 });

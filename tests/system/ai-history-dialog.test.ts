@@ -45,6 +45,10 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('label.textContent = "下载中"');
     expect(application.text).toContain('toast(`对话导出失败：${error.message}`, "error")');
     expect(application.text).toContain('$("#ai-history-dialog").addEventListener("cancel"');
+    expect(application.text).toContain('fork.setAttribute("aria-label", "从此消息续写为新对话")');
+    expect(application.text).toContain("const forkRequestId = crypto.randomUUID()");
+    expect(application.text).toContain("body: { messageId: message.dataset.messageId, requestId: forkRequestId }");
+    expect(application.text).not.toContain('message.classList.contains("assistant-message")');
     expect(styles.text).toContain(".ai-history-dialog-body");
     expect(styles.text).toContain(".ai-heading-action-icon");
     expect(styles.text).toContain(".ai-history-row { display: grid;");

@@ -2392,9 +2392,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.send(exportAiConversationMarkdown(readableConversation));
   });
   app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
-    const input = parse(z.object({ messageId: identifier, title: z.string().max(200).optional() }), request.body);
-    const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title);
-    const permissions = requestPermissions(request, String(forked.workId));
+    const input = parse(z.object({
+      messageId: identifier,
+      title: z.string().max(200).optional(),
+      requestId: identifier.optional()
+    }).strict(), request.body);
+    const sourceConversation = store.getAiConversationSummary(request.params.conversationId);
+    const permissions = requestPermissions(request, String(sourceConversation.workId));
+    if (sourceConversation.roleplayCharacter && !canReadWorkModule(permissions, "characters")) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取“角色”模块的权限");
+    }
+    const forked = store.forkAiConversation(request.params.conversationId, input.messageId, input.title, input.requestId);
     data(response, redactAiConversation(forked, permissions), 201);
   });
   app.patch("/api/ai-conversations/:conversationId/task-type", (request, response) => {
