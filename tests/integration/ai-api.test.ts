@@ -1138,6 +1138,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     setLegacyModelContextWindow(modelId, 16_000);
+    runtime.database.run("UPDATE models SET preset_json = ? WHERE id = ?", JSON.stringify({ max_tokens: 1_024 }), modelId);
     runtime.store.saveChapter(chapterId, { content: "分页上下文证据。".repeat(2_500) });
     let completionCount = 0;
     let firstPageContent = "";
@@ -1259,6 +1260,55 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(completionCount).toBe(2);
     expect(returnedPages[0]?.pagination.maxChars).toBeLessThan(10_000);
     expect(returnedPages[0]?.pagination.nextCursor).toEqual(expect.any(Number));
+  });
+
+  it("模型最大输出达到上下文 95% 时工具上下文也会先压缩", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    setLegacyModelContextWindow(modelId, 128_000);
+    runtime.database.run("UPDATE models SET preset_json = ? WHERE id = ?", JSON.stringify({ max_tokens: 110_000 }), modelId);
+    runtime.store.saveChapter(chapterId, { content: "工具分页证据。".repeat(2_500) });
+    let completionCount = 0;
+    let compactRequestCount = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; content?: string }>; tools?: unknown[] };
+      if (body.messages[0]?.content?.includes("压缩已完成的 AI 工具调用上下文")) {
+        compactRequestCount += 1;
+        expect(body.tools).toBeUndefined();
+        return new Response(JSON.stringify({ choices: [{ message: { content: "已压缩旧工具结果，继续读取剩余分页。" } }] }), { status: 200 });
+      }
+      const toolMessages = body.messages.filter((message) => message.role === "tool");
+      if (toolMessages.length === 0) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "output-threshold-page-1",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content" } }
+        }] } }] }), { status: 200 });
+      }
+      if (!body.messages.some((message) => message.content?.includes("已压缩的工具调用上下文"))) {
+        const firstPage = JSON.parse(toolMessages.at(-1)?.content ?? "{}") as { pagination: { nextCursor: number | null } };
+        expect(firstPage.pagination.nextCursor).not.toBeNull();
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{
+          id: "output-threshold-page-2",
+          type: "function",
+          function: { name: "read_chapters", arguments: { chapterIds: [chapterId], include: "content", cursor: firstPage.pagination.nextCursor } }
+        }] } }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: "已完成工具上下文回答。" } }] }), { status: 200 });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "读取章节后回答。",
+      scope: { type: "none" },
+      modelId
+    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+
+    expect(response.text).toContain('event: delta\ndata: {"delta":"已完成工具上下文回答。"}');
+    expect(response.text).toContain("event: context_compacted");
+    expect(compactRequestCount).toBe(1);
+    expect(completionCount).toBe(4);
   });
 
   it("把无效工具参数和未知工具作为英文错误结果反馈给模型", async () => {
