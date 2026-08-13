@@ -12,7 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
-import { AiWriteApprovalService } from "./ai-write-approval.js";
+import { AiWriteApprovalService, questionDisplay } from "./ai-write-approval.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -495,6 +495,18 @@ const workAiSettingsSchema = z.object({
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  aiWriteTools: z.object({
+    settings: z.boolean(),
+    characters: z.boolean(),
+    races: z.boolean(),
+    organizations: z.boolean(),
+    timeline: z.boolean(),
+    relationships: z.boolean(),
+    outlines: z.boolean(),
+    "chapter-annotations": z.boolean(),
+    "analysis-tasks": z.boolean(),
+    "ask-user-questions": z.boolean()
+  }).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -2247,6 +2259,46 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         scope: input.scope
       })
     });
+  });
+
+  // AI 可写工具审批中心：列表、详情、确认、拒绝与撤销。
+  app.get("/api/works/:workId/ai-approvals", (request, response) => {
+    const pagination = parsePagination(request.query) ?? { page: 1, limit: 20, offset: 0 };
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    data(response, aiWriteApproval.listPlans(request.params.workId, pagination, status, request.authUser!));
+  });
+  app.get("/api/ai-approvals/:planId", (request, response) => {
+    data(response, aiWriteApproval.getPlan(request.params.planId, request.authUser!));
+  });
+  app.post("/api/ai-approvals/:planId/approve", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, aiWriteApproval.approvePlan(request.params.planId, request.authUser!));
+  });
+  app.post("/api/ai-approvals/:planId/reject", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, aiWriteApproval.rejectPlan(request.params.planId, request.authUser!));
+  });
+  app.post("/api/ai-approvals/:planId/revoke", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, aiWriteApproval.revokePlan(request.params.planId, request.authUser!));
+  });
+
+  // AskUserQuestions 提问：详情与回答。
+  app.get("/api/ai-questions/:questionId", (request, response) => {
+    const question = aiWriteApproval.getQuestion(request.params.questionId);
+    const actor = request.authUser!;
+    const permitted = (question.requesterUserId && question.requesterUserId === actor.userId)
+      || (question.ownerUserId && question.ownerUserId === actor.userId)
+      || actor.role === "admin";
+    if (!permitted) throw new AppError(403, "AI_QUESTION_ACCESS_DENIED", "你无权查看该提问");
+    data(response, questionDisplay(question));
+  });
+  app.post("/api/ai-questions/:questionId/answer", (request, response) => {
+    const input = parse(z.union([
+      z.object({ type: z.literal("option"), index: z.number().int().min(0).max(100) }).strict(),
+      z.object({ type: z.literal("custom"), text: z.string().min(1).max(500) }).strict()
+    ]), request.body);
+    data(response, questionDisplay(aiWriteApproval.answerQuestion(request.params.questionId, input, request.authUser!)));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {

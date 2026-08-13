@@ -368,7 +368,9 @@ export type AiWritePlanRecord = {
   workId: string;
   conversationId: string | null;
   requesterUserId: string | null;
+  requesterDisplayName: string;
   ownerUserId: string | null;
+  ownerDisplayName: string;
   status: AiWritePlanStatus;
   summary: string;
   operations: AiWritePlanOperation[];
@@ -671,7 +673,8 @@ export class AiWriteApprovalService {
     }
     const operations = input.operations.map((raw) => this.buildOperation(input.workId, raw));
     // 提交计划时即校验权限交集与工具开关，未开启或无权时不允许生成计划。
-    const failure = this.validatePlanPermissions(input.workId, input.requesterUserId, input.ownerUserId, operations);
+    const requesterUser = input.requesterUserId ? this.auth.getUser(input.requesterUserId) : null;
+    const failure = this.validatePlanPermissions(input.workId, input.requesterUserId, input.ownerUserId, requesterUser, operations);
     if (failure) {
       throw new AppError(403, "AI_WRITE_PLAN_FORBIDDEN", failure.message, { reason: failure.code });
     }
@@ -1150,11 +1153,12 @@ export class AiWriteApprovalService {
     return normalizeAiWriteToolSwitches(this.store.getWorkAiSettings(workId).aiWriteTools);
   }
 
-  /** 逐操作校验权限交集（当前操作用户 × 对话归属用户）与工具开关。 */
+  /** 逐操作校验权限交集（当前操作用户 × 对话归属用户 × 确认操作者）与工具开关。 */
   private validatePlanPermissions(
     workId: string,
     requesterUserId: string | null,
     ownerUserId: string | null,
+    operatorUser: AuthUser | null,
     operations: AiWritePlanOperation[]
   ): PlanInvalidation | null {
     const requesterUser = requesterUserId ? this.auth.getUser(requesterUserId) : null;
@@ -1172,6 +1176,12 @@ export class AiWriteApprovalService {
     if (!requesterPermissions || !ownerPermissions) {
       return { code: "WORK_ACCESS_LOST", message: "发起用户或对话归属用户已失去这部作品的访问权限" };
     }
+    const operatorPermissions = operatorUser && operatorUser !== requesterUser && operatorUser !== ownerUser
+      ? this.auth.workModulePermissions(operatorUser, workId, operatorUser.role === "admin")
+      : requesterPermissions;
+    if (!operatorPermissions) {
+      return { code: "OPERATOR_ACCESS_LOST", message: "确认操作者已失去这部作品的访问权限" };
+    }
     const switches = this.workToolSwitches(workId);
     for (const operation of operations) {
       const definition = OPERATION_DEFINITIONS[operation.operationType];
@@ -1185,17 +1195,21 @@ export class AiWriteApprovalService {
         const requiredRead = analysisTaskReadModules(operation.payload.taskType, operation.payload.scope);
         const requesterReadOk = requiredRead.every((module) => canReadWorkModule(requesterPermissions, module));
         const ownerReadOk = requiredRead.every((module) => canReadWorkModule(ownerPermissions, module));
+        const operatorReadOk = requiredRead.every((module) => canReadWorkModule(operatorPermissions, module));
         const requesterWriteOk = canWriteWorkModule(requesterPermissions, "ai-analysis");
         const ownerWriteOk = canWriteWorkModule(ownerPermissions, "ai-analysis");
-        if (!requesterReadOk || !ownerReadOk || !requesterWriteOk || !ownerWriteOk) {
-          return { code: "ANALYSIS_PERMISSION_DENIED", message: "发起用户或对话归属用户缺少 AI 分析权限或分析范围所需资料的读取权限" };
+        const operatorWriteOk = canWriteWorkModule(operatorPermissions, "ai-analysis");
+        if (!requesterReadOk || !ownerReadOk || !operatorReadOk || !requesterWriteOk || !ownerWriteOk || !operatorWriteOk) {
+          return { code: "ANALYSIS_PERMISSION_DENIED", message: "发起用户、对话归属用户或确认操作者缺少 AI 分析权限或分析范围所需资料的读取权限" };
         }
         continue;
       }
-      if (!canWriteWorkModule(requesterPermissions, definition.module) || !canWriteWorkModule(ownerPermissions, definition.module)) {
+      if (!canWriteWorkModule(requesterPermissions, definition.module)
+        || !canWriteWorkModule(ownerPermissions, definition.module)
+        || !canWriteWorkModule(operatorPermissions, definition.module)) {
         return {
           code: "MODULE_WRITE_DENIED",
-          message: `发起用户或对话归属用户缺少“${workPermissionModuleLabels[definition.module]}”模块的写权限`
+          message: `发起用户、对话归属用户或确认操作者缺少“${workPermissionModuleLabels[definition.module]}”模块的写权限`
         };
       }
     }
@@ -1251,12 +1265,20 @@ export class AiWriteApprovalService {
     }
     const operations = json<AiWritePlanOperation[]>(String(row.operations_json ?? "[]"), []);
     const workId = String(row.work_id);
+    const requesterRow = row.requester_user_id === null || row.requester_user_id === undefined
+      ? null
+      : this.store.db.get("SELECT display_name FROM users WHERE id = ?", String(row.requester_user_id));
+    const ownerRow = row.owner_user_id === null || row.owner_user_id === undefined
+      ? null
+      : this.store.db.get("SELECT display_name FROM users WHERE id = ?", String(row.owner_user_id));
     return {
       id: String(row.id),
       workId,
       conversationId: row.conversation_id === null || row.conversation_id === undefined ? null : String(row.conversation_id),
       requesterUserId: row.requester_user_id === null || row.requester_user_id === undefined ? null : String(row.requester_user_id),
+      requesterDisplayName: requesterRow ? String(requesterRow.display_name) : "",
       ownerUserId: row.owner_user_id === null || row.owner_user_id === undefined ? null : String(row.owner_user_id),
+      ownerDisplayName: ownerRow ? String(ownerRow.display_name) : "",
       status,
       summary: String(row.summary ?? ""),
       operations: includeOperations ? this.redactOperations(workId, operations, viewer) : operations.map((operation) => ({
@@ -1338,7 +1360,7 @@ export class AiWriteApprovalService {
     if (plan.status !== "pending") {
       throw new AppError(409, "AI_WRITE_PLAN_NOT_PENDING", planStatusMessage(plan.status));
     }
-    const failure = this.validatePlanPermissions(plan.workId, plan.requesterUserId, plan.ownerUserId, plan.operations);
+    const failure = this.validatePlanPermissions(plan.workId, plan.requesterUserId, plan.ownerUserId, actor, plan.operations);
     if (failure) {
       this.markInvalidated(planId, failure);
       throw new AppError(409, "AI_WRITE_PLAN_INVALIDATED", `修改计划已失效：${failure.message}`, { reason: failure.code });
