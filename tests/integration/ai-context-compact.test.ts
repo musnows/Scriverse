@@ -58,10 +58,11 @@ describe("AI 对话上下文压缩", () => {
   afterEach(() => runtime.close());
 
   it("达到可配置阈值时可忽略本次提醒且下次仍会提醒", async () => {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 16_384, modelId);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
-    const oldUser = `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(30)}`;
-    const oldAssistant = `旧助手回答：${"飞船仍在北港附近。".repeat(30)}`;
+    const oldUser = `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(180)}`;
+    const oldAssistant = `旧助手回答：${"飞船仍在北港附近。".repeat(180)}`;
     const recentUser = "最近问题：当前燃料还剩多少？";
     const recentAssistant = "最近回答：燃料数据尚未在正文中明确。";
     for (const [role, content] of [["user", oldUser], ["assistant", oldAssistant], ["user", recentUser], ["assistant", recentAssistant]] as const) {
@@ -147,8 +148,8 @@ describe("AI 对话上下文压缩", () => {
     expect(secondRetry.body.data.id).toBe(firstRetry.body.data.id);
   });
 
-  it("模型最大输出达到上下文 95% 时也会触发压缩", async () => {
-    runtime.database.run("UPDATE models SET context_window = ?, preset_json = ? WHERE id = ?", 32_768, JSON.stringify({ max_tokens: 32_000 }), modelId);
+  it("模型最大输出达到 Compact 阈值时也会触发压缩", async () => {
+    runtime.database.run("UPDATE models SET context_window = ?, preset_json = ? WHERE id = ?", 32_768, JSON.stringify({ max_tokens: 20_000 }), modelId);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
     for (const [role, content] of [
@@ -169,8 +170,8 @@ describe("AI 对话上下文压缩", () => {
       action: "compacted",
       reason: "forced_usage_threshold",
       usage: {
-        maxOutputTokens: 32_000,
-        maxOutputUsagePercent: 98,
+        maxOutputTokens: 20_000,
+        maxOutputUsagePercent: 61,
         maxOutputThresholdReached: true
       }
     });
@@ -178,11 +179,12 @@ describe("AI 对话上下文压缩", () => {
   });
 
   it("流式提醒以 warningOnly 正常结束，忽略后只持久化一次并继续生成", async () => {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 16_384, modelId);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
     for (const [role, content] of [
-      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(30)}`],
-      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(30)}`],
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(120)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(120)}`],
       ["user", "最近问题：当前燃料还剩多少？"],
       ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
     ] as const) {
@@ -231,11 +233,12 @@ describe("AI 对话上下文压缩", () => {
   });
 
   it("整次请求达到 95% 时先自动压缩再保存用户消息并调用 Agent", async () => {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 16_384, modelId);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
     for (const [role, content] of [
-      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`],
-      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`],
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(600)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(600)}`],
       ["user", "最近问题：当前燃料还剩多少？"],
       ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
     ] as const) {
@@ -341,7 +344,8 @@ describe("AI 对话上下文压缩", () => {
     expect(compacted.body.data.memoryItemCount).toBeGreaterThan(0);
   });
 
-  it("正文区块过长时降级正文而不误触发对话压缩", async () => {
+  it("正文区块过长时降级正文并标记上下文兜底", async () => {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 16_384, modelId);
     runtime.store.saveChapter(chapterId, { content: `当前章节开头。${"非常长的章节正文。".repeat(2_000)}当前章节结尾。` });
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
@@ -356,10 +360,50 @@ describe("AI 对话上下文压缩", () => {
     }).expect(200);
     const usage = prepared.body.data.usage;
 
-    expect(usage.compactRecommended).toBe(false);
+    expect(prepared.body.data.action).toBe("ready");
+    expect(usage.compactRecommended).toBe(true);
+    expect(usage.contextFallbackReached).toBe(true);
     expect(usage.degradedContextBlocks).toBeGreaterThan(0);
     expect(usage.inputTokens).toBeLessThan(usage.contextWindow);
     expect(usage).toMatchObject({ conversationTokens: expect.any(Number), conversationBudgetTokens: expect.any(Number) });
+  });
+
+  it("上下文剩余不足 5k 时即使低于 95% 也会自动压缩", async () => {
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 20_000, modelId);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ contextCompactThreshold: 90, agentTools: [] }).expect(200);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [
+      ["user", `较早要求：${"必须遵守跃迁冷却规则。".repeat(400)}`],
+      ["assistant", "最近回答：飞船仍在北港附近。"],
+      ["user", "最近问题：燃料还剩多少？"]
+    ] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+    const instruction = "请检查当前章节。".repeat(1_080);
+    const usageBefore = runtime.ai.getContextUsage({
+      workId,
+      taskType: "chat",
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction,
+      conversationId
+    });
+    expect(usageBefore.outputReserveTokens).toBe(1_024);
+    expect(usageBefore.remainingTokens).toBeLessThanOrEqual(5_000);
+    expect(usageBefore).toMatchObject({ contextFallbackReached: true });
+    expect(Number(usageBefore.usagePercent)).toBeLessThan(95);
+    expect(Number(usageBefore.conversationUsagePercent)).toBeLessThan(90);
+
+    const prepared = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send({
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction
+    }).expect(200);
+
+    expect(prepared.body.data).toMatchObject({ action: "compacted", reason: "forced_usage_threshold" });
+    expect(prepared.body.data.usage.contextFallbackReached).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("拒绝把其他作品的章节混入当前对话上下文", async () => {

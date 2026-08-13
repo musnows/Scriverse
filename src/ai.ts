@@ -150,6 +150,8 @@ const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT = 95;
+const MIN_OUTPUT_RESERVE_TOKENS = 1_024;
+const MIN_CONTEXT_REMAINING_TOKENS = 5_000;
 const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
 const interactiveStreamErrorCodes = new Set([
   "AI_STREAM_IDLE_TIMEOUT",
@@ -811,7 +813,7 @@ export type AiProcessStep = {
 
 const MAX_AGENT_TOOL_CALLS = 12;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
-const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = 512;
+const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = MIN_OUTPUT_RESERVE_TOKENS;
 const IMAGE_TOOL_MAX_BYTES = 30 * 1024 * 1024;
 const IMAGE_TOOL_MAX_OUTPUT_TOKENS = 8_192;
 const agentToolCursor = z.number().int().min(0).max(100_000).default(0);
@@ -4338,7 +4340,7 @@ export class AiManager {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const configuredOutputTokens = typeof preset.max_tokens === "number" ? preset.max_tokens : DEFAULT_MAX_TOKENS;
-    const outputReserveTokens = Math.max(512, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - 512));
+    const outputReserveTokens = Math.max(MIN_OUTPUT_RESERVE_TOKENS, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - MIN_OUTPUT_RESERVE_TOKENS));
     const availableInputTokens = Math.max(256, contextWindow - outputReserveTokens - 512);
     const conversation = input.conversationId
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
@@ -4391,6 +4393,7 @@ export class AiManager {
     const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
     const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
     const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
+    const contextFallbackReached = remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
     return {
       modelId: stringValue(model, "id"),
       contextWindow,
@@ -4401,9 +4404,10 @@ export class AiManager {
       conversationUsagePercent,
       maxOutputTokens: configuredOutputTokens,
       maxOutputUsagePercent,
-      maxOutputThresholdReached: configuredOutputTokens >= contextWindow * FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT / 100,
+      maxOutputThresholdReached: maxOutputUsagePercent >= threshold,
       outputReserveTokens: Number(budget.outputReserveTokens),
       remainingTokens,
+      contextFallbackReached,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
       tokenDistribution: {
         systemPromptTokens,
@@ -4414,7 +4418,7 @@ export class AiManager {
       },
       compactThreshold: threshold,
       compactableMessageCount,
-      compactRecommended: compactableMessageCount > 0 && conversationUsagePercent >= threshold,
+      compactRecommended: compactableMessageCount > 0 && (conversationUsagePercent >= threshold || contextFallbackReached),
       contextWarningPending: conversation?.warningPending ?? false,
       compactedMessageCount: conversation?.compactedMessageCount ?? 0,
       includedContextBlocks: contextPlan.includedBlockIds.length,
@@ -4445,6 +4449,7 @@ export class AiManager {
       contextWindow,
       inputTokens,
       remainingTokens,
+      contextFallbackReached: remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
       tokenDistribution: {
         systemPromptTokens,
@@ -4463,8 +4468,9 @@ export class AiManager {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const usagePercent = Number(usage.usagePercent) || 0;
     const maxOutputThresholdReached = usage.maxOutputThresholdReached === true;
+    const contextFallbackReached = usage.contextFallbackReached === true;
     const compactableMessageCount = Number(usage.compactableMessageCount) || 0;
-    const outputThresholdNeedsCompaction = maxOutputThresholdReached && compactableMessageCount > 0;
+    const outputThresholdNeedsCompaction = (maxOutputThresholdReached || contextFallbackReached) && compactableMessageCount > 0;
     if (usagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT || outputThresholdNeedsCompaction) {
       if (compactableMessageCount <= 0) {
         throw new AppError(
@@ -4506,7 +4512,7 @@ export class AiManager {
     const compaction = await this.compactConversation(input);
     if (compaction.changed !== true) {
       const inputBelowForcedThreshold = (Number(inspection.usage.usagePercent) || 0) < FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT;
-      if (inspection.usage.maxOutputThresholdReached === true && inputBelowForcedThreshold) {
+      if ((inspection.usage.maxOutputThresholdReached === true || inspection.usage.contextFallbackReached === true) && inputBelowForcedThreshold) {
         return {
           action: "ready",
           reason: "output_budget_already_fits",
@@ -4520,7 +4526,8 @@ export class AiManager {
       );
     }
     const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
-    if ((Number(compactedUsage.usagePercent) || 0) >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT) {
+    if ((Number(compactedUsage.usagePercent) || 0) >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT
+      || compactedUsage.contextFallbackReached === true) {
       throw new AppError(
         413,
         "AI_CONTEXT_STILL_OVER_LIMIT",
@@ -5625,6 +5632,7 @@ export class AiManager {
       ...thinkingParameters(provider, model)
     };
     const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
+    const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     let effectiveInput = input;
     let context = this.buildContext(effectiveInput, model);
     let messages = this.buildMessages(effectiveInput, context);
@@ -6093,8 +6101,14 @@ export class AiManager {
         const projectedUsagePercent = Math.round(
           (currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS) / contextWindow * 100
         );
-        const maxOutputThresholdReached = configuredOutputTokens >= contextWindow * FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT / 100;
-        return projectedUsagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT || maxOutputThresholdReached;
+        const projectedRemainingTokens = Math.max(
+          0,
+          contextWindow - currentTokens - maximumNewToolTokens - TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS
+        );
+        const maxOutputThresholdReached = configuredOutputTokens >= contextWindow * contextCompactThreshold / 100;
+        return projectedUsagePercent >= contextCompactThreshold
+          || maxOutputThresholdReached
+          || projectedRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
       };
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];

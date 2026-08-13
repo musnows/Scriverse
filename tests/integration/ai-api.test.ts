@@ -1266,7 +1266,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     setLegacyModelContextWindow(modelId, 128_000);
-    runtime.database.run("UPDATE models SET preset_json = ? WHERE id = ?", JSON.stringify({ max_tokens: 128_000 }), modelId);
+    runtime.database.run("UPDATE models SET preset_json = ? WHERE id = ?", JSON.stringify({ max_tokens: 110_000 }), modelId);
     runtime.store.saveChapter(chapterId, { content: "工具分页证据。".repeat(2_500) });
     let completionCount = 0;
     let compactRequestCount = 0;
