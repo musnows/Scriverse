@@ -1,5 +1,6 @@
 import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
+import type { SQLInputValue } from "node:sqlite";
 import {
   Database,
   ENTITY_VERSION_BASELINE_MIGRATION_VERSION,
@@ -414,10 +415,24 @@ type ChapterOutlineBoardVolume = {
   id: string;
   title: string;
   sortOrder: number;
+  chapterCount: number;
+  filteredChapterCount: number;
   chapters: ChapterOutlineBoardChapter[];
 };
 
+type ChapterOutlineBoardFilters = {
+  query: string;
+  volumeId: string;
+  outlineStatus: "all" | "empty" | "draft" | "ready" | "completed";
+  foreshadowStatus: "all" | "none" | "unresolved" | "resolved" | "abandoned";
+  sort: "tree" | "status" | "foreshadows" | "title";
+};
+
 const CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH = 600;
+
+function chapterOutlineBoardLikePattern(value: string): string {
+  return `%${value.normalize("NFKC").toLocaleLowerCase("zh-CN").replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+}
 
 type ForeshadowOccurrenceInput = {
   chapterId: string;
@@ -3585,9 +3600,18 @@ export class Store {
     return this.mapChapterOutline(row, chapter);
   }
 
-  getChapterOutlineBoard(workId: string): {
+  getChapterOutlineBoard(workId: string, filters: ChapterOutlineBoardFilters, pagination: Pagination): {
     workId: string;
     volumes: ChapterOutlineBoardVolume[];
+    volumeOptions: Array<Omit<ChapterOutlineBoardVolume, "chapters">>;
+    filters: ChapterOutlineBoardFilters;
+    page: number;
+    limit: number;
+    itemCount: number;
+    total: number;
+    pageCount: number;
+    hasMore: boolean;
+    nextPage: number | null;
     stats: {
       chapterCount: number;
       outlinedChapterCount: number;
@@ -3597,7 +3621,102 @@ export class Store {
   } {
     this.getWork(workId);
     const previewLength = CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH;
-    const rows = this.db.all(
+    const where = [
+      "chapter.work_id = ?",
+      "chapter.deleted_at IS NULL",
+      "volume.deleted_at IS NULL"
+    ];
+    const whereParams: SQLInputValue[] = [workId];
+    if (filters.volumeId) {
+      where.push("chapter.volume_id = ?");
+      whereParams.push(filters.volumeId);
+    }
+    if (filters.outlineStatus === "empty") {
+      where.push("outline.chapter_id IS NULL");
+    } else if (filters.outlineStatus !== "all") {
+      where.push("outline.status = ?");
+      whereParams.push(filters.outlineStatus);
+    }
+
+    const associatedForeshadow = (statusSql = ""): string => `(
+      EXISTS (
+        SELECT 1 FROM foreshadow_occurrences occurrence
+        JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+        WHERE occurrence.chapter_id = chapter.id AND foreshadow.work_id = chapter.work_id${statusSql}
+      ) OR EXISTS (
+        SELECT 1 FROM foreshadows foreshadow
+        WHERE foreshadow.work_id = chapter.work_id
+          AND foreshadow.planned_payoff_chapter_id = chapter.id${statusSql}
+      )
+    )`;
+    if (filters.foreshadowStatus === "none") {
+      where.push(`NOT ${associatedForeshadow()}`);
+    } else if (filters.foreshadowStatus !== "all") {
+      const statusSql = filters.foreshadowStatus === "unresolved"
+        ? " AND foreshadow.status IN ('planned', 'planted')"
+        : filters.foreshadowStatus === "resolved"
+          ? " AND foreshadow.status = 'resolved'"
+          : " AND foreshadow.status = 'abandoned'";
+      where.push(associatedForeshadow(statusSql));
+    }
+    const trimmedQuery = filters.query.trim();
+    if (trimmedQuery) {
+      const pattern = chapterOutlineBoardLikePattern(trimmedQuery);
+      where.push(`(
+        lower(chapter.title) LIKE ? ESCAPE '\\'
+        OR lower(chapter.chapter_type) LIKE ? ESCAPE '\\'
+        OR lower(outline.goal) LIKE ? ESCAPE '\\'
+        OR lower(outline.conflict) LIKE ? ESCAPE '\\'
+        OR lower(outline.turning_point) LIKE ? ESCAPE '\\'
+        OR lower(outline.notes) LIKE ? ESCAPE '\\'
+        OR EXISTS (
+          SELECT 1 FROM foreshadow_occurrences occurrence
+          JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+          WHERE occurrence.chapter_id = chapter.id AND foreshadow.work_id = chapter.work_id
+            AND lower(foreshadow.title) LIKE ? ESCAPE '\\'
+        )
+        OR EXISTS (
+          SELECT 1 FROM foreshadows foreshadow
+          WHERE foreshadow.work_id = chapter.work_id
+            AND foreshadow.planned_payoff_chapter_id = chapter.id
+            AND lower(foreshadow.title) LIKE ? ESCAPE '\\'
+        )
+      )`);
+      whereParams.push(...Array.from({ length: 8 }, () => pattern));
+    }
+    const whereSql = where.join(" AND ");
+
+    const associationCount = (statusSql = ""): string => `(
+      SELECT COUNT(*) FROM foreshadows sorted_foreshadow
+      WHERE sorted_foreshadow.work_id = chapter.work_id${statusSql}
+        AND (
+          sorted_foreshadow.planned_payoff_chapter_id = chapter.id
+          OR EXISTS (
+            SELECT 1 FROM foreshadow_occurrences sorted_occurrence
+            WHERE sorted_occurrence.foreshadow_id = sorted_foreshadow.id
+              AND sorted_occurrence.chapter_id = chapter.id
+          )
+        )
+    )`;
+    const chapterTreeOrder = "chapter.sort_order, chapter.created_at, chapter.id";
+    const chapterOrder = filters.sort === "status"
+      ? `CASE WHEN outline.chapter_id IS NULL THEN 0 WHEN outline.status = 'draft' THEN 1 WHEN outline.status = 'ready' THEN 2 ELSE 3 END, ${chapterTreeOrder}`
+      : filters.sort === "foreshadows"
+        ? `${associationCount(" AND sorted_foreshadow.status IN ('planned', 'planted')")} DESC, ${associationCount()} DESC, ${chapterTreeOrder}`
+        : filters.sort === "title"
+          ? `chapter.title COLLATE NOCASE, ${chapterTreeOrder}`
+          : chapterTreeOrder;
+    const orderSql = `volume.sort_order, volume.created_at, volume.id, ${chapterOrder}`;
+
+    const total = numberValue(this.db.get(
+      `SELECT COUNT(*) AS count
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       WHERE ${whereSql}`,
+      ...whereParams
+    ) ?? {}, "count");
+    const pageRows = this.db.all(
       `SELECT volume.id AS volume_id, volume.title AS volume_title, volume.sort_order AS volume_order,
        chapter.id AS chapter_id, chapter.title AS chapter_title, chapter.chapter_type,
        chapter.sort_order AS chapter_order,
@@ -3607,43 +3726,78 @@ export class Store {
        substr(outline.turning_point, 1, ?) AS turning_point, length(outline.turning_point) > ? AS turning_point_truncated,
        substr(outline.notes, 1, ?) AS notes, length(outline.notes) > ? AS notes_truncated,
        outline.status, outline.updated_at AS outline_updated_at
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       WHERE ${whereSql}
+       ORDER BY ${orderSql}
+       LIMIT ? OFFSET ?`,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      previewLength,
+      ...whereParams,
+      pagination.limit + 1,
+      pagination.offset
+    );
+    const chapterPage = paginated(pageRows, pagination, total);
+
+    const volumeRows = this.db.all(
+      `SELECT volume.id, volume.title, volume.sort_order,
+       COUNT(chapter.id) AS chapter_count
        FROM volumes volume
        LEFT JOIN chapters chapter
          ON chapter.volume_id = volume.id AND chapter.work_id = volume.work_id AND chapter.deleted_at IS NULL
-       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
        WHERE volume.work_id = ? AND volume.deleted_at IS NULL
-       ORDER BY volume.sort_order, volume.created_at, volume.id,
-         chapter.sort_order, chapter.created_at, chapter.id`,
-      previewLength,
-      previewLength,
-      previewLength,
-      previewLength,
-      previewLength,
-      previewLength,
-      previewLength,
-      previewLength,
+       GROUP BY volume.id
+       ORDER BY volume.sort_order, volume.created_at, volume.id`,
       workId
     );
-
+    const filteredVolumeRows = this.db.all(
+      `SELECT chapter.volume_id, COUNT(*) AS chapter_count
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       WHERE ${whereSql}
+       GROUP BY chapter.volume_id`,
+      ...whereParams
+    );
+    const filteredCountByVolume = new Map(filteredVolumeRows.map((row) => [
+      requiredString(row, "volume_id"),
+      numberValue(row, "chapter_count")
+    ]));
+    const volumeOptions = volumeRows.map((row) => ({
+      id: requiredString(row, "id"),
+      title: requiredString(row, "title"),
+      sortOrder: numberValue(row, "sort_order"),
+      chapterCount: numberValue(row, "chapter_count"),
+      filteredChapterCount: filteredCountByVolume.get(requiredString(row, "id")) ?? 0
+    }));
+    const volumeOptionById = new Map(volumeOptions.map((volume) => [volume.id, volume]));
+    const volumeOrderById = new Map(volumeOptions.map((volume, index) => [volume.id, index]));
     const volumeById = new Map<string, ChapterOutlineBoardVolume>();
     const chapterById = new Map<string, ChapterOutlineBoardChapter>();
-    let outlinedChapterCount = 0;
-    for (const row of rows) {
+    for (const row of chapterPage.items) {
       const volumeId = requiredString(row, "volume_id");
       let volume = volumeById.get(volumeId);
       if (!volume) {
+        const summary = volumeOptionById.get(volumeId);
         volume = {
           id: volumeId,
           title: requiredString(row, "volume_title"),
           sortOrder: numberValue(row, "volume_order"),
+          chapterCount: summary?.chapterCount ?? 0,
+          filteredChapterCount: summary?.filteredChapterCount ?? 0,
           chapters: []
         };
         volumeById.set(volumeId, volume);
       }
-      const chapterId = optionalString(row, "chapter_id");
-      if (!chapterId) continue;
+      const chapterId = requiredString(row, "chapter_id");
       const hasOutline = optionalString(row, "outline_chapter_id") !== null;
-      if (hasOutline) outlinedChapterCount += 1;
       const chapter: ChapterOutlineBoardChapter = {
         id: chapterId,
         title: requiredString(row, "chapter_title"),
@@ -3665,6 +3819,7 @@ export class Store {
       chapterById.set(chapterId, chapter);
     }
 
+    const chapterIds = [...chapterById.keys()];
     type MutableForeshadow = Omit<ChapterOutlineBoardForeshadow, "roles"> & {
       roles: Set<"setup" | "reminder" | "payoff">;
     };
@@ -3688,31 +3843,37 @@ export class Store {
       associations.set(chapterId, byForeshadow);
     };
 
-    const foreshadowRows = this.db.all(
-      `SELECT foreshadow.id, foreshadow.title, foreshadow.status, foreshadow.importance,
-       occurrence_chapter.id AS occurrence_chapter_id, occurrence_volume.id AS occurrence_volume_id,
-       occurrence.role, payoff_chapter.id AS payoff_chapter_id, payoff_volume.id AS payoff_volume_id
-       FROM foreshadows foreshadow
-       LEFT JOIN foreshadow_occurrences occurrence ON occurrence.foreshadow_id = foreshadow.id
-       LEFT JOIN chapters occurrence_chapter
-         ON occurrence_chapter.id = occurrence.chapter_id
-         AND occurrence_chapter.work_id = foreshadow.work_id
-         AND occurrence_chapter.deleted_at IS NULL
-       LEFT JOIN volumes occurrence_volume
-         ON occurrence_volume.id = occurrence_chapter.volume_id AND occurrence_volume.deleted_at IS NULL
-       LEFT JOIN chapters payoff_chapter
-         ON payoff_chapter.id = foreshadow.planned_payoff_chapter_id
-         AND payoff_chapter.work_id = foreshadow.work_id
-         AND payoff_chapter.deleted_at IS NULL
-       LEFT JOIN volumes payoff_volume
-         ON payoff_volume.id = payoff_chapter.volume_id AND payoff_volume.deleted_at IS NULL
-       WHERE foreshadow.work_id = ?
-       ORDER BY CASE foreshadow.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-         foreshadow.created_at, foreshadow.id, occurrence.created_at, occurrence.id`,
+    const placeholders = chapterIds.map(() => "?").join(", ");
+    const foreshadowRows = chapterIds.length === 0 ? [] : this.db.all(
+      `SELECT association.* FROM (
+         SELECT chapter.id AS chapter_id, foreshadow.id, foreshadow.title, foreshadow.status,
+           foreshadow.importance, foreshadow.created_at AS foreshadow_created_at,
+           occurrence.role, 0 AS planned_payoff, occurrence.created_at AS association_created_at,
+           occurrence.id AS association_id
+         FROM chapters chapter
+         JOIN foreshadow_occurrences occurrence ON occurrence.chapter_id = chapter.id
+         JOIN foreshadows foreshadow ON foreshadow.id = occurrence.foreshadow_id
+         WHERE chapter.id IN (${placeholders}) AND chapter.work_id = ? AND chapter.deleted_at IS NULL
+           AND foreshadow.work_id = ?
+         UNION ALL
+         SELECT chapter.id AS chapter_id, foreshadow.id, foreshadow.title, foreshadow.status,
+           foreshadow.importance, foreshadow.created_at AS foreshadow_created_at,
+           NULL AS role, 1 AS planned_payoff, foreshadow.created_at AS association_created_at,
+           foreshadow.id AS association_id
+         FROM chapters chapter
+         JOIN foreshadows foreshadow ON foreshadow.planned_payoff_chapter_id = chapter.id
+         WHERE chapter.id IN (${placeholders}) AND chapter.work_id = ? AND chapter.deleted_at IS NULL
+           AND foreshadow.work_id = ?
+       ) association
+       ORDER BY CASE association.importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+         association.foreshadow_created_at, association.id, association.association_created_at, association.association_id`,
+      ...chapterIds,
+      workId,
+      workId,
+      ...chapterIds,
+      workId,
       workId
     );
-    const foreshadowIds = new Set<string>();
-    const unresolvedForeshadowIds = new Set<string>();
     for (const row of foreshadowRows) {
       const source = {
         id: requiredString(row, "id"),
@@ -3720,18 +3881,13 @@ export class Store {
         status: requiredString(row, "status"),
         importance: requiredString(row, "importance")
       };
-      foreshadowIds.add(source.id);
-      if (source.status === "planned" || source.status === "planted") unresolvedForeshadowIds.add(source.id);
-      const occurrenceChapterId = optionalString(row, "occurrence_volume_id")
-        ? optionalString(row, "occurrence_chapter_id")
-        : null;
       const role = optionalString(row, "role");
       associate(
-        occurrenceChapterId,
+        requiredString(row, "chapter_id"),
         source,
-        role === "setup" || role === "reminder" || role === "payoff" ? role : undefined
+        role === "setup" || role === "reminder" || role === "payoff" ? role : undefined,
+        booleanValue(row, "planned_payoff")
       );
-      associate(optionalString(row, "payoff_volume_id") ? optionalString(row, "payoff_chapter_id") : null, source, undefined, true);
     }
 
     for (const [chapterId, byForeshadow] of associations) {
@@ -3743,14 +3899,52 @@ export class Store {
       }));
     }
 
+    const chapterFiltersActive = Boolean(trimmedQuery || filters.outlineStatus !== "all" || filters.foreshadowStatus !== "all");
+    if (pagination.page === 1) {
+      for (const option of volumeOptions) {
+        if (option.chapterCount !== 0) continue;
+        if (filters.volumeId && option.id !== filters.volumeId) continue;
+        if (chapterFiltersActive && filters.volumeId !== option.id) continue;
+        volumeById.set(option.id, { ...option, chapters: [] });
+      }
+    }
+    const volumes = [...volumeById.values()].sort((left, right) => (
+      (volumeOrderById.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (volumeOrderById.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+    ));
+    const statsRow = this.db.get(
+      `SELECT
+       (SELECT COUNT(*) FROM chapters chapter
+        JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+        WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL) AS chapter_count,
+       (SELECT COUNT(*) FROM chapter_outlines outline
+        JOIN chapters chapter ON chapter.id = outline.chapter_id
+        JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+        WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL) AS outlined_chapter_count,
+       (SELECT COUNT(*) FROM foreshadows foreshadow WHERE foreshadow.work_id = ?) AS foreshadow_count,
+       (SELECT COUNT(*) FROM foreshadows foreshadow
+        WHERE foreshadow.work_id = ? AND foreshadow.status IN ('planned', 'planted')) AS unresolved_foreshadow_count`,
+      workId,
+      workId,
+      workId,
+      workId
+    ) ?? {};
     return {
       workId,
-      volumes: [...volumeById.values()],
+      volumes,
+      volumeOptions,
+      filters: { ...filters, query: trimmedQuery },
+      page: chapterPage.page,
+      limit: chapterPage.limit,
+      itemCount: chapterById.size,
+      total,
+      pageCount: Math.max(1, Math.ceil(total / pagination.limit)),
+      hasMore: chapterPage.hasMore,
+      nextPage: chapterPage.nextPage,
       stats: {
-        chapterCount: chapterById.size,
-        outlinedChapterCount,
-        foreshadowCount: foreshadowIds.size,
-        unresolvedForeshadowCount: unresolvedForeshadowIds.size
+        chapterCount: numberValue(statsRow, "chapter_count"),
+        outlinedChapterCount: numberValue(statsRow, "outlined_chapter_count"),
+        foreshadowCount: numberValue(statsRow, "foreshadow_count"),
+        unresolvedForeshadowCount: numberValue(statsRow, "unresolved_foreshadow_count")
       }
     };
   }

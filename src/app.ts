@@ -1752,7 +1752,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listChapterOutlinesPage(request.params.workId, pagination) : store.listChapterOutlines(request.params.workId));
   });
   app.get("/api/works/:workId/outline-board", (request, response) => {
-    data(response, store.getChapterOutlineBoard(request.params.workId));
+    const query = parse(z.object({
+      q: z.string().trim().max(200).default(""),
+      volumeId: z.string().trim().max(200).default(""),
+      outlineStatus: z.enum(["all", "empty", "draft", "ready", "completed"]).default("all"),
+      foreshadowStatus: z.enum(["all", "none", "unresolved", "resolved", "abandoned"]).default("all"),
+      sort: z.enum(["tree", "status", "foreshadows", "title"]).default("tree")
+    }), request.query);
+    const pagination = parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 };
+    data(response, store.getChapterOutlineBoard(request.params.workId, {
+      query: query.q,
+      volumeId: query.volumeId,
+      outlineStatus: query.outlineStatus,
+      foreshadowStatus: query.foreshadowStatus,
+      sort: query.sort
+    }, pagination));
   });
   app.get("/api/chapters/:chapterId/outline", (request, response) => data(response, store.getChapterOutline(request.params.chapterId)));
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
