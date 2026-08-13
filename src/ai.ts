@@ -34,6 +34,20 @@ import { AttachmentStorage } from "./attachment-storage.js";
 import { PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
 import {
+  AI_WRITE_ENTITY_TYPES,
+  AI_WRITE_TOOL_IDS,
+  ENTITY_FIELD_LABELS,
+  buildFieldDiff,
+  entityBeforeSnapshot,
+  entityTypeModule,
+  type AiApprovalQuestionDraft,
+  type AiWriteApprovalManager as AiWriteApprovalManagerType,
+  type AiWriteEntityType,
+  type AiWriteToolSwitchKey,
+  type WriteOperationDraft
+} from "./ai-write-approvals.js";
+import { analysisTaskReadModules } from "./user-auth.js";
+import {
   assertOfficialGoogleVertexBaseUrl,
   fetchGoogleOAuthAccessToken,
   GoogleVertexTokenCache,
@@ -54,7 +68,7 @@ import { paginated, paginationSql, type PaginatedResult, type Pagination } from 
 import { currentRequestActor } from "./request-context.js";
 import { fetchSafeAiEndpoint } from "./security.js";
 import { defaultAiConversationTitle, normalizeCharacterName, Store, type AiConversationContext, type AiConversationTitleContext } from "./store.js";
-import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+import { canReadWorkModule, canWriteWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
 import { buildWritingCalendar, formatServerLocalClock, resolveServerTimeZone } from "./writing-progress-time.js";
 import {
   RELATIONSHIP_SEARCH_POLICY_VERSION,
@@ -225,6 +239,16 @@ type GenerateInput = {
   disableTools?: boolean;
   agentToolIds?: AgentToolId[];
   agentToolCallLimit?: number;
+  writeContext?: AiChatWriteContext;
+};
+
+/** 侧边栏对话中一次响应周期内的可写工具草稿收集器。 */
+export type AiChatWriteContext = {
+  conversationId: string;
+  requesterUserId: string;
+  conversationOwnerUserId: string;
+  planOperations: WriteOperationDraft[];
+  question: AiApprovalQuestionDraft | null;
 };
 
 type GenerateResult = {
@@ -369,9 +393,10 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"] as const;
-const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
+const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, ...AI_WRITE_TOOL_IDS, "recall_self", "recall_relationship"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
+type AiWriteToolId = (typeof AI_WRITE_TOOL_IDS)[number];
 const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_story_entities">, readonly WorkPermissionModule[]> = {
   story_index: ["prose"],
   read_chapters: ["prose"],
@@ -704,6 +729,57 @@ const recallRelationshipArguments = z.object({
   characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   cursor: agentToolCursor
 }).strict();
+const aiWriteEntityTypeSchema = z.enum(AI_WRITE_ENTITY_TYPES);
+const aiWriteEntityFieldsSchema = z.record(z.string().min(1).max(200), z.unknown());
+const createStoryEntityArguments = z.object({
+  entityType: aiWriteEntityTypeSchema,
+  fields: aiWriteEntityFieldsSchema,
+  summary: z.string().trim().min(1).max(500)
+}).strict();
+const updateStoryEntityArguments = z.object({
+  entityType: aiWriteEntityTypeSchema,
+  entityId: z.string().trim().min(1).max(300),
+  expectedVersionNo: z.number().int().min(1).max(100_000),
+  fields: aiWriteEntityFieldsSchema,
+  summary: z.string().trim().min(1).max(500)
+}).strict();
+const createChapterAnnotationArguments = z.object({
+  chapterId: z.string().trim().min(1).max(300),
+  kind: z.enum(["note", "todo"]),
+  startLine: z.number().int().min(1).max(1_000_000),
+  endLine: z.number().int().min(1).max(1_000_000),
+  note: z.string().trim().min(1).max(2_000),
+  summary: z.string().trim().min(1).max(500)
+}).strict().refine((input) => input.endLine >= input.startLine, { path: ["endLine"], message: "结束行号不能小于起始行号" });
+const aiWriteAnalysisTaskTypes = [
+  "structure",
+  "chapter-analysis",
+  "character-extraction",
+  "character-summary",
+  "character-identity-audit",
+  "timeline-analysis",
+  "worldview-analysis",
+  "setting-extraction",
+  "consistency-check",
+  "report-update",
+  "book-analysis",
+  "relationship-analysis"
+] as const;
+const aiWriteAnalysisScopeSchema = z.record(z.string().min(1).max(200), z.unknown());
+const createAnalysisTaskArguments = z.object({
+  taskType: z.enum(aiWriteAnalysisTaskTypes),
+  scope: aiWriteAnalysisScopeSchema,
+  modelId: z.string().trim().min(1).max(300).optional(),
+  summary: z.string().trim().min(1).max(500)
+}).strict();
+const askUserQuestionArguments = z.object({
+  question: z.string().trim().min(1).max(2_000),
+  options: z.array(z.object({
+    label: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(500).optional()
+  })).min(2).max(8),
+  summary: z.string().trim().min(1).max(500)
+}).strict();
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
@@ -783,6 +859,142 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "recall_relationship",
       description: "查询当前扮演角色的人物关系。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
       parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  create_story_entity: {
+    type: "function",
+    function: {
+      name: "create_story_entity",
+      description: [
+        "新建当前作品中的一个词条：setting（世界设定）、character（角色）、race（种族）、organization（组织）、timeline_event（时间线事件）、relationship（人物关系）、outline（章节大纲）、foreshadow（伏笔）。",
+        "调用后系统会基于当前数据库内容生成一份修改计划并请求用户确认；在用户确认前，修改尚未生效，禁止声称已经创建或修改了任何内容。",
+        "fields 只填写需要设置的字段：setting 支持 title/category/content/tags/status；character 支持 name/code/aliases/species/raceId/organizationIds/attributes/profile/currentState/isDead；race 支持 name/parentRaceId/description/isExtinct/settingsMarkdown；organization 支持 name/description/isDissolved/settingsMarkdown；timeline_event 支持 name/trackId/description/eventType/timeLabel/chapterIds/participantIds/location/causes/impactScope/evidence/status；relationship 支持 fromCharacterId/toCharacterId/category/subtype/keywords/directed/currentStatus/timeRange/confidence/evidence/confirmationStatus/locked；outline 支持 chapterId/goal/conflict/turningPoint/notes/status；foreshadow 支持 title/description/status/importance/plannedPayoffChapterId。",
+        "ID 字段（如 raceId、chapterIds、fromCharacterId）必须先用 search_story_entities 等只读工具查询确认，禁止编造。",
+        "summary 用一句话说明本次新建的对象与目的，会展示给用户确认。"
+      ].join("\n"),
+      parameters: {
+        type: "object",
+        properties: {
+          entityType: { type: "string", enum: [...AI_WRITE_ENTITY_TYPES], description: "词条类型" },
+          fields: { type: "object", description: "按词条类型填写的字段值" },
+          summary: { type: "string", description: "本次新建的一句话简述" }
+        },
+        required: ["entityType", "fields", "summary"],
+        additionalProperties: false
+      }
+    }
+  },
+  update_story_entity: {
+    type: "function",
+    function: {
+      name: "update_story_entity",
+      description: [
+        "编辑当前作品中的一个已有词条：setting（世界设定）、character（角色）、race（种族）、organization（组织）、timeline_event（时间线事件）、relationship（人物关系）、outline（章节大纲）、foreshadow（伏笔）。不支持删除词条。",
+        "调用后系统会基于当前数据库内容生成一份修改计划（含修改前值、修改后值与差异）并请求用户确认；在用户确认前，修改尚未生效，禁止声称已经修改了任何内容。",
+        "entityId 必须先通过 search_story_entities 等只读工具查询确认，禁止编造；outline 的 entityId 是章节 ID。",
+        "expectedVersionNo 必须是该词条当前版本号（只读工具结果中的 versionNo）；版本不匹配时计划将无法执行。",
+        "fields 只填写需要修改的字段，字段名与 create_story_entity 一致；未列出的字段保持原值。",
+        "summary 用一句话说明本次修改的对象与目的，会展示给用户确认。"
+      ].join("\n"),
+      parameters: {
+        type: "object",
+        properties: {
+          entityType: { type: "string", enum: [...AI_WRITE_ENTITY_TYPES], description: "词条类型" },
+          entityId: { type: "string", description: "目标词条 ID" },
+          expectedVersionNo: { type: "integer", minimum: 1, description: "目标词条当前版本号" },
+          fields: { type: "object", description: "需要修改的字段与修改后的值" },
+          summary: { type: "string", description: "本次修改的一句话简述" }
+        },
+        required: ["entityType", "entityId", "expectedVersionNo", "fields", "summary"],
+        additionalProperties: false
+      }
+    }
+  },
+  create_chapter_annotation: {
+    type: "function",
+    function: {
+      name: "create_chapter_annotation",
+      description: [
+        "为指定章节的指定行号范围创建评论（note）或待办（todo）。只创建批注，不修改正文内容、标题、章节顺序或分卷归属；不支持通过 AI 编辑章节正文。",
+        "startLine 与 endLine 是章节正文的行号（从 1 开始），跨度不超过 20 行；行号必须先用 read_chapters 或 grep 确认，禁止编造。",
+        "调用后系统会生成一份修改计划并请求用户确认；在用户确认前，批注尚未创建，禁止声称已经创建。",
+        "summary 用一句话说明本次批注的目的，会展示给用户确认。"
+      ].join("\n"),
+      parameters: {
+        type: "object",
+        properties: {
+          chapterId: { type: "string", description: "目标章节 ID" },
+          kind: { type: "string", enum: ["note", "todo"], description: "评论或待办" },
+          startLine: { type: "integer", minimum: 1 },
+          endLine: { type: "integer", minimum: 1 },
+          note: { type: "string", description: "批注内容" },
+          summary: { type: "string", description: "本次批注的一句话简述" }
+        },
+        required: ["chapterId", "kind", "startLine", "endLine", "note", "summary"],
+        additionalProperties: false
+      }
+    }
+  },
+  create_analysis_task: {
+    type: "function",
+    function: {
+      name: "create_analysis_task",
+      description: [
+        "创建当前作品的分析任务。任务创建后进入既有任务队列，任务类型、模型和分析范围必须与用户确认的内容一致。",
+        "taskType 可选：structure、chapter-analysis、character-extraction、character-summary、character-identity-audit、timeline-analysis、worldview-analysis、setting-extraction、consistency-check、report-update、book-analysis、relationship-analysis。",
+        "scope 描述分析范围：{type:'chapter',chapterId}、{type:'volume',volumeId}、{type:'book'} 等；引用 ID 必须先通过只读工具查询确认。relationship-analysis 的 scope 需要 {type:'chapter'|'book'|'settings',chapterId?,characterIds?...}。",
+        "modelId 可选，缺省使用任务默认模型。",
+        "调用后系统会生成一份修改计划并请求用户确认；在用户确认前，任务尚未创建，禁止声称任务已创建。",
+        "summary 用一句话说明本次任务的目的，会展示给用户确认。"
+      ].join("\n"),
+      parameters: {
+        type: "object",
+        properties: {
+          taskType: { type: "string", enum: [...aiWriteAnalysisTaskTypes], description: "分析任务类型" },
+          scope: { type: "object", description: "分析范围" },
+          modelId: { type: "string", description: "可选的模型 ID" },
+          summary: { type: "string", description: "本次任务的一句话简述" }
+        },
+        required: ["taskType", "scope", "summary"],
+        additionalProperties: false
+      }
+    }
+  },
+  ask_user_question: {
+    type: "function",
+    function: {
+      name: "ask_user_question",
+      description: [
+        "向用户提出一个问题。一次只能提出一个问题；用户通过界面选择预置选项或输入自定义回答。",
+        "必须提供至少两个预置选项；把最推荐的选项放在 options 数组的第一个位置，界面会为第一个选项标注“（最推荐）”。",
+        "调用后问题会展示给用户；本轮回复请以向用户提问结束并停止生成。用户回答前不得假定任何答案；用户未回答、拒绝、过期或失效时，不得伪造回答，也不得依赖该回答继续执行写操作。",
+        "用户回答后会作为新的对话消息回传给你，届时候根据回答继续。",
+        "summary 用一句话说明为什么需要提问。"
+      ].join("\n"),
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "要提问的问题" },
+          options: {
+            type: "array",
+            minItems: 2,
+            maxItems: 8,
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string", description: "选项文字" },
+                description: { type: "string", description: "可选的选项说明" }
+              },
+              required: ["label"],
+              additionalProperties: false
+            },
+            description: "预置选项；第一个为最推荐选项"
+          },
+          summary: { type: "string", description: "提问原因的一句话简述" }
+        },
+        required: ["question", "options", "summary"],
+        additionalProperties: false
+      }
     }
   }
 };
@@ -1875,7 +2087,8 @@ export class AiManager {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly validateOutboundUrl?: (url: string) => Promise<readonly { address: string; family: 4 | 6 }[] | void>,
     private readonly authorizeTaskRun?: (task: Record<string, unknown>, actor?: TaskRunActor) => void,
-    private readonly attachmentStorage?: AttachmentStorage
+    private readonly attachmentStorage?: AttachmentStorage,
+    private readonly approvals?: AiWriteApprovalManagerType
   ) {
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
@@ -3274,11 +3487,28 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
+    const conversationOwnerUserId = this.resolveConversationOwnerUserId(input.workId, input.conversationId);
+    const requesterUserId = currentRequestActor()?.userId ?? "";
+    const writeContext: AiChatWriteContext | undefined = this.approvals && input.conversationId && !this.roleplayCharacterId(input.workId, input.conversationId)
+      ? {
+          conversationId: input.conversationId,
+          requesterUserId,
+          conversationOwnerUserId,
+          planOperations: [],
+          question: null
+        }
+      : undefined;
     const chatTools = this.enabledAgentTools(input.workId, "chat", input.agentToolIds, input.conversationId);
     const generated = chatTools.length
-      ? await this.generate({ ...input, taskType: "chat" })
+      ? await this.generate({ ...input, taskType: "chat", ...(writeContext ? { writeContext } : {}) })
       : await this.generateStream({ ...input, taskType: "chat" }, onDelta);
     if (chatTools.length) onDelta(generated.content);
+    const pendingPlans = writeContext && writeContext.planOperations.length > 0
+      ? [this.persistAiWritePlan(input.workId, writeContext)]
+      : [];
+    const pendingQuestions = writeContext && writeContext.question
+      ? [this.persistAiWriteQuestion(input.workId, writeContext)]
+      : [];
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3331,8 +3561,59 @@ export class AiManager {
       toolCalls: generated.toolCalls,
       processSteps: generated.processSteps,
       contextUsage: generated.contextUsage,
-      ...(conversationMessage ? { conversationMessage } : {})
+      ...(conversationMessage ? { conversationMessage } : {}),
+      ...(pendingPlans.length > 0 ? { pendingPlans } : {}),
+      ...(pendingQuestions.length > 0 ? { pendingQuestions } : {})
     };
+  }
+
+  /** 对话归属用户：对话创建者，未绑定对话时回退当前操作者。 */
+  private resolveConversationOwnerUserId(workId: string, conversationId?: string): string {
+    if (conversationId) {
+      const row = this.store.db.get("SELECT created_by_user_id FROM ai_conversations WHERE id = ?", conversationId);
+      const ownerId = typeof row?.created_by_user_id === "string" ? row.created_by_user_id : "";
+      if (ownerId) return ownerId;
+    }
+    return currentRequestActor()?.userId ?? "";
+  }
+
+  /** 把本次响应收集的写操作草稿持久化为不可变修改计划。 */
+  private persistAiWritePlan(workId: string, writeContext: AiChatWriteContext): Record<string, unknown> {
+    if (!this.approvals) throw new AppError(500, "WRITE_PLAN_UNAVAILABLE", "写计划服务不可用");
+    const operations = writeContext.planOperations;
+    // 持久化前校验权限交集与工具开关，任一不足整单拒绝。
+    const denied = operations.flatMap((operation) => this.approvals!.missingIntersectionWriteModules(
+      workId,
+      writeContext.requesterUserId,
+      writeContext.conversationOwnerUserId,
+      [operation.targetModule]
+    ).map((module) => ({ operation, module })));
+    if (denied.length > 0) {
+      throw new AppError(403, "AI_WRITE_PLAN_PERMISSION_DENIED", "当前用户或 AI 对话归属用户缺少词条模块写权限，无法生成修改计划", {
+        modules: [...new Set(denied.map((item) => item.module))]
+      });
+    }
+    const summary = operations.map((operation) => operation.aiSummary).join("；") || "AI 修改计划";
+    return this.approvals.createPlan({
+      workId,
+      conversationId: writeContext.conversationId,
+      requesterUserId: writeContext.requesterUserId,
+      conversationOwnerUserId: writeContext.conversationOwnerUserId,
+      summary,
+      operations
+    });
+  }
+
+  /** 把本次响应的问题草稿持久化。 */
+  private persistAiWriteQuestion(workId: string, writeContext: AiChatWriteContext): Record<string, unknown> {
+    if (!this.approvals || !writeContext.question) throw new AppError(500, "WRITE_QUESTION_UNAVAILABLE", "提问服务不可用");
+    return this.approvals.createQuestion({
+      workId,
+      conversationId: writeContext.conversationId,
+      requesterUserId: writeContext.requesterUserId,
+      question: writeContext.question.question,
+      options: writeContext.question.options
+    });
   }
 
   private async generateConversationTitle(
@@ -4237,9 +4518,38 @@ export class AiManager {
     const enabled = new Set((sourceTools as unknown[])
       .filter((item): item is ConfiguredAgentToolId => typeof item === "string" && CONFIGURED_AGENT_TOOL_IDS.includes(item as ConfiguredAgentToolId)));
     const requested = requestedToolIds ? new Set(requestedToolIds) : null;
-    return CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
+    const readTools = CONFIGURED_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId)
       && (!requested || requested.has(toolId))
       && this.canReadWithAgentTool(permissions, toolId));
+    if (taskType !== "chat") return readTools;
+    return [...readTools, ...this.enabledAiWriteToolIds(workId, requested)];
+  }
+
+  /** 可写工具：仅侧边栏对话启用，逐模块校验开关与当前用户写权限。 */
+  private enabledAiWriteToolIds(workId: string, requested: ReadonlySet<AgentToolId> | null): AgentToolId[] {
+    if (!this.approvals) return [];
+    const switches = this.approvals.enabledWriteToolSwitches(workId);
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    const writeTools: AgentToolId[] = [];
+    const entityWritable = new Set(AI_WRITE_ENTITY_TYPES.filter((entityType) =>
+      switches.has(`entity:${entityTypeModule(entityType)}` as AiWriteToolSwitchKey) && canWriteWorkModule(permissions, entityTypeModule(entityType))
+    ));
+    if (entityWritable.size > 0) {
+      if (!requested || requested.has("create_story_entity")) writeTools.push("create_story_entity");
+      if (!requested || requested.has("update_story_entity")) writeTools.push("update_story_entity");
+    }
+    if ((!requested || requested.has("create_chapter_annotation"))
+      && switches.has("annotation") && canWriteWorkModule(permissions, "prose")) {
+      writeTools.push("create_chapter_annotation");
+    }
+    if ((!requested || requested.has("create_analysis_task"))
+      && switches.has("analysis-task") && canWriteWorkModule(permissions, "ai-analysis")) {
+      writeTools.push("create_analysis_task");
+    }
+    if ((!requested || requested.has("ask_user_question")) && switches.has("ask-question")) {
+      writeTools.push("ask_user_question");
+    }
+    return writeTools;
   }
 
   private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): Record<string, unknown>[] {
@@ -4372,7 +4682,8 @@ export class AiManager {
     roleplayCharacterId: string | null = null,
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
-    onUsage?: (usage: ResolvedAiTokenUsage) => void
+    onUsage?: (usage: ResolvedAiTokenUsage) => void,
+    writeContext?: AiChatWriteContext | null
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -4404,6 +4715,11 @@ export class AiManager {
       : name === "image" ? imageArguments
       : name === "recall_self" ? recallSelfArguments
       : name === "recall_relationship" ? recallRelationshipArguments
+      : name === "create_story_entity" ? createStoryEntityArguments
+      : name === "update_story_entity" ? updateStoryEntityArguments
+      : name === "create_chapter_annotation" ? createChapterAnnotationArguments
+      : name === "create_analysis_task" ? createAnalysisTaskArguments
+      : name === "ask_user_question" ? askUserQuestionArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
     const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
@@ -4412,10 +4728,13 @@ export class AiManager {
     const configuredToolId = toolId && CONFIGURED_AGENT_TOOL_IDS.includes(toolId as ConfiguredAgentToolId)
       ? toolId as ConfiguredAgentToolId
       : null;
+    const writeToolId = toolId && (AI_WRITE_TOOL_IDS as readonly string[]).includes(toolId) ? toolId as AiWriteToolId : null;
     const toolAvailable = roleplayCharacterId
       ? (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
         || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
-      : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
+      : writeToolId !== null
+        ? Boolean(writeContext && this.approvals && enabledTools.has(writeToolId))
+        : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
     if (!schema || !toolId || !toolAvailable) {
       return {
         id: toolCall.id,
@@ -4439,6 +4758,12 @@ export class AiManager {
       };
     }
     const args = parsed.data;
+    if (writeToolId !== null) {
+      if (!writeContext || !this.approvals) {
+        throw new Error("Write tool context is required for ai write tools");
+      }
+      return this.executeAiWriteTool(workId, writeToolId, args as Record<string, unknown>, suppliedArguments, calledAt, toolCall.id, writeContext);
+    }
     if (name === "recall_relationship") {
       if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_relationship");
       const { characters: requestedCharacters, cursor } = args as z.infer<typeof recallRelationshipArguments>;
@@ -4861,6 +5186,369 @@ export class AiManager {
       };
     }
     throw new Error(`Unhandled agent tool: ${name}`);
+  }
+
+  /** 可写工具执行：只把操作写入当前响应周期的计划草稿，不直接写库。 */
+  private executeAiWriteTool(
+    workId: string,
+    writeToolId: AiWriteToolId,
+    args: Record<string, unknown>,
+    suppliedArguments: Record<string, unknown> | null,
+    calledAt: string,
+    callId: string,
+    writeContext: AiChatWriteContext
+  ): AgentToolCallResult {
+    const approvals = this.approvals;
+    if (!approvals) {
+      return {
+        id: callId,
+        name: writeToolId,
+        calledAt,
+        arguments: suppliedArguments,
+        status: "failed",
+        result: { ok: false, error: { code: "WRITE_TOOL_UNAVAILABLE", message: "Write tools are not configured for this request." } }
+      };
+    }
+    const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
+    const switches = approvals.enabledWriteToolSwitches(workId);
+    const fail = (code: string, message: string): AgentToolCallResult => ({
+      id: callId,
+      name: writeToolId,
+      calledAt,
+      arguments: suppliedArguments,
+      status: "failed",
+      result: { ok: false, error: { code, message } }
+    });
+    const pushOperation = (operation: WriteOperationDraft): AgentToolCallResult | null => {
+      if (writeContext.planOperations.length >= approvals.maxOperations) {
+        return fail("WRITE_PLAN_OPERATION_LIMIT", `本次响应的修改计划最多包含 ${approvals.maxOperations} 项操作，请拆分后分批提交。`);
+      }
+      writeContext.planOperations.push(operation);
+      return null;
+    };
+    try {
+      if (writeToolId === "create_story_entity" || writeToolId === "update_story_entity") {
+        const input = args as z.infer<typeof createStoryEntityArguments | typeof updateStoryEntityArguments>;
+        const entityType = input.entityType as AiWriteEntityType;
+        const module = entityTypeModule(entityType);
+        if (!switches.has(`entity:${module}` as AiWriteToolSwitchKey)) return fail("WRITE_TOOL_SWITCH_DISABLED", `词条写入工具未开启（entity:${module}）。`);
+        if (!canWriteWorkModule(permissions, module)) return fail("WRITE_TOOL_PERMISSION_DENIED", `你没有“${entityType}”模块的写权限。`);
+        const fields = this.normalizedAiWriteEntityFields(entityType, input.fields);
+        if (Object.keys(fields).length === 0) return fail("WRITE_FIELDS_INVALID", "fields 中没有该词条类型支持的字段。");
+        if (entityType === "outline" && typeof fields.chapterId !== "string") {
+          return fail("OUTLINE_CHAPTER_REQUIRED", "大纲词条必须提供 chapterId 字段。");
+        }
+        if (writeToolId === "create_story_entity") {
+          this.assertAiWriteCreateReferences(workId, entityType, fields);
+          const limited = pushOperation({
+            operationType: "entity_create",
+            entityType,
+            targetModule: module,
+            aiSummary: input.summary,
+            before: null,
+            after: fields,
+            diff: buildFieldDiff(entityType, null, fields)
+          });
+          if (limited) return limited;
+          return {
+            id: callId,
+            name: writeToolId,
+            calledAt,
+            arguments: suppliedArguments,
+            status: "completed",
+            result: {
+              ok: true,
+              data: {
+                status: "plan_pending",
+                message: "新建词条已生成修改计划，等待用户确认后才生效；在用户确认前不要声称已经创建。",
+                entityType,
+                operationIndex: writeContext.planOperations.length - 1
+              }
+            }
+          };
+        }
+        const updateInput = input as z.infer<typeof updateStoryEntityArguments>;
+        const entity = this.aiWriteEntity(workId, entityType, updateInput.entityId);
+        if (!entity) return fail("WRITE_TARGET_NOT_FOUND", `目标词条不存在（${entityType}:${updateInput.entityId}）。`);
+        if (String(entity.workId) !== workId) return fail("WRITE_TARGET_WORK_MISMATCH", `目标词条不属于当前作品（${entityType}:${updateInput.entityId}）。`);
+        if (numberValue(entity, "versionNo") !== updateInput.expectedVersionNo) {
+          return fail("WRITE_TARGET_VERSION_CHANGED", `目标词条版本已变化：计划版本 ${updateInput.expectedVersionNo}，当前版本 ${numberValue(entity, "versionNo")}，请重新读取后再提交。`);
+        }
+        const before = entityBeforeSnapshot(entityType, entity, Object.keys(fields));
+        const limited = pushOperation({
+          operationType: "entity_update",
+          entityType,
+          targetModule: module,
+          targetId: updateInput.entityId,
+          targetVersion: updateInput.expectedVersionNo,
+          aiSummary: updateInput.summary,
+          before,
+          after: fields,
+          diff: buildFieldDiff(entityType, before, fields)
+        });
+        if (limited) return limited;
+        return {
+          id: callId,
+          name: writeToolId,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "completed",
+          result: {
+            ok: true,
+            data: {
+              status: "plan_pending",
+              message: "词条修改已生成修改计划，等待用户确认后才生效；在用户确认前不要声称已经修改。",
+              entityType,
+              operationIndex: writeContext.planOperations.length - 1
+            }
+          }
+        };
+      }
+      if (writeToolId === "create_chapter_annotation") {
+        const input = args as z.infer<typeof createChapterAnnotationArguments>;
+        if (!switches.has("annotation")) return fail("WRITE_TOOL_SWITCH_DISABLED", "正文批注工具未开启（annotation）。");
+        if (!canWriteWorkModule(permissions, "prose")) return fail("WRITE_TOOL_PERMISSION_DENIED", "你没有正文模块的写权限。");
+        const chapter = this.store.getChapter(input.chapterId);
+        if (String(chapter.workId) !== workId) return fail("ANNOTATION_CHAPTER_WORK_MISMATCH", "批注目标章节不属于当前作品。");
+        const lines = String(chapter.content).replace(/\r\n?/gu, "\n").split("\n");
+        if (input.startLine > lines.length || input.endLine > lines.length) {
+          return fail("ANNOTATION_LINE_RANGE_INVALID", "批注行号超出当前正文范围。");
+        }
+        if (input.endLine - input.startLine >= 20) return fail("ANNOTATION_LINE_RANGE_TOO_LARGE", "一次最多批注 20 行正文。");
+        const quote = lines.slice(input.startLine - 1, input.endLine).join("\n");
+        const after: Record<string, unknown> = {
+          chapterId: input.chapterId,
+          kind: input.kind,
+          startLine: input.startLine,
+          endLine: input.endLine,
+          note: input.note,
+          quote
+        };
+        const limited = pushOperation({
+          operationType: "annotation_create",
+          targetModule: "prose",
+          targetId: input.chapterId,
+          aiSummary: input.summary,
+          before: null,
+          after,
+          diff: [
+            { field: "kind", label: "批注类型", before: null, after: input.kind === "todo" ? "待办" : "评论" },
+            { field: "lines", label: "引用正文行号", before: null, after: `${input.startLine}-${input.endLine}` },
+            { field: "quote", label: "引用正文", before: null, after: quote },
+            { field: "note", label: "批注内容", before: null, after: input.note }
+          ]
+        });
+        if (limited) return limited;
+        return {
+          id: callId,
+          name: writeToolId,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "completed",
+          result: {
+            ok: true,
+            data: {
+              status: "plan_pending",
+              message: "正文批注已生成修改计划，等待用户确认后才生效；在用户确认前不要声称已经创建。",
+              operationIndex: writeContext.planOperations.length - 1
+            }
+          }
+        };
+      }
+      if (writeToolId === "create_analysis_task") {
+        const input = args as z.infer<typeof createAnalysisTaskArguments>;
+        if (!switches.has("analysis-task")) return fail("WRITE_TOOL_SWITCH_DISABLED", "分析任务工具未开启（analysis-task）。");
+        if (!canWriteWorkModule(permissions, "ai-analysis")) return fail("WRITE_TOOL_PERMISSION_DENIED", "你没有 AI 分析模块的写权限。");
+        const scope = input.scope as Record<string, unknown>;
+        if (!this.aiWriteAnalysisScopeValid(workId, input.taskType, scope)) {
+          return fail("ANALYSIS_SCOPE_INVALID", "分析范围引用的对象不属于当前作品或范围不完整。");
+        }
+        const requiredReadModules = analysisTaskReadModules(input.taskType, scope);
+        const deniedRead = requiredReadModules.filter((module) => !canReadWorkModule(permissions, module));
+        if (deniedRead.length > 0) return fail("ANALYSIS_SCOPE_READ_DENIED", `你没有读取分析所需资料模块的权限：${deniedRead.join("、")}。`);
+        const ownerDeniedRead = approvals.missingIntersectionReadModules(
+          workId,
+          writeContext.requesterUserId,
+          writeContext.conversationOwnerUserId,
+          requiredReadModules
+        );
+        if (ownerDeniedRead.length > 0) return fail("ANALYSIS_SCOPE_READ_DENIED", `AI 对话归属用户缺少读取分析所需资料模块的权限：${ownerDeniedRead.join("、")}。`);
+        if (input.modelId) {
+          try {
+            this.assertModelAvailable(input.modelId);
+          } catch {
+            return fail("ANALYSIS_MODEL_INVALID", "指定的分析模型不可用。");
+          }
+        }
+        const after: Record<string, unknown> = {
+          taskType: input.taskType,
+          scope,
+          ...(input.modelId ? { modelId: input.modelId } : {})
+        };
+        const limited = pushOperation({
+          operationType: "analysis_task",
+          targetModule: "ai-analysis",
+          aiSummary: input.summary,
+          before: null,
+          after,
+          diff: [
+            { field: "taskType", label: "任务类型", before: null, after: input.taskType },
+            { field: "model", label: "模型", before: null, after: input.modelId ?? "任务默认模型" },
+            { field: "scope", label: "分析范围", before: null, after: scope }
+          ]
+        });
+        if (limited) return limited;
+        return {
+          id: callId,
+          name: writeToolId,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "completed",
+          result: {
+            ok: true,
+            data: {
+              status: "plan_pending",
+              message: "分析任务已生成修改计划，等待用户确认后才创建；在用户确认前不要声称任务已创建。",
+              operationIndex: writeContext.planOperations.length - 1
+            }
+          }
+        };
+      }
+      if (writeToolId === "ask_user_question") {
+        const input = args as z.infer<typeof askUserQuestionArguments>;
+        if (!switches.has("ask-question")) return fail("WRITE_TOOL_SWITCH_DISABLED", "提问工具未开启（ask-question）。");
+        if (writeContext.question !== null) {
+          return fail("QUESTION_ALREADY_PENDING", "本轮已有一个待回答的问题，一次只能提出一个问题。");
+        }
+        writeContext.question = {
+          question: input.question,
+          options: input.options.map((option) => ({ label: option.label, ...(option.description ? { description: option.description } : {}) }))
+        };
+        return {
+          id: callId,
+          name: writeToolId,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "completed",
+          result: {
+            ok: true,
+            data: {
+              status: "question_pending",
+              message: "问题已展示给用户。请停止生成，以向用户提问结束本轮回复；用户回答前不得假定答案，不得伪造回答，不得依赖该回答继续执行写操作。"
+            }
+          }
+        };
+      }
+      return fail("WRITE_TOOL_UNKNOWN", `Unhandled write tool: ${writeToolId}`);
+    } catch (error) {
+      if (error instanceof AppError) return fail(error.code, error.message);
+      return fail("WRITE_TOOL_FAILED", error instanceof Error ? error.message : "Write tool execution failed.");
+    }
+  }
+
+  /** 过滤 AI 提供的字段，只保留该词条类型支持且已有标签的字段。 */
+  private normalizedAiWriteEntityFields(entityType: AiWriteEntityType, fields: Record<string, unknown>): Record<string, unknown> {
+    const output: Record<string, unknown> = {};
+    for (const [field, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      if (field in ENTITY_FIELD_LABELS[entityType]) output[field] = value;
+    }
+    return output;
+  }
+
+  private assertAiWriteCreateReferences(workId: string, entityType: AiWriteEntityType, fields: Record<string, unknown>): void {
+    if (entityType === "outline") {
+      const chapter = this.store.getChapter(String(fields.chapterId ?? ""));
+      if (String(chapter.workId) !== workId) throw new AppError(400, "OUTLINE_CHAPTER_WORK_MISMATCH", "大纲目标章节不属于当前作品");
+      return;
+    }
+    if (entityType === "relationship") {
+      for (const key of ["fromCharacterId", "toCharacterId"]) {
+        if (typeof fields[key] !== "string") continue;
+        const character = this.store.getCharacter(fields[key]);
+        if (String(character.workId) !== workId) throw new AppError(400, "RELATIONSHIP_CHARACTER_WORK_MISMATCH", "关系中的角色不属于当前作品");
+      }
+      return;
+    }
+    if (entityType === "character") {
+      if (typeof fields.raceId === "string" && fields.raceId) {
+        const race = this.store.getRace(fields.raceId);
+        if (String(race.workId) !== workId) throw new AppError(400, "CHARACTER_RACE_WORK_MISMATCH", "角色所属种族不属于当前作品");
+      }
+      if (Array.isArray(fields.organizationIds)) {
+        for (const organizationId of fields.organizationIds) {
+          if (typeof organizationId !== "string") continue;
+          const organization = this.store.getOrganization(organizationId);
+          if (String(organization.workId) !== workId) throw new AppError(400, "CHARACTER_ORGANIZATION_WORK_MISMATCH", "角色所属组织不属于当前作品");
+        }
+      }
+      return;
+    }
+    if (entityType === "timeline_event") {
+      if (typeof fields.trackId === "string" && fields.trackId) {
+        const track = this.store.getTimelineTrack(fields.trackId);
+        if (String(track.workId) !== workId) throw new AppError(400, "TIMELINE_TRACK_WORK_MISMATCH", "时间轴不属于当前作品");
+      }
+      for (const key of ["chapterIds", "participantIds"]) {
+        if (!Array.isArray(fields[key])) continue;
+        for (const referenced of fields[key]) {
+          if (typeof referenced !== "string") continue;
+          const entity = key === "chapterIds" ? this.store.getChapter(referenced) : this.store.getCharacter(referenced);
+          if (String(entity.workId) !== workId) throw new AppError(400, "TIMELINE_REFERENCE_WORK_MISMATCH", "时间线事件引用的对象不属于当前作品");
+        }
+      }
+      return;
+    }
+    if (entityType === "foreshadow" && typeof fields.plannedPayoffChapterId === "string" && fields.plannedPayoffChapterId) {
+      const chapter = this.store.getChapter(fields.plannedPayoffChapterId);
+      if (String(chapter.workId) !== workId) throw new AppError(400, "FORESHADOW_CHAPTER_WORK_MISMATCH", "伏笔揭晓章节不属于当前作品");
+    }
+  }
+
+  private aiWriteEntity(workId: string, entityType: AiWriteEntityType, entityId: string): Record<string, unknown> | null {
+    try {
+      switch (entityType) {
+        case "setting": return this.store.getSetting(entityId);
+        case "character": return this.store.getCharacter(entityId);
+        case "race": return this.store.getRace(entityId);
+        case "organization": return this.store.getOrganization(entityId);
+        case "timeline_event": return this.store.getTimelineEvent(entityId);
+        case "relationship": return this.store.getRelationship(entityId);
+        case "foreshadow": return this.store.getForeshadow(entityId);
+        case "outline": return this.store.getChapterOutline(entityId);
+        default: return null;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  private aiWriteAnalysisScopeValid(workId: string, taskType: string, scope: Record<string, unknown>): boolean {
+    if (typeof scope.chapterId === "string") {
+      try {
+        if (String(this.store.getChapter(scope.chapterId).workId) !== workId) return false;
+      } catch {
+        return false;
+      }
+    }
+    if (typeof scope.volumeId === "string") {
+      const volume = this.store.db.get("SELECT work_id FROM volumes WHERE id = ?", scope.volumeId);
+      if (!volume || String(volume.work_id) !== workId) return false;
+    }
+    if (Array.isArray(scope.characterIds)) {
+      for (const characterId of scope.characterIds) {
+        if (typeof characterId !== "string") return false;
+        try {
+          if (String(this.store.getCharacter(characterId).workId) !== workId) return false;
+        } catch {
+          return false;
+        }
+      }
+    }
+    if (taskType === "relationship-analysis" && typeof scope.type === "string" && scope.type === "chapter" && typeof scope.chapterId !== "string") {
+      return false;
+    }
+    return true;
   }
 
   private constrainParametersForContext(
@@ -5400,7 +6088,8 @@ export class AiManager {
             generationRoleplayCharacterId,
             allowedToolIds,
             input.signal,
-            trackUsage
+            trackUsage,
+            input.writeContext ?? null
           );
           logger.info("ai.tool_call.completed", {
             callId,
