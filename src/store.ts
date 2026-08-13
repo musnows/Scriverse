@@ -1641,20 +1641,31 @@ export class Store {
   }
 
   deleteWork(workId: string, expectedVersionNo?: number): string[] {
-    this.db.transaction(() => {
+    return this.db.transaction(() => {
       const current = this.getWork(workId);
       this.assertExpectedVersion("work", workId, expectedVersionNo, "作品", Number(current.versionNo));
       const timestamp = now();
+      const activeTaskIds = this.db.all(
+        "SELECT id FROM analysis_tasks WHERE work_id = ? AND status IN ('pending', 'running') ORDER BY id",
+        workId
+      ).map((row) => requiredString(row, "id"));
       const versionNo = this.recordEntityVersion("work", workId, "delete", null, "删除作品（可恢复）", timestamp);
       this.db.run("UPDATE works SET version_no = ?, deleted_at = ?, updated_at = ? WHERE id = ?", versionNo, timestamp, timestamp, workId);
+      this.db.run(
+        `UPDATE analysis_tasks SET status = 'expired', next_attempt_at = NULL, updated_at = ?
+         WHERE work_id = ? AND status IN ('pending', 'running')`,
+        timestamp,
+        workId
+      );
+      this.db.run("DELETE FROM relationship_source_index_queue WHERE work_id = ?", workId);
       this.audit(workId, "work.deleted", "work", workId, {
         title: current.title,
         versionNo,
         recoverable: true,
         expiresAt: recycleBinExpiresAt(timestamp)
       });
+      return activeTaskIds;
     });
-    return [];
   }
 
   restoreWork(workId: string, expectedVersionNo?: number): Record<string, unknown> {
@@ -8267,7 +8278,10 @@ export class Store {
 
   listAutoRunWorkIds(): string[] {
     return this.db.all(
-      "SELECT work_id FROM work_ai_settings WHERE auto_run_enabled = 1 ORDER BY work_id"
+      `SELECT settings.work_id FROM work_ai_settings settings
+       JOIN works work ON work.id = settings.work_id
+       WHERE settings.auto_run_enabled = 1 AND work.deleted_at IS NULL
+       ORDER BY settings.work_id`
     ).map((row) => requiredString(row, "work_id"));
   }
 

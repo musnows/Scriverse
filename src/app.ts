@@ -1545,7 +1545,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/works/:workId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    store.deleteWork(request.params.workId, input.expectedVersionNo);
+    ai.deleteWork(request.params.workId, input.expectedVersionNo);
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
