@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import request from "supertest";
 import sharp from "sharp";
@@ -94,17 +95,30 @@ describe("人物 Markdown 章节与附件", () => {
     }
   });
 
-  it("GIF 附件只按文件大小限制，不因动画帧数拦截", async () => {
+  it("允许 10,000 帧 GIF 附件并在持久化前拒绝 10,001 帧", async () => {
     const work = await createWork(runtime);
-    const upload = await request(runtime.app)
+    const boundaryUpload = await request(runtime.app)
       .post("/api/works/" + String(work.id) + "/attachments")
-      .attach("file", animatedGif(154), { filename: "多帧动画.gif", contentType: "image/gif" })
+      .attach("file", animatedGif(10_000), { filename: "一万帧动画.gif", contentType: "image/gif" })
       .expect(201);
-    expect(upload.body.data).toMatchObject({
+    expect(boundaryUpload.body.data).toMatchObject({
       originalMimeType: "image/gif",
-      pageCount: 154,
+      pageCount: 10_000,
       animated: true
     });
+
+    const excessiveGif = animatedGif(10_001);
+    const rejected = await request(runtime.app)
+      .post("/api/works/" + String(work.id) + "/attachments")
+      .attach("file", excessiveGif, { filename: "超限动画.gif", contentType: "image/gif" })
+      .expect(413);
+    expect(rejected.body.error).toEqual({
+      code: "ATTACHMENT_GIF_TOO_MANY_FRAMES",
+      message: "GIF 动画不能超过 10,000 帧"
+    });
+    expect(runtime.store.listAttachments(String(work.id))).toHaveLength(1);
+    const rejectedSha256 = createHash("sha256").update(excessiveGif).digest("hex");
+    expect(existsSync(runtime.attachmentStorage.path(`${rejectedSha256.slice(0, 2)}/${rejectedSha256}.gif`))).toBe(false);
   });
 
   it("作品在回收站时保留附件，彻底删除后清理不再使用的附件文件", async () => {
