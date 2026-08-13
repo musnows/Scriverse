@@ -311,8 +311,8 @@ export class AiWriteApprovalManager {
     if (!this.permissionResolver) return [...modules];
     const missing = new Set<WorkPermissionModule>();
     for (const module of modules) {
-      const requester = requesterUserId ? this.permissionResolver(requesterUserId, workId) : null;
-      const owner = conversationOwnerUserId ? this.permissionResolver(conversationOwnerUserId, workId) : null;
+      const requester = this.permissionResolver(requesterUserId ?? "", workId);
+      const owner = this.permissionResolver(conversationOwnerUserId ?? "", workId);
       if (!requester || !canWriteWorkModule(requester, module)) missing.add(module);
       if (!owner || !canWriteWorkModule(owner, module)) missing.add(module);
     }
@@ -329,8 +329,8 @@ export class AiWriteApprovalManager {
     if (!this.permissionResolver) return [...modules];
     const missing = new Set<WorkPermissionModule>();
     for (const module of modules) {
-      const requester = requesterUserId ? this.permissionResolver(requesterUserId, workId) : null;
-      const owner = conversationOwnerUserId ? this.permissionResolver(conversationOwnerUserId, workId) : null;
+      const requester = this.permissionResolver(requesterUserId ?? "", workId);
+      const owner = this.permissionResolver(conversationOwnerUserId ?? "", workId);
       if (!requester || !canReadWorkModule(requester, module)) missing.add(module);
       if (!owner || !canReadWorkModule(owner, module)) missing.add(module);
     }
@@ -716,10 +716,8 @@ export class AiWriteApprovalManager {
     const plan = this.getPlanRow(planId);
     if (requiredString(plan, "expires_at") <= timestamp) return "审批已过期";
     // 对话归属用户必须仍有作品访问权限。
-    if (this.permissionResolver) {
-      if (ownerUserId === null || this.permissionResolver(ownerUserId, workId) === null) {
-        return "AI 对话归属用户已失去该作品的访问权限";
-      }
+    if (this.permissionResolver && this.permissionResolver(ownerUserId ?? "", workId) === null) {
+      return "AI 对话归属用户已失去该作品的访问权限";
     }
     const switches = this.enabledWriteToolSwitches(workId);
     for (const operation of operations) {

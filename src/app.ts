@@ -1011,6 +1011,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     permissionResolver: options.disableUserAuth === true
       ? () => fullWorkModulePermissions()
       : (userId, workId) => {
+          if (!userId) return null;
           const user = auth.getUser(userId);
           if (!user || user.status !== "active") return null;
           return auth.workModulePermissions(user, workId, true);

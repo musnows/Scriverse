@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createTestRuntime, createWork } from "../helpers.js";
 import type { Runtime } from "../../src/app.js";
 import type { AiChatWriteContext } from "../../src/ai.js";
-import type { AgentToolId } from "../../src/ai.js";
+
+type AgentToolId = string;
 
 type ToolCallInput = { id: string; type: "function"; function: { name: string; arguments: unknown } };
 
