@@ -67,6 +67,34 @@ export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
 }
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
+/**
+ * AI 可写工具开关键：每个键对应一种可写能力，默认全部关闭，
+ * 仅拥有 AI 设置权限的用户可以在作品设置页主动开启。
+ */
+export const AI_WRITE_TOOL_KEYS = [
+  "settings",
+  "characters",
+  "races",
+  "organizations",
+  "timeline",
+  "relationships",
+  "outlines",
+  "chapter-annotations",
+  "analysis-tasks",
+  "ask-user-questions"
+] as const;
+export type AiWriteToolKey = (typeof AI_WRITE_TOOL_KEYS)[number];
+export type AiWriteToolSwitches = Record<AiWriteToolKey, boolean>;
+
+export function normalizeAiWriteToolSwitches(value: unknown): AiWriteToolSwitches {
+  const parsed = (() => {
+    if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+    if (typeof value === "string") return json<Record<string, unknown>>(value, {});
+    return {};
+  })();
+  return Object.fromEntries(AI_WRITE_TOOL_KEYS.map((key) => [key, parsed[key] === true])) as AiWriteToolSwitches;
+}
+
 type PlatformPageSizes = {
   drafts: number;
   settings: number;
@@ -123,7 +151,7 @@ function platformPageSizes(value: unknown): PlatformPageSizes {
   };
 }
 
-type SettingInput = {
+export type SettingInput = {
   title: string;
   category: string;
   content: string;
@@ -143,7 +171,7 @@ type DraftInput = {
   content: string;
 };
 
-type CharacterInput = {
+export type CharacterInput = {
   name: string;
   isDead?: boolean;
   code?: string;
@@ -198,7 +226,7 @@ type CharacterSnapshot = {
   firstChapterId: string | null;
 };
 
-type TimelineInput = {
+export type TimelineInput = {
   name: string;
   trackId?: string | null;
   description?: string;
@@ -214,13 +242,13 @@ type TimelineInput = {
   status?: string;
 };
 
-type TimelineTrackInput = {
+export type TimelineTrackInput = {
   name: string;
   description?: string;
   sortOrder?: number;
 };
 
-type RelationshipInput = {
+export type RelationshipInput = {
   fromCharacterId: string;
   toCharacterId: string;
   category: string;
@@ -235,7 +263,7 @@ type RelationshipInput = {
   locked?: boolean;
 };
 
-type OrganizationInput = {
+export type OrganizationInput = {
   name: string;
   isDissolved?: boolean;
   description?: string;
@@ -245,7 +273,7 @@ type OrganizationInput = {
   memberIds?: string[];
 };
 
-type RaceInput = {
+export type RaceInput = {
   name: string;
   isExtinct?: boolean;
   parentRaceId?: string | null;
@@ -345,7 +373,7 @@ function settingsFromKnowledgeSections(sections: KnowledgeSection[]): string[] {
   return sections.map((section) => section.contentMarkdown).filter((content) => content.trim());
 }
 
-type ChapterOutlineInput = {
+export type ChapterOutlineInput = {
   goal?: string;
   conflict?: string;
   turningPoint?: string;
@@ -360,7 +388,7 @@ type ForeshadowOccurrenceInput = {
   evidence?: unknown[];
 };
 
-type ForeshadowInput = {
+export type ForeshadowInput = {
   title: string;
   description?: string;
   status?: "planned" | "planted" | "resolved" | "abandoned";
@@ -1193,6 +1221,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
+      aiWriteTools: normalizeAiWriteToolSwitches(row?.ai_write_tools_json),
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
         ? null
         : String(row.image_tool_model_id),
@@ -1217,6 +1246,7 @@ export class Store {
     agentToolCallLimit?: number;
     agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
+    aiWriteTools?: Record<string, boolean>;
     imageToolModelId?: string | null;
     alwaysIncludeSettingInfo?: boolean;
     titleGenerationModelId?: string | null;
@@ -1238,6 +1268,9 @@ export class Store {
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
+    const nextAiWriteTools = normalizeAiWriteToolSwitches(
+      input.aiWriteTools === undefined ? current.aiWriteTools : input.aiWriteTools
+    );
     const nextImageToolModelId = input.imageToolModelId === undefined
       ? (current.imageToolModelId ? String(current.imageToolModelId) : null)
       : input.imageToolModelId?.trim() || null;
@@ -1251,8 +1284,8 @@ export class Store {
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
-         agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         agent_tools_json, ai_write_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1270,6 +1303,7 @@ export class Store {
          agent_tool_call_limit = excluded.agent_tool_call_limit,
          agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
+         ai_write_tools_json = excluded.ai_write_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
          image_tool_model_id = excluded.image_tool_model_id,
          always_include_setting_info = excluded.always_include_setting_info,
@@ -1291,6 +1325,7 @@ export class Store {
       Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
+      JSON.stringify(nextAiWriteTools),
       nextTitleGenerationModelId,
       nextImageToolModelId,
       nextAlwaysIncludeSettingInfo ? 1 : 0,
@@ -1309,6 +1344,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
+      aiWriteTools: nextAiWriteTools,
       imageToolModelId: nextImageToolModelId,
       alwaysIncludeSettingInfo: nextAlwaysIncludeSettingInfo,
       titleGenerationModelId: nextTitleGenerationModelId
