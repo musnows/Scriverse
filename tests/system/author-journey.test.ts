@@ -357,6 +357,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('<body>');
     expect(page.text).toContain('id="auth-view" class="auth-view hidden"');
     expect(page.text).toContain('<html lang="zh-CN" class="dev-auth-bypass">');
+    expect(page.text.match(/<img class="brand-mark" src="\/icon\.svg\?v=20260712" alt="">/gu)).toHaveLength(2);
     expect(page.text).toContain('id="presence-button"');
     expect(page.text).toContain('<span id="presence-count">1 人</span>');
     expect(page.text).not.toContain('id="presence-count">1 人在线</span>');
