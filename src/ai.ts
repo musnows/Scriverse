@@ -6098,17 +6098,14 @@ export class AiManager {
           agentToolCallQuotaNoticeBudgetChars(agentToolCallSoftWarningThreshold(agentToolCallLimit), agentToolCallLimit)
         );
         const maximumNewToolTokens = Math.ceil((AGENT_TOOL_RESULT_MAX_CHARS + noticeBudgetChars) * 1.1) * Math.max(1, toolCallCount);
-        const projectedUsagePercent = Math.round(
-          (currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS) / contextWindow * 100
-        );
-        const projectedRemainingTokens = Math.max(
-          0,
-          contextWindow - currentTokens - maximumNewToolTokens - TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS
-        );
+        // 这里只按工具结果写入后的 context 剩余判断；输出 max_tokens 由下方独立判断。
+        const projectedContextTokens = currentTokens + maximumNewToolTokens;
+        const projectedUsagePercent = Math.round(projectedContextTokens / contextWindow * 100);
+        const projectedContextRemainingTokens = Math.max(0, contextWindow - projectedContextTokens);
         const maxOutputThresholdReached = configuredOutputTokens >= contextWindow * contextCompactThreshold / 100;
         return projectedUsagePercent >= contextCompactThreshold
           || maxOutputThresholdReached
-          || projectedRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
+          || projectedContextRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
       };
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
