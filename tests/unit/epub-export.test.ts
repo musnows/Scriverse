@@ -1,4 +1,7 @@
 import JSZip from "jszip";
+import { buffer } from "node:stream/consumers";
+import { Writable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import sharp from "sharp";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
@@ -8,13 +11,6 @@ import {
   epubDownloadFileName
 } from "../../src/epub-export.js";
 
-const archiveOptions = {
-  type: "nodebuffer" as const,
-  streamFiles: false,
-  compression: "DEFLATE" as const,
-  compressionOptions: { level: 6 }
-};
-
 let validWebp: Buffer;
 
 async function generatedArchive(input: Parameters<typeof createEpubArchive>[0]): Promise<{ buffer: Buffer; zip: JSZip }> {
@@ -23,8 +19,8 @@ async function generatedArchive(input: Parameters<typeof createEpubArchive>[0]):
     modifiedAt: "2026-08-12T13:00:00.000Z",
     ...input
   });
-  const buffer = await archive.generateAsync(archiveOptions);
-  return { buffer, zip: await JSZip.loadAsync(buffer) };
+  const generated = await buffer(archive);
+  return { buffer: generated, zip: await JSZip.loadAsync(generated) };
 }
 
 describe("EPUB 导出生成器", () => {
@@ -118,6 +114,51 @@ describe("EPUB 导出生成器", () => {
     expect(chapter).toContain("星海中的长段落 &amp; 航线。");
     expect(chapter).toContain("结尾。");
     expect(chapter).not.toContain("<标签>");
+  });
+
+  it("消费到对应 ZIP 条目时才读取章节，并在读取失败后停止", async () => {
+    const reads: string[] = [];
+    const archive = await createEpubArchive({
+      title: "按章读取",
+      identifier: "urn:uuid:11111111-2222-4333-8444-555555555555",
+      modifiedAt: "2026-08-12T13:00:00.000Z",
+      volumes: [{
+        title: "正文",
+        chapters: [
+          { title: "第一章", content: () => { reads.push("first"); return "第一章正文"; } },
+          { title: "第二章", content: () => { reads.push("second"); throw new Error("chapter read failed"); } },
+          { title: "第三章", content: () => { reads.push("third"); return "不应读取"; } }
+        ]
+      }]
+    });
+
+    expect(reads).toEqual([]);
+    await expect(buffer(archive)).rejects.toThrow("chapter read failed");
+    expect(reads).toEqual(["first", "second"]);
+  });
+
+  it("下游断开时不继续读取尚未写出的章节", async () => {
+    const reads: string[] = [];
+    const archive = await createEpubArchive({
+      title: "中断导出",
+      identifier: "urn:uuid:11111111-2222-4333-8444-555555555555",
+      modifiedAt: "2026-08-12T13:00:00.000Z",
+      volumes: [{
+        title: "正文",
+        chapters: Array.from({ length: 20 }, (_, index) => ({
+          title: `第${index + 1}章`,
+          content: () => { reads.push(String(index)); return "正文".repeat(10_000); }
+        }))
+      }]
+    });
+    const disconnected = new Writable({
+      write(_chunk, _encoding, callback) {
+        callback(new Error("client disconnected"));
+      }
+    });
+
+    await expect(pipeline(archive, disconnected)).rejects.toThrow("client disconnected");
+    expect(reads).toEqual([]);
   });
 
   it("安全生成中文下载文件名和回退响应头", () => {

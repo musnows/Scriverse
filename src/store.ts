@@ -9721,23 +9721,63 @@ export class Store {
   }
 
   async exportEpub(workId: string, volumeId?: string): Promise<{ title: string; archive: Awaited<ReturnType<typeof createEpubArchive>> }> {
-    const tree = this.getWorkTree(workId);
-    const allVolumes = tree.volumes as Record<string, unknown>[];
-    const selectedVolume = volumeId ? allVolumes.find((volume) => String(volume.id) === volumeId) : undefined;
+    const work = this.getWork(workId);
+    const allVolumeRows = this.db.all(
+      "SELECT id, title FROM volumes WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+      workId
+    );
+    const selectedVolume = volumeId ? allVolumeRows.find((volume) => requiredString(volume, "id") === volumeId) : undefined;
     if (volumeId && !selectedVolume) throw notFound("分卷");
-    const sourceVolumes = selectedVolume ? [selectedVolume] : allVolumes;
-    const title = selectedVolume ? `${String(tree.title)} - ${String(selectedVolume.title)}` : String(tree.title);
+    const sourceVolumeRows = selectedVolume ? [selectedVolume] : allVolumeRows;
+    const chapterRows = volumeId
+      ? this.db.all(
+        `SELECT id, volume_id, title, version_no FROM chapters
+         WHERE work_id = ? AND volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at`,
+        workId,
+        volumeId
+      )
+      : this.db.all(
+        `SELECT id, volume_id, title, version_no FROM chapters
+         WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at`,
+        workId
+      );
+    const chaptersByVolume = new Map<string, Row[]>();
+    for (const chapter of chapterRows) {
+      const chapterVolumeId = requiredString(chapter, "volume_id");
+      const chapters = chaptersByVolume.get(chapterVolumeId) ?? [];
+      chapters.push(chapter);
+      chaptersByVolume.set(chapterVolumeId, chapters);
+    }
+    const title = selectedVolume ? `${String(work.title)} - ${requiredString(selectedVolume, "title")}` : String(work.title);
     const cover = this.findWorkCover(workId);
     const archive = await createEpubArchive({
       title,
-      author: String(tree.author ?? ""),
-      description: String(tree.description ?? ""),
-      language: String(tree.language ?? "zh-CN"),
-      volumes: sourceVolumes.map((volume) => ({
-        title: String(volume.title),
-        chapters: (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
-          title: String(chapter.title),
-          content: String(chapter.content ?? "")
+      author: String(work.author ?? ""),
+      description: String(work.description ?? ""),
+      language: String(work.language ?? "zh-CN"),
+      volumes: sourceVolumeRows.map((volume) => ({
+        title: requiredString(volume, "title"),
+        chapters: (chaptersByVolume.get(requiredString(volume, "id")) ?? []).map((chapter) => ({
+          title: requiredString(chapter, "title"),
+          content: () => {
+            const chapterId = requiredString(chapter, "id");
+            const versionNo = numberValue(chapter, "version_no");
+            const current = this.db.get(
+              "SELECT content FROM chapters WHERE id = ? AND work_id = ? AND version_no = ? AND deleted_at IS NULL",
+              chapterId,
+              workId,
+              versionNo
+            );
+            if (current) return requiredString(current, "content");
+            const historical = this.db.get(
+              "SELECT content FROM chapter_versions WHERE chapter_id = ? AND work_id = ? AND version_no = ?",
+              chapterId,
+              workId,
+              versionNo
+            );
+            if (!historical) throw new AppError(409, "EPUB_EXPORT_SOURCE_CHANGED", "导出过程中章节版本已不可用，请重新导出");
+            return requiredString(historical, "content");
+          }
         }))
       })),
       cover: cover ? { mimeType: cover.mimeType, content: cover.content } : null

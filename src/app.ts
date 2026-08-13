@@ -7,6 +7,7 @@ import { dirname, extname, join } from "node:path";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
@@ -782,17 +783,11 @@ function noContent(response: Response): void {
   response.status(204).end();
 }
 
-async function sendEpub(response: Response, archive: JSZip, title: string, fallbackStem: string): Promise<void> {
+async function sendEpub(response: Response, archive: Readable, title: string, fallbackStem: string): Promise<void> {
   response.type(EPUB_MIME_TYPE);
   response.setHeader("Content-Disposition", epubContentDisposition(title, fallbackStem));
   response.setHeader("Cache-Control", "private, no-store");
-  await pipeline(archive.generateNodeStream({
-    type: "nodebuffer",
-    // 逐条目压缩后再写入，确保首个 mimetype 本地头包含确定长度且没有额外字段。
-    streamFiles: false,
-    compression: "DEFLATE",
-    compressionOptions: { level: 6 }
-  }), response);
+  await pipeline(archive, response);
 }
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
