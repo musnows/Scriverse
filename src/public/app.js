@@ -2875,6 +2875,7 @@ async function initializeAuthentication() {
   observeSystemBootId(session.bootId);
   applyAuthenticatedUser(session);
   scheduleSystemBootCheck();
+  scheduleBackupFailureCheck();
   await loadPlatformUiSettings();
   return true;
 }
@@ -3373,6 +3374,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3640,6 +3642,7 @@ async function showWorkAudit() {
   $("#platform-usage-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#work-audit-view").classList.remove("hidden");
+  $("#backup-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
@@ -3986,7 +3989,8 @@ async function showSettingsHub() {
   const alreadyInSettings = !$("#settings-hub-view").classList.contains("hidden")
     || !$("#platform-ai-view").classList.contains("hidden")
     || !$("#platform-usage-view").classList.contains("hidden")
-    || !$("#work-audit-view").classList.contains("hidden");
+    || !$("#work-audit-view").classList.contains("hidden")
+    || !$("#backup-view").classList.contains("hidden");
   if (!alreadyInSettings) {
     if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入设置将放弃本地修改。是否继续？"))) return false;
     settingsReturnContext = captureSettingsReturnContext();
@@ -3999,6 +4003,7 @@ async function showSettingsHub() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.remove("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -4026,6 +4031,7 @@ async function returnFromSettings() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#backup-view").classList.add("hidden");
   if (context.view === "shelf" || !state.work) return showShelf();
   $("#app").classList.remove("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -4046,6 +4052,7 @@ async function showPlatformAi() {
   $("#platform-ai-view").classList.remove("hidden");
   $("#platform-usage-view").classList.add("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -4067,6 +4074,7 @@ async function showPlatformUsage() {
   $("#platform-ai-view").classList.add("hidden");
   $("#platform-usage-view").classList.remove("hidden");
   $("#work-audit-view").classList.add("hidden");
+  $("#backup-view").classList.add("hidden");
   $("#settings-hub-view").classList.add("hidden");
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
@@ -4077,6 +4085,237 @@ async function showPlatformUsage() {
   await renderPlatformTokenUsage();
   replacePageRoute({ view: "platform-usage", workId: state.work?.id ?? null, ...settingsRouteContext() });
   return true;
+}
+
+// S3 备份页面状态：后台轮询定时器与最近一次已提示的运行记录。
+let backupPollTimer = null;
+let backupLastSeenRunId = null;
+
+function waitMs(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function showS3Backup() {
+  if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 S3 备份设置将放弃本地修改。是否继续？"))) return false;
+  state.dirty = false;
+  dismissChapterInsightToast();
+  updateDocumentTitle();
+  $("#app").classList.add("shelf-mode");
+  $("#shelf-view").classList.add("hidden");
+  $("#platform-ai-view").classList.add("hidden");
+  $("#platform-usage-view").classList.add("hidden");
+  $("#work-audit-view").classList.add("hidden");
+  $("#settings-hub-view").classList.add("hidden");
+  $("#backup-view").classList.remove("hidden");
+  $("#welcome-view").classList.add("hidden");
+  $("#editor-view").classList.add("hidden");
+  $("#module-view").classList.add("hidden");
+  $("#work-meta").textContent = "S3 备份";
+  $("#settings-button").setAttribute("aria-current", "page");
+  setTopbarViewState("S3 备份");
+  await renderS3Backup();
+  replacePageRoute({ view: "backup", workId: state.work?.id ?? null, ...settingsRouteContext() });
+  return true;
+}
+
+async function renderS3Backup() {
+  const [settings, targets, status] = await Promise.all([
+    api("/api/platform/backup/settings"),
+    api("/api/platform/backup/targets"),
+    api("/api/platform/backup/status")
+  ]);
+  const host = $("#backup-content");
+  const failedRun = !status.running && status.lastRun?.status === "failed";
+  host.innerHTML = `
+    <section class="config-section">
+      <div class="config-section-header"><div><h2>备份任务</h2><p>定时备份整个系统的数据：数据库快照以时间戳文件名上传到每个目标的 scriverse/db 目录，超出留存个数的旧快照会被清理；图片只上传缺失的文件。</p></div></div>
+      <div class="pagination-settings-grid backup-settings-grid">
+        <label class="checkbox-field"><input id="backup-schedule-enabled" type="checkbox" ${settings.scheduleEnabled ? "checked" : ""}><span>启用定时备份</span></label>
+        <label>触发时间<input id="backup-schedule-time" type="time" value="${esc(settings.scheduleTime)}" aria-label="定时备份触发时间"></label>
+        <label class="checkbox-field"><input id="backup-images-enabled" type="checkbox" ${settings.backupImages ? "checked" : ""}><span>备份图片附件</span></label>
+        <label>快照留存个数<input id="backup-retention-count" type="number" min="1" max="365" step="1" value="${esc(settings.retentionCount)}" aria-label="数据库快照留存个数"></label>
+      </div>
+      <div class="card-actions"><button id="backup-settings-save" class="primary-button">保存备份设置</button></div>
+    </section>
+    <section class="config-section">
+      <div class="config-section-header"><div><h2>备份目标</h2><p>支持任意 S3 兼容存储，可同时启用多个目标，备份时依次同步。</p></div></div>
+      ${renderBackupTargetCards(targets)}
+      <div class="card-actions"><button id="backup-new-target" class="ghost-button">新建备份目标</button></div>
+    </section>
+    <section class="config-section">
+      <div class="config-section-header"><div><h2>最近备份</h2></div></div>
+      <p id="backup-last-run" class="backup-run-status${failedRun ? " is-failed" : ""}">${esc(renderBackupLastRun(status))}</p>
+    </section>`;
+  $("#backup-schedule-time").disabled = !$("#backup-schedule-enabled").checked;
+  bindBackupSettingsActions(targets);
+}
+
+function renderBackupTargetCards(targets) {
+  if (!targets.length) return emptyModule("尚未配置备份目标", "添加 S3 兼容存储的地址与凭据，启用后即可自动同步。");
+  return `<div class="card-grid backup-target-grid">${targets.map((target) => `
+    <article class="record-card backup-target-card ${target.enabled ? "" : "is-disabled"}">
+      <div class="provider-card-meta"><small>${esc(target.region)}</small><span class="provider-status-badge ${target.enabled ? "is-enabled" : "is-disabled"}">${target.enabled ? "已启用" : "已停用"}</span></div>
+      <h3>${esc(target.name)}</h3>
+      <p>${esc(target.endpoint)}\n存储桶：${esc(target.bucket)}\n子目录：${target.prefix ? esc(target.prefix) : "桶根目录"}\n访问密钥：${esc(target.accessKeyId)}</p>
+      <div class="card-actions"><button data-edit-backup-target="${esc(target.id)}">编辑配置</button><button data-delete-backup-target="${esc(target.id)}">删除</button></div>
+    </article>`).join("")}</div>`;
+}
+
+function renderBackupLastRun(status) {
+  if (status.running) return "备份进行中……";
+  const run = status.lastRun;
+  if (!run) return "还没有执行过备份。点击右上角“立即备份”开始第一次同步。";
+  const triggerLabel = run.trigger === "manual" ? "手动备份" : "定时备份";
+  const parts = (run.results ?? []).map((result) => `${result.name}${result.status === "success" ? "成功" : `失败（${result.errorMessage ?? "未知错误"}）`}`);
+  const detail = parts.length ? `：${parts.join("；")}` : "";
+  return `${triggerLabel} ${formatDateTime(run.startedAt)}${run.finishedAt ? ` 至 ${formatDateTime(run.finishedAt)}` : ""}${detail}`;
+}
+
+function bindBackupSettingsActions(targets) {
+  $("#backup-schedule-enabled").addEventListener("change", () => {
+    $("#backup-schedule-time").disabled = !$("#backup-schedule-enabled").checked;
+  });
+  $("#backup-settings-save").addEventListener("click", async () => {
+    const button = $("#backup-settings-save");
+    button.disabled = true;
+    try {
+      await api("/api/platform/backup/settings", {
+        method: "PATCH",
+        body: {
+          scheduleEnabled: $("#backup-schedule-enabled").checked,
+          scheduleTime: $("#backup-schedule-time").value,
+          backupImages: $("#backup-images-enabled").checked,
+          retentionCount: Number($("#backup-retention-count").value)
+        }
+      });
+      toast("备份设置已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#backup-new-target").addEventListener("click", () => openBackupTargetDialog(null));
+  $("#backup-content").querySelectorAll("[data-edit-backup-target]").forEach((button) => button.addEventListener("click", () => {
+    openBackupTargetDialog(targets.find((target) => target.id === button.dataset.editBackupTarget));
+  }));
+  $("#backup-content").querySelectorAll("[data-delete-backup-target]").forEach((button) => button.addEventListener("click", () => {
+    deleteBackupTarget(targets.find((target) => target.id === button.dataset.deleteBackupTarget)).catch((error) => toast(error.message, "error"));
+  }));
+}
+
+async function deleteBackupTarget(target) {
+  if (!target) return;
+  const confirmed = await confirmToast(`删除备份目标“${target.name}”？远端已上传的备份不会受影响。`, { confirmLabel: "删除" });
+  if (!confirmed) return;
+  await api(`/api/platform/backup/targets/${target.id}`, { method: "DELETE" });
+  toast("备份目标已删除");
+  await renderS3Backup();
+}
+
+function openBackupTargetDialog(item) {
+  openDialog(
+    item ? "编辑备份目标" : "新建备份目标",
+    field("name", "显示名称", "text", item?.name ?? "")
+      + field("endpoint", "S3 服务地址", "url", item?.endpoint ?? "https://")
+      + field("region", "区域", "text", item?.region ?? "us-east-1")
+      + field("bucket", "存储桶", "text", item?.bucket ?? "")
+      + field("prefix", "子目录（可选）", "text", item?.prefix ?? "")
+      + `<p class="form-field-note">留空则同步到桶根目录；数据库位于其下 scriverse/db，图片位于 scriverse/img。</p>`
+      + field("accessKeyId", item ? "替换访问密钥 ID（留空则不变）" : "访问密钥 ID", "text", "")
+      + field("secretAccessKey", item ? "替换访问密钥（留空则不变）" : "访问密钥", "password", "")
+      + field("enabled", "启用该目标", "checkbox", item ? item.enabled : true),
+    async (form) => {
+      const body = {
+        name: form.get("name"),
+        endpoint: form.get("endpoint"),
+        region: form.get("region"),
+        bucket: form.get("bucket"),
+        prefix: String(form.get("prefix") ?? ""),
+        accessKeyId: String(form.get("accessKeyId") ?? ""),
+        enabled: form.get("enabled") === "on"
+      };
+      if (!item || String(form.get("secretAccessKey") ?? "").trim()) body.secretAccessKey = form.get("secretAccessKey");
+      await api(item ? `/api/platform/backup/targets/${item.id}` : "/api/platform/backup/targets", { method: item ? "PATCH" : "POST", body });
+      toast(item ? "备份目标已更新" : "备份目标已创建");
+      await renderS3Backup();
+    },
+    "S3 兼容存储"
+  );
+}
+
+/** 记录最近一次已结束的运行；首次发现的失败运行触发错误提示，禁止静默失败。 */
+function observeBackupStatus(status, { notifyFailure = true } = {}) {
+  const run = status && !status.running ? status.lastRun ?? null : null;
+  if (!run) return null;
+  const fresh = backupLastSeenRunId !== run.id;
+  backupLastSeenRunId = run.id;
+  if (fresh && notifyFailure && run.status === "failed") {
+    const failedTargets = (run.results ?? []).filter((result) => result.status === "failed");
+    const summary = failedTargets.length ? failedTargets.map((result) => result.name).join("、") : "备份任务";
+    toast(`${summary} 同步失败，请打开 S3 备份设置查看详情`, "error");
+  }
+  return run;
+}
+
+/** 后台低频检查定时备份结果，发现新的失败即提示。 */
+async function checkBackupFailureNotice() {
+  if (!state.user || state.user.role !== "admin") return;
+  try {
+    const status = await api("/api/platform/backup/status");
+    observeBackupStatus(status);
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) return;
+    // 网络抖动等临时错误保持静默，下一轮再检查。
+  }
+}
+
+function scheduleBackupFailureCheck(delay = 60000) {
+  if (backupPollTimer !== null) clearTimeout(backupPollTimer);
+  backupPollTimer = null;
+  if (!state.user || state.user.role !== "admin") return;
+  backupPollTimer = setTimeout(async () => {
+    backupPollTimer = null;
+    await checkBackupFailureNotice();
+    scheduleBackupFailureCheck();
+  }, delay);
+}
+
+/** 等待正在进行的备份结束，返回最近一次运行记录。 */
+async function pollBackupUntilFinished() {
+  for (let attempt = 0; attempt < 900; attempt += 1) {
+    await waitMs(1000);
+    const status = await api("/api/platform/backup/status");
+    if (!status.running) {
+      observeBackupStatus(status, { notifyFailure: false });
+      return status.lastRun;
+    }
+  }
+  throw new Error("备份耗时过长，请稍后在“最近备份”中查看结果");
+}
+
+async function triggerBackupNow() {
+  const button = $("#backup-run-now");
+  button.disabled = true;
+  const originalLabel = button.textContent;
+  button.textContent = "备份中…";
+  try {
+    await api("/api/platform/backup/run", { method: "POST", body: {} });
+    renderS3Backup().catch(() => {});
+    const run = await pollBackupUntilFinished();
+    if (run?.status === "success") {
+      toast("备份完成");
+    } else if (run?.status === "failed") {
+      const failedTargets = (run.results ?? []).filter((result) => result.status === "failed");
+      toast(`备份失败：${failedTargets.length ? failedTargets.map((result) => result.name).join("、") : "备份任务"}`, "error");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+    renderS3Backup().catch(() => {});
+  }
 }
 
 function renderShelf() {
@@ -11343,6 +11582,9 @@ $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
+$("#s3-backup-button").addEventListener("click", () => showS3Backup().catch((error) => toast(error.message, "error")));
+$("#backup-return").addEventListener("click", () => returnToSettingsHub("#s3-backup-button").catch((error) => toast(error.message, "error")));
+$("#backup-run-now").addEventListener("click", () => triggerBackupNow());
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
   const panel = $("#presence-panel");

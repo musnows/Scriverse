@@ -225,7 +225,7 @@ describe("S3 备份目标管理", () => {
     expect(list.body.data[0].prefix).toBe("novel-backup");
   });
 
-  it("更新目标时密钥留空保持不变", async () => {
+  it("更新目标时密钥字段留空保持不变", async () => {
     const created = await createTarget(admin).expect(201);
     const targetId = created.body.data.id as string;
     await admin.agent.patch(`/api/platform/backup/targets/${targetId}`)
@@ -236,7 +236,6 @@ describe("S3 备份目标管理", () => {
         region: "us-east-1",
         bucket: "backup-bucket",
         prefix: "other-prefix",
-        accessKeyId: "AKIATESTKEY123456",
         enabled: false
       })
       .expect(200);
@@ -245,6 +244,29 @@ describe("S3 备份目标管理", () => {
     expect(list.body.data[0].name).toBe("改名后的目标");
     expect(list.body.data[0].prefix).toBe("other-prefix");
     expect(list.body.data[0].enabled).toBe(false);
+    expect(list.body.data[0].accessKeyId).toBe("AKIA****456");
+    // 密钥未变：修改其他字段后再次执行备份仍能成功，证明凭据未被掩码覆盖。
+    await admin.agent.patch("/api/platform/backup/settings")
+      .set("x-csrf-token", admin.csrfToken)
+      .send({ backupImages: false })
+      .expect(200);
+    await admin.agent.patch(`/api/platform/backup/targets/${targetId}`)
+      .set("x-csrf-token", admin.csrfToken)
+      .send({
+        name: "改名后的目标",
+        endpoint: "http://127.0.0.1:19000",
+        region: "us-east-1",
+        bucket: "backup-bucket",
+        prefix: "other-prefix",
+        enabled: true
+      })
+      .expect(200);
+    await admin.agent.post("/api/platform/backup/run")
+      .set("x-csrf-token", admin.csrfToken)
+      .send({})
+      .expect(202);
+    const lastRun = await waitForBackupFinish(runtime.app, admin);
+    expect(lastRun.status).toBe("success");
   });
 
   it("删除目标", async () => {
@@ -371,13 +393,13 @@ describe("S3 备份执行", () => {
 
   it("备份执行期间重复触发返回 409", async () => {
     await createTarget(admin).expect(201);
-    let releasePut: (() => void) | null = null;
+    const gate: { release: (() => void) | null } = { release: null };
     let blockedDbPut = false;
     s3.putHandlers.push((key) => {
       if (!key.startsWith("novel-backup/scriverse/db/") || blockedDbPut) return null;
       blockedDbPut = true;
       return new Promise<Response>((resolvePut) => {
-        releasePut = () => resolvePut(new Response(null, { status: 200 }));
+        gate.release = () => resolvePut(new Response(null, { status: 200 }));
       }) as unknown as Response;
     });
     await admin.agent.post("/api/platform/backup/run")
@@ -391,9 +413,9 @@ describe("S3 备份执行", () => {
     expect(duplicate.body.error.code).toBe("BACKUP_ALREADY_RUNNING");
     // 等待备份线程真正进入数据库上传阶段再放行，验证挂起期间 running 状态保持。
     await vi.waitFor(() => {
-      expect(releasePut).not.toBeNull();
+      expect(gate.release).not.toBeNull();
     }, { timeout: 5_000, interval: 20 });
-    releasePut?.();
+    gate.release?.();
     await waitForBackupFinish(runtime.app, admin);
   }, 15_000);
 });

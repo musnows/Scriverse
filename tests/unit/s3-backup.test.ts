@@ -137,7 +137,7 @@ describe("S3Client 列表与错误处理", () => {
   it("listObjectKeys 解析 XML 并跟随分页", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(xmlListResponse(["scriverse/db/novel-20260810-030000.db"], { truncated: true, continuationToken: "page-2" }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(xmlListResponse(["scriverse/db/novel-20260813-030000.db", "scriverse/db/note.txt"]), { truncated: false }), { status: 200 });
+      .mockResolvedValueOnce(new Response(xmlListResponse(["scriverse/db/novel-20260813-030000.db", "scriverse/db/note.txt"], { truncated: false }), { status: 200 }));
     const client = new S3Client(testTarget, fetchMock);
     const keys = await client.listObjectKeys("scriverse/db/");
     expect(keys).toEqual([

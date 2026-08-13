@@ -2694,6 +2694,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .pagination-settings-fieldset legend { padding: 0 6px; color: var(--text); font-weight: 700; }
 .pagination-settings-fieldset > small { color: var(--muted); }
 .pagination-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.backup-settings-grid .checkbox-field { align-self: end; }
+.backup-run-status { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.backup-run-status.is-failed { color: var(--accent-dark); }
 .pagination-settings-grid label { display: grid; gap: 6px; min-width: 0; }
 .entity-editor-view { position: fixed; z-index: 700; inset: 0; overflow: hidden; background: var(--panel); color: var(--ink); }
 .entity-editor-view.hidden, .entity-editor-page.hidden { display: none; }

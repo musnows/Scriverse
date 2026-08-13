@@ -463,7 +463,7 @@ const backupTargetUpdateSchema = z.object({
   region: z.string().min(1).max(64),
   bucket: z.string().min(1).max(128),
   prefix: z.string().max(256),
-  accessKeyId: z.string().min(1).max(256),
+  accessKeyId: z.string().max(256).optional(),
   secretAccessKey: z.string().max(512).optional(),
   enabled: z.boolean()
 }).strict();

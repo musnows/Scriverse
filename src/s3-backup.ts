@@ -480,13 +480,15 @@ export class BackupService {
     return this.getTarget(targetId);
   }
 
-  async updateTarget(targetId: string, input: Omit<BackupTargetInput, "secretAccessKey"> & { secretAccessKey?: string }): Promise<Record<string, unknown>> {
+  async updateTarget(targetId: string, input: Omit<BackupTargetInput, "accessKeyId" | "secretAccessKey"> & { accessKeyId?: string; secretAccessKey?: string }): Promise<Record<string, unknown>> {
     const existing = this.options.database.get("SELECT * FROM backup_targets WHERE id = ?", targetId);
     if (!existing) throw notFound("备份目标");
     const endpoint = normalizeBackupEndpoint(input.endpoint);
     await validateBackupEndpoint(endpoint);
     const timestamp = now();
     const prefix = normalizeBackupPrefix(input.prefix);
+    // 编辑时密钥字段留空表示保持不变，避免用掩码覆盖已存凭据。
+    const accessKeyId = String(input.accessKeyId ?? "").trim() ? String(input.accessKeyId) : String(existing.access_key_id);
     this.options.database.transaction(() => {
       if (input.secretAccessKey) {
         const encrypted = this.options.vault.encrypt(input.secretAccessKey);
@@ -495,7 +497,7 @@ export class BackupService {
            SET name = ?, endpoint = ?, region = ?, bucket = ?, prefix = ?, access_key_id = ?,
              encrypted_secret_key = ?, secret_key_iv = ?, secret_key_tag = ?, enabled = ?, updated_at = ?
            WHERE id = ?`,
-          input.name, endpoint, input.region, input.bucket, prefix, input.accessKeyId,
+          input.name, endpoint, input.region, input.bucket, prefix, accessKeyId,
           encrypted.encrypted, encrypted.iv, encrypted.tag, input.enabled ? 1 : 0, timestamp, targetId
         );
       } else {
@@ -503,7 +505,7 @@ export class BackupService {
           `UPDATE backup_targets
            SET name = ?, endpoint = ?, region = ?, bucket = ?, prefix = ?, access_key_id = ?, enabled = ?, updated_at = ?
            WHERE id = ?`,
-          input.name, endpoint, input.region, input.bucket, prefix, input.accessKeyId, input.enabled ? 1 : 0, timestamp, targetId
+          input.name, endpoint, input.region, input.bucket, prefix, accessKeyId, input.enabled ? 1 : 0, timestamp, targetId
         );
       }
       this.audit("platform.backup-target.updated", "backup-target", targetId, { name: input.name, endpoint, bucket: input.bucket });
