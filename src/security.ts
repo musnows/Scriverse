@@ -308,12 +308,12 @@ function unsafeIpKind(address: string): "private" | "blocked" | null {
   return null;
 }
 
-type SafeAiEndpointAddress = { address: string; family: 4 | 6 };
+export type SafeAiEndpointAddress = { address: string; family: 4 | 6 };
 type SafeAiEndpointValidator = (url: string) => Promise<readonly SafeAiEndpointAddress[] | void>;
 
 const pinnedAiAddresses = new Map<string, SafeAiEndpointAddress[]>();
 const maximumPinnedAiHosts = 1_000;
-const pinnedAiAgent = new Agent({
+export const pinnedAiAgent = new Agent({
   connect: {
     lookup: (hostname, _options, callback) => {
       const addresses = pinnedAiAddresses.get(hostname.toLocaleLowerCase());
@@ -326,7 +326,7 @@ const pinnedAiAgent = new Agent({
   }
 });
 
-function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAddress[]): void {
+export function rememberPinnedAiAddresses(hostname: string, addresses: SafeAiEndpointAddress[]): void {
   const key = hostname.toLocaleLowerCase();
   if (!pinnedAiAddresses.has(key) && pinnedAiAddresses.size >= maximumPinnedAiHosts) {
     const oldest = pinnedAiAddresses.keys().next().value;

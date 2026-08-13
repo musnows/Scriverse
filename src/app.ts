@@ -22,6 +22,7 @@ import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
+import { BackupService } from "./s3-backup.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
 import { ImageCaptchaService } from "./image-captcha.js";
@@ -435,6 +436,38 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupSettingsSchema = z.object({
+  scheduleEnabled: z.boolean().optional(),
+  scheduleTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/u).optional(),
+  backupImages: z.boolean().optional(),
+  retentionCount: z.number().int().min(1).max(365).optional()
+}).strict().refine((input) => input.scheduleEnabled !== undefined || input.scheduleTime !== undefined
+  || input.backupImages !== undefined || input.retentionCount !== undefined, {
+  message: "至少需要提供一项备份设置"
+});
+
+const backupTargetSchema = z.object({
+  name: z.string().min(1).max(80),
+  endpoint: z.string().min(1).max(2048),
+  region: z.string().min(1).max(64),
+  bucket: z.string().min(1).max(128),
+  prefix: z.string().max(256),
+  accessKeyId: z.string().min(1).max(256),
+  secretAccessKey: z.string().min(1).max(512),
+  enabled: z.boolean()
+}).strict();
+
+const backupTargetUpdateSchema = z.object({
+  name: z.string().min(1).max(80),
+  endpoint: z.string().min(1).max(2048),
+  region: z.string().min(1).max(64),
+  bucket: z.string().min(1).max(128),
+  prefix: z.string().max(256),
+  accessKeyId: z.string().min(1).max(256),
+  secretAccessKey: z.string().max(512).optional(),
+  enabled: z.boolean()
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -599,6 +632,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backup: BackupService;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -970,9 +1004,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
+  const vault = new CredentialVault(options.masterSecret);
+  const backup = new BackupService({
+    database,
+    databasePath: options.databasePath,
+    attachmentDirectory: attachmentStorage.rootDirectory,
+    vault,
+    fetchImpl: options.fetchImpl ?? fetch,
+    audit: (workId, action, entityType, entityId, detail) => store.audit(workId, action, entityType, entityId, detail)
+  });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -2060,6 +2103,49 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  const requirePlatformAdmin = (request: Request): void => {
+    if (!request.authUser || request.authMethod !== "session") {
+      throw new AppError(401, "SESSION_REQUIRED", "请使用网页会话管理备份设置");
+    }
+    if (request.authUser.role !== "admin") {
+      throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+    }
+  };
+  app.get("/api/platform/backup/settings", (request, response) => {
+    requirePlatformAdmin(request);
+    data(response, backup.getSettings());
+  });
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    requirePlatformAdmin(request);
+    data(response, backup.updateSettings(parse(backupSettingsSchema, request.body)));
+  });
+  app.get("/api/platform/backup/targets", (request, response) => {
+    requirePlatformAdmin(request);
+    data(response, backup.listTargets());
+  });
+  app.post("/api/platform/backup/targets", async (request, response) => {
+    requirePlatformAdmin(request);
+    data(response, await backup.createTarget(parse(backupTargetSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup/targets/:targetId", async (request, response) => {
+    requirePlatformAdmin(request);
+    data(response, await backup.updateTarget(request.params.targetId, parse(backupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    requirePlatformAdmin(request);
+    backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/run", (request, response) => {
+    requirePlatformAdmin(request);
+    parse(z.object({}).strict(), request.body ?? {});
+    data(response, backup.triggerBackup("manual"), 202);
+  });
+  app.get("/api/platform/backup/status", (request, response) => {
+    requirePlatformAdmin(request);
+    data(response, backup.getStatus());
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,8 +2660,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  backup.startScheduler();
+  return { app, database, store, ai, auth, attachmentStorage, backup, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
