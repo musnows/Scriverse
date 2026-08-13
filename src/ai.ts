@@ -444,6 +444,7 @@ type CharacterExtractionApplicationItem = {
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
+const MAX_MODEL_OUTPUT_TOKENS = 2_000_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const RELATIONSHIP_MAX_FUZZY_REFERENCES = 32;
 const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
@@ -1165,7 +1166,7 @@ function completionPayloadOutputText(payload: CompletionPayload): string {
 
 function normalizeModelPreset(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
   const maxTokens = typeof input.max_tokens === "number" && Number.isFinite(input.max_tokens)
-    ? Math.round(clamp(input.max_tokens, 1, 32_768))
+    ? Math.round(clamp(input.max_tokens, 1, MAX_MODEL_OUTPUT_TOKENS))
     : DEFAULT_MAX_TOKENS;
   const temperature = input.temperature;
   const defaultTemperature = isKimiModelId(modelId) && !(typeof temperature === "number" && Number.isFinite(temperature))
@@ -10196,7 +10197,7 @@ export class AiManager {
     if (isKimiModelId(modelId) && typeof output.temperature !== "number") output.temperature = 1;
     if (typeof output.top_p === "number") output.top_p = clamp(output.top_p, 0, 1);
     output.max_tokens = typeof output.max_tokens === "number"
-      ? Math.round(clamp(output.max_tokens, 1, 32_768))
+      ? Math.round(clamp(output.max_tokens, 1, MAX_MODEL_OUTPUT_TOKENS))
       : DEFAULT_MAX_TOKENS;
     return output;
   }
