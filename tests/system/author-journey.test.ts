@@ -328,7 +328,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260814-pending-footer-layout-v1');
+    expect(page.text).toContain('/styles.css?v=20260814-shelf-action-height-v1');
     expect(page.text).toContain('/app.js?v=20260813-outline-board-page-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -372,6 +372,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".dev-auth-bypass .auth-view { display: none !important; }");
     expect(styles.text).toContain(".dev-auth-bypass .auth-loading { display: none !important; }");
     expect(styles.text).toContain(".shelf-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; width: 100%;");
+    expect(styles.text).toContain(".shelf-header .primary-button { align-self: flex-start; min-width: 150px; min-height: 40px; padding: 8px 18px; }");
     expect(styles.text).toContain("width: 90%; margin-inline: auto; aspect-ratio: 3 / 4.25;");
     expect(styles.text).toContain(".settings-hub-header h1 { font-size: clamp(26px, 3vw, 36px); line-height: 1.15; letter-spacing: -.02em; }");
     expect(styles.text).toContain(".settings-hub-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));");

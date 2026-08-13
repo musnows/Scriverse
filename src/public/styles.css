@@ -3578,7 +3578,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   #shelf-view .product-footer, #settings-hub-view .product-footer { margin-bottom: 0; padding-bottom: env(safe-area-inset-bottom); }
   .shelf-header, .module-header { align-items: stretch; flex-direction: column; gap: 14px; margin-bottom: 20px; }
   .shelf-header h1 { font-size: clamp(24px, 7.5vw, 32px); }
-  .shelf-header .primary-button { align-self: flex-start; min-width: 150px; min-height: 40px; padding: 10px 18px; }
+  .shelf-header .primary-button { align-self: flex-start; min-width: 150px; min-height: 40px; padding: 8px 18px; }
   .shelf-header-actions { align-self: flex-start; flex-wrap: wrap; }
   .settings-detail-actions { align-items: stretch; flex-direction: column; }
   .settings-detail-actions .primary-button, .settings-detail-actions .settings-parent-button { align-self: stretch; width: 100%; }
