@@ -3597,7 +3597,8 @@ async function refreshAuthCaptcha(target = "login") {
 }
 
 function clearAuthenticationOverlays() {
-  clearToastRegion();
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
   document.querySelectorAll("[popover]").forEach((popover) => {
     if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
   });
@@ -3739,47 +3740,43 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
-const TOAST_DURATION_MS = 15_000;
-const toastTimers = new Map();
+const TIMELINE_DELETE_TOAST_DURATION_MS = 15_000;
 
-function hideToastRegionIfEmpty() {
+function dismissTimelineDeleteToast() {
   const region = $("#toast-region");
+  region.querySelectorAll(".timeline-delete-toast").forEach((element) => element.remove());
   if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
     region.hidePopover();
   }
 }
 
-function removeToastElement(element) {
-  const timer = toastTimers.get(element);
-  if (timer !== undefined) {
-    window.clearTimeout(timer);
-    toastTimers.delete(element);
-  }
-  element.remove();
-  hideToastRegionIfEmpty();
-}
-
-function clearToastRegion() {
-  toastTimers.forEach((timer) => window.clearTimeout(timer));
-  toastTimers.clear();
-  $("#toast-region").replaceChildren();
-  hideToastRegionIfEmpty();
-}
-
-function clearTransientToasts() {
+function timelineDeleteToast(message) {
+  dismissTimelineDeleteToast();
   const region = $("#toast-region");
-  [...region.children]
-    .filter((element) => !element.classList.contains("toast-confirmation") && !element.classList.contains("chapter-insight-toast"))
-    .forEach(removeToastElement);
+  const element = document.createElement("div");
+  element.className = "toast info timeline-delete-toast";
+  element.setAttribute("role", "status");
+  element.setAttribute("aria-atomic", "true");
+  element.textContent = message;
+  region.append(element);
+  raiseToastRegion();
+  window.setTimeout(() => {
+    if (!element.isConnected) return;
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  }, TIMELINE_DELETE_TOAST_DURATION_MS);
 }
 
 function dismissChapterInsightToast() {
   chapterInsightRequestId += 1;
   const region = $("#toast-region");
-  const element = region.querySelector(".chapter-insight-toast");
-  if (element) removeToastElement(element);
+  region.querySelector(".chapter-insight-toast")?.remove();
   $("#insight-button").setAttribute("aria-expanded", "false");
-  hideToastRegionIfEmpty();
+  if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+    region.hidePopover();
+  }
 }
 
 function toast(message, type = "info") {
@@ -3792,7 +3789,12 @@ function toast(message, type = "info") {
   element.textContent = message;
   region.append(element);
   raiseToastRegion();
-  toastTimers.set(element, window.setTimeout(() => removeToastElement(element), TOAST_DURATION_MS));
+  setTimeout(() => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  }, 3600);
 }
 
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
@@ -4290,7 +4292,6 @@ async function initializePage() {
 function showShelf() {
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
-  clearTransientToasts();
   state.dirty = false;
   settingsReturnContext = null;
   updateDocumentTitle();
@@ -4591,7 +4592,6 @@ async function showWorkAudit() {
   workAuditRecords = [];
   workAuditNextPage = null;
   dismissChapterInsightToast();
-  clearTransientToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5514,7 +5514,6 @@ async function showSettingsHub() {
     state.dirty = false;
   }
   dismissChapterInsightToast();
-  clearTransientToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5562,7 +5561,6 @@ async function showPlatformAi() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   dismissChapterInsightToast();
-  clearTransientToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5584,8 +5582,6 @@ async function showPlatformAi() {
 async function showPlatformUsage() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
-  dismissChapterInsightToast();
-  clearTransientToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -6380,7 +6376,6 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
   dismissChapterInsightToast();
-  clearTransientToasts();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
@@ -6899,7 +6894,6 @@ function showWelcome(hasWork = false) {
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
-  clearTransientToasts();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#welcome-view").classList.remove("hidden");
@@ -6944,6 +6938,7 @@ async function showModule(module) {
   }
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
+  dismissTimelineDeleteToast();
   state.module = module;
   if (module !== "editor") {
     chapterSelectionRequestId += 1;
@@ -6963,7 +6958,6 @@ async function showModule(module) {
   }
   showSystemStatus();
   dismissChapterInsightToast();
-  clearTransientToasts();
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.remove("hidden");
@@ -8015,7 +8009,7 @@ async function deleteTimelineEvent(item, page = moduleListPages.timeline) {
   try {
     await api(`/api/timeline/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderTimeline(page);
-    toast(`已删除时间事件“${item.name}”`);
+    timelineDeleteToast(`已删除时间事件“${item.name}”`);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -8075,7 +8069,7 @@ async function renderTimeline(page = moduleListPages.timeline) {
   $("#module-content").querySelectorAll("[data-timeline-track-tab]").forEach((button) => button.addEventListener("click", async () => {
     const nextTrackId = button.dataset.timelineTrackTab ?? "";
     if (String(nextTrackId) === String(timelineActiveTrackId)) return;
-    clearTransientToasts();
+    dismissTimelineDeleteToast();
     timelineActiveTrackId = nextTrackId;
     await renderTimeline(1);
   }));
@@ -15991,7 +15985,7 @@ document.addEventListener("visibilitychange", () => {
   if (state.user?.role === "admin" && !systemRestartDetected) void refreshS3BackupEvents();
   void refreshSystemHealth();
 });
-window.addEventListener("pagehide", clearToastRegion);
+window.addEventListener("pagehide", dismissTimelineDeleteToast);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
 });

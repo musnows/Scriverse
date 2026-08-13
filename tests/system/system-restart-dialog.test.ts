@@ -52,7 +52,7 @@ describe("系统重启认证清理", () => {
     expect(application.text).toContain('document.querySelectorAll("[popover]").forEach((popover) => {');
     expect(application.text).toContain('document.documentElement.classList.add("login-route");');
     expect(application.text).toContain('window.history.replaceState(null, "", serializePageRoute({ view: "login" }));');
-    expect(application.text).toContain("clearToastRegion();");
+    expect(application.text).toContain("toastRegion.replaceChildren();");
     expect(application.text).toContain("showAuth(false);");
     expect(application.text).toContain('import { createPresenceClientId, stagePresenceClientIdForRelogin } from "/presence-client-id.js?v=20260810-presence-relogin-v1";');
     expect(application.text).toContain("const presenceClientId = createPresenceClientId(presenceSessionStorage);");
