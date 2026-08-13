@@ -331,8 +331,8 @@
         <div class="prompt-box">
           <div id="ai-citations" class="ai-citations hidden" aria-label="已添加的正文引用"></div>
           <section id="ai-context-warning" class="ai-context-warning hidden" role="status" aria-live="polite">
-            <div><strong id="ai-context-warning-title">对话历史接近整理阈值</strong><p id="ai-context-warning-message">建议整理为长期记忆或新开对话。</p></div>
-            <div><button id="ai-context-compact" type="button">整理长期记忆</button><button id="ai-context-new-conversation" type="button">新开对话</button><button id="ai-context-dismiss" type="button">稍后处理</button></div>
+            <div><strong id="ai-context-warning-title">对话上下文过长</strong><p id="ai-context-warning-message">当前对话上下文过长，是否进行压缩？不压缩可能会导致后续请求失败</p></div>
+            <div><button id="ai-context-compact" type="button">压缩</button><button id="ai-context-dismiss" type="button">忽略</button><button id="ai-context-new-conversation" type="button">新开对话</button></div>
           </section>
           <div class="prompt-options">
             <select id="ai-task" aria-label="任务类型">
@@ -1156,6 +1156,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260813-reader-volume-mobile-v3"></script>
+    <script type="module" src="/app.js?v=20260813-ai-context-compact-v1"></script>
   </body>
 </html>

@@ -2587,8 +2587,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: identifier.optional(),
       scope: contextSchema,
       instruction: z.string().max(100_000).default(""),
-      citations: aiCitationsSchema.optional()
-    }), request.body ?? {});
+      citations: aiCitationsSchema.optional(),
+      ignoreContextWarning: z.boolean().optional()
+    }).strict(), request.body ?? {});
     const conversation = store.getAiConversation(request.params.conversationId);
     data(response, await ai.prepareConversationContext({
       conversationId: request.params.conversationId,
@@ -2596,7 +2597,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: input.modelId,
       scope: input.scope,
       instruction: instructionWithCitations(input.instruction, input.citations ?? [])
-    }));
+    }, { ignoreWarning: input.ignoreContextWarning === true }));
   });
   app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional(), scope: contextSchema }), request.body);
@@ -2705,8 +2706,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       parameters: jsonObject.optional(),
       citations: aiCitationsSchema.optional(),
       conversationId: identifier.optional(),
-      currentMessageId: identifier.optional()
-    }), request.body);
+      currentMessageId: identifier.optional(),
+      ignoreContextWarning: z.boolean().optional()
+    }).strict(), request.body);
     const providedIdempotencyKey = request.get("Idempotency-Key");
     const idempotencyKey = providedIdempotencyKey
       ? parse(idempotencyKeySchema, providedIdempotencyKey)
@@ -2739,6 +2741,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     let streamRequestId: string | null = null;
     let streamRequestFinished = false;
     let lastStreamLeaseTouchAt = Date.now();
+    let preparedContext: Record<string, unknown> | null = null;
+    let preparedConversation: Record<string, unknown> | null = null;
     const startStream = (): void => {
       if (response.headersSent) return;
       response.status(200);
@@ -2758,31 +2762,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     try {
       if (!existingRequest) {
         store.assertAiConversationStreamAvailable(conversationId);
-        const inspection = ai.inspectConversationContext({
+        preparedContext = await ai.prepareConversationContext({
           conversationId,
           workId: request.params.workId,
           modelId: input.modelId,
           scope: input.scope as ContextScope,
           instruction: resolvedInstruction,
           excludeConversationMessageId: input.currentMessageId
-        });
-        if (inspection.action === "warn") {
-          const prepared = await ai.prepareConversationContext({
-            conversationId,
-            workId: request.params.workId,
-            modelId: input.modelId,
-            scope: input.scope as ContextScope,
-            instruction: resolvedInstruction,
-            excludeConversationMessageId: input.currentMessageId
-          });
+        }, { ignoreWarning: input.ignoreContextWarning === true });
+        preparedConversation = redactAiConversation(store.getAiConversationSummary(conversationId), permissions);
+        if (preparedContext.action === "warn") {
           startStream();
           sendEvent("ready", { streaming: true, idempotencyKey });
           sendEvent("context", {
-            ...prepared,
-            conversation: redactAiConversation({
-              ...store.getAiConversationSummary(conversationId),
-              contextWarningPending: true
-            }, permissions)
+            ...preparedContext,
+            conversation: preparedConversation
+          });
+          sendEvent("complete", {
+            warningOnly: true,
+            conversationId,
+            conversationTitle: conversation.title,
+            contextUsage: preparedContext.usage
           });
           return;
         }
@@ -2845,23 +2845,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }
         return;
       }
+      if (preparedContext) {
+        sendEvent("context", {
+          ...preparedContext,
+          conversation: preparedConversation
+        });
+      }
       const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
       if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
-      const prepared = await ai.prepareConversationContext({
-        conversationId,
-        workId: request.params.workId,
-        modelId: input.modelId,
-        scope: input.scope as ContextScope,
-        instruction: resolvedInstruction,
-        excludeConversationMessageId: currentMessageId
-      }, { skipWarning: true });
-      sendEvent("context", {
-        ...prepared,
-        conversation: redactAiConversation({
-          ...store.getAiConversationSummary(conversationId),
-          contextWarningPending: prepared.action === "warn"
-        }, permissions)
-      });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,

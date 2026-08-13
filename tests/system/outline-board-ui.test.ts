@@ -21,7 +21,7 @@ describe("章节大纲看板界面", () => {
     ]);
 
     expect(page.text).toContain('/styles.css?v=20260813-scrollbar-stable-v1');
-    expect(page.text).toContain('/app.js?v=20260813-reader-volume-mobile-v3');
+    expect(page.text).toContain('/app.js?v=20260813-ai-context-compact-v1');
     expect(application.text).toContain('/outline-board.js?v=20260812-outline-board-v1');
     expect(application.text).toContain('/api/works/${encodeURIComponent(workId)}/outline-board');
     expect(application.text).toContain('aria-label="筛选章节大纲看板"');

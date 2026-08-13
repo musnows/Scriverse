@@ -12,7 +12,7 @@ describe("角色抽取结果入库预览界面", () => {
     ]);
 
     expect(page).toContain('/styles.css?v=20260813-scrollbar-stable-v1');
-    expect(page).toContain('/app.js?v=20260813-reader-volume-mobile-v3');
+    expect(page).toContain('/app.js?v=20260813-ai-context-compact-v1');
     expect(application).toContain("function renderCharacterExtractionPreview(task, result)");
     expect(application).toContain("function renderCharacterExtractionEditor(preview)");
     expect(application).toContain("function bindCharacterExtractionEditor(container, taskId)");
