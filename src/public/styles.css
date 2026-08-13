@@ -643,6 +643,44 @@ body.is-panel-resizing { cursor: col-resize; user-select: none; }
 .work-audit-footer { display: flex; justify-content: center; padding-top: 18px; }
 .work-audit-footer button { min-width: 160px; }
 .work-audit-list > .entity-history-empty { font-size: 13px; }
+.ai-approval-center-view { padding-bottom: 48px; }
+.ai-approval-filter-row { display: flex; align-items: center; gap: 16px; width: 100%; max-width: 1400px; margin-inline: auto; min-height: 42px; padding: 0 18px; border: 1px solid var(--line); border-bottom: 0; border-radius: 7px 7px 0 0; background: var(--surface-soft); }
+.ai-approval-status-filter { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.ai-approval-status-filter select { min-width: 130px; }
+.ai-approval-filter-row p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.ai-approval-center-list { display: grid; gap: 0; width: 100%; max-width: 1400px; margin-inline: auto; border: 1px solid var(--line); border-radius: 0 0 7px 7px; background: var(--panel); }
+.ai-approval-record { border-radius: 0; border: 0; border-bottom: 1px solid var(--line); }
+.ai-approval-record:last-child { border-bottom: 0; }
+.ai-approval-record-main { display: grid; gap: 8px; min-width: 0; }
+.ai-approval-record-heading { display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px 12px; }
+.ai-approval-record-heading strong { color: var(--ink); font-size: 15px; font-weight: 650; line-height: 1.35; }
+.ai-approval-record-main small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.ai-approval-center-list > .entity-history-empty { font-size: 13px; }
+.ai-write-plan-body { display: grid; gap: 14px; }
+.ai-write-plan-meta .ai-tool-call-info { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ai-write-plan-operations { display: grid; gap: 12px; }
+.ai-approval-operation { display: grid; gap: 10px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
+.ai-approval-operation.is-redacted { opacity: 0.75; }
+.ai-approval-operation-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ai-approval-operation-heading strong { color: var(--ink); font-size: 14px; font-weight: 650; }
+.ai-approval-operation-summary { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.55; }
+.ai-approval-operation-redacted { margin: 0; color: var(--muted); font-size: 12px; }
+.ai-approval-operation-result { margin: 0; color: var(--green); font-size: 12px; }
+.ai-approval-operation-error { margin: 0; color: var(--accent); font-size: 12px; }
+.ai-diff-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 5px; }
+.ai-diff-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ai-diff-table th, .ai-diff-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.ai-diff-table tr:last-child th, .ai-diff-table tr:last-child td { border-bottom: 0; }
+.ai-diff-table th { width: 110px; color: var(--muted); font-weight: 600; background: var(--surface-soft); white-space: nowrap; }
+.ai-diff-table td { overflow-wrap: anywhere; line-height: 1.5; }
+.ai-diff-before { color: var(--accent); }
+.ai-diff-after { color: var(--ink); }
+.ai-question-options { display: flex; flex-direction: column; gap: 6px; }
+.ai-question-option { width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); color: var(--ink); font-size: 13px; text-align: left; cursor: pointer; }
+.ai-question-option:hover { background: var(--surface-hover); }
+.ai-question-custom-row { display: flex; gap: 8px; }
+.ai-question-custom-row .toast-input { flex: 1; }
+.ai-question-toast { min-width: min(420px, calc(100vw - 48px)); }
 @media (max-width: 720px) {
   .work-audit-row { grid-template-columns: 1fr; gap: 14px; padding: 18px 14px; }
   .work-audit-time time { display: flex; align-items: baseline; gap: 8px; }

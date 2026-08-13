@@ -49,6 +49,17 @@ describe("页面刷新路由", () => {
       returnView: "module",
       returnModule: "timeline"
     });
+    const approvalHash = serializePageRoute({
+      view: "ai-approval-center",
+      workId: "work-1",
+      returnView: "shelf"
+    });
+    expect(parsePageRoute(approvalHash)).toEqual({
+      view: "ai-approval-center",
+      workId: "work-1",
+      returnView: "shelf"
+    });
+    expect(parsePageRoute("#view=ai-approval-center")).toEqual({ view: "shelf" });
   });
 
   it("往返保存登录页路由", () => {
