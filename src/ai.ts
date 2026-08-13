@@ -150,6 +150,8 @@ const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
 const FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT = 95;
+const MIN_OUTPUT_RESERVE_TOKENS = 1_024;
+const MIN_CONTEXT_REMAINING_TOKENS = 5_000;
 const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
 const interactiveStreamErrorCodes = new Set([
   "AI_STREAM_IDLE_TIMEOUT",
@@ -444,6 +446,7 @@ type CharacterExtractionApplicationItem = {
 
 const allowedParameters = new Set(["temperature", "top_p", "max_tokens", "presence_penalty", "frequency_penalty", "seed"]);
 const DEFAULT_MAX_TOKENS = 32_000;
+const MAX_MODEL_OUTPUT_TOKENS = 2_000_000;
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const RELATIONSHIP_MAX_FUZZY_REFERENCES = 32;
 const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
@@ -810,7 +813,7 @@ export type AiProcessStep = {
 
 const MAX_AGENT_TOOL_CALLS = 12;
 const TOOL_CONTEXT_COMPACT_MAX_TOKENS = 1_024;
-const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = 512;
+const TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS = MIN_OUTPUT_RESERVE_TOKENS;
 const IMAGE_TOOL_MAX_BYTES = 30 * 1024 * 1024;
 const IMAGE_TOOL_MAX_OUTPUT_TOKENS = 8_192;
 const agentToolCursor = z.number().int().min(0).max(100_000).default(0);
@@ -1165,7 +1168,7 @@ function completionPayloadOutputText(payload: CompletionPayload): string {
 
 function normalizeModelPreset(input: Record<string, unknown>, modelId = ""): Record<string, unknown> {
   const maxTokens = typeof input.max_tokens === "number" && Number.isFinite(input.max_tokens)
-    ? Math.round(clamp(input.max_tokens, 1, 32_768))
+    ? Math.round(clamp(input.max_tokens, 1, MAX_MODEL_OUTPUT_TOKENS))
     : DEFAULT_MAX_TOKENS;
   const temperature = input.temperature;
   const defaultTemperature = isKimiModelId(modelId) && !(typeof temperature === "number" && Number.isFinite(temperature))
@@ -4337,7 +4340,7 @@ export class AiManager {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const configuredOutputTokens = typeof preset.max_tokens === "number" ? preset.max_tokens : DEFAULT_MAX_TOKENS;
-    const outputReserveTokens = Math.max(512, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - 512));
+    const outputReserveTokens = Math.max(MIN_OUTPUT_RESERVE_TOKENS, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - MIN_OUTPUT_RESERVE_TOKENS));
     const availableInputTokens = Math.max(256, contextWindow - outputReserveTokens - 512);
     const conversation = input.conversationId
       ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
@@ -4356,6 +4359,7 @@ export class AiManager {
       - functionTokens);
     return {
       contextWindow,
+      configuredOutputTokens,
       outputReserveTokens,
       availableInputTokens,
       conversation,
@@ -4386,7 +4390,10 @@ export class AiManager {
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversation = budget.conversation as AiConversationContext | null;
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
+    const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
+    const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
     const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
+    const contextFallbackReached = remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
     return {
       modelId: stringValue(model, "id"),
       contextWindow,
@@ -4395,8 +4402,12 @@ export class AiManager {
       conversationTokens: Number(budget.conversationTokens),
       conversationBudgetTokens: Number(budget.conversationBudgetTokens),
       conversationUsagePercent,
+      maxOutputTokens: configuredOutputTokens,
+      maxOutputUsagePercent,
+      maxOutputThresholdReached: maxOutputUsagePercent >= threshold,
       outputReserveTokens: Number(budget.outputReserveTokens),
       remainingTokens,
+      contextFallbackReached,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
       tokenDistribution: {
         systemPromptTokens,
@@ -4407,7 +4418,7 @@ export class AiManager {
       },
       compactThreshold: threshold,
       compactableMessageCount,
-      compactRecommended: compactableMessageCount > 0 && conversationUsagePercent >= threshold,
+      compactRecommended: compactableMessageCount > 0 && (conversationUsagePercent >= threshold || contextFallbackReached),
       contextWarningPending: conversation?.warningPending ?? false,
       compactedMessageCount: conversation?.compactedMessageCount ?? 0,
       includedContextBlocks: contextPlan.includedBlockIds.length,
@@ -4438,6 +4449,7 @@ export class AiManager {
       contextWindow,
       inputTokens,
       remainingTokens,
+      contextFallbackReached: remainingTokens <= MIN_CONTEXT_REMAINING_TOKENS,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
       tokenDistribution: {
         systemPromptTokens,
@@ -4455,8 +4467,11 @@ export class AiManager {
   } {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const usagePercent = Number(usage.usagePercent) || 0;
+    const maxOutputThresholdReached = usage.maxOutputThresholdReached === true;
+    const contextFallbackReached = usage.contextFallbackReached === true;
     const compactableMessageCount = Number(usage.compactableMessageCount) || 0;
-    if (usagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT) {
+    const outputThresholdNeedsCompaction = (maxOutputThresholdReached || contextFallbackReached) && compactableMessageCount > 0;
+    if (usagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT || outputThresholdNeedsCompaction) {
       if (compactableMessageCount <= 0) {
         throw new AppError(
           409,
@@ -4496,6 +4511,14 @@ export class AiManager {
     }
     const compaction = await this.compactConversation(input);
     if (compaction.changed !== true) {
+      const inputBelowForcedThreshold = (Number(inspection.usage.usagePercent) || 0) < FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT;
+      if ((inspection.usage.maxOutputThresholdReached === true || inspection.usage.contextFallbackReached === true) && inputBelowForcedThreshold) {
+        return {
+          action: "ready",
+          reason: "output_budget_already_fits",
+          usage: { ...inspection.usage, contextWarningPending: false }
+        };
+      }
       throw new AppError(
         409,
         "AI_CONTEXT_COMPACTION_UNAVAILABLE",
@@ -4503,7 +4526,8 @@ export class AiManager {
       );
     }
     const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
-    if ((Number(compactedUsage.usagePercent) || 0) >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT) {
+    if ((Number(compactedUsage.usagePercent) || 0) >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT
+      || compactedUsage.contextFallbackReached === true) {
       throw new AppError(
         413,
         "AI_CONTEXT_STILL_OVER_LIMIT",
@@ -5607,6 +5631,8 @@ export class AiManager {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     };
+    const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
+    const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     let effectiveInput = input;
     let context = this.buildContext(effectiveInput, model);
     let messages = this.buildMessages(effectiveInput, context);
@@ -6072,7 +6098,14 @@ export class AiManager {
           agentToolCallQuotaNoticeBudgetChars(agentToolCallSoftWarningThreshold(agentToolCallLimit), agentToolCallLimit)
         );
         const maximumNewToolTokens = Math.ceil((AGENT_TOOL_RESULT_MAX_CHARS + noticeBudgetChars) * 1.1) * Math.max(1, toolCallCount);
-        return currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS >= contextWindow;
+        // 这里只按工具结果写入后的 context 剩余判断；输出 max_tokens 由下方独立判断。
+        const projectedContextTokens = currentTokens + maximumNewToolTokens;
+        const projectedUsagePercent = Math.round(projectedContextTokens / contextWindow * 100);
+        const projectedContextRemainingTokens = Math.max(0, contextWindow - projectedContextTokens);
+        const maxOutputThresholdReached = configuredOutputTokens >= contextWindow * contextCompactThreshold / 100;
+        return projectedUsagePercent >= contextCompactThreshold
+          || maxOutputThresholdReached
+          || projectedContextRemainingTokens <= MIN_CONTEXT_REMAINING_TOKENS;
       };
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
@@ -10196,7 +10229,7 @@ export class AiManager {
     if (isKimiModelId(modelId) && typeof output.temperature !== "number") output.temperature = 1;
     if (typeof output.top_p === "number") output.top_p = clamp(output.top_p, 0, 1);
     output.max_tokens = typeof output.max_tokens === "number"
-      ? Math.round(clamp(output.max_tokens, 1, 32_768))
+      ? Math.round(clamp(output.max_tokens, 1, MAX_MODEL_OUTPUT_TOKENS))
       : DEFAULT_MAX_TOKENS;
     return output;
   }

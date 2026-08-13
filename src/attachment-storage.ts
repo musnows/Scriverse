@@ -9,6 +9,7 @@ import { DEFAULT_ATTACHMENT_IMAGE_MAX_BYTES, formatUploadLimit } from "./upload-
 const maximumPixels = 25_000_000;
 const maximumAnimationFrames = 100;
 const maximumAnimationPixels = 50_000_000;
+const maximumGifFrames = 10_000;
 const allowedFormats = new Set(["png", "jpeg", "webp", "gif"]);
 
 type StoredImageMimeType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
@@ -135,6 +136,9 @@ export class AttachmentStorage {
     const pageCount = Math.max(1, Number(metadata.pages ?? 1));
     if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(pageHeight) || pageHeight <= 0) {
       throw new AppError(415, "INVALID_ATTACHMENT_IMAGE", "无法读取附件图片尺寸");
+    }
+    if (isGif && pageCount > maximumGifFrames) {
+      throw new AppError(413, "ATTACHMENT_GIF_TOO_MANY_FRAMES", "GIF 动画不能超过 10,000 帧");
     }
     if (!isGif && width * pageHeight > maximumPixels) throw new AppError(413, "ATTACHMENT_IMAGE_TOO_LARGE", "附件图片像素尺寸过大");
     if (!isGif && (!Number.isInteger(pageCount) || pageCount > maximumAnimationFrames)) {

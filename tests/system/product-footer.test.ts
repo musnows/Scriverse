@@ -42,6 +42,8 @@ describe("产品信息页脚", () => {
     expect(application.text).toContain('element.textContent = `发现新版本 v${latestVersion}，查看更新说明`;');
     expect(application.text).toContain('const [authenticated] = await Promise.all([initializeAuthentication(), initializeProductFooters()]);');
     expect(styles.text).toContain(".shelf-view { display: flex; flex-direction: column; height: 100%;");
+    expect(styles.text).toContain('[data-pending-view="shelf"] .auth-pending #shelf-view.hidden,');
+    expect(styles.text).toContain('[data-pending-view="work-audit"] .auth-pending #work-audit-view.hidden { display: flex !important; }');
     expect(styles.text).toContain("#shelf-view, #settings-hub-view { padding-bottom: 24px; }");
     expect(styles.text).toContain("width: 100%; min-width: 0; max-width: 1400px;");
     expect(styles.text).toContain("margin: auto auto 0;");
