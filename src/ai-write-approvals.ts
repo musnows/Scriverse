@@ -274,7 +274,12 @@ export class AiWriteApprovalManager {
   /** 当前作品开启的写工具开关键集合。 */
   enabledWriteToolSwitches(workId: string): Set<AiWriteToolSwitchKey> {
     const settings = this.store.getWorkAiSettings(workId);
-    const tools = json<string[]>(String(settings.aiWriteTools ?? "[]"), []);
+    const source = Array.isArray(settings.aiWriteTools)
+      ? settings.aiWriteTools
+      : typeof settings.aiWriteTools === "string"
+        ? json<unknown[]>(settings.aiWriteTools, [])
+        : [];
+    const tools = source.filter((tool): tool is string => typeof tool === "string");
     return new Set(tools.filter((tool): tool is AiWriteToolSwitchKey =>
       (AI_WRITE_TOOL_SWITCH_KEYS as readonly string[]).includes(tool)));
   }
@@ -299,15 +304,15 @@ export class AiWriteApprovalManager {
   /** 当前用户与对话归属用户的模块权限交集校验；返回不满足写权限的模块列表。 */
   missingIntersectionWriteModules(
     workId: string,
-    requesterUserId: string,
-    conversationOwnerUserId: string,
+    requesterUserId: string | null,
+    conversationOwnerUserId: string | null,
     modules: readonly WorkPermissionModule[]
   ): WorkPermissionModule[] {
     if (!this.permissionResolver) return [...modules];
     const missing = new Set<WorkPermissionModule>();
     for (const module of modules) {
-      const requester = this.permissionResolver(requesterUserId, workId);
-      const owner = this.permissionResolver(conversationOwnerUserId, workId);
+      const requester = requesterUserId ? this.permissionResolver(requesterUserId, workId) : null;
+      const owner = conversationOwnerUserId ? this.permissionResolver(conversationOwnerUserId, workId) : null;
       if (!requester || !canWriteWorkModule(requester, module)) missing.add(module);
       if (!owner || !canWriteWorkModule(owner, module)) missing.add(module);
     }
@@ -317,15 +322,15 @@ export class AiWriteApprovalManager {
   /** 当前用户与对话归属用户对该操作所需的读取模块交集校验（分析任务资料读取）。 */
   missingIntersectionReadModules(
     workId: string,
-    requesterUserId: string,
-    conversationOwnerUserId: string,
+    requesterUserId: string | null,
+    conversationOwnerUserId: string | null,
     modules: readonly WorkPermissionModule[]
   ): WorkPermissionModule[] {
     if (!this.permissionResolver) return [...modules];
     const missing = new Set<WorkPermissionModule>();
     for (const module of modules) {
-      const requester = this.permissionResolver(requesterUserId, workId);
-      const owner = this.permissionResolver(conversationOwnerUserId, workId);
+      const requester = requesterUserId ? this.permissionResolver(requesterUserId, workId) : null;
+      const owner = conversationOwnerUserId ? this.permissionResolver(conversationOwnerUserId, workId) : null;
       if (!requester || !canReadWorkModule(requester, module)) missing.add(module);
       if (!owner || !canReadWorkModule(owner, module)) missing.add(module);
     }
@@ -349,6 +354,8 @@ export class AiWriteApprovalManager {
     const timestamp = now();
     const expiresAt = new Date(Date.parse(timestamp) + this.planTtlMs).toISOString();
     const planId = id("aiWritePlan");
+    const requesterUserId = input.requesterUserId || null;
+    const conversationOwnerUserId = input.conversationOwnerUserId || null;
     const plan = this.db.transaction(() => {
       this.db.run(
         `INSERT INTO ai_write_plans (id, work_id, conversation_id, status, summary, plan_json,
@@ -362,8 +369,8 @@ export class AiWriteApprovalManager {
           operationType: "plan",
           workId: input.workId,
           conversationId: input.conversationId,
-          requesterUserId: input.requesterUserId,
-          conversationOwnerUserId: input.conversationOwnerUserId,
+          requesterUserId: requesterUserId,
+          conversationOwnerUserId: conversationOwnerUserId,
           createdAt: timestamp,
           operations: input.operations.map((operation) => ({
             operationType: operation.operationType,
@@ -377,8 +384,8 @@ export class AiWriteApprovalManager {
             diff: operation.diff
           }))
         }),
-        input.requesterUserId,
-        input.conversationOwnerUserId,
+        requesterUserId,
+        conversationOwnerUserId,
         expiresAt,
         timestamp,
         timestamp
@@ -534,10 +541,11 @@ export class AiWriteApprovalManager {
     );
     const page = paginationSql(pagination);
     const filtered = status !== undefined && status !== "" && AI_WRITE_PLAN_STATUSES.includes(status as AiWritePlanStatus);
-    const where = filtered ? " AND status = ?" : "";
+    const where = filtered ? " AND plan.status = ?" : "";
+    const countWhere = filtered ? " AND status = ?" : "";
     const params: Array<string | number> = filtered ? [workId, status, ...page.params] : [workId, ...page.params];
     const total = numberValue(this.db.get(
-      `SELECT COUNT(*) AS value FROM ai_write_plans WHERE work_id = ?${where}`,
+      `SELECT COUNT(*) AS value FROM ai_write_plans WHERE work_id = ?${countWhere}`,
       ...params.slice(0, filtered ? 2 : 1)
     ) ?? {}, "value");
     const rows = this.db.all(
@@ -574,10 +582,11 @@ export class AiWriteApprovalManager {
   // ---------- 确认 / 拒绝 / 撤销 ----------
 
   /**
-   * 整体确认一份审批。只接受审批 ID；在单个事务内完成状态翻转、重校验与原子执行。
-   * 重复确认（多标签、重试、并发）不会产生重复写入。
+   * 整体确认一份审批。只接受审批 ID；执行前重校验权限/开关/归属/版本，
+   * 任一条件变化时整单标记失效并提交；执行在单个事务内原子完成，
+   * 任一操作失败整体回滚并将整单标记为执行失败。重复确认（多标签、重试、并发）不会产生重复写入。
    */
-  approvePlan(planId: string, approverUserId: string): Record<string, unknown> {
+  approvePlan(planId: string, approverUserId: string | null): Record<string, unknown> {
     this.expirePendingPlanRow(planId);
     const current = this.getPlanRow(planId);
     const currentStatus = requiredString(current, "status");
@@ -590,40 +599,26 @@ export class AiWriteApprovalManager {
     if (currentStatus !== "pending") {
       throw new AppError(409, "AI_WRITE_PLAN_NOT_PENDING", "该审批已处理，不能重复确认");
     }
-    return this.db.transaction(() => {
-      // 事务内重读并翻转状态：并发确认时只有第一个请求能拿到 pending。
-      const locked = this.db.get("SELECT status FROM ai_write_plans WHERE id = ?", planId);
-      if (!locked) throw new AppError(404, "AI_WRITE_PLAN_NOT_FOUND", "审批记录不存在");
-      const lockedStatus = requiredString(locked, "status");
-      if (lockedStatus === "succeeded") {
-        return this.getPlan(planId);
-      }
-      if (lockedStatus !== "pending") {
-        throw new AppError(409, "AI_WRITE_PLAN_NOT_PENDING", "该审批已处理，不能重复确认");
-      }
-      const timestamp = now();
-      this.db.run(
-        "UPDATE ai_write_plans SET status = 'executing', updated_at = ? WHERE id = ? AND status = 'pending'",
-        timestamp,
-        planId
-      );
-      const plan = this.getPlanRow(planId);
-      const workId = requiredString(plan, "work_id");
-      const conversationOwnerUserId = optionalString(plan, "conversation_owner_user_id");
-      const planContent = json<Record<string, unknown>>(requiredString(plan, "plan_json"), {});
-      const operations = this.listPlanOperations(planId);
+    const timestamp = now();
+    const workId = requiredString(current, "work_id");
+    const conversationOwnerUserId = optionalString(current, "conversation_owner_user_id");
+    const operations = this.listPlanOperations(planId);
+    // 无认证环境（开发/测试）下缺少当前用户时，以对话归属用户作为权限基准。
+    const effectiveApprover = approverUserId ?? conversationOwnerUserId;
 
-      // 重校验：任一条件变化时整单失效，禁止继续执行。
-      const invalidation = this.planInvalidation(workId, planId, approverUserId, conversationOwnerUserId, operations, timestamp);
-      if (invalidation !== null) {
-        this.db.run(
-          "UPDATE ai_write_plans SET status = 'invalidated', invalid_reason = ?, decided_at = ?, decided_by_user_id = ?, updated_at = ? WHERE id = ?",
+    // 事务外重校验：条件变化时失效标记必须落库，随后才拒绝请求。
+    const invalidation = this.planInvalidation(workId, planId, effectiveApprover, conversationOwnerUserId, operations, timestamp);
+    if (invalidation !== null) {
+      this.db.transaction(() => {
+        const changed = this.db.run(
+          "UPDATE ai_write_plans SET status = 'invalidated', invalid_reason = ?, decided_at = ?, decided_by_user_id = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
           invalidation,
           timestamp,
           approverUserId,
           timestamp,
           planId
         );
+        if (changed.changes !== 1) return;
         for (const operation of operations) {
           this.db.run(
             "UPDATE ai_write_plan_operations SET status = 'failed', error = ? WHERE id = ?",
@@ -635,43 +630,84 @@ export class AiWriteApprovalManager {
           reason: invalidation,
           decidedByUserId: approverUserId
         });
-        throw new AppError(409, "AI_WRITE_PLAN_INVALIDATED", `该审批已失效：${invalidation}`, { planId });
-      }
-
-      // 逐项原子执行；任一失败整体回滚，不留部分写入。
-      const operationResults: Record<string, unknown>[] = [];
-      for (const operation of operations) {
-        const result = this.applyOperation(workId, planId, operation, approverUserId);
-        this.db.run(
-          "UPDATE ai_write_plan_operations SET status = 'succeeded', result_json = ? WHERE id = ?",
-          JSON.stringify(result),
-          String(operation.id)
-        );
-        operationResults.push({ operationIndex: operation.operationIndex, ...result });
-      }
-      this.db.run(
-        "UPDATE ai_write_plans SET status = 'succeeded', decided_at = ?, decided_by_user_id = ?, executed_at = ?, updated_at = ? WHERE id = ?",
-        timestamp,
-        approverUserId,
-        timestamp,
-        timestamp,
-        planId
-      );
-      this.store.audit(workId, "ai-write-plan.approved", "ai-write-plan", planId, {
-        decidedByUserId: approverUserId,
-        conversationOwnerUserId: conversationOwnerUserId ?? null,
-        operationCount: operations.length,
-        results: operationResults
       });
-      return this.getPlan(planId);
-    });
+      throw new AppError(409, "AI_WRITE_PLAN_INVALIDATED", `该审批已失效：${invalidation}`, { planId });
+    }
+
+    try {
+      return this.db.transaction(() => {
+        // 事务内重读并翻转状态：并发确认时只有第一个请求能拿到 pending。
+        const locked = this.db.get("SELECT status FROM ai_write_plans WHERE id = ?", planId);
+        if (!locked) throw new AppError(404, "AI_WRITE_PLAN_NOT_FOUND", "审批记录不存在");
+        const lockedStatus = requiredString(locked, "status");
+        if (lockedStatus === "succeeded") {
+          return this.getPlan(planId);
+        }
+        if (lockedStatus !== "pending") {
+          throw new AppError(409, "AI_WRITE_PLAN_NOT_PENDING", "该审批已处理，不能重复确认");
+        }
+        this.db.run(
+          "UPDATE ai_write_plans SET status = 'executing', updated_at = ? WHERE id = ? AND status = 'pending'",
+          timestamp,
+          planId
+        );
+        // 逐项原子执行；任一失败整体回滚，不留部分写入。
+        const operationResults: Record<string, unknown>[] = [];
+        for (const operation of operations) {
+          const result = this.applyOperation(workId, planId, operation, approverUserId);
+          this.db.run(
+            "UPDATE ai_write_plan_operations SET status = 'succeeded', result_json = ? WHERE id = ?",
+            JSON.stringify(result),
+            String(operation.id)
+          );
+          operationResults.push({ operationIndex: operation.operationIndex, ...result });
+        }
+        this.db.run(
+          "UPDATE ai_write_plans SET status = 'succeeded', decided_at = ?, decided_by_user_id = ?, executed_at = ?, updated_at = ? WHERE id = ?",
+          timestamp,
+          approverUserId,
+          timestamp,
+          timestamp,
+          planId
+        );
+        this.store.audit(workId, "ai-write-plan.approved", "ai-write-plan", planId, {
+          decidedByUserId: approverUserId,
+          conversationOwnerUserId: conversationOwnerUserId ?? null,
+          operationCount: operations.length,
+          results: operationResults
+        });
+        return this.getPlan(planId);
+      });
+    } catch (error) {
+      // 执行阶段失败：业务写入已随事务回滚，把整单标记为执行失败以便审批中心展示。
+      if (!(error instanceof AppError) || (error.code !== "AI_WRITE_PLAN_NOT_PENDING" && error.code !== "AI_WRITE_PLAN_NOT_FOUND")) {
+        const failure = error instanceof Error ? error.message.slice(0, 2_000) : "审批执行失败";
+        this.db.transaction(() => {
+          this.db.run(
+            "UPDATE ai_write_plans SET status = 'failed', failure = ?, updated_at = ? WHERE id = ? AND status = 'pending'",
+            failure,
+            now(),
+            planId
+          );
+          for (const operation of operations) {
+            this.db.run(
+              "UPDATE ai_write_plan_operations SET status = 'failed', error = ? WHERE id = ? AND status = 'pending'",
+              failure,
+              String(operation.id)
+            );
+          }
+          this.store.audit(workId, "ai-write-plan.failed", "ai-write-plan", planId, { failure });
+        });
+      }
+      throw error;
+    }
   }
 
   /** 执行前重校验；返回失效原因或 null。 */
   private planInvalidation(
     workId: string,
     planId: string,
-    approverUserId: string,
+    approverUserId: string | null,
     conversationOwnerUserId: string | null,
     operations: Record<string, unknown>[],
     timestamp: string
@@ -681,26 +717,26 @@ export class AiWriteApprovalManager {
     if (requiredString(plan, "expires_at") <= timestamp) return "审批已过期";
     // 对话归属用户必须仍有作品访问权限。
     if (this.permissionResolver) {
-      if (this.permissionResolver(ownerUserId, workId) === null) {
+      if (ownerUserId === null || this.permissionResolver(ownerUserId, workId) === null) {
         return "AI 对话归属用户已失去该作品的访问权限";
       }
     }
     const switches = this.enabledWriteToolSwitches(workId);
     for (const operation of operations) {
-      const operationType = requiredString(operation, "operation_type");
-      const targetModule = requiredString(operation, "target_module");
+      const operationType = requiredString(operation, "operationType");
+      const targetModule = requiredString(operation, "targetModule");
       // 模块写权限交集。
       const missingWrite = this.missingIntersectionWriteModules(workId, approverUserId, ownerUserId, [targetModule as WorkPermissionModule]);
       if (missingWrite.length > 0) {
         return `当前用户或 AI 对话归属用户缺少“${targetModule}”模块的写权限`;
       }
       if (operationType === "entity_create" || operationType === "entity_update") {
-        const entityType = requiredString(operation, "entity_type");
-        const switchKey = `entity:${entityType}` as AiWriteToolSwitchKey;
+        const entityType = requiredString(operation, "entityType");
+        const switchKey = `entity:${entityTypeModule(entityType as AiWriteEntityType)}` as AiWriteToolSwitchKey;
         if (!switches.has(switchKey)) return `词条工具开关已关闭（${switchKey}）`;
         if (operationType === "entity_update") {
-          const targetId = requiredString(operation, "target_id");
-          const targetVersion = numberValue(operation, "target_version");
+          const targetId = requiredString(operation, "targetId");
+          const targetVersion = numberValue(operation, "targetVersion");
           const entity = this.entityById(entityType, targetId);
           if (!entity) return `目标对象已不存在（${entityType}:${targetId}）`;
           if (String(entity.workId ?? "") !== workId) return `目标对象不属于当前作品（${entityType}:${targetId}）`;
@@ -710,7 +746,7 @@ export class AiWriteApprovalManager {
         }
       } else if (operationType === "annotation_create") {
         if (!switches.has("annotation")) return "正文批注工具开关已关闭（annotation）";
-        const chapterId = requiredString(operation, "target_id");
+        const chapterId = requiredString(operation, "targetId");
         const chapter = this.store.getChapter(chapterId);
         if (String(chapter.workId ?? "") !== workId) return "批注目标章节不属于当前作品";
       } else if (operationType === "analysis_task") {
@@ -746,14 +782,14 @@ export class AiWriteApprovalManager {
     workId: string,
     planId: string,
     operation: Record<string, unknown>,
-    actorUserId: string
+    actorUserId: string | null
   ): Record<string, unknown> {
-    const operationType = requiredString(operation, "operation_type");
-    const after = json<Record<string, unknown>>(requiredString(operation, "after_json"), {});
+    const operationType = requiredString(operation, "operationType");
+    const after = isRecord(operation.after) ? operation.after : {};
     const source = "ai-approval";
     const sourceRef = planId;
     if (operationType === "entity_create") {
-      const entityType = requiredString(operation, "entity_type");
+      const entityType = requiredString(operation, "entityType");
       const created = this.createEntity(workId, entityType, after, source, sourceRef);
       return {
         operationType,
@@ -764,10 +800,10 @@ export class AiWriteApprovalManager {
       };
     }
     if (operationType === "entity_update") {
-      const entityType = requiredString(operation, "entity_type");
-      const targetId = requiredString(operation, "target_id");
-      const targetVersion = numberValue(operation, "target_version");
-      const before = json<Record<string, unknown>>(requiredString(operation, "before_json"), {});
+      const entityType = requiredString(operation, "entityType");
+      const targetId = requiredString(operation, "targetId");
+      const targetVersion = numberValue(operation, "targetVersion");
+      const before = isRecord(operation.before) ? operation.before : {};
       const updated = this.updateEntity(workId, entityType, targetId, before, after, source, sourceRef, targetVersion);
       return {
         operationType,
@@ -778,7 +814,7 @@ export class AiWriteApprovalManager {
       };
     }
     if (operationType === "annotation_create") {
-      const chapterId = requiredString(operation, "target_id");
+      const chapterId = requiredString(operation, "targetId");
       const annotation = this.store.createChapterAnnotation(chapterId, {
         kind: after.kind === "todo" ? "todo" : "note",
         startLine: numberValue(after, "startLine"),
@@ -1041,7 +1077,7 @@ export class AiWriteApprovalManager {
     };
   }
 
-  rejectPlan(planId: string, approverUserId: string): Record<string, unknown> {
+  rejectPlan(planId: string, approverUserId: string | null): Record<string, unknown> {
     this.expirePendingPlanRow(planId);
     const current = this.getPlanRow(planId);
     if (requiredString(current, "status") !== "pending") {
@@ -1070,7 +1106,7 @@ export class AiWriteApprovalManager {
    * 撤销本次审批：仅编辑已有词条的操作可撤销，且目标词条未被后续版本修改。
    * 恢复修改前值并产生新版本；新建词条不自动删除。
    */
-  revokePlan(planId: string, revokerUserId: string): Record<string, unknown> {
+  revokePlan(planId: string, revokerUserId: string | null): Record<string, unknown> {
     const current = this.getPlanRow(planId);
     if (requiredString(current, "status") !== "succeeded") {
       throw new AppError(409, "AI_WRITE_PLAN_NOT_SUCCEEDED", "只有执行成功的审批才能撤销");
@@ -1079,7 +1115,7 @@ export class AiWriteApprovalManager {
     const conversationOwnerUserId = optionalString(current, "conversation_owner_user_id");
     const operations = this.listPlanOperations(planId);
     const revocable = operations.filter((operation) =>
-      requiredString(operation, "operation_type") === "entity_update"
+      requiredString(operation, "operationType") === "entity_update"
       && isRecord(operation.result)
       && operation.result.revoked !== true
     );
@@ -1093,9 +1129,9 @@ export class AiWriteApprovalManager {
       }
       const results: Record<string, unknown>[] = [];
       for (const operation of revocable) {
-        const entityType = requiredString(operation, "entity_type");
-        const targetId = requiredString(operation, "target_id");
-        const before = json<Record<string, unknown>>(requiredString(operation, "before_json"), {});
+        const entityType = requiredString(operation, "entityType");
+        const targetId = requiredString(operation, "targetId");
+        const before = isRecord(operation.before) ? operation.before : {};
         const appliedVersion = isRecord(operation.result) && typeof operation.result.versionNo === "number"
           ? operation.result.versionNo
           : null;
@@ -1128,13 +1164,13 @@ export class AiWriteApprovalManager {
 
   private revokeInvalidation(
     workId: string,
-    revokerUserId: string,
+    revokerUserId: string | null,
     conversationOwnerUserId: string | null,
     operations: Record<string, unknown>[]
   ): string | null {
     const ownerUserId = conversationOwnerUserId ?? revokerUserId;
     for (const operation of operations) {
-      const targetModule = requiredString(operation, "target_module");
+      const targetModule = requiredString(operation, "targetModule");
       if (this.missingIntersectionWriteModules(workId, revokerUserId, ownerUserId, [targetModule as WorkPermissionModule]).length > 0) {
         return `当前用户或 AI 对话归属用户缺少“${targetModule}”模块的写权限`;
       }
@@ -1219,7 +1255,7 @@ export class AiWriteApprovalManager {
     ).map((row) => this.mapQuestion(row));
   }
 
-  answerQuestion(questionId: string, answer: string, answererUserId: string): Record<string, unknown> {
+  answerQuestion(questionId: string, answer: string, answererUserId: string | null): Record<string, unknown> {
     const normalized = answer.trim();
     if (!normalized) throw new AppError(400, "AI_QUESTION_ANSWER_REQUIRED", "回答不能为空");
     return this.db.transaction(() => {
@@ -1248,7 +1284,7 @@ export class AiWriteApprovalManager {
     });
   }
 
-  declineQuestion(questionId: string, declinerUserId: string): Record<string, unknown> {
+  declineQuestion(questionId: string, declinerUserId: string | null): Record<string, unknown> {
     return this.db.transaction(() => {
       const row = this.db.get("SELECT * FROM ai_approval_questions WHERE id = ?", questionId);
       if (!row) throw new AppError(404, "AI_QUESTION_NOT_FOUND", "提问记录不存在");

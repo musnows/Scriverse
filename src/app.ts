@@ -625,6 +625,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  aiWriteApprovals: AiWriteApprovalManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -1007,11 +1008,13 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   );
   const aiWriteApprovals = new AiWriteApprovalManager(store, {
     maxOperations: resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS, (message) => logger.warn("ai.write_plan.max_operations.invalid", { message })),
-    permissionResolver: (userId, workId) => {
-      const user = auth.getUser(userId);
-      if (!user || user.status !== "active") return null;
-      return auth.workModulePermissions(user, workId, true);
-    }
+    permissionResolver: options.disableUserAuth === true
+      ? () => fullWorkModulePermissions()
+      : (userId, workId) => {
+          const user = auth.getUser(userId);
+          if (!user || user.status !== "active") return null;
+          return auth.workModulePermissions(user, workId, true);
+        }
   });
   const ai = new AiManager(
     store,
@@ -2472,8 +2475,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       action: z.enum(["approve", "reject"])
     }).strict(), request.body);
     const plan = aiWriteApprovals.getPlan(request.params.planId);
-    const actorUserId = request.authUser?.userId;
-    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "确认审批前必须登录");
+    const actorUserId = request.authUser?.userId ?? null;
     if (input.action === "reject") {
       data(response, aiWriteApprovals.rejectPlan(request.params.planId, actorUserId));
       return;
@@ -2482,8 +2484,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.post("/api/ai-write-plans/:planId/revoke", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
-    const actorUserId = request.authUser?.userId;
-    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "撤销审批前必须登录");
+    const actorUserId = request.authUser?.userId ?? null;
     data(response, aiWriteApprovals.revokePlan(request.params.planId, actorUserId));
   });
   app.get("/api/works/:workId/ai-approval-questions", (request, response) => {
@@ -2492,8 +2493,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/ai-approval-questions/:questionId/answer", (request, response) => {
     const input = parse(z.object({ answer: z.string().trim().min(1).max(10_000) }).strict(), request.body);
     const question = aiWriteApprovals.getQuestion(request.params.questionId);
-    const actorUserId = request.authUser?.userId;
-    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "回答问题前必须登录");
+    const actorUserId = request.authUser?.userId ?? null;
     const workPermissions = requestPermissions(request, String(question.workId));
     const permissions = workPermissions as unknown as Record<string, string>;
     const aiChatAccess = permissions["ai-chat"];
@@ -2505,8 +2505,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   app.post("/api/ai-approval-questions/:questionId/decline", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
     const question = aiWriteApprovals.getQuestion(request.params.questionId);
-    const actorUserId = request.authUser?.userId;
-    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "拒绝提问前必须登录");
+    const actorUserId = request.authUser?.userId ?? null;
     const workPermissions = requestPermissions(request, String(question.workId));
     const permissions = workPermissions as unknown as Record<string, string>;
     const aiChatAccess = permissions["ai-chat"];
@@ -2712,7 +2711,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, aiWriteApprovals, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
     database.close();
