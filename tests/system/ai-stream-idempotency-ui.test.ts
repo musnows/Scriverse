@@ -21,6 +21,6 @@ describe("AI 对话流幂等前端", () => {
     expect(application).toContain('toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error")');
     expect(application).toContain('$("#ai-prompt").focus();');
     expect(application).toContain('eventName === "request_status"');
-    expect(page).toContain('/app.js?v=20260813-outline-board-page-v1');
+    expect(page).toContain('/app.js?v=20260814-toast-lifecycle-v1');
   });
 });

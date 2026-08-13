@@ -3597,8 +3597,7 @@ async function refreshAuthCaptcha(target = "login") {
 }
 
 function clearAuthenticationOverlays() {
-  const toastRegion = $("#toast-region");
-  toastRegion.replaceChildren();
+  clearToastRegion();
   document.querySelectorAll("[popover]").forEach((popover) => {
     if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
   });
@@ -3740,14 +3739,47 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
-function dismissChapterInsightToast() {
-  chapterInsightRequestId += 1;
+const TOAST_DURATION_MS = 15_000;
+const toastTimers = new Map();
+
+function hideToastRegionIfEmpty() {
   const region = $("#toast-region");
-  region.querySelector(".chapter-insight-toast")?.remove();
-  $("#insight-button").setAttribute("aria-expanded", "false");
   if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
     region.hidePopover();
   }
+}
+
+function removeToastElement(element) {
+  const timer = toastTimers.get(element);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    toastTimers.delete(element);
+  }
+  element.remove();
+  hideToastRegionIfEmpty();
+}
+
+function clearToastRegion() {
+  toastTimers.forEach((timer) => window.clearTimeout(timer));
+  toastTimers.clear();
+  $("#toast-region").replaceChildren();
+  hideToastRegionIfEmpty();
+}
+
+function clearTransientToasts() {
+  const region = $("#toast-region");
+  [...region.children]
+    .filter((element) => !element.classList.contains("toast-confirmation") && !element.classList.contains("chapter-insight-toast"))
+    .forEach(removeToastElement);
+}
+
+function dismissChapterInsightToast() {
+  chapterInsightRequestId += 1;
+  const region = $("#toast-region");
+  const element = region.querySelector(".chapter-insight-toast");
+  if (element) removeToastElement(element);
+  $("#insight-button").setAttribute("aria-expanded", "false");
+  hideToastRegionIfEmpty();
 }
 
 function toast(message, type = "info") {
@@ -3760,12 +3792,7 @@ function toast(message, type = "info") {
   element.textContent = message;
   region.append(element);
   raiseToastRegion();
-  setTimeout(() => {
-    element.remove();
-    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
-      region.hidePopover();
-    }
-  }, 3600);
+  toastTimers.set(element, window.setTimeout(() => removeToastElement(element), TOAST_DURATION_MS));
 }
 
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
@@ -4263,6 +4290,7 @@ async function initializePage() {
 function showShelf() {
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
+  clearTransientToasts();
   state.dirty = false;
   settingsReturnContext = null;
   updateDocumentTitle();
@@ -4563,6 +4591,7 @@ async function showWorkAudit() {
   workAuditRecords = [];
   workAuditNextPage = null;
   dismissChapterInsightToast();
+  clearTransientToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5485,6 +5514,7 @@ async function showSettingsHub() {
     state.dirty = false;
   }
   dismissChapterInsightToast();
+  clearTransientToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5532,6 +5562,7 @@ async function showPlatformAi() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   dismissChapterInsightToast();
+  clearTransientToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5553,6 +5584,8 @@ async function showPlatformAi() {
 async function showPlatformUsage() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
+  dismissChapterInsightToast();
+  clearTransientToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -6347,6 +6380,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
   dismissChapterInsightToast();
+  clearTransientToasts();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
@@ -6865,6 +6899,7 @@ function showWelcome(hasWork = false) {
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
+  clearTransientToasts();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#welcome-view").classList.remove("hidden");
@@ -6928,6 +6963,7 @@ async function showModule(module) {
   }
   showSystemStatus();
   dismissChapterInsightToast();
+  clearTransientToasts();
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.remove("hidden");
@@ -15954,6 +15990,7 @@ document.addEventListener("visibilitychange", () => {
   if (state.user?.role === "admin" && !systemRestartDetected) void refreshS3BackupEvents();
   void refreshSystemHealth();
 });
+window.addEventListener("pagehide", clearToastRegion);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
 });
