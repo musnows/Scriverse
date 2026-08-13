@@ -163,6 +163,13 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA index_list(ai_history_search_short_terms)").some(
       (index) => index.name === "idx_ai_history_search_short_terms_search"
     )).toBe(true);
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_write_plans'")?.name).toBe("ai_write_plans");
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_write_plan_operations'")?.name).toBe("ai_write_plan_operations");
+    expect(first.get("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ai_approval_questions'")?.name).toBe("ai_approval_questions");
+    expect(first.all("PRAGMA index_list(ai_write_plans)").some((index) => index.name === "idx_ai_write_plans_work")).toBe(true);
+    expect(first.all("PRAGMA index_list(ai_write_plan_operations)").some((index) => index.name === "idx_ai_write_plan_operations_plan")).toBe(true);
+    expect(first.all("PRAGMA index_list(ai_approval_questions)").some((index) => index.name === "idx_ai_approval_questions_work")).toBe(true);
+    expect(first.all("PRAGMA table_info(work_ai_settings)").some((column) => column.name === "ai_write_tools_json")).toBe(true);
     expect(first.get("SELECT is_internal FROM works WHERE id = '__scriverse_platform_ai__'")).toEqual({ is_internal: 1 });
     expect(first.get("SELECT system_prompt FROM platform_ai_settings WHERE id = 1")).toEqual({ system_prompt: "" });
     expect(first.get("SELECT toast_position, page_sizes_json FROM platform_ui_settings WHERE id = 1")).toEqual({

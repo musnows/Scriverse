@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 74;
+export const DATABASE_SCHEMA_VERSION = 75;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -463,6 +463,7 @@ export class Database {
         title_generation_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         image_tool_model_id TEXT REFERENCES models(id) ON DELETE SET NULL,
         always_include_setting_info INTEGER NOT NULL DEFAULT 0 CHECK(always_include_setting_info IN (0, 1)),
+        ai_write_tools_json TEXT NOT NULL DEFAULT '[]',
         updated_at TEXT NOT NULL
       );
 
@@ -2937,6 +2938,80 @@ export class Database {
           for (const term of documentShortSearchTerms(String(row.search_content))) insertTerm.run(row.id, term);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (74, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(75)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS ai_write_plans (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'rejected', 'expired', 'invalidated', 'executing', 'succeeded', 'failed')),
+          summary TEXT NOT NULL DEFAULT '',
+          plan_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(plan_json) AND json_type(plan_json) = 'object'),
+          requested_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          conversation_owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          expires_at TEXT NOT NULL,
+          decided_at TEXT,
+          decided_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          executed_at TEXT,
+          invalid_reason TEXT NOT NULL DEFAULT '',
+          failure TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_ai_write_plans_work ON ai_write_plans(work_id, status, created_at DESC, id DESC)`);
+        this.run(`CREATE TABLE IF NOT EXISTS ai_write_plan_operations (
+          id TEXT PRIMARY KEY,
+          plan_id TEXT NOT NULL REFERENCES ai_write_plans(id) ON DELETE CASCADE,
+          operation_index INTEGER NOT NULL CHECK(operation_index >= 0),
+          operation_type TEXT NOT NULL
+            CHECK(operation_type IN ('entity_create', 'entity_update', 'annotation_create', 'analysis_task')),
+          entity_type TEXT NOT NULL DEFAULT ''
+            CHECK(entity_type IN ('', 'setting', 'character', 'race', 'organization', 'timeline_event', 'relationship', 'outline', 'foreshadow')),
+          target_module TEXT NOT NULL DEFAULT '',
+          target_id TEXT NOT NULL DEFAULT '',
+          target_version INTEGER,
+          ai_summary TEXT NOT NULL DEFAULT '',
+          before_json TEXT NOT NULL DEFAULT 'null' CHECK(json_valid(before_json)),
+          after_json TEXT NOT NULL DEFAULT 'null' CHECK(json_valid(after_json)),
+          diff_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(diff_json) AND json_type(diff_json) = 'array'),
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'succeeded', 'failed')),
+          result_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(result_json) AND json_type(result_json) = 'object'),
+          error TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          UNIQUE(plan_id, operation_index)
+        )`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_ai_write_plan_operations_plan ON ai_write_plan_operations(plan_id, operation_index)`);
+        this.run(`CREATE TABLE IF NOT EXISTS ai_approval_questions (
+          id TEXT PRIMARY KEY,
+          work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+          conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+          question TEXT NOT NULL,
+          options_json TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(options_json) AND json_type(options_json) = 'array'),
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending', 'answered', 'declined', 'expired', 'invalidated')),
+          answer TEXT NOT NULL DEFAULT '',
+          answered_at TEXT,
+          answered_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_ai_approval_questions_work ON ai_approval_questions(work_id, status, created_at DESC, id DESC)`);
+        this.run(`CREATE INDEX IF NOT EXISTS idx_ai_approval_questions_conversation ON ai_approval_questions(conversation_id, status, created_at DESC)`);
+        const writeToolsColumn = this.all<{ name: string }>("PRAGMA table_info(work_ai_settings)");
+        if (!writeToolsColumn.some((column) => column.name === "ai_write_tools_json")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN ai_write_tools_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
