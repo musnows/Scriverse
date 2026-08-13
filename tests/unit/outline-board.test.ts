@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   normalizeOutlineBoardState,
-  outlineBoardUnresolvedCount,
-  prepareOutlineBoard
+  outlineBoardRequestPath,
+  outlineBoardUnresolvedCount
 } from "../../src/public/outline-board.js";
 
 const board = {
@@ -50,53 +50,39 @@ const board = {
   ]
 };
 
-describe("prepareOutlineBoard", () => {
-  it("默认按章节树顺序组织，并保留空分卷", () => {
-    const result = prepareOutlineBoard(board);
-
-    expect(result.volumes.map((volume) => volume.id)).toEqual(["volume-first", "volume-late", "volume-empty"]);
-    expect(result.volumes[1]?.chapters.map((chapter) => chapter.id)).toEqual(["chapter-empty", "chapter-ready"]);
-    expect(result.totalChapterCount).toBe(3);
-    expect(result.visibleChapterCount).toBe(3);
-    expect(result.filtersActive).toBe(false);
-  });
-
-  it("跨标题、大纲和伏笔搜索，并组合状态筛选", () => {
-    expect(prepareOutlineBoard(board, { query: "旧信" }).volumes.flatMap((volume) => volume.chapters).map((chapter) => chapter.id))
-      .toEqual(["chapter-complete", "chapter-ready"]);
-    expect(prepareOutlineBoard(board, { outlineStatus: "empty" }).volumes.flatMap((volume) => volume.chapters).map((chapter) => chapter.id))
-      .toEqual(["chapter-empty"]);
-    expect(prepareOutlineBoard(board, { foreshadowStatus: "unresolved", outlineStatus: "completed" }).volumes.flatMap((volume) => volume.chapters).map((chapter) => chapter.id))
-      .toEqual(["chapter-complete"]);
-    expect(prepareOutlineBoard(board, { foreshadowStatus: "none" }).volumes.flatMap((volume) => volume.chapters).map((chapter) => chapter.id))
-      .toEqual(["chapter-empty"]);
-  });
-
-  it("指定空分卷时保留空状态，其他筛选无结果时移除空分组", () => {
-    const selectedEmpty = prepareOutlineBoard(board, { volumeId: "volume-empty" });
-    expect(selectedEmpty.volumes).toEqual([expect.objectContaining({ id: "volume-empty", chapters: [] })]);
-
-    const noMatch = prepareOutlineBoard(board, { query: "不存在的摘要" });
-    expect(noMatch.volumes).toEqual([]);
-    expect(noMatch.visibleChapterCount).toBe(0);
-  });
-
-  it("仅在卷内排序并保持输入数据不变", () => {
-    const snapshot = structuredClone(board);
-    const byStatus = prepareOutlineBoard(board, { volumeId: "volume-late", sort: "status" });
-    expect(byStatus.volumes[0]?.chapters.map((chapter) => chapter.id)).toEqual(["chapter-empty", "chapter-ready"]);
-    const byTitle = prepareOutlineBoard(board, { volumeId: "volume-late", sort: "title" });
-    expect(byTitle.volumes[0]?.chapters.map((chapter) => chapter.id)).toEqual(["chapter-ready", "chapter-empty"]);
-    const byForeshadows = prepareOutlineBoard(board, { volumeId: "volume-late", sort: "foreshadows" });
-    expect(byForeshadows.volumes[0]?.chapters.map((chapter) => chapter.id)).toEqual(["chapter-ready", "chapter-empty"]);
-    expect(board).toEqual(snapshot);
-  });
-});
-
 describe("outline board state", () => {
   it("规范无效筛选与排序值", () => {
     expect(normalizeOutlineBoardState({ outlineStatus: "invalid" as "draft", foreshadowStatus: "invalid" as "none", sort: "invalid" as "tree" }))
       .toEqual({ query: "", volumeId: "", outlineStatus: "all", foreshadowStatus: "all", sort: "tree" });
+  });
+
+  it("为服务端分页筛选生成有界请求参数", () => {
+    const path = outlineBoardRequestPath("work / 一", {
+      query: " 旧信 坐标 ",
+      volumeId: "volume-late",
+      outlineStatus: "ready",
+      foreshadowStatus: "unresolved",
+      sort: "foreshadows"
+    }, 3, 50);
+    const url = new URL(path, "http://localhost");
+
+    expect(url.pathname).toBe("/api/works/work%20%2F%20%E4%B8%80/outline-board");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      page: "3",
+      limit: "50",
+      q: "旧信 坐标",
+      volumeId: "volume-late",
+      outlineStatus: "ready",
+      foreshadowStatus: "unresolved",
+      sort: "foreshadows"
+    });
+  });
+
+  it("修正无效分页并限制搜索长度", () => {
+    const url = new URL(outlineBoardRequestPath("work", { query: "查".repeat(250) }, 0, 500), "http://localhost");
+    expect(url.searchParams.get("page")).toBe("1");
+    expect(url.searchParams.get("limit")).toBe("30");
+    expect(url.searchParams.get("q")).toHaveLength(200);
   });
 
   it("统计章节关联的未回收伏笔", () => {

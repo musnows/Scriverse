@@ -30,11 +30,21 @@ export type OutlineBoardVolume<T extends OutlineBoardChapter = OutlineBoardChapt
   id?: string | null;
   title?: string | null;
   sortOrder?: number | null;
+  chapterCount?: number | null;
+  filteredChapterCount?: number | null;
   chapters?: T[];
 };
 
 export type OutlineBoard<T extends OutlineBoardChapter = OutlineBoardChapter> = {
   volumes?: Array<OutlineBoardVolume<T>>;
+  volumeOptions?: Array<Omit<OutlineBoardVolume<T>, "chapters">>;
+  page?: number;
+  limit?: number;
+  itemCount?: number;
+  total?: number;
+  pageCount?: number;
+  hasMore?: boolean;
+  nextPage?: number | null;
 };
 
 export type OutlineBoardState = {
@@ -47,15 +57,11 @@ export type OutlineBoardState = {
 
 export declare function normalizeOutlineBoardState(value?: Partial<OutlineBoardState>): OutlineBoardState;
 
-export declare function prepareOutlineBoard<T extends OutlineBoardChapter>(
-  board: OutlineBoard<T> | null | undefined,
-  value?: Partial<OutlineBoardState>
-): {
-  state: OutlineBoardState;
-  volumes: Array<OutlineBoardVolume<T> & { chapters: T[] }>;
-  totalChapterCount: number;
-  visibleChapterCount: number;
-  filtersActive: boolean;
-};
+export declare function outlineBoardRequestPath(
+  workId: string,
+  value?: Partial<OutlineBoardState>,
+  page?: number,
+  limit?: number
+): string;
 
 export declare function outlineBoardUnresolvedCount(chapter: OutlineBoardChapter): number;

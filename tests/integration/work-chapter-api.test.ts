@@ -1,6 +1,7 @@
 import request from "supertest";
 import JSZip from "jszip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buffer } from "node:stream/consumers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime } from "../helpers.js";
 
@@ -886,6 +887,58 @@ describe("作品、导入和章节版本 API", () => {
     const emptyArchive = await JSZip.loadAsync(emptyExport.body as Buffer);
     expect(Object.keys(emptyArchive.files).filter((name) => /chapter-\d/u.test(name))).toEqual([]);
     await request(runtime.app).get(`/api/volumes/${firstVolume.body.data.id}/export?format=docx`).expect(400);
+  });
+
+  it("大作品 EPUB 按章节读取正文并完整写出目录与元信息", async () => {
+    const work = await request(runtime.app).post("/api/works").send({
+      title: "长篇流式导出",
+      author: "测试作者",
+      description: "验证正文不会整本预载。"
+    }).expect(201);
+    const workId = String(work.body.data.id);
+    const chapterCount = 24;
+    const chapterIds: string[] = [];
+    for (let volumeIndex = 0; volumeIndex < 3; volumeIndex += 1) {
+      const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({
+        title: `第${volumeIndex + 1}卷`
+      }).expect(201);
+      for (let chapterIndex = 0; chapterIndex < 8; chapterIndex += 1) {
+        const sequence = volumeIndex * 8 + chapterIndex + 1;
+        const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+          volumeId: volume.body.data.id,
+          title: `第${sequence}章`,
+          content: `章节标记-${sequence}\n${`第${sequence}章长正文 & <转义>。\n`.repeat(2_000)}`
+        }).expect(201);
+        chapterIds.push(String(chapter.body.data.id));
+      }
+    }
+
+    const treeRead = vi.spyOn(runtime.store, "getWorkTree");
+    const databaseRead = vi.spyOn(runtime.database, "get");
+    const exported = await runtime.store.exportEpub(workId);
+    const contentReadCount = (): number => databaseRead.mock.calls.filter(([sql]) =>
+      String(sql).includes("SELECT content FROM chapters WHERE id = ?")
+    ).length;
+    expect(treeRead).not.toHaveBeenCalled();
+    expect(contentReadCount()).toBe(0);
+    await request(runtime.app).patch(`/api/chapters/${chapterIds[0]}`).send({ content: "导出开始后的新正文" }).expect(200);
+
+    const archive = await JSZip.loadAsync(await buffer(exported.archive));
+    expect(contentReadCount()).toBe(chapterCount);
+    const packageXml = await archive.file("OEBPS/package.opf")?.async("string");
+    expect(packageXml).toContain("<dc:title>长篇流式导出</dc:title>");
+    expect(packageXml).toContain("<dc:creator>测试作者</dc:creator>");
+    const navigation = await archive.file("OEBPS/nav.xhtml")?.async("string");
+    expect(navigation).toContain("第1卷");
+    expect(navigation).toContain("第3卷");
+    for (let sequence = 1; sequence <= chapterCount; sequence += 1) {
+      const volumeNumber = String(Math.ceil(sequence / 8)).padStart(3, "0");
+      const chapterNumber = String(((sequence - 1) % 8) + 1).padStart(3, "0");
+      const chapter = await archive.file(`OEBPS/text/chapter-${volumeNumber}-${chapterNumber}.xhtml`)?.async("string");
+      expect(chapter).toContain(`章节标记-${sequence}`);
+      expect(chapter).toContain(`第${sequence}章长正文 &amp; &lt;转义&gt;。`);
+      expect(navigation).toContain(`第${sequence}章`);
+    }
   });
 
   it("删除章节后可列出版本并恢复", async () => {

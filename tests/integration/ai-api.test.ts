@@ -2389,29 +2389,24 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(cancelled).toBe(true);
   });
 
-  it("首轮上下文超限时不请求模型并提示减少上下文", async () => {
+  it("首轮整窗超限且无历史可压缩时不请求模型并提示减少上下文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     setLegacyModelContextWindow(modelId, 1_024);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     fetchMock.mockClear();
 
-    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+    const failed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       instruction: "必须保留的超长首轮指令。".repeat(1_000),
       scope: { type: "none" },
       modelId
-    }).expect(200).expect("Content-Type", /text\/event-stream/u);
+    }).expect(409);
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(streamed.text).toContain("event: error");
-    expect(streamed.text).toContain('"code":"CONTEXT_WINDOW_EXCEEDED"');
-    expect(streamed.text).toContain('"status":400');
-    expect(streamed.text).toContain("首轮上下文约");
-    expect(streamed.text).toContain("本轮未进行上下文压缩，请减少选中的正文、设定、引用、对话历史或指令长度后重试");
-    expect(streamed.text).toContain('"providerName":"本地兼容服务"');
-    expect(streamed.text).toContain(`"providerId":"${providerId}"`);
-    expect(streamed.text).toContain('"modelId":"mock-novel-model"');
-    expect(streamed.text).toContain(`"modelRecordId":"${modelId}"`);
+    expect(failed.body.error).toMatchObject({
+      code: "AI_CONTEXT_COMPACTION_UNAVAILABLE",
+      message: expect.stringContaining("没有可压缩的较早对话")
+    });
   });
 
   it("OpenAI 工具参数收齐前只转发正文，结束标记后才执行工具并继续流式回答", async () => {

@@ -7,6 +7,7 @@ import { dirname, extname, join } from "node:path";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
@@ -782,17 +783,11 @@ function noContent(response: Response): void {
   response.status(204).end();
 }
 
-async function sendEpub(response: Response, archive: JSZip, title: string, fallbackStem: string): Promise<void> {
+async function sendEpub(response: Response, archive: Readable, title: string, fallbackStem: string): Promise<void> {
   response.type(EPUB_MIME_TYPE);
   response.setHeader("Content-Disposition", epubContentDisposition(title, fallbackStem));
   response.setHeader("Cache-Control", "private, no-store");
-  await pipeline(archive.generateNodeStream({
-    type: "nodebuffer",
-    // 逐条目压缩后再写入，确保首个 mimetype 本地头包含确定长度且没有额外字段。
-    streamFiles: false,
-    compression: "DEFLATE",
-    compressionOptions: { level: 6 }
-  }), response);
+  await pipeline(archive, response);
 }
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -1545,7 +1540,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
   app.delete("/api/works/:workId", async (request, response) => {
     const input = parse(z.object({ expectedVersionNo: expectedVersionNoSchema }).strict(), request.body ?? {});
-    store.deleteWork(request.params.workId, input.expectedVersionNo);
+    ai.deleteWork(request.params.workId, input.expectedVersionNo);
     noContent(response);
   });
   app.get("/api/works/:workId/cover", (request, response) => {
@@ -1752,7 +1747,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, pagination ? store.listChapterOutlinesPage(request.params.workId, pagination) : store.listChapterOutlines(request.params.workId));
   });
   app.get("/api/works/:workId/outline-board", (request, response) => {
-    data(response, store.getChapterOutlineBoard(request.params.workId));
+    const query = parse(z.object({
+      q: z.string().trim().max(200).default(""),
+      volumeId: z.string().trim().max(200).default(""),
+      outlineStatus: z.enum(["all", "empty", "draft", "ready", "completed"]).default("all"),
+      foreshadowStatus: z.enum(["all", "none", "unresolved", "resolved", "abandoned"]).default("all"),
+      sort: z.enum(["tree", "status", "foreshadows", "title"]).default("tree")
+    }), request.query);
+    const pagination = parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 };
+    data(response, store.getChapterOutlineBoard(request.params.workId, {
+      query: query.q,
+      volumeId: query.volumeId,
+      outlineStatus: query.outlineStatus,
+      foreshadowStatus: query.foreshadowStatus,
+      sort: query.sort
+    }, pagination));
   });
   app.get("/api/chapters/:chapterId/outline", (request, response) => data(response, store.getChapterOutline(request.params.chapterId)));
   app.put("/api/chapters/:chapterId/outline", (request, response) => {
@@ -2587,8 +2596,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: identifier.optional(),
       scope: contextSchema,
       instruction: z.string().max(100_000).default(""),
-      citations: aiCitationsSchema.optional()
-    }), request.body ?? {});
+      citations: aiCitationsSchema.optional(),
+      ignoreContextWarning: z.boolean().optional()
+    }).strict(), request.body ?? {});
     const conversation = store.getAiConversation(request.params.conversationId);
     data(response, await ai.prepareConversationContext({
       conversationId: request.params.conversationId,
@@ -2596,7 +2606,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       modelId: input.modelId,
       scope: input.scope,
       instruction: instructionWithCitations(input.instruction, input.citations ?? [])
-    }));
+    }, { ignoreWarning: input.ignoreContextWarning === true }));
   });
   app.post("/api/ai-conversations/:conversationId/compact", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional(), scope: contextSchema }), request.body);
@@ -2705,8 +2715,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       parameters: jsonObject.optional(),
       citations: aiCitationsSchema.optional(),
       conversationId: identifier.optional(),
-      currentMessageId: identifier.optional()
-    }), request.body);
+      currentMessageId: identifier.optional(),
+      ignoreContextWarning: z.boolean().optional()
+    }).strict(), request.body);
     const providedIdempotencyKey = request.get("Idempotency-Key");
     const idempotencyKey = providedIdempotencyKey
       ? parse(idempotencyKeySchema, providedIdempotencyKey)
@@ -2739,6 +2750,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     let streamRequestId: string | null = null;
     let streamRequestFinished = false;
     let lastStreamLeaseTouchAt = Date.now();
+    let preparedContext: Record<string, unknown> | null = null;
+    let preparedConversation: Record<string, unknown> | null = null;
     const startStream = (): void => {
       if (response.headersSent) return;
       response.status(200);
@@ -2758,31 +2771,27 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     try {
       if (!existingRequest) {
         store.assertAiConversationStreamAvailable(conversationId);
-        const inspection = ai.inspectConversationContext({
+        preparedContext = await ai.prepareConversationContext({
           conversationId,
           workId: request.params.workId,
           modelId: input.modelId,
           scope: input.scope as ContextScope,
           instruction: resolvedInstruction,
           excludeConversationMessageId: input.currentMessageId
-        });
-        if (inspection.action === "warn") {
-          const prepared = await ai.prepareConversationContext({
-            conversationId,
-            workId: request.params.workId,
-            modelId: input.modelId,
-            scope: input.scope as ContextScope,
-            instruction: resolvedInstruction,
-            excludeConversationMessageId: input.currentMessageId
-          });
+        }, { ignoreWarning: input.ignoreContextWarning === true });
+        preparedConversation = redactAiConversation(store.getAiConversationSummary(conversationId), permissions);
+        if (preparedContext.action === "warn") {
           startStream();
           sendEvent("ready", { streaming: true, idempotencyKey });
           sendEvent("context", {
-            ...prepared,
-            conversation: redactAiConversation({
-              ...store.getAiConversationSummary(conversationId),
-              contextWarningPending: true
-            }, permissions)
+            ...preparedContext,
+            conversation: preparedConversation
+          });
+          sendEvent("complete", {
+            warningOnly: true,
+            conversationId,
+            conversationTitle: conversation.title,
+            contextUsage: preparedContext.usage
           });
           return;
         }
@@ -2845,23 +2854,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         }
         return;
       }
+      if (preparedContext) {
+        sendEvent("context", {
+          ...preparedContext,
+          conversation: preparedConversation
+        });
+      }
       const currentMessageId = String(begun.userMessage?.id ?? input.currentMessageId ?? "");
       if (begun.userMessage) sendEvent("user_message", { message: redactAiConversationMessage(begun.userMessage, permissions) });
-      const prepared = await ai.prepareConversationContext({
-        conversationId,
-        workId: request.params.workId,
-        modelId: input.modelId,
-        scope: input.scope as ContextScope,
-        instruction: resolvedInstruction,
-        excludeConversationMessageId: currentMessageId
-      }, { skipWarning: true });
-      sendEvent("context", {
-        ...prepared,
-        conversation: redactAiConversation({
-          ...store.getAiConversationSummary(conversationId),
-          contextWarningPending: prepared.action === "warn"
-        }, permissions)
-      });
       const suggestion = await ai.createStreamingChat({
         workId: request.params.workId,
         instruction: resolvedInstruction,

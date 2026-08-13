@@ -149,6 +149,7 @@ const AUTO_RUN_MAX_ATTEMPTS = 3;
 const AUTO_RUN_RETRY_DELAYS_MS = [5_000, 30_000] as const;
 const AI_INTERACTIVE_TIMEOUT_MS = 60_000;
 const AI_LONG_RUNNING_TIMEOUT_MS = 300_000;
+const FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT = 95;
 const analysisTaskTypes = new Set<string>(ANALYSIS_TASK_TYPES);
 const interactiveStreamErrorCodes = new Set([
   "AI_STREAM_IDLE_TIMEOUT",
@@ -2506,6 +2507,22 @@ export class AiManager {
     };
   }
 
+  deleteWork(workId: string, expectedVersionNo?: number): string[] {
+    const taskIds = this.store.deleteWork(workId, expectedVersionNo);
+    const autoRunTimer = this.autoRunTimers.get(workId);
+    if (autoRunTimer) clearTimeout(autoRunTimer);
+    this.autoRunTimers.delete(workId);
+    this.autoRunStarting.delete(workId);
+    const relationshipIndexTimer = this.relationshipIndexSyncTimers.get(workId);
+    if (relationshipIndexTimer) clearTimeout(relationshipIndexTimer);
+    this.relationshipIndexSyncTimers.delete(workId);
+    for (const taskId of taskIds) {
+      this.taskControllers.get(taskId)?.abort(new Error("作品已移入回收站"));
+    }
+    logger.info("ai.work_tasks.expired", { workId, taskCount: taskIds.length });
+    return taskIds;
+  }
+
   dispose(): void {
     logger.info("ai.manager.disposing", { scheduledWorks: this.autoRunTimers.size, activeTasks: this.taskControllers.size });
     if (this.autoRunStartupTimer) clearTimeout(this.autoRunStartupTimer);
@@ -4389,6 +4406,7 @@ export class AiManager {
         leftTokens: remainingTokens
       },
       compactThreshold: threshold,
+      compactableMessageCount,
       compactRecommended: compactableMessageCount > 0 && conversationUsagePercent >= threshold,
       contextWarningPending: conversation?.warningPending ?? false,
       compactedMessageCount: conversation?.compactedMessageCount ?? 0,
@@ -4436,19 +4454,27 @@ export class AiManager {
     usage: Record<string, unknown>;
   } {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
-    const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
+    const usagePercent = Number(usage.usagePercent) || 0;
+    const compactableMessageCount = Number(usage.compactableMessageCount) || 0;
+    if (usagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT) {
+      if (compactableMessageCount <= 0) {
+        throw new AppError(
+          409,
+          "AI_CONTEXT_COMPACTION_UNAVAILABLE",
+          "当前请求已占满模型上下文，但没有可压缩的较早对话；请缩短问题、减少引用或新开对话"
+        );
+      }
+      return { action: "compact", usage };
+    }
     if (!usage.compactRecommended) {
       return { action: "ready", usage: { ...usage, contextWarningPending: false } };
     }
-    if (!conversation.warningPending) {
-      return { action: "warn", usage: { ...usage, contextWarningPending: true } };
-    }
-    return { action: "compact", usage };
+    return { action: "warn", usage: { ...usage, contextWarningPending: true } };
   }
 
   async prepareConversationContext(
     input: Pick<GenerateInput, "workId" | "modelId" | "scope" | "instruction" | "excludeConversationMessageId"> & { conversationId: string },
-    options: { skipWarning?: boolean } = {}
+    options: { ignoreWarning?: boolean } = {}
   ): Promise<Record<string, unknown>> {
     const inspection = this.inspectConversationContext(input);
     if (inspection.action === "ready") {
@@ -4456,13 +4482,40 @@ export class AiManager {
       if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
       return inspection;
     }
-    if (inspection.action === "warn" && !options.skipWarning) {
+    if (inspection.action === "warn" && !options.ignoreWarning) {
       this.store.setAiConversationContextWarning(input.conversationId, true);
       return inspection;
     }
+    if (inspection.action === "warn") {
+      this.store.setAiConversationContextWarning(input.conversationId, false);
+      return {
+        action: "ready",
+        reason: "warning_ignored",
+        usage: { ...inspection.usage, contextWarningPending: false }
+      };
+    }
     const compaction = await this.compactConversation(input);
+    if (compaction.changed !== true) {
+      throw new AppError(
+        409,
+        "AI_CONTEXT_COMPACTION_UNAVAILABLE",
+        "当前请求已占满模型上下文，但没有可压缩的较早对话；请缩短问题、减少引用或新开对话"
+      );
+    }
     const compactedUsage = this.getContextUsage({ ...input, taskType: "chat" });
-    return { action: "compacted", usage: compactedUsage, compaction };
+    if ((Number(compactedUsage.usagePercent) || 0) >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT) {
+      throw new AppError(
+        413,
+        "AI_CONTEXT_STILL_OVER_LIMIT",
+        "自动压缩后当前请求仍占满模型上下文；请缩短问题、减少引用或新开对话"
+      );
+    }
+    return {
+      action: "compacted",
+      reason: "forced_usage_threshold",
+      usage: compactedUsage,
+      compaction
+    };
   }
 
   /** 解析本轮消息中的自动角色提及；不使用会话累计排除集，也不改写累计注入状态。 */

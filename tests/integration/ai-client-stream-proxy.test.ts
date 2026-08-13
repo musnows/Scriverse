@@ -86,4 +86,22 @@ describe("AI 客户端流完成协议", () => {
     expect(result).toEqual({ completed: true });
     expect(() => assertAiStreamCompleted(result.completed)).not.toThrow();
   });
+
+  it("收到 warningOnly complete 时也视为正常业务结束", async () => {
+    const body = new Response([
+      'event: context\ndata: {"action":"warn"}',
+      'event: complete\ndata: {"warningOnly":true}',
+      ""
+    ].join("\n\n"), { headers: { "Content-Type": "text/event-stream" } }).body;
+    if (!body) throw new Error("测试响应缺少正文");
+    const events: string[] = [];
+
+    const result = await readAiEventStream(body, (eventName: string) => {
+      events.push(eventName);
+    });
+
+    expect(events).toEqual(["context", "complete"]);
+    expect(result).toEqual({ completed: true });
+    expect(() => assertAiStreamCompleted(result.completed)).not.toThrow();
+  });
 });

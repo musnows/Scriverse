@@ -57,11 +57,11 @@ describe("AI 对话上下文压缩", () => {
 
   afterEach(() => runtime.close());
 
-  it("达到阈值先提醒，继续发送时自动压缩并只保留摘要和最近消息", async () => {
+  it("达到可配置阈值时可忽略本次提醒且下次仍会提醒", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
-    const oldUser = `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`;
-    const oldAssistant = `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`;
+    const oldUser = `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(30)}`;
+    const oldAssistant = `旧助手回答：${"飞船仍在北港附近。".repeat(30)}`;
     const recentUser = "最近问题：当前燃料还剩多少？";
     const recentAssistant = "最近回答：燃料数据尚未在正文中明确。";
     for (const [role, content] of [["user", oldUser], ["assistant", oldAssistant], ["user", recentUser], ["assistant", recentAssistant]] as const) {
@@ -72,7 +72,8 @@ describe("AI 对话上下文压缩", () => {
     const warned = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
     const usage = warned.body.data.usage;
     expect(warned.body.data).toMatchObject({ action: "warn", usage: { compactThreshold: 50, compactRecommended: true, contextWarningPending: true } });
-    expect(usage.usagePercent).toBeGreaterThanOrEqual(50);
+    expect(usage.conversationUsagePercent).toBeGreaterThanOrEqual(50);
+    expect(usage.usagePercent).toBeLessThan(95);
     expect(usage.tokenDistribution).toEqual(expect.objectContaining({
       systemPromptTokens: expect.any(Number),
       functionTokens: expect.any(Number),
@@ -85,11 +86,28 @@ describe("AI 对话上下文压缩", () => {
       + usage.tokenDistribution.leftTokens).toBe(usage.contextWindow);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    const compacted = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
-    expect(compacted.body.data).toMatchObject({ action: "compacted", compaction: { compactedMessageCount: 2, retainedMessageCount: 2, changed: true } });
+    const ignored = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send({
+      ...requestBody,
+      ignoreContextWarning: true
+    }).expect(200);
+    expect(ignored.body.data).toMatchObject({
+      action: "ready",
+      reason: "warning_ignored",
+      usage: { contextWarningPending: false }
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const warnedAgain = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send(requestBody).expect(200);
+    expect(warnedAgain.body.data).toMatchObject({ action: "warn", usage: { contextWarningPending: true } });
+
+    const compacted = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/compact`).send({
+      modelId,
+      scope: requestBody.scope
+    }).expect(200);
+    expect(compacted.body.data).toMatchObject({ compactedMessageCount: 1, retainedMessageCount: 3, changed: true });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(reloaded.body.data).toMatchObject({ compactedMessageCount: 2, hasCompactedSummary: true, contextWarningPending: false });
+    expect(reloaded.body.data).toMatchObject({ compactedMessageCount: 1, hasCompactedSummary: true, contextWarningPending: false });
 
     const current = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role: "user", content: requestBody.instruction }).expect(201);
     let actualMessages: Array<{ role: string; content: string }> = [];
@@ -104,7 +122,8 @@ describe("AI 对话上下文压缩", () => {
     const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
       ...requestBody,
       conversationId,
-      currentMessageId: current.body.data.id
+      currentMessageId: current.body.data.id,
+      ignoreContextWarning: true
     }).expect(200);
     expect(streamed.text).toContain("已结合压缩摘要和最近对话回答。");
     const modelContext = actualMessages.map((message) => message.content).join("\n");
@@ -128,12 +147,12 @@ describe("AI 对话上下文压缩", () => {
     expect(secondRetry.body.data.id).toBe(firstRetry.body.data.id);
   });
 
-  it("流式聊天在同一请求内完成预检和消息持久化", async () => {
+  it("流式提醒以 warningOnly 正常结束，忽略后只持久化一次并继续生成", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = conversation.body.data.id;
     for (const [role, content] of [
-      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`],
-      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`],
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(30)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(30)}`],
       ["user", "最近问题：当前燃料还剩多少？"],
       ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
     ] as const) {
@@ -150,22 +169,127 @@ describe("AI 对话上下文压缩", () => {
     const warned = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send(body).expect(200);
     expect(warned.text).toContain('event: context\ndata: {"action":"warn"');
     expect(warned.text).not.toContain("event: user_message");
-    expect(warned.text).not.toContain("event: complete");
+    expect(warned.text).toContain('event: complete\ndata: {"warningOnly":true');
     expect(fetchMock).not.toHaveBeenCalled();
     const afterWarning = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(afterWarning.body.data).toMatchObject({ messageCount: 4, contextWarningPending: true });
 
-    const continued = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send(body).expect(200);
-    expect(continued.text).toContain('event: context\ndata: {"action":"compacted"');
+    const continued = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      ...body,
+      ignoreContextWarning: true
+    }).expect(200);
+    expect(continued.text).toContain('event: context\ndata: {"action":"ready","reason":"warning_ignored"');
     expect(continued.text).toContain("event: user_message");
     expect(continued.text).toContain("event: complete");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     const afterCompletion = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(afterCompletion.body.data).toMatchObject({ messageCount: 6, contextWarningPending: false });
+    expect(afterCompletion.body.data).toMatchObject({ messageCount: 6, compactedMessageCount: 0, contextWarningPending: false });
     expect(afterCompletion.body.data.messages.slice(-2)).toEqual([
       expect.objectContaining({ role: "user", content: body.instruction }),
       expect.objectContaining({ role: "assistant", content: "已结合压缩摘要和最近对话回答。" })
     ]);
+
+    fetchMock.mockClear();
+    const warnedAgain = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      ...body,
+      instruction: "下一次仍应提醒。"
+    }).expect(200);
+    expect(warnedAgain.text).toContain('event: context\ndata: {"action":"warn"');
+    expect(warnedAgain.text).toContain('event: complete\ndata: {"warningOnly":true');
+    expect(warnedAgain.text).not.toContain("event: user_message");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("整次请求达到 95% 时先自动压缩再保存用户消息并调用 Agent", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`],
+      ["user", "最近问题：当前燃料还剩多少？"],
+      ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
+    ] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+
+    fetchMock.mockClear();
+    const streamed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: "继续回答燃料问题。",
+      conversationId
+    }).expect(200);
+
+    expect(streamed.text).toContain('event: context\ndata: {"action":"compacted","reason":"forced_usage_threshold"');
+    expect(streamed.text).not.toContain('"action":"warn"');
+    expect(streamed.text.indexOf("event: context")).toBeLessThan(streamed.text.indexOf("event: user_message"));
+    expect(streamed.text.indexOf("event: user_message")).toBeLessThan(streamed.text.indexOf("event: delta"));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data).toMatchObject({ messageCount: 6, compactedMessageCount: 2, hasCompactedSummary: true });
+  });
+
+  it("整窗超限但无可压缩历史时返回可理解错误且不保存消息", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    fetchMock.mockClear();
+
+    const failed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: `超长问题：${"请检查当前章节。".repeat(4_000)}`,
+      conversationId
+    }).expect(409);
+
+    expect(failed.body.error).toMatchObject({
+      code: "AI_CONTEXT_COMPACTION_UNAVAILABLE",
+      message: expect.stringContaining("没有可压缩的较早对话")
+    });
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data.messageCount).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("自动压缩后仍达到 95% 时停止请求且不重复保存本轮消息", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [
+      ["user", `旧作者要求：${"必须遵守跃迁冷却规则。".repeat(90)}`],
+      ["assistant", `旧助手回答：${"飞船仍在北港附近。".repeat(90)}`],
+      ["user", "最近问题：当前燃料还剩多少？"],
+      ["assistant", "最近回答：燃料数据尚未在正文中明确。"]
+    ] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+    fetchMock.mockClear();
+
+    const failed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: `仍然过长的问题：${"请检查当前章节。".repeat(4_000)}`,
+      conversationId
+    }).expect(413);
+
+    expect(failed.body.error).toMatchObject({
+      code: "AI_CONTEXT_STILL_OVER_LIMIT",
+      message: expect.stringContaining("自动压缩后")
+    });
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(reloaded.body.data).toMatchObject({ messageCount: 4, hasCompactedSummary: true });
+    expect(reloaded.body.data.compactedMessageCount).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("拒绝非布尔值的本次忽略字段", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: "继续回答。",
+      conversationId: conversation.body.data.id,
+      ignoreContextWarning: "true"
+    }).expect(400);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("手动整理较长对话时优先保留最近八条原始消息", async () => {

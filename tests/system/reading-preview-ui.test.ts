@@ -23,7 +23,7 @@ describe("沉浸式阅读预览界面", () => {
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260813-scrollbar-stable-v1');
-    expect(page.text).toContain('/app.js?v=20260813-reader-volume-mobile-v3');
+    expect(page.text).toContain('/app.js?v=20260813-outline-board-page-v1');
     expect(page.text).toContain('id="reader-open-button" class="module-nav-secondary hidden"');
     expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="reader-open-button"[\s\S]*data-module="comments"/u);
     expect(page.text).not.toMatch(/data-module="editor"[\s\S]*id="reader-open-button"[\s\S]*data-module="drafts"/u);

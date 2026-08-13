@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
-import JSZip from "jszip";
+import type { Readable } from "node:stream";
 import sharp from "sharp";
+import { createZipStream, type ZipStreamEntry } from "./zip-stream.js";
 
 export const EPUB_MIME_TYPE = "application/epub+zip";
 
 export type EpubExportChapter = {
   title: string;
-  content: string;
+  content: string | (() => string);
 };
 
 export type EpubExportVolume = {
@@ -40,7 +41,6 @@ type EpubDocument = {
   id: string;
   href: string;
   title: string;
-  content: string;
 };
 
 const bidiControlCharacters = /[\u202a-\u202e\u2066-\u2069]/gu;
@@ -309,7 +309,7 @@ export function epubContentDisposition(title: string, fallbackStem: string): str
   return `attachment; filename="${asciiFallbackFileName(fallbackStem)}"; filename*=UTF-8''${encodeRfc5987(epubDownloadFileName(title))}`;
 }
 
-export async function createEpubArchive(input: EpubExportInput): Promise<JSZip> {
+export async function createEpubArchive(input: EpubExportInput): Promise<Readable> {
   const title = String(input.title || "未命名作品");
   const author = String(input.author ?? "").trim();
   const description = String(input.description ?? "").trim();
@@ -317,27 +317,24 @@ export async function createEpubArchive(input: EpubExportInput): Promise<JSZip> 
   const identifier = String(input.identifier ?? `urn:uuid:${randomUUID()}`);
   const modified = normalizeModifiedAt(input.modifiedAt);
   const cover = input.cover ? await prepareCover(input.cover) : null;
-  const archive = new JSZip();
-  const fileOptions = { date: modified.date };
-
-  archive.file("mimetype", EPUB_MIME_TYPE, { ...fileOptions, compression: "STORE" });
-  archive.file("META-INF/container.xml", `<?xml version="1.0" encoding="UTF-8"?>
+  const entries: ZipStreamEntry[] = [{ name: "mimetype", content: EPUB_MIME_TYPE, compression: "STORE" }];
+  entries.push({ name: "META-INF/container.xml", content: `<?xml version="1.0" encoding="UTF-8"?>
 <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
   <rootfiles>
     <rootfile full-path="OEBPS/package.opf" media-type="application/oebps-package+xml" />
   </rootfiles>
 </container>
-`, fileOptions);
-  archive.file("OEBPS/styles/book.css", bookStyles, fileOptions);
+` });
+  entries.push({ name: "OEBPS/styles/book.css", content: bookStyles });
 
   if (cover) {
-    archive.file(`OEBPS/images/cover.${cover.extension}`, cover.content, fileOptions);
-    archive.file("OEBPS/text/cover.xhtml", xhtmlPage({
+    entries.push({ name: `OEBPS/images/cover.${cover.extension}`, content: cover.content });
+    entries.push({ name: "OEBPS/text/cover.xhtml", content: xhtmlPage({
       language,
       title: `${title}封面`,
       body: `    <div class="cover-page"><img src="../images/cover.${cover.extension}" alt="${xml(title)}封面" /></div>`,
       bodyType: "cover"
-    }), fileOptions);
+    }) });
   }
 
   const titleBody = `    <section class="title-page" epub:type="titlepage">
@@ -346,10 +343,12 @@ export async function createEpubArchive(input: EpubExportInput): Promise<JSZip> 
   const titleDocument: EpubDocument = {
     id: "title-page",
     href: "text/title.xhtml",
-    title,
-    content: xhtmlPage({ language, title, body: titleBody, bodyType: "frontmatter" })
+    title
   };
-  archive.file(`OEBPS/${titleDocument.href}`, titleDocument.content, fileOptions);
+  entries.push({
+    name: `OEBPS/${titleDocument.href}`,
+    content: xhtmlPage({ language, title, body: titleBody, bodyType: "frontmatter" })
+  });
 
   const volumeDocuments = input.volumes.map((volume, volumeIndex) => {
     const volumeNumber = String(volumeIndex + 1).padStart(3, "0");
@@ -357,39 +356,43 @@ export async function createEpubArchive(input: EpubExportInput): Promise<JSZip> 
     const volumeDocument: EpubDocument = {
       id: `volume-${volumeNumber}`,
       href: `text/volume-${volumeNumber}.xhtml`,
-      title: volumeTitle,
+      title: volumeTitle
+    };
+    entries.push({
+      name: `OEBPS/${volumeDocument.href}`,
       content: xhtmlPage({
         language,
         title: volumeTitle,
         body: `    <section class="volume-page" epub:type="part"><h1>${xml(volumeTitle)}</h1></section>`,
         bodyType: "bodymatter"
       })
-    };
-    archive.file(`OEBPS/${volumeDocument.href}`, volumeDocument.content, fileOptions);
+    });
     const chapters = volume.chapters.map((chapter, chapterIndex) => {
       const chapterNumber = String(chapterIndex + 1).padStart(3, "0");
       const chapterTitle = String(chapter.title ?? "");
       const chapterDocument: EpubDocument = {
         id: `chapter-${volumeNumber}-${chapterNumber}`,
         href: `text/chapter-${volumeNumber}-${chapterNumber}.xhtml`,
-        title: chapterTitle,
-        content: xhtmlPage({
+        title: chapterTitle
+      };
+      entries.push({
+        name: `OEBPS/${chapterDocument.href}`,
+        content: () => xhtmlPage({
           language,
           title: chapterTitle,
-          body: `    <article epub:type="chapter">\n      <p class="volume-label">${xml(volumeTitle)}</p>\n      <h1>${xml(chapterTitle)}</h1>\n${renderChapterBody(chapter.content)}\n    </article>`,
+          body: `    <article epub:type="chapter">\n      <p class="volume-label">${xml(volumeTitle)}</p>\n      <h1>${xml(chapterTitle)}</h1>\n${renderChapterBody(typeof chapter.content === "function" ? chapter.content() : chapter.content)}\n    </article>`,
           bodyType: "bodymatter"
         })
-      };
-      archive.file(`OEBPS/${chapterDocument.href}`, chapterDocument.content, fileOptions);
+      });
       return chapterDocument;
     });
     return { document: volumeDocument, chapters };
   });
 
   const documents = [titleDocument, ...volumeDocuments.flatMap((volume) => [volume.document, ...volume.chapters])];
-  archive.file("OEBPS/nav.xhtml", navigationDocument({ title, language, volumes: volumeDocuments, hasCover: Boolean(cover) }), fileOptions);
-  archive.file("OEBPS/toc.ncx", ncxDocument({ title, identifier, volumes: volumeDocuments }), fileOptions);
-  archive.file("OEBPS/package.opf", packageDocument({
+  entries.push({ name: "OEBPS/nav.xhtml", content: navigationDocument({ title, language, volumes: volumeDocuments, hasCover: Boolean(cover) }) });
+  entries.push({ name: "OEBPS/toc.ncx", content: ncxDocument({ title, identifier, volumes: volumeDocuments }) });
+  entries.push({ name: "OEBPS/package.opf", content: packageDocument({
     title,
     author,
     description,
@@ -398,6 +401,6 @@ export async function createEpubArchive(input: EpubExportInput): Promise<JSZip> 
     modifiedAt: modified.value,
     documents,
     cover
-  }), fileOptions);
-  return archive;
+  }) });
+  return createZipStream(entries, modified.date);
 }

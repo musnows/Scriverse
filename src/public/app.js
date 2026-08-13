@@ -84,9 +84,9 @@ import {
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
 import {
   normalizeOutlineBoardState,
-  outlineBoardUnresolvedCount,
-  prepareOutlineBoard
-} from "/outline-board.js?v=20260812-outline-board-v1";
+  outlineBoardRequestPath,
+  outlineBoardUnresolvedCount
+} from "/outline-board.js?v=20260813-outline-board-page-v1";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
@@ -1228,6 +1228,7 @@ let settingFiltersPanelOpen = false;
 const outlineBoardFilters = normalizeOutlineBoardState();
 let outlineBoardFiltersPanelOpen = false;
 let outlineBoardRenderRequestId = 0;
+let outlineBoardSearchTimer = null;
 const relationshipFilters = { fromCharacterIds: [], toCharacterIds: [] };
 let relationshipFiltersPanelOpen = false;
 
@@ -1808,7 +1809,7 @@ function aiAssistantLabel(suffix = "") {
   return suffix ? `${name} · ${suffix}` : name;
 }
 
-function createAiContextCompactionDivider({ kind = "conversation", ariaLabel = "已压缩上下文", title = "" } = {}) {
+function createAiContextCompactionDivider({ kind = "conversation", ariaLabel = "当前上下文已压缩", title = "" } = {}) {
   const divider = document.createElement("div");
   divider.className = "ai-context-compaction-divider";
   divider.dataset.contextCompaction = kind;
@@ -1816,7 +1817,7 @@ function createAiContextCompactionDivider({ kind = "conversation", ariaLabel = "
   divider.setAttribute("role", "separator");
   divider.setAttribute("aria-label", ariaLabel);
   if (title) divider.title = title;
-  divider.innerHTML = "<span>已压缩上下文</span>";
+  divider.innerHTML = "<span>—— 当前上下文已压缩 ——</span>";
   return divider;
 }
 
@@ -5627,6 +5628,8 @@ function resetWorkScopedUiCaches() {
   Object.assign(outlineBoardFilters, normalizeOutlineBoardState());
   outlineBoardFiltersPanelOpen = false;
   outlineBoardRenderRequestId += 1;
+  clearTimeout(outlineBoardSearchTimer);
+  outlineBoardSearchTimer = null;
   chapterSelectionRequestGeneration += 1;
   Object.keys(moduleListPages).forEach((key) => { moduleListPages[key] = 1; });
   relationshipFilters.fromCharacterIds = [];
@@ -8198,16 +8201,17 @@ function bindOutlineBoardCards(board, workId) {
   }));
 }
 
-async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
+async function renderOutlines(foreshadowPage = moduleListPages.foreshadows, boardPage = moduleListPages.outlinePlans) {
   const workId = state.work.id;
   const generation = workScopedUiGeneration;
   const requestId = ++outlineBoardRenderRequestId;
   const currentChapterId = state.chapter?.id;
+  const boardPageSize = pageSizeFor("outlines");
   let board;
   let foreshadows;
   try {
     [board, foreshadows] = await Promise.all([
-      moduleApi("outlines", `/api/works/${encodeURIComponent(workId)}/outline-board`),
+      moduleApi("outlines", outlineBoardRequestPath(workId, outlineBoardFilters, boardPage, boardPageSize)),
       moduleApiAllPages("outlines", `/api/works/${encodeURIComponent(workId)}/foreshadows?status=all${currentChapterId ? `&currentChapterId=${encodeURIComponent(currentChapterId)}` : ""}`)
     ]);
   } catch (error) {
@@ -8216,9 +8220,12 @@ async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
   }
   if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== outlineBoardRenderRequestId || state.module !== "outlines") return;
 
-  if (outlineBoardFilters.volumeId && !board.volumes.some((volume) => String(volume.id) === outlineBoardFilters.volumeId)) {
+  if (outlineBoardFilters.volumeId && !board.volumeOptions.some((volume) => String(volume.id) === outlineBoardFilters.volumeId)) {
     outlineBoardFilters.volumeId = "";
+    board = await moduleApi("outlines", outlineBoardRequestPath(workId, outlineBoardFilters, 1, boardPageSize));
+    if (state.work?.id !== workId || generation !== workScopedUiGeneration || requestId !== outlineBoardRenderRequestId || state.module !== "outlines") return;
   }
+  moduleListPages.outlinePlans = board.page;
   const foreshadowPageResult = paginateModuleItems(foreshadows, foreshadowPage, "outlines");
   moduleListPages.foreshadows = foreshadowPageResult.page;
   const layout = readModuleLayout();
@@ -8254,9 +8261,9 @@ async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
 
   const filterState = normalizeOutlineBoardState(outlineBoardFilters);
   Object.assign(outlineBoardFilters, filterState);
-  const volumeOptions = board.volumes.map((volume) => `<option value="${esc(volume.id)}" ${filterState.volumeId === String(volume.id) ? "selected" : ""}>${esc(volume.title)}</option>`).join("");
+  const volumeOptions = board.volumeOptions.map((volume) => `<option value="${esc(volume.id)}" ${filterState.volumeId === String(volume.id) ? "selected" : ""}>${esc(volume.title)}</option>`).join("");
   const filterToolbar = `<section id="outline-board-filter-panel" class="character-filter-toolbar outline-board-filter-toolbar${outlineBoardFiltersPanelOpen ? "" : " hidden"}" aria-label="章节大纲看板筛选">
-    <label class="setting-filter-field outline-board-search-field" for="outline-board-search"><span>搜索章节与摘要</span><input id="outline-board-search" type="search" value="${esc(filterState.query)}" placeholder="章节、目标、冲突、转折或伏笔" autocomplete="off"></label>
+    <label class="setting-filter-field outline-board-search-field" for="outline-board-search"><span>搜索章节与摘要</span><input id="outline-board-search" type="search" value="${esc(filterState.query)}" placeholder="章节、目标、冲突、转折或伏笔" autocomplete="off" maxlength="200"></label>
     <label class="setting-filter-field" for="outline-board-volume-filter"><span>按分卷筛选</span><select id="outline-board-volume-filter"><option value="">全部分卷</option>${volumeOptions}</select></label>
     <label class="setting-filter-field" for="outline-board-status-filter"><span>按大纲状态筛选</span><select id="outline-board-status-filter"><option value="all" ${filterState.outlineStatus === "all" ? "selected" : ""}>全部大纲状态</option><option value="empty" ${filterState.outlineStatus === "empty" ? "selected" : ""}>尚未规划</option><option value="draft" ${filterState.outlineStatus === "draft" ? "selected" : ""}>草稿</option><option value="ready" ${filterState.outlineStatus === "ready" ? "selected" : ""}>可执行</option><option value="completed" ${filterState.outlineStatus === "completed" ? "selected" : ""}>已完成</option></select></label>
     <label class="setting-filter-field" for="outline-board-foreshadow-filter"><span>按伏笔状态筛选</span><select id="outline-board-foreshadow-filter"><option value="all" ${filterState.foreshadowStatus === "all" ? "selected" : ""}>全部伏笔状态</option><option value="none" ${filterState.foreshadowStatus === "none" ? "selected" : ""}>无关联伏笔</option><option value="unresolved" ${filterState.foreshadowStatus === "unresolved" ? "selected" : ""}>有未回收伏笔</option><option value="resolved" ${filterState.foreshadowStatus === "resolved" ? "selected" : ""}>有已回收伏笔</option><option value="abandoned" ${filterState.foreshadowStatus === "abandoned" ? "selected" : ""}>有已放弃伏笔</option></select></label>
@@ -8266,21 +8273,44 @@ async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
   $("#module-content").innerHTML = `${filterToolbar}<div id="outline-board-results"></div><section class="planning-section outline-foreshadow-library"><div class="section-title"><div><span class="eyebrow">伏笔追踪</span><h2>尚未回收与历史伏笔</h2></div></div>${foreshadowHtml}</section>`;
   mountOutlineBoardFilterToggle();
 
-  const renderOutlineBoardResults = () => {
-    const prepared = prepareOutlineBoard(board, outlineBoardFilters);
-    const controlsActive = prepared.filtersActive || prepared.state.sort !== "tree";
-    const summary = `<div class="outline-summary"><article><strong>${prepared.filtersActive ? prepared.visibleChapterCount : board.stats.chapterCount}</strong><span>${prepared.filtersActive ? `筛选结果 / 共 ${board.stats.chapterCount} 章` : "全书章节"}</span></article><article><strong>${board.stats.outlinedChapterCount}</strong><span>已有章节大纲</span></article><article class="${board.stats.unresolvedForeshadowCount ? "danger-text" : ""}"><strong>${board.stats.unresolvedForeshadowCount}</strong><span>未回收伏笔</span></article></div>`;
-    const boardHtml = prepared.volumes.length
-      ? `<div class="outline-board">${prepared.volumes.map((volume) => `<section class="outline-board-volume" data-outline-board-volume="${esc(volume.id)}" aria-labelledby="outline-board-volume-${esc(volume.id)}"><header><div><span class="eyebrow">分卷</span><h3 id="outline-board-volume-${esc(volume.id)}">${esc(volume.title)}</h3></div><span>${volume.chapters.length} 章</span></header>${volume.chapters.length ? `<div class="outline-board-grid">${volume.chapters.map((chapter) => outlineBoardCard(chapter, volume)).join("")}</div>` : '<div class="outline-board-volume-empty"><b>本卷暂无章节</b><span>空分卷会保留在全书看板中。</span></div>'}</section>`).join("")}</div>`
-      : emptyModule(board.stats.chapterCount ? "没有符合筛选条件的章节" : board.volumes.length ? "当前分卷还没有章节" : "还没有分卷", board.stats.chapterCount ? "可以调整关键词、状态、分卷或排序条件。" : "先在作品目录创建分卷和章节，再维护每章目标、冲突与转折。");
-    $("#outline-board-results").innerHTML = `${summary}<section class="planning-section"><div class="section-title"><div><span class="eyebrow">全书总览</span><h2>章节大纲看板</h2></div><span class="outline-board-result-note">${prepared.visibleChapterCount} / ${board.stats.chapterCount} 章</span></div>${boardHtml}</section>`;
-    $("#outline-board-filter-count").textContent = prepared.filtersActive ? `筛选后剩余 ${prepared.visibleChapterCount} 章` : "";
+  const renderOutlineBoardResults = (pageResult) => {
+    const currentFilters = normalizeOutlineBoardState(outlineBoardFilters);
+    const filtersActive = Boolean(currentFilters.query.trim() || currentFilters.volumeId || currentFilters.outlineStatus !== "all" || currentFilters.foreshadowStatus !== "all");
+    const controlsActive = filtersActive || currentFilters.sort !== "tree";
+    const summary = `<div class="outline-summary"><article><strong>${filtersActive ? pageResult.total : pageResult.stats.chapterCount}</strong><span>${filtersActive ? `筛选结果 / 共 ${pageResult.stats.chapterCount} 章` : "全书章节"}</span></article><article><strong>${pageResult.stats.outlinedChapterCount}</strong><span>已有章节大纲</span></article><article class="${pageResult.stats.unresolvedForeshadowCount ? "danger-text" : ""}"><strong>${pageResult.stats.unresolvedForeshadowCount}</strong><span>未回收伏笔</span></article></div>`;
+    const boardHtml = pageResult.volumes.length
+      ? `<div class="outline-board">${pageResult.volumes.map((volume) => `<section class="outline-board-volume" data-outline-board-volume="${esc(volume.id)}" aria-labelledby="outline-board-volume-${esc(volume.id)}"><header><div><span class="eyebrow">分卷</span><h3 id="outline-board-volume-${esc(volume.id)}">${esc(volume.title)}</h3></div><span>${volume.chapters.length === volume.filteredChapterCount ? `${volume.chapters.length} 章` : `本页 ${volume.chapters.length} / ${volume.filteredChapterCount} 章`}</span></header>${volume.chapters.length ? `<div class="outline-board-grid">${volume.chapters.map((chapter) => outlineBoardCard(chapter, volume)).join("")}</div>` : '<div class="outline-board-volume-empty"><b>本卷暂无章节</b><span>空分卷会保留在全书看板中。</span></div>'}</section>`).join("")}</div>`
+      : emptyModule(pageResult.stats.chapterCount ? "没有符合筛选条件的章节" : pageResult.volumeOptions.length ? "当前分卷还没有章节" : "还没有分卷", pageResult.stats.chapterCount ? "可以调整关键词、状态、分卷或排序条件。" : "先在作品目录创建分卷和章节，再维护每章目标、冲突与转折。");
+    const pagination = renderModulePagination(pageResult, "outlinePlans", "章节大纲看板");
+    $("#outline-board-results").innerHTML = `${summary}<section class="planning-section"><div class="section-title"><div><span class="eyebrow">全书总览</span><h2>章节大纲看板</h2></div><span class="outline-board-result-note">本页 ${pageResult.itemCount} / ${pageResult.total} 章</span></div>${boardHtml}${pagination}</section>`;
+    $("#outline-board-filter-count").textContent = filtersActive ? `筛选后共 ${pageResult.total} 章` : "";
     $("#clear-outline-board-filters").disabled = !controlsActive;
-    mountModuleCount(prepared.visibleChapterCount + foreshadows.length);
-    bindOutlineBoardCards(prepared, workId);
+    mountModuleCount(pageResult.total + foreshadows.length);
+    bindOutlineBoardCards(pageResult, workId);
+    bindModulePagination("outlinePlans", (page) => refreshOutlineBoard(page));
   };
 
-  const updateFilters = () => {
+  const refreshOutlineBoard = async (page = 1) => {
+    const pageRequestId = ++outlineBoardRenderRequestId;
+    moduleListPages.outlinePlans = page;
+    $("#outline-board-results")?.setAttribute("aria-busy", "true");
+    $("#outline-board-filter-count").textContent = "正在加载看板…";
+    try {
+      const nextBoard = await moduleApi("outlines", outlineBoardRequestPath(workId, outlineBoardFilters, page, boardPageSize));
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration || pageRequestId !== outlineBoardRenderRequestId || state.module !== "outlines") return;
+      board = nextBoard;
+      moduleListPages.outlinePlans = nextBoard.page;
+      renderOutlineBoardResults(nextBoard);
+    } catch (error) {
+      if (state.work?.id !== workId || generation !== workScopedUiGeneration || pageRequestId !== outlineBoardRenderRequestId || state.module !== "outlines") return;
+      $("#outline-board-filter-count").textContent = "看板加载失败";
+      toast(`读取章节大纲看板失败：${error.message}`, "error");
+    } finally {
+      if (pageRequestId === outlineBoardRenderRequestId) $("#outline-board-results")?.removeAttribute("aria-busy");
+    }
+  };
+
+  const updateFilters = (defer = false) => {
     Object.assign(outlineBoardFilters, normalizeOutlineBoardState({
       query: $("#outline-board-search").value,
       volumeId: $("#outline-board-volume-filter").value,
@@ -8289,10 +8319,16 @@ async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
       sort: $("#outline-board-sort").value
     }));
     outlineBoardFiltersPanelOpen = true;
-    renderOutlineBoardResults();
+    clearTimeout(outlineBoardSearchTimer);
+    if (defer) {
+      outlineBoardSearchTimer = window.setTimeout(() => { void refreshOutlineBoard(1); }, 250);
+    } else {
+      outlineBoardSearchTimer = null;
+      void refreshOutlineBoard(1);
+    }
   };
-  $("#outline-board-search").addEventListener("input", updateFilters);
-  ["#outline-board-volume-filter", "#outline-board-status-filter", "#outline-board-foreshadow-filter", "#outline-board-sort"].forEach((selector) => $(selector).addEventListener("change", updateFilters));
+  $("#outline-board-search").addEventListener("input", () => updateFilters(true));
+  ["#outline-board-volume-filter", "#outline-board-status-filter", "#outline-board-foreshadow-filter", "#outline-board-sort"].forEach((selector) => $(selector).addEventListener("change", () => updateFilters(false)));
   $("#clear-outline-board-filters").addEventListener("click", () => {
     Object.assign(outlineBoardFilters, normalizeOutlineBoardState());
     $("#outline-board-search").value = "";
@@ -8301,10 +8337,12 @@ async function renderOutlines(foreshadowPage = moduleListPages.foreshadows) {
     $("#outline-board-foreshadow-filter").value = "all";
     $("#outline-board-sort").value = "tree";
     outlineBoardFiltersPanelOpen = true;
-    renderOutlineBoardResults();
     $("#outline-board-search").focus();
+    clearTimeout(outlineBoardSearchTimer);
+    outlineBoardSearchTimer = null;
+    void refreshOutlineBoard(1);
   });
-  renderOutlineBoardResults();
+  renderOutlineBoardResults(board);
   bindModuleLayoutToggle(() => renderOutlines(foreshadowPageResult.page));
   bindModulePagination("foreshadows", renderOutlines);
   $("#module-content").querySelectorAll("[data-edit-foreshadow]").forEach((button) => button.addEventListener("click", () => openForeshadowDialog(foreshadows.find((item) => item.id === button.dataset.editForeshadow))));
@@ -10145,7 +10183,7 @@ async function renderBookAiSettings() {
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>该阈值按对话历史的独立预算计算，用于显示可选择压缩或忽略的提醒；整次请求达到模型上下文窗口 95% 时仍会强制压缩较早消息，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label class="checkbox-field config-checkbox-field"><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section ai-agent-tools-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
   const agentToolCallLimitInput = host.querySelector("#agent-tool-call-limit");
   agentToolCallLimitInput?.setAttribute("max", String(maximumAgentToolCallLimit));
   const agentToolCallDescription = agentToolCallLimitInput?.closest(".config-section")?.querySelector(".config-section-header p");
@@ -10562,15 +10600,17 @@ function setAiContextDistributionVisible(visible) {
 }
 
 function showAiContextWarning(usage = null) {
-  const percent = Math.max(0, Math.round(Number(usage?.conversationUsagePercent) || 0));
-  const threshold = Math.max(50, Math.min(90, Number(usage?.compactThreshold) || 85));
-  $("#ai-context-warning-title").textContent = percent ? `对话历史已使用 ${percent}% 的独立预算` : "对话历史接近整理阈值";
-  $("#ai-context-warning-message").textContent = `已达到 ${threshold}% 的长期记忆整理阈值。现在可整理较早对话或新开对话；若继续发送，系统会先生成带来源的结构化长期记忆。作品正文超限不会触发此操作。`;
+  $("#ai-context-warning-title").textContent = "对话上下文过长";
+  $("#ai-context-warning-message").textContent = "当前对话上下文过长，是否进行压缩？不压缩可能会导致后续请求失败";
   $("#ai-context-warning").classList.remove("hidden");
 }
 
 function hideAiContextWarning() {
   $("#ai-context-warning").classList.add("hidden");
+}
+
+function setAiContextWarningActionsDisabled(disabled) {
+  for (const button of $("#ai-context-warning").querySelectorAll("button")) button.disabled = disabled;
 }
 
 async function loadAiReferences() {
@@ -13342,6 +13382,10 @@ function openModelDialog(providerId, item = null, provider = null) {
 }
 
 async function sendAi() {
+  return sendAiWithOptions();
+}
+
+async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   if (!state.work) return toast("请先选择作品", "error");
   const composerSnapshot = captureAiPromptComposer();
   const instruction = composerSnapshot.text.trim();
@@ -13414,7 +13458,8 @@ async function sendAi() {
         scope,
         modelId,
         citations,
-        conversationId: requestHolder.snapshot.conversationId
+        conversationId: requestHolder.snapshot.conversationId,
+        ...(ignoreContextWarning ? { ignoreContextWarning: true } : {})
       }, createAiIdempotencyKey());
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       if (streamed.action === "warn") return;
@@ -13585,6 +13630,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   let conversationTitle = null;
   let persistedUserMessage = null;
   let contextAction = "ready";
+  let warningOnly = false;
   let streamContextCompacted = false;
   let finalAnswerStarted = false;
   const processStartedAt = Date.now();
@@ -13708,6 +13754,11 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         setAiContextMeter(payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
+        if (payload.warningOnly === true) {
+          warningOnly = true;
+          setAiContextMeter(payload.contextUsage);
+          return;
+        }
         mountAssistantMessage();
         persistedMessageId = typeof payload.messageId === "string" ? payload.messageId : null;
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
@@ -13739,7 +13790,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     assertAiRequestCurrent(requestHolder.snapshot);
     if (streamError) throw streamError;
     assertAiStreamCompleted(streamCompleted);
-    return { action: contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
+    return { action: warningOnly ? "warn" : contextAction, content: streamedText, message, metadata: generatedMetadata, messageId: persistedMessageId, createdAt: persistedMessageCreatedAt, conversationTitle, userMessage: persistedUserMessage };
   } catch (error) {
     const streamFailure = error instanceof Error ? error : new Error(String(error ?? "AI 流式调用失败"));
     const interruptionCode = typeof streamFailure.code === "string" ? streamFailure.code.slice(0, 100) : "AI_STREAM_FAILED";
@@ -15665,7 +15716,7 @@ $("#ai-context-compact").addEventListener("click", async () => {
   const modelId = $("#ai-model").value;
   if (!requestScope || !modelId) return toast("请先选择章节和模型", "error");
   const button = $("#ai-context-compact");
-  button.disabled = true;
+  setAiContextWarningActionsDisabled(true);
   button.textContent = "压缩中";
   try {
     const conversationId = await ensureAiConversation();
@@ -15674,6 +15725,7 @@ $("#ai-context-compact").addEventListener("click", async () => {
       body: { modelId, scope: requestScope.scope }
     });
     hideAiContextWarning();
+    $("#ai-prompt").focus();
     toast(result.changed ? `已整理 ${result.compactedMessageCount} 条较早消息为长期记忆` : "当前没有需要整理的较早消息");
     setAiContextMeter(result.usage);
     if (result.changed) {
@@ -15687,19 +15739,30 @@ $("#ai-context-compact").addEventListener("click", async () => {
   } catch (error) {
     toast(`上下文压缩失败：${error.message}`, "error");
   } finally {
-    button.disabled = false;
-    button.textContent = "压缩上下文";
+    setAiContextWarningActionsDisabled(false);
+    button.textContent = "压缩";
   }
 });
 $("#ai-context-new-conversation").addEventListener("click", async () => {
+  setAiContextWarningActionsDisabled(true);
   try {
     await createNewAiConversation();
     hideAiContextWarning();
   } catch (error) {
     toast(error.message, "error");
+  } finally {
+    setAiContextWarningActionsDisabled(false);
   }
 });
-$("#ai-context-dismiss").addEventListener("click", hideAiContextWarning);
+$("#ai-context-dismiss").addEventListener("click", async () => {
+  setAiContextWarningActionsDisabled(true);
+  try {
+    await sendAiWithOptions({ ignoreContextWarning: true });
+    if ($("#ai-context-warning").classList.contains("hidden")) $("#ai-prompt").focus();
+  } finally {
+    setAiContextWarningActionsDisabled(false);
+  }
+});
 $("#ai-history-toggle").addEventListener("click", async () => {
   if ($("#ai-history-dialog").open) return setAiHistoryVisible(false);
   try {

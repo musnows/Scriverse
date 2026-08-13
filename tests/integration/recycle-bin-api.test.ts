@@ -70,6 +70,132 @@ describe("作品、分卷与章节回收站", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("软删除作品仅失效活动分析任务，恢复不重启旧任务且彻底删除仍完整级联", async () => {
+    runtime.ai.dispose();
+    const work = runtime.store.createWork({ title: "分析任务回收站作品" });
+    const workId = String(work.id);
+    const pending = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    const running = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    const completed = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    const cancelled = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    const pendingId = String(pending.id);
+    const runningId = String(running.id);
+    const completedId = String(completed.id);
+    const cancelledId = String(cancelled.id);
+    expect(runtime.store.claimPendingTask(runningId)).not.toBeNull();
+    runtime.store.updateTask(completedId, { status: "completed", progress: 100, result: { summary: "保留历史结果" } });
+    runtime.store.cancelTask(cancelledId);
+    runtime.store.updateWorkAiSettings(workId, { autoRunEnabled: true });
+    runtime.database.run(
+      `INSERT INTO ai_calls (id, work_id, task_id, task_type, provider_id, model_id, context_scope_json, status, created_at)
+       VALUES (?, ?, ?, 'book-analysis', 'provider-history', 'model-history', '{}', 'completed', ?)`,
+      "call-history",
+      workId,
+      completedId,
+      new Date().toISOString()
+    );
+    runtime.database.run(
+      `INSERT INTO relationship_source_index_queue (work_id, source_type, source_id, queued_at)
+       VALUES (?, 'work', ?, ?)
+       ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+      workId,
+      workId,
+      new Date().toISOString()
+    );
+    expect(runtime.store.listAutoRunWorkIds()).toContain(workId);
+
+    await request(runtime.app).delete(`/api/works/${workId}`).send({ expectedVersionNo: 1 }).expect(204);
+    expect(runtime.database.all(
+      "SELECT id, status FROM analysis_tasks WHERE work_id = ? ORDER BY id",
+      workId
+    )).toEqual(expect.arrayContaining([
+      { id: pendingId, status: "expired" },
+      { id: runningId, status: "expired" },
+      { id: completedId, status: "completed" },
+      { id: cancelledId, status: "cancelled" }
+    ]));
+    expect(runtime.database.get("SELECT result_json FROM analysis_tasks WHERE id = ?", completedId)).toEqual({
+      result_json: JSON.stringify({ summary: "保留历史结果" })
+    });
+    expect(runtime.database.get("SELECT id, task_id FROM ai_calls WHERE id = 'call-history'")).toEqual({
+      id: "call-history",
+      task_id: completedId
+    });
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM relationship_source_index_queue WHERE work_id = ?",
+      workId
+    )?.count).toBe(0);
+    expect(runtime.store.listAutoRunWorkIds()).not.toContain(workId);
+
+    const repeated = await request(runtime.app).delete(`/api/works/${workId}`).send({ expectedVersionNo: 2 }).expect(404);
+    expect(repeated.body.error.code).toBe("NOT_FOUND");
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'work' AND entity_id = ?",
+      workId
+    )?.count).toBe(2);
+
+    await request(runtime.app).post(`/api/recycle-bin/works/${workId}/restore`).send({ expectedVersionNo: 2 }).expect(200);
+    expect(runtime.store.listAutoRunWorkIds()).toContain(workId);
+    expect(runtime.database.all(
+      "SELECT id, status FROM analysis_tasks WHERE id IN (?, ?) ORDER BY id",
+      pendingId,
+      runningId
+    )).toEqual(expect.arrayContaining([
+      { id: pendingId, status: "expired" },
+      { id: runningId, status: "expired" }
+    ]));
+
+    await request(runtime.app).delete(`/api/works/${workId}`).send({ expectedVersionNo: 3 }).expect(204);
+    await request(runtime.app).delete(`/api/recycle-bin/works/${workId}/permanent`).send({ expectedVersionNo: 4 }).expect(204);
+    expect(runtime.database.get("SELECT id FROM analysis_tasks WHERE work_id = ?", workId)).toBeUndefined();
+    expect(runtime.database.get("SELECT id FROM ai_calls WHERE id = 'call-history'")).toBeUndefined();
+    expect(runtime.database.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("作品删除事务失败时回滚任务失效和关系索引队列清理", async () => {
+    runtime.ai.dispose();
+    const work = runtime.store.createWork({ title: "删除事务回滚作品" });
+    const workId = String(work.id);
+    const pending = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    const running = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    runtime.store.claimPendingTask(String(running.id));
+    runtime.database.run(
+      `INSERT INTO relationship_source_index_queue (work_id, source_type, source_id, queued_at)
+       VALUES (?, 'work', ?, ?)
+       ON CONFLICT(work_id, source_type, source_id) DO UPDATE SET queued_at = excluded.queued_at`,
+      workId,
+      workId,
+      new Date().toISOString()
+    );
+    runtime.database.raw.exec(`
+      CREATE TRIGGER fail_work_delete_audit
+      BEFORE INSERT ON audit_logs WHEN NEW.action = 'work.deleted'
+      BEGIN SELECT RAISE(ABORT, 'forced audit failure'); END;
+    `);
+
+    await request(runtime.app).delete(`/api/works/${workId}`).send({ expectedVersionNo: 1 }).expect(500);
+    expect(runtime.database.get("SELECT version_no, deleted_at FROM works WHERE id = ?", workId)).toEqual({
+      version_no: 1,
+      deleted_at: null
+    });
+    expect(runtime.database.all(
+      "SELECT id, status FROM analysis_tasks WHERE work_id = ? ORDER BY id",
+      workId
+    )).toEqual(expect.arrayContaining([
+      { id: pending.id, status: "pending" },
+      { id: running.id, status: "running" }
+    ]));
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM relationship_source_index_queue WHERE work_id = ?",
+      workId
+    )?.count).toBe(1);
+    expect(runtime.database.get(
+      "SELECT COUNT(*) AS count FROM entity_versions WHERE entity_type = 'work' AND entity_id = ?",
+      workId
+    )?.count).toBe(1);
+  });
+
   it("分卷软删除和恢复保持章节关联，彻底删除后清理历史且无悬挂外键", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "分卷恢复作品" }).expect(201);
     const workId = String(work.body.data.id);
