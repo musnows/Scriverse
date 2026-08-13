@@ -50,7 +50,7 @@ describe("AI 对话上下文压缩", () => {
       contextWindow: 32_768
     }).expect(201);
     modelId = model.body.data.id;
-    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 4_096, modelId);
+    runtime.database.run("UPDATE models SET context_window = ?, preset_json = ? WHERE id = ?", 4_096, JSON.stringify({ max_tokens: 1_024 }), modelId);
     fetchMock.mockClear();
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ contextCompactThreshold: 50 }).expect(200);
   });
@@ -145,6 +145,36 @@ describe("AI 对话上下文压缩", () => {
     const firstRetry = await request(runtime.app).post(`/api/ai-conversations/${retryConversation.body.data.id}/messages`).send(retryPayload).expect(201);
     const secondRetry = await request(runtime.app).post(`/api/ai-conversations/${retryConversation.body.data.id}/messages`).send(retryPayload).expect(201);
     expect(secondRetry.body.data.id).toBe(firstRetry.body.data.id);
+  });
+
+  it("模型最大输出达到上下文 95% 时也会触发压缩", async () => {
+    runtime.database.run("UPDATE models SET context_window = ?, preset_json = ? WHERE id = ?", 32_768, JSON.stringify({ max_tokens: 32_000 }), modelId);
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (const [role, content] of [
+      ["user", `较早问题：${"飞船现在在哪里？".repeat(1_000)}`],
+      ["assistant", `较早回答：${"飞船在北港。".repeat(1_000)}`],
+      ["user", "最近问题：燃料还剩多少？"]
+    ] as const) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({ role, content }).expect(201);
+    }
+
+    const prepared = await request(runtime.app).post(`/api/ai-conversations/${conversationId}/context/prepare`).send({
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: "继续回答燃料问题。"
+    }).expect(200);
+
+    expect(prepared.body.data).toMatchObject({
+      action: "compacted",
+      reason: "forced_usage_threshold",
+      usage: {
+        maxOutputTokens: 32_000,
+        maxOutputUsagePercent: 98,
+        maxOutputThresholdReached: true
+      }
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("流式提醒以 warningOnly 正常结束，忽略后只持久化一次并继续生成", async () => {

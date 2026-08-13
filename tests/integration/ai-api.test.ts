@@ -1138,6 +1138,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     setLegacyModelContextWindow(modelId, 16_000);
+    runtime.database.run("UPDATE models SET preset_json = ? WHERE id = ?", JSON.stringify({ max_tokens: 1_024 }), modelId);
     runtime.store.saveChapter(chapterId, { content: "分页上下文证据。".repeat(2_500) });
     let completionCount = 0;
     let firstPageContent = "";

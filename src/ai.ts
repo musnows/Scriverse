@@ -4357,6 +4357,7 @@ export class AiManager {
       - functionTokens);
     return {
       contextWindow,
+      configuredOutputTokens,
       outputReserveTokens,
       availableInputTokens,
       conversation,
@@ -4387,6 +4388,8 @@ export class AiManager {
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     const conversation = budget.conversation as AiConversationContext | null;
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
+    const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
+    const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
     const compactableMessageCount = Math.max(0, (conversation?.messages.length ?? 0) - 2);
     return {
       modelId: stringValue(model, "id"),
@@ -4396,6 +4399,9 @@ export class AiManager {
       conversationTokens: Number(budget.conversationTokens),
       conversationBudgetTokens: Number(budget.conversationBudgetTokens),
       conversationUsagePercent,
+      maxOutputTokens: configuredOutputTokens,
+      maxOutputUsagePercent,
+      maxOutputThresholdReached: configuredOutputTokens >= contextWindow * FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT / 100,
       outputReserveTokens: Number(budget.outputReserveTokens),
       remainingTokens,
       usagePercent: Math.min(100, Math.round(inputTokens / contextWindow * 100)),
@@ -4456,8 +4462,10 @@ export class AiManager {
   } {
     const usage = this.getContextUsage({ ...input, taskType: "chat" });
     const usagePercent = Number(usage.usagePercent) || 0;
+    const maxOutputThresholdReached = usage.maxOutputThresholdReached === true;
     const compactableMessageCount = Number(usage.compactableMessageCount) || 0;
-    if (usagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT) {
+    const outputThresholdNeedsCompaction = maxOutputThresholdReached && compactableMessageCount > 0;
+    if (usagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT || outputThresholdNeedsCompaction) {
       if (compactableMessageCount <= 0) {
         throw new AppError(
           409,
@@ -4497,6 +4505,14 @@ export class AiManager {
     }
     const compaction = await this.compactConversation(input);
     if (compaction.changed !== true) {
+      const inputBelowForcedThreshold = (Number(inspection.usage.usagePercent) || 0) < FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT;
+      if (inspection.usage.maxOutputThresholdReached === true && inputBelowForcedThreshold) {
+        return {
+          action: "ready",
+          reason: "output_budget_already_fits",
+          usage: { ...inspection.usage, contextWarningPending: false }
+        };
+      }
       throw new AppError(
         409,
         "AI_CONTEXT_COMPACTION_UNAVAILABLE",
