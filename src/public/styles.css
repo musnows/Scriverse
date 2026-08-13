@@ -307,10 +307,11 @@
 }
 
 * { box-sizing: border-box; }
-* { scrollbar-width: none; }
-*::-webkit-scrollbar { width: 0; }
-.is-scrollbar-visible { scrollbar-width: thin; }
-.is-scrollbar-visible::-webkit-scrollbar { width: 8px; }
+* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+*::-webkit-scrollbar { width: 8px; }
+*::-webkit-scrollbar-track, *::-webkit-scrollbar-thumb { background: transparent; }
+.is-scrollbar-visible { scrollbar-color: var(--muted) transparent; }
+.is-scrollbar-visible::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--muted); }
 
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 

@@ -23,7 +23,7 @@ describe("知识模块布局切换", () => {
     const application = await request(runtime.app).get("/app.js").expect(200);
     const layoutModule = await request(runtime.app).get("/module-layout.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260813-reader-volume-mobile-v3');
+    expect(page.text).toContain('/styles.css?v=20260813-scrollbar-stable-v1');
     expect(page.text).toContain('/app.js?v=20260813-reader-volume-mobile-v3');
     expect(page.text).toContain('<script type="module" src="/app.js?v=20260813-reader-volume-mobile-v3"></script>');
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
