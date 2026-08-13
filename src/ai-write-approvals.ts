@@ -165,6 +165,7 @@ export const ENTITY_FIELD_LABELS: Record<AiWriteEntityType, Record<string, strin
     locked: "是否锁定"
   },
   outline: {
+    chapterId: "所属章节",
     goal: "本章目标",
     conflict: "冲突",
     turningPoint: "转折点",
@@ -423,7 +424,7 @@ export class AiWriteApprovalManager {
           aiSummary: operation.aiSummary
         }))
       });
-      return this.getPlan(planId);
+      return { ...this.getPlan(planId), operationCount: input.operations.length };
     });
     return plan;
   }
@@ -453,7 +454,6 @@ export class AiWriteApprovalManager {
       conversationId: optionalString(row, "conversation_id"),
       status: requiredString(row, "status"),
       summary: requiredString(row, "summary"),
-      plan: json(requiredString(row, "plan_json"), {}),
       expiresAt: requiredString(row, "expires_at"),
       decidedAt: optionalString(row, "decided_at"),
       executedAt: optionalString(row, "executed_at"),
@@ -524,8 +524,18 @@ export class AiWriteApprovalManager {
 
   getPlanDetail(planId: string, viewerPermissions: WorkModulePermissions | null): Record<string, unknown> {
     const plan = this.getPlan(planId);
+    const names = this.db.get(
+      `SELECT requester.display_name AS requester_display_name, owner.display_name AS owner_display_name
+       FROM ai_write_plans plan
+       LEFT JOIN users requester ON requester.id = plan.requested_by_user_id
+       LEFT JOIN users owner ON owner.id = plan.conversation_owner_user_id
+       WHERE plan.id = ?`,
+      planId
+    );
     return {
       ...plan,
+      requesterDisplayName: optionalString(names ?? {}, "requester_display_name") ?? "",
+      ownerDisplayName: optionalString(names ?? {}, "owner_display_name") ?? "",
       operations: this.listPlanOperations(planId).map((operation) => this.redactOperationForViewer(operation, viewerPermissions))
     };
   }
@@ -558,11 +568,19 @@ export class AiWriteApprovalManager {
        ORDER BY plan.created_at DESC, plan.id DESC${page.sql}`,
       ...params
     );
+    const revocableRows = this.db.all(
+      `SELECT plan_id, COUNT(*) AS count FROM ai_write_plan_operations
+       WHERE operation_type = 'entity_update' AND status = 'succeeded'
+         AND (json_extract(result_json, '$.revoked') IS NULL OR json_extract(result_json, '$.revoked') = 0)
+       GROUP BY plan_id`
+    );
+    const revocableByPlan = new Map(revocableRows.map((row) => [requiredString(row, "plan_id"), numberValue(row, "count") > 0]));
     const items = rows.map((row) => ({
       ...this.mapPlan(row),
       requesterDisplayName: optionalString(row, "requester_display_name") ?? "",
       ownerDisplayName: optionalString(row, "owner_display_name") ?? "",
-      operationCount: numberValue(row, "operation_count")
+      operationCount: numberValue(row, "operation_count"),
+      revocable: revocableByPlan.get(requiredString(row, "id")) ?? false
     }));
     const stats = Object.fromEntries(AI_WRITE_PLAN_STATUSES.map((item) => [item, 0]));
     const statsRows = this.db.all(
@@ -745,8 +763,12 @@ export class AiWriteApprovalManager {
       } else if (operationType === "annotation_create") {
         if (!switches.has("annotation")) return "正文批注工具开关已关闭（annotation）";
         const chapterId = requiredString(operation, "targetId");
-        const chapter = this.store.getChapter(chapterId);
-        if (String(chapter.workId ?? "") !== workId) return "批注目标章节不属于当前作品";
+        try {
+          const chapter = this.store.getChapter(chapterId);
+          if (String(chapter.workId ?? "") !== workId) return "批注目标章节不属于当前作品";
+        } catch {
+          return "批注目标章节已不存在或已被删除";
+        }
       } else if (operationType === "analysis_task") {
         if (!switches.has("analysis-task")) return "分析任务工具开关已关闭（analysis-task）";
         if (this.missingIntersectionWriteModules(workId, approverUserId, ownerUserId, ["ai-analysis"]).length > 0) {
@@ -1081,6 +1103,17 @@ export class AiWriteApprovalManager {
     if (requiredString(current, "status") !== "pending") {
       throw new AppError(409, "AI_WRITE_PLAN_NOT_PENDING", "该审批已处理，不能重复操作");
     }
+    const workId = requiredString(current, "work_id");
+    const conversationOwnerUserId = optionalString(current, "conversation_owner_user_id");
+    // 拒绝与确认同门槛：拒绝者与对话归属用户必须满足目标模块的写权限交集。
+    const operations = this.listPlanOperations(planId);
+    const modules = [...new Set(operations.map((operation) => requiredString(operation, "targetModule")))] as WorkPermissionModule[];
+    const denied = this.missingIntersectionWriteModules(workId, approverUserId, conversationOwnerUserId, modules);
+    if (denied.length > 0) {
+      throw new AppError(403, "AI_WRITE_PLAN_PERMISSION_DENIED", "当前用户或 AI 对话归属用户缺少目标模块写权限，不能处理该审批", {
+        modules: denied
+      });
+    }
     const timestamp = now();
     return this.db.transaction(() => {
       const changed = this.db.run(
@@ -1093,7 +1126,15 @@ export class AiWriteApprovalManager {
       if (changed.changes !== 1) {
         throw new AppError(409, "AI_WRITE_PLAN_NOT_PENDING", "该审批已处理，不能重复操作");
       }
-      this.store.audit(requiredString(current, "work_id"), "ai-write-plan.rejected", "ai-write-plan", planId, {
+      // 与失效路径一致：拒绝后操作行标记未执行，避免详情展示矛盾。
+      for (const operation of operations) {
+        this.db.run(
+          "UPDATE ai_write_plan_operations SET status = 'failed', error = ? WHERE id = ?",
+          "审批已拒绝",
+          String(operation.id)
+        );
+      }
+      this.store.audit(workId, "ai-write-plan.rejected", "ai-write-plan", planId, {
         decidedByUserId: approverUserId
       });
       return this.getPlan(planId);

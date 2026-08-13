@@ -229,4 +229,46 @@ describe("AI 可写工具执行链路", () => {
       runtime.close();
     }
   });
+
+  it("create_story_entity 支持新建章节大纲并保留 chapterId", async () => {
+    runtime = createTestRuntime();
+    try {
+      const work = await createWork(runtime);
+      runtime.store.updateWorkAiSettings(String(work.id), { aiWriteTools: ["entity:outlines"] });
+      const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+      const chapter = runtime.store.createChapter(String(work.id), { volumeId: String(volume.id), title: "第一章", content: "正文" });
+      const context = writeContext("conversation_1", "user_1");
+      const result = await executeTool(
+        runtime,
+        String(work.id),
+        { id: "call_12", type: "function", function: { name: "create_story_entity", arguments: JSON.stringify({ entityType: "outline", fields: { chapterId: String(chapter.id), goal: "引出主角", status: "draft" }, summary: "新建章节大纲" }) } },
+        new Set(["create_story_entity", "update_story_entity"]),
+        context
+      );
+      expect(result.status).toBe("completed");
+      expect(context.planOperations).toHaveLength(1);
+      const operation = context.planOperations[0] as Record<string, unknown>;
+      const after = operation.after as Record<string, unknown>;
+      expect(after.chapterId).toBe(String(chapter.id));
+      expect(after.goal).toBe("引出主角");
+      const diffFields = (operation.diff as Array<Record<string, unknown>>).map((entry) => entry.field);
+      expect(diffFields).toContain("chapterId");
+      expect(diffFields).toContain("goal");
+      // 跨作品章节被拒绝
+      const otherWork = await createWork(runtime, "其他作品");
+      const otherVolume = runtime.store.createVolume(String(otherWork.id), { title: "外卷" });
+      const otherChapter = runtime.store.createChapter(String(otherWork.id), { volumeId: String(otherVolume.id), title: "外章", content: "" });
+      const crossWork = await executeTool(
+        runtime,
+        String(work.id),
+        { id: "call_13", type: "function", function: { name: "create_story_entity", arguments: JSON.stringify({ entityType: "outline", fields: { chapterId: String(otherChapter.id), goal: "越权" }, summary: "越权大纲" }) } },
+        new Set(["create_story_entity", "update_story_entity"]),
+        context
+      );
+      expect(crossWork.status).toBe("failed");
+      expect(((crossWork.result as Record<string, unknown>).error as Record<string, unknown>).code).toBe("OUTLINE_CHAPTER_WORK_MISMATCH");
+    } finally {
+      runtime.close();
+    }
+  });
 });

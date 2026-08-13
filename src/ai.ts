@@ -5274,6 +5274,7 @@ export class AiManager {
         if (numberValue(entity, "versionNo") !== updateInput.expectedVersionNo) {
           return fail("WRITE_TARGET_VERSION_CHANGED", `目标词条版本已变化：计划版本 ${updateInput.expectedVersionNo}，当前版本 ${numberValue(entity, "versionNo")}，请重新读取后再提交。`);
         }
+        if (entityType !== "outline") this.assertAiWriteEntityReferences(workId, entityType, fields);
         const before = entityBeforeSnapshot(entityType, entity, Object.keys(fields));
         const limited = pushOperation({
           operationType: "entity_update",
@@ -5462,6 +5463,11 @@ export class AiManager {
       if (String(chapter.workId) !== workId) throw new AppError(400, "OUTLINE_CHAPTER_WORK_MISMATCH", "大纲目标章节不属于当前作品");
       return;
     }
+    this.assertAiWriteEntityReferences(workId, entityType, fields);
+  }
+
+  /** 校验新建与编辑操作中引用字段（种族、组织、角色、时间轴、章节、参与者、揭晓章节）的作品归属。 */
+  private assertAiWriteEntityReferences(workId: string, entityType: AiWriteEntityType, fields: Record<string, unknown>): void {
     if (entityType === "relationship") {
       for (const key of ["fromCharacterId", "toCharacterId"]) {
         if (typeof fields[key] !== "string") continue;

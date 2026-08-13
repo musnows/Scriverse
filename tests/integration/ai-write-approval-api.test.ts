@@ -79,10 +79,10 @@ describe("AI 写计划审批核心流程", () => {
       { field: "title", label: "标题", before: null, after: "大陆纪年" },
       { field: "content", label: "内容", before: null, after: "以星辰纪年为历法。" }
     ]);
-    const planContent = plan.plan as Record<string, unknown>;
-    expect(planContent.workId).toBe(String(work.id));
-    expect(planContent.requesterUserId).toBe(actorUserId(runtime));
-    expect(planContent.createdAt).toBeTruthy();
+    // 对外输出不携带 plan_json 全文，避免绕过模块读权限的脱敏
+    expect("plan" in plan).toBe(false);
+    expect(plan.workId).toBe(String(work.id));
+    expect(plan.createdAt).toBeTruthy();
   });
 
   it("approve 后原子执行词条新建、词条编辑、正文批注与分析任务", () => {

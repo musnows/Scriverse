@@ -3922,7 +3922,7 @@ function renderAiApprovalPlans(plans) {
     const requester = String(plan.requesterDisplayName ?? "系统");
     const created = formatAiToolCallTime(String(plan.createdAt ?? ""));
     const canDecide = plan.status === "pending";
-    const canRevoke = plan.status === "succeeded";
+    const canRevoke = plan.status === "succeeded" && plan.revocable === true;
     const actions = [];
     if (canDecide) {
       actions.push(`<button type="button" class="primary-button" data-ai-plan-decide="${esc(plan.id)}" data-action="approve">确认执行</button>`);
@@ -4005,7 +4005,7 @@ async function openAiWritePlanDetailDialog(planId) {
   const statusLabel = AI_WRITE_PLAN_STATUS_LABELS[plan.status] ?? String(plan.status);
   $("#ai-write-plan-eyebrow").textContent = `AI 操作审批 · ${statusLabel}`;
   $("#ai-write-plan-dialog-title").textContent = String(plan.summary || "修改计划详情");
-  const requester = String(plan.plan?.requesterUserId ?? "");
+  const requester = String(plan.requesterDisplayName ?? plan.ownerDisplayName ?? "");
   const created = formatAiToolCallTime(String(plan.createdAt ?? ""));
   const expiresAt = formatAiToolCallTime(String(plan.expiresAt ?? ""));
   const meta = [];
@@ -4068,7 +4068,7 @@ async function openAiWritePlanDetailDialog(planId) {
         rejectButton.disabled = false;
       }
     });
-  } else if (plan.status === "succeeded" && operations.some((operation) => operation.operationType === "entity_update" && operation.result?.revoked !== true)) {
+  } else if (plan.status === "succeeded" && operations.some((operation) => operation.operationType === "entity_update" && operation.status === "succeeded" && operation.result?.revoked !== true)) {
     actions.classList.remove("hidden");
     actions.append(Object.assign(document.createElement("button"), {
       type: "button",
@@ -4099,10 +4099,9 @@ async function openAiWritePlanDetailDialog(planId) {
 function showAiWritePlanToast(payload) {
   const planId = String(payload?.planId ?? "");
   if (!planId) return;
-  const plan = payload?.plan && typeof payload.plan === "object" ? payload.plan : {};
-  const operations = Array.isArray(plan.operations) ? plan.operations : [];
+  const operationCount = Number(payload?.operationCount ?? 0);
   const summary = String(payload?.summary ?? "");
-  const dismiss = persistentToast(`AI 提交了包含 ${operations.length} 项操作的修改计划：${summary}。已暂停写入，请先审批。`);
+  const dismiss = persistentToast(`AI 提交了包含 ${operationCount} 项操作的修改计划：${summary}。已暂停写入，请先审批。`);
   const region = $("#toast-region");
   const element = region.lastElementChild;
   if (element && element.querySelector("strong") === null && element.querySelector("button") === null) {
@@ -4110,7 +4109,7 @@ function showAiWritePlanToast(payload) {
     const heading = document.createElement("strong");
     heading.textContent = "AI 修改计划待确认";
     const description = document.createElement("p");
-    description.textContent = `${operations.length} 项操作：${summary}`;
+    description.textContent = `${operationCount} 项操作：${summary}`;
     const actionsRow = document.createElement("div");
     actionsRow.className = "toast-confirmation-actions";
     const detailButton = document.createElement("button");
@@ -4181,8 +4180,14 @@ function showAiQuestionToast(question) {
     const optionButton = document.createElement("button");
     optionButton.type = "button";
     optionButton.className = "ai-question-option";
-    optionButton.textContent = `${esc(option.label)}${option.description ? `（${esc(option.description)}）` : ""}${index === 0 ? "（最推荐）" : ""}`;
-    optionButton.addEventListener("click", () => answerAiQuestion(questionId, String(option.label ?? ""), dismiss));
+    optionButton.textContent = `${String(option.label ?? "")}${option.description ? `（${String(option.description)}）` : ""}${index === 0 ? "（最推荐）" : ""}`;
+    optionButton.addEventListener("click", () => {
+      if (!ensureAiQuestionConversation(question)) {
+        toast("该提问来自其他对话，请先切回对应对话再回答", "error");
+        return;
+      }
+      answerAiQuestion(questionId, String(option.label ?? ""), dismiss);
+    });
     optionsList.append(optionButton);
   });
   const customRow = document.createElement("div");
@@ -4200,6 +4205,10 @@ function showAiQuestionToast(question) {
     const answer = customInput.value.trim();
     if (!answer) {
       customInput.focus();
+      return;
+    }
+    if (!ensureAiQuestionConversation(question)) {
+      toast("该提问来自其他对话，请先切回对应对话再回答", "error");
       return;
     }
     answerAiQuestion(questionId, answer, dismiss);
@@ -4229,7 +4238,7 @@ async function answerAiQuestion(questionId, answer, dismiss) {
     await api(`/api/ai-approval-questions/${encodeURIComponent(questionId)}/answer`, { method: "POST", body: { answer } });
     toast("回答已提交");
     dismiss?.();
-    resumeAiConversationWithQuestionAnswer(answer);
+    await resumeAiConversationWithQuestionAnswer(answer);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -4253,6 +4262,13 @@ async function resumeAiConversationWithQuestionAnswer(answer) {
   const prompt = `【问题回答】你刚才向用户提出的问题，用户的回答是：${answer}\n\n请根据这个回答继续。`;
   $("#ai-prompt").textContent = prompt;
   await sendAi();
+}
+
+/** 回答前校验问题与当前对话的归属，避免回答进入错误的对话。 */
+function ensureAiQuestionConversation(question) {
+  const questionConversationId = String(question?.conversationId ?? "");
+  if (!questionConversationId) return true;
+  return questionConversationId === state.aiConversationId;
 }
 
 function renderUsers(users) {

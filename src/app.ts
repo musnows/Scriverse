@@ -1012,9 +1012,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       ? () => fullWorkModulePermissions()
       : (userId, workId) => {
           if (!userId) return null;
-          const user = auth.getUser(userId);
-          if (!user || user.status !== "active") return null;
-          return auth.workModulePermissions(user, workId, true);
+          try {
+            const user = auth.getUser(userId);
+            if (!user || user.status !== "active") return null;
+            return auth.workModulePermissions(user, workId, true);
+          } catch {
+            // 用户已删除等情况视为失去作品访问权限，走正常失效流程。
+            return null;
+          }
         }
   });
   const ai = new AiManager(
@@ -2438,7 +2443,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           summary: record.summary,
           status: record.status,
           expiresAt: record.expiresAt,
-          plan: record.plan
+          operationCount: record.operationCount
         });
       }
       const pendingQuestions = Array.isArray(suggestion.pendingQuestions) ? suggestion.pendingQuestions : [];

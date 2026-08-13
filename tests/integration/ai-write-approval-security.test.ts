@@ -182,6 +182,20 @@ describe("AI 写计划审批安全边界", () => {
     expect(runtime.store.listSettings(String(work.id)).some((item) => item.title === "大陆纪年")).toBe(true);
   });
 
+  it("没有目标模块写权限的协作者不能拒绝他人的审批", async () => {
+    const plan = createPlanAs(owner, owner);
+    const weak = await register(runtime, "weak-collaborator");
+    runtime.auth.addMember(String(work.id), weak.user.userId, {
+      permissions: permissionFor({ "ai-chat": "write" })
+    }, owner.user.userId);
+    await weak.agent
+      .post(`/api/ai-write-plans/${String(plan.id)}/decision`)
+      .set("X-CSRF-Token", weak.csrfToken)
+      .send({ action: "reject" })
+      .expect(403);
+    expect(runtime.aiWriteApprovals.getPlan(String(plan.id)).status).toBe("pending");
+  });
+
   it("确认请求只能携带审批 ID，伪造操作内容被 Zod 拒绝且不产生写入", async () => {
     const plan = createPlanAs(owner, owner);
     await owner.agent
