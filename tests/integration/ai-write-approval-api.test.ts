@@ -207,6 +207,28 @@ describe("AI 可写工具审批中心 API", () => {
     expect(setting.body.data.content).toBe("只执行一次。");
   });
 
+  it("多个标签页同时确认只产生一次写入", async () => {
+    await enableWriteTools(["settings"]);
+    const plan = proposePlan([{
+      operationType: "update_setting",
+      targetId: settingId,
+      summary: "并发确认",
+      changes: { content: "并发确认只写入一次。" }
+    }]);
+    const planId = String(plan.planId);
+
+    const [tabA, tabB] = await Promise.all([
+      owner.agent.post(`/api/ai-approvals/${planId}/approve`).set("X-CSRF-Token", owner.csrfToken).send({}),
+      owner.agent.post(`/api/ai-approvals/${planId}/approve`).set("X-CSRF-Token", owner.csrfToken).send({})
+    ]);
+    expect(tabA.status).toBe(200);
+    expect(tabB.status).toBe(200);
+    expect(tabA.body.data.executedAt).toBe(tabB.body.data.executedAt);
+    const setting = await owner.agent.get(`/api/settings/${settingId}`).expect(200);
+    expect(setting.body.data.versionNo).toBe(2);
+    expect(setting.body.data.content).toBe("并发确认只写入一次。");
+  });
+
   it("审批中心列表与详情按状态筛选并展示系统 diff", async () => {
     await enableWriteTools(["settings"]);
     const plan = proposePlan([{

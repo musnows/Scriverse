@@ -606,7 +606,7 @@ export class AiWriteApprovalService {
        WHERE id = ? AND status = 'pending'`,
       JSON.stringify(normalizedAnswer),
       timestamp,
-      actor.userId,
+      this.referenceableUserId(actor.userId),
       timestamp,
       questionId
     );
@@ -1161,6 +1161,7 @@ export class AiWriteApprovalService {
     operatorUser: AuthUser | null,
     operations: AiWritePlanOperation[]
   ): PlanInvalidation | null {
+    // 无认证部署（开发/测试环境）中计划没有发起人与归属人，按系统计划处理，只校验确认操作者。
     const requesterUser = requesterUserId ? this.auth.getUser(requesterUserId) : null;
     if (requesterUser && requesterUser.status !== "active") {
       return { code: "REQUESTER_INACTIVE", message: "计划发起账户已停用" };
@@ -1169,19 +1170,29 @@ export class AiWriteApprovalService {
     if (ownerUser && ownerUser.status !== "active") {
       return { code: "OWNER_INACTIVE", message: "AI 对话归属账户已停用" };
     }
-    const requesterPermissions = requesterUser ? this.auth.workModulePermissions(requesterUser, workId, requesterUser.role === "admin") : null;
+    const requesterPermissions = requesterUser
+      ? this.auth.workModulePermissions(requesterUser, workId, requesterUser.role === "admin")
+      : null;
+    if (requesterUserId !== null && !requesterPermissions) {
+      return { code: "WORK_ACCESS_LOST", message: "发起用户已失去这部作品的访问权限" };
+    }
     const ownerPermissions = ownerUser && ownerUser !== requesterUser
       ? this.auth.workModulePermissions(ownerUser, workId, ownerUser.role === "admin")
       : requesterPermissions;
-    if (!requesterPermissions || !ownerPermissions) {
-      return { code: "WORK_ACCESS_LOST", message: "发起用户或对话归属用户已失去这部作品的访问权限" };
+    if (ownerUserId !== null && !ownerPermissions) {
+      return { code: "WORK_ACCESS_LOST", message: "对话归属用户已失去这部作品的访问权限" };
     }
-    const operatorPermissions = operatorUser && operatorUser !== requesterUser && operatorUser !== ownerUser
+    // 无认证环境（开发/测试）中没有操作者，按系统操作处理，只校验发起人与归属人。
+    const operatorPermissions = operatorUser
       ? this.auth.workModulePermissions(operatorUser, workId, operatorUser.role === "admin")
-      : requesterPermissions;
-    if (!operatorPermissions) {
+      : null;
+    if (operatorUser && !operatorPermissions) {
       return { code: "OPERATOR_ACCESS_LOST", message: "确认操作者已失去这部作品的访问权限" };
     }
+    const requesterWriteOk = (module: WorkPermissionModule) => requesterPermissions === null || canWriteWorkModule(requesterPermissions, module);
+    const ownerWriteOk = (module: WorkPermissionModule) => ownerPermissions === null || canWriteWorkModule(ownerPermissions, module);
+    const requesterReadOk = (module: WorkPermissionModule) => requesterPermissions === null || canReadWorkModule(requesterPermissions, module);
+    const ownerReadOk = (module: WorkPermissionModule) => ownerPermissions === null || canReadWorkModule(ownerPermissions, module);
     const switches = this.workToolSwitches(workId);
     for (const operation of operations) {
       const definition = OPERATION_DEFINITIONS[operation.operationType];
@@ -1191,22 +1202,18 @@ export class AiWriteApprovalService {
           message: `可写工具“${AI_WRITE_TOOL_LABELS[definition.toolKey]}”已被关闭`
         };
       }
+      const operatorReadOk = (module: WorkPermissionModule) => operatorPermissions === null || canReadWorkModule(operatorPermissions, module);
+      const operatorWriteOk = (module: WorkPermissionModule) => operatorPermissions === null || canWriteWorkModule(operatorPermissions, module);
       if (operation.operationType === "create_analysis_task") {
         const requiredRead = analysisTaskReadModules(operation.payload.taskType, operation.payload.scope);
-        const requesterReadOk = requiredRead.every((module) => canReadWorkModule(requesterPermissions, module));
-        const ownerReadOk = requiredRead.every((module) => canReadWorkModule(ownerPermissions, module));
-        const operatorReadOk = requiredRead.every((module) => canReadWorkModule(operatorPermissions, module));
-        const requesterWriteOk = canWriteWorkModule(requesterPermissions, "ai-analysis");
-        const ownerWriteOk = canWriteWorkModule(ownerPermissions, "ai-analysis");
-        const operatorWriteOk = canWriteWorkModule(operatorPermissions, "ai-analysis");
-        if (!requesterReadOk || !ownerReadOk || !operatorReadOk || !requesterWriteOk || !ownerWriteOk || !operatorWriteOk) {
+        const readOk = requiredRead.every((module) => requesterReadOk(module) && ownerReadOk(module) && operatorReadOk(module));
+        const writeOk = requesterWriteOk("ai-analysis") && ownerWriteOk("ai-analysis") && operatorWriteOk("ai-analysis");
+        if (!readOk || !writeOk) {
           return { code: "ANALYSIS_PERMISSION_DENIED", message: "发起用户、对话归属用户或确认操作者缺少 AI 分析权限或分析范围所需资料的读取权限" };
         }
         continue;
       }
-      if (!canWriteWorkModule(requesterPermissions, definition.module)
-        || !canWriteWorkModule(ownerPermissions, definition.module)
-        || !canWriteWorkModule(operatorPermissions, definition.module)) {
+      if (!requesterWriteOk(definition.module) || !ownerWriteOk(definition.module) || !operatorWriteOk(definition.module)) {
         return {
           code: "MODULE_WRITE_DENIED",
           message: `发起用户、对话归属用户或确认操作者缺少“${workPermissionModuleLabels[definition.module]}”模块的写权限`
@@ -1243,6 +1250,12 @@ export class AiWriteApprovalService {
     const plan = this.requirePlan(planId);
     this.assertPlanViewer(plan, actor);
     return this.mapPlan(this.store.db.get("SELECT * FROM ai_write_plans WHERE id = ?", planId) as Record<string, unknown>, actor, true);
+  }
+
+  /** 仅当用户真实存在于 users 表时返回其 ID；无认证环境的虚拟操作者不落库。 */
+  private referenceableUserId(userId: string | null | undefined): string | null {
+    if (!userId) return null;
+    return this.store.db.get("SELECT id FROM users WHERE id = ?", userId) ? userId : null;
   }
 
   private requirePlan(planId: string): AiWritePlanRecord {
@@ -1415,7 +1428,7 @@ export class AiWriteApprovalService {
            execution_result_json = ?, operations_json = ?, updated_at = ?
          WHERE id = ?`,
         timestamp,
-        actor.userId,
+        this.referenceableUserId(actor.userId),
         JSON.stringify(resultPayload),
         JSON.stringify(executedOperations),
         timestamp,
@@ -1583,7 +1596,7 @@ export class AiWriteApprovalService {
       `UPDATE ai_write_plans SET status = 'rejected', rejected_at = ?, rejected_by_user_id = ?, updated_at = ?
        WHERE id = ? AND status = 'pending'`,
       timestamp,
-      actor.userId,
+      this.referenceableUserId(actor.userId),
       timestamp,
       planId
     );
@@ -1626,7 +1639,7 @@ export class AiWriteApprovalService {
       this.store.db.run(
         "UPDATE ai_write_plans SET revoked_at = ?, revoked_by_user_id = ?, updated_at = ? WHERE id = ?",
         timestamp,
-        actor.userId,
+        this.referenceableUserId(actor.userId),
         timestamp,
         planId
       );

@@ -2262,31 +2262,41 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   // AI 可写工具审批中心：列表、详情、确认、拒绝与撤销。
+  const approvalActor = (request: Request): AuthUser => request.authUser ?? {
+    userId: "development-bypass-user",
+    username: "development-bypass",
+    displayName: "开发模式",
+    role: "admin",
+    status: "active",
+    createdAt: new Date(0).toISOString(),
+    avatarUrl: null,
+    onboardingCompleted: true
+  };
   app.get("/api/works/:workId/ai-approvals", (request, response) => {
     const pagination = parsePagination(request.query) ?? { page: 1, limit: 20, offset: 0 };
     const status = typeof request.query.status === "string" ? request.query.status : undefined;
-    data(response, aiWriteApproval.listPlans(request.params.workId, pagination, status, request.authUser!));
+    data(response, aiWriteApproval.listPlans(request.params.workId, pagination, status, approvalActor(request)));
   });
   app.get("/api/ai-approvals/:planId", (request, response) => {
-    data(response, aiWriteApproval.getPlan(request.params.planId, request.authUser!));
+    data(response, aiWriteApproval.getPlan(request.params.planId, approvalActor(request)));
   });
   app.post("/api/ai-approvals/:planId/approve", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
-    data(response, aiWriteApproval.approvePlan(request.params.planId, request.authUser!));
+    data(response, aiWriteApproval.approvePlan(request.params.planId, approvalActor(request)));
   });
   app.post("/api/ai-approvals/:planId/reject", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
-    data(response, aiWriteApproval.rejectPlan(request.params.planId, request.authUser!));
+    data(response, aiWriteApproval.rejectPlan(request.params.planId, approvalActor(request)));
   });
   app.post("/api/ai-approvals/:planId/revoke", (request, response) => {
     parse(z.object({}).strict(), request.body ?? {});
-    data(response, aiWriteApproval.revokePlan(request.params.planId, request.authUser!));
+    data(response, aiWriteApproval.revokePlan(request.params.planId, approvalActor(request)));
   });
 
   // AskUserQuestions 提问：详情与回答。
   app.get("/api/ai-questions/:questionId", (request, response) => {
     const question = aiWriteApproval.getQuestion(request.params.questionId);
-    const actor = request.authUser!;
+    const actor = approvalActor(request);
     const permitted = (question.requesterUserId && question.requesterUserId === actor.userId)
       || (question.ownerUserId && question.ownerUserId === actor.userId)
       || actor.role === "admin";
@@ -2298,7 +2308,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       z.object({ type: z.literal("option"), index: z.number().int().min(0).max(100) }).strict(),
       z.object({ type: z.literal("custom"), text: z.string().min(1).max(500) }).strict()
     ]), request.body);
-    data(response, questionDisplay(aiWriteApproval.answerQuestion(request.params.questionId, input, request.authUser!)));
+    data(response, questionDisplay(aiWriteApproval.answerQuestion(request.params.questionId, input, approvalActor(request))));
   });
 
   app.get("/api/works/:workId/providers", (request, response) => {
