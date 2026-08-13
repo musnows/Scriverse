@@ -141,6 +141,19 @@ describe("数据库版本化迁移", () => {
     expect(migratedSnapshot).toMatchObject({ name: "魔斯拉", raceId: "race_migration_1", species: "泰坦族", organizationIds: [] });
     expect(first.get("SELECT COUNT(*) AS count FROM organizations")?.count).toBe(0);
     expect(first.get("SELECT COUNT(*) AS count FROM timeline_tracks")?.count).toBe(0);
+    expect(first.get("SELECT schedule_enabled, schedule_time, backup_images, retention_count FROM backup_settings WHERE id = 1")).toEqual({
+      schedule_enabled: 0,
+      schedule_time: "03:00",
+      backup_images: 1,
+      retention_count: 14
+    });
+    expect(first.all("PRAGMA table_info(backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
+      "id", "name", "endpoint", "region", "bucket", "prefix", "access_key_id",
+      "encrypted_secret_key", "secret_key_iv", "secret_key_tag", "enabled"
+    ]));
+    expect(first.all("PRAGMA table_info(backup_runs)").map((column) => column.name)).toEqual(
+      expect.arrayContaining(["id", "trigger", "started_at", "finished_at", "status", "results_json"])
+    );
     expect(first.all("PRAGMA table_info(timeline_events)").some((column) => column.name === "track_id")).toBe(true);
     expect(first.all("PRAGMA table_info(volumes)").filter((column) => ["description", "keywords_json"].includes(String(column.name)))).toHaveLength(2);
     expect(first.get("SELECT description, keywords_json FROM volumes WHERE id = 'volume-old'")).toEqual({ description: "", keywords_json: "[]" });
