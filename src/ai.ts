@@ -5624,6 +5624,7 @@ export class AiManager {
       ...this.sanitizeParameters({ ...preset, ...(input.parameters ?? {}) }, stringValue(model, "model_id")),
       ...thinkingParameters(provider, model)
     };
+    const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
     let effectiveInput = input;
     let context = this.buildContext(effectiveInput, model);
     let messages = this.buildMessages(effectiveInput, context);
@@ -6089,7 +6090,11 @@ export class AiManager {
           agentToolCallQuotaNoticeBudgetChars(agentToolCallSoftWarningThreshold(agentToolCallLimit), agentToolCallLimit)
         );
         const maximumNewToolTokens = Math.ceil((AGENT_TOOL_RESULT_MAX_CHARS + noticeBudgetChars) * 1.1) * Math.max(1, toolCallCount);
-        return currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS >= contextWindow;
+        const projectedUsagePercent = Math.round(
+          (currentTokens + maximumNewToolTokens + TOOL_CONTEXT_RESPONSE_RESERVE_TOKENS) / contextWindow * 100
+        );
+        const maxOutputThresholdReached = configuredOutputTokens >= contextWindow * FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT / 100;
+        return projectedUsagePercent >= FORCE_CONVERSATION_COMPACTION_USAGE_PERCENT || maxOutputThresholdReached;
       };
       let payload = await requestCompletion("auto");
       let choice = payload.choices?.[0];
