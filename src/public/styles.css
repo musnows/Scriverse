@@ -94,7 +94,7 @@
 [data-pending-view="settings"] .auth-pending #settings-hub-view.hidden,
 [data-pending-view="platform-ai"] .auth-pending #platform-ai-view.hidden,
 [data-pending-view="platform-usage"] .auth-pending #platform-usage-view.hidden,
-[data-pending-view="work-audit"] .auth-pending #work-audit-view.hidden,
+[data-pending-view="work-audit"] .auth-pending #work-audit-view.hidden { display: flex !important; }
 [data-pending-view="module"] .auth-pending #module-view.hidden { display: block !important; }
 [data-pending-view="welcome"] .auth-pending #welcome-view.hidden,
 [data-pending-view="editor"] .auth-pending #editor-view.hidden { display: grid !important; }
