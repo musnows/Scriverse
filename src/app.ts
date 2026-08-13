@@ -12,6 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { AiWriteApprovalService } from "./ai-write-approval.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -992,6 +993,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retries: options.releaseCheckRetries
     }
   );
+  let aiWriteApproval: AiWriteApprovalService;
   const ai = new AiManager(
     store,
     new CredentialVault(options.masterSecret),
@@ -1012,7 +1014,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
     },
-    attachmentStorage
+    attachmentStorage,
+    {
+      askUserQuestion: (input) => aiWriteApproval.createQuestion(input),
+      proposeWrites: (input) => aiWriteApproval.proposeWrites(input),
+      questionToolResult: (questionId) => aiWriteApproval.questionToolResult(questionId)
+    }
+  );
+  aiWriteApproval = new AiWriteApprovalService(
+    store,
+    auth,
+    (workId, input) => ai.createTask(workId, input)
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
