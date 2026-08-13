@@ -1650,8 +1650,9 @@ describe("AI 供应商、模型与建议 API", () => {
   it("生成建议不改正文，作者采纳后才生成新版本", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    expectedMaxTokens = 24_000;
-    await request(runtime.app).patch(`/api/models/${modelId}`).send({ preset: { max_tokens: expectedMaxTokens } }).expect(200);
+    expectedMaxTokens = 64_000;
+    const updatedModel = await request(runtime.app).patch(`/api/models/${modelId}`).send({ preset: { max_tokens: expectedMaxTokens } }).expect(200);
+    expect(updatedModel.body.data.preset.max_tokens).toBe(expectedMaxTokens);
 
     const suggestion = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "continue",
@@ -1670,7 +1671,7 @@ describe("AI 供应商、模型与建议 API", () => {
 
     const calls = await request(runtime.app).get(`/api/works/${workId}/ai-calls`).expect(200);
     const continuationCall = calls.body.data.find((call: { taskType: string }) => call.taskType === "continue");
-    expect(continuationCall).toMatchObject({ status: "completed", parameters: { temperature: 2, max_tokens: 24_000 } });
+    expect(continuationCall).toMatchObject({ status: "completed", parameters: { temperature: 2, max_tokens: 64_000 } });
     expect(continuationCall.provider.name).toBe("本地兼容服务");
     expect(continuationCall.model.displayName).toBe("小说模型");
     expect(suggestion.body.data.guard).toMatchObject({ status: "clear", issues: [] });
