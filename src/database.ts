@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 74;
+export const DATABASE_SCHEMA_VERSION = 75;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -2937,6 +2937,70 @@ export class Database {
           for (const term of documentShortSearchTerms(String(row.search_content))) insertTerm.run(row.id, term);
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (74, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(75)) {
+      this.transaction(() => {
+        this.raw.exec(`
+          CREATE TABLE IF NOT EXISTS ai_write_plans (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+            requester_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+              CHECK(status IN ('pending','rejected','expired','invalidated','executing','succeeded','failed')),
+            summary TEXT NOT NULL DEFAULT '',
+            operations_json TEXT NOT NULL DEFAULT '[]'
+              CHECK(json_valid(operations_json) AND json_type(operations_json) = 'array'),
+            expires_at TEXT NOT NULL,
+            rejected_at TEXT,
+            rejected_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            executed_at TEXT,
+            executed_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            execution_result_json TEXT NOT NULL DEFAULT '{}',
+            invalidation_reason TEXT NOT NULL DEFAULT '',
+            revoked_at TEXT,
+            revoked_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_write_plans_work ON ai_write_plans(work_id, status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_ai_write_plans_conversation ON ai_write_plans(conversation_id, created_at DESC);
+
+          CREATE TABLE IF NOT EXISTS ai_questions (
+            id TEXT PRIMARY KEY,
+            work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+            conversation_id TEXT REFERENCES ai_conversations(id) ON DELETE SET NULL,
+            requester_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            question TEXT NOT NULL,
+            options_json TEXT NOT NULL DEFAULT '[]'
+              CHECK(json_valid(options_json) AND json_type(options_json) = 'array'),
+            recommended_index INTEGER NOT NULL DEFAULT 0 CHECK(recommended_index >= 0),
+            allow_custom_answer INTEGER NOT NULL DEFAULT 1 CHECK(allow_custom_answer IN (0, 1)),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','answered','expired','cancelled')),
+            answer_json TEXT,
+            answered_at TEXT,
+            answered_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_ai_questions_work ON ai_questions(work_id, status, created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_ai_questions_conversation ON ai_questions(conversation_id, created_at DESC);
+        `);
+        const settingsColumns = new Set(this.all("PRAGMA table_info(work_ai_settings)").map((row) => String(row.name)));
+        if (!settingsColumns.has("ai_write_tools_json")) {
+          this.run("ALTER TABLE work_ai_settings ADD COLUMN ai_write_tools_json TEXT NOT NULL DEFAULT '{}'");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (75, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {
