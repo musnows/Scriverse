@@ -46,8 +46,19 @@ async function setupWork(fetchMock: typeof fetch): Promise<{
         headers: { "Content-Type": "application/json" }
       });
     }
-    await new Promise<void>((resolve) => {
-      releaseGates.push(resolve);
+    await new Promise<void>((resolve, reject) => {
+      const signal = init?.signal;
+      const release = () => {
+        signal?.removeEventListener("abort", rejectOnAbort);
+        resolve();
+      };
+      const rejectOnAbort = () => reject(signal?.reason ?? new Error("AI request aborted"));
+      if (signal?.aborted) {
+        rejectOnAbort();
+        return;
+      }
+      signal?.addEventListener("abort", rejectOnAbort, { once: true });
+      releaseGates.push(release);
     });
     return fetchMock(input, init);
   };
@@ -427,6 +438,63 @@ describe("分析任务自动运行", () => {
     const statuses = (tasks.body.data.items as Array<{ status: string }>).map((item) => item.status);
     expect(statuses.filter((status) => status === "review")).toHaveLength(5);
     expect(statuses.filter((status) => status === "pending")).toHaveLength(0);
+  });
+
+  it("作品进入回收站后中止运行任务并清理后续调度", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ summary: "不应写入", events: [], characters: [], settings: [], evidence: [], uncertainties: [] }) } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const { runtime, workId } = await setupWork(fetchMock);
+    runtimes.push(runtime);
+
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunEnabled: true,
+      autoRunConcurrency: 1
+    }).expect(200);
+    await waitFor(() => runtime.store.countRunningTasks(workId) === 1);
+
+    const aiInternals = runtime.ai as unknown as {
+      autoRunStarting: Map<string, Set<string>>;
+      autoRunTimers: Map<string, ReturnType<typeof setTimeout>>;
+      relationshipIndexSyncTimers: Map<string, ReturnType<typeof setTimeout>>;
+      scheduleRelationshipIndexSync: (targetWorkId: string) => void;
+      taskControllers: Map<string, AbortController>;
+    };
+    const runningSignal = [...aiInternals.taskControllers.values()][0]?.signal;
+    expect(runningSignal?.aborted).toBe(false);
+    runtime.ai.scheduleAutoRun(workId, 25);
+    aiInternals.scheduleRelationshipIndexSync(workId);
+    expect(aiInternals.autoRunTimers.has(workId)).toBe(true);
+    expect(aiInternals.relationshipIndexSyncTimers.has(workId)).toBe(true);
+
+    await request(runtime.app).delete(`/api/works/${workId}`).send({ expectedVersionNo: 1 }).expect(204);
+    await waitFor(() => aiInternals.taskControllers.size === 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(runningSignal?.aborted).toBe(true);
+    expect(aiInternals.autoRunStarting.has(workId)).toBe(false);
+    expect(aiInternals.autoRunTimers.has(workId)).toBe(false);
+    expect(aiInternals.relationshipIndexSyncTimers.has(workId)).toBe(false);
+    expect(runtime.database.all(
+      "SELECT status, COUNT(*) AS count FROM analysis_tasks WHERE work_id = ? GROUP BY status ORDER BY status",
+      workId
+    )).toEqual([{ status: "expired", count: 5 }]);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await request(runtime.app).post(`/api/recycle-bin/works/${workId}/restore`).send({ expectedVersionNo: 2 }).expect(200);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(runtime.store.countPendingTasks(workId)).toBe(0);
+    expect(runtime.store.countRunningTasks(workId)).toBe(0);
+    expect(aiInternals.autoRunTimers.has(workId)).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const newTask = runtime.store.createTask(workId, { taskType: "book-analysis", scope: { type: "book" } });
+    expect(aiInternals.autoRunTimers.has(workId)).toBe(true);
+    runtime.ai.scheduleAutoRun(workId, 60_000);
+    await request(runtime.app).delete(`/api/works/${workId}`).send({ expectedVersionNo: 3 }).expect(204);
+    expect(runtime.store.getTask(String(newTask.id)).status).toBe("expired");
+    expect(aiInternals.autoRunTimers.has(workId)).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("自动任务连续失败后暂停剩余队列", async () => {

@@ -2507,6 +2507,22 @@ export class AiManager {
     };
   }
 
+  deleteWork(workId: string, expectedVersionNo?: number): string[] {
+    const taskIds = this.store.deleteWork(workId, expectedVersionNo);
+    const autoRunTimer = this.autoRunTimers.get(workId);
+    if (autoRunTimer) clearTimeout(autoRunTimer);
+    this.autoRunTimers.delete(workId);
+    this.autoRunStarting.delete(workId);
+    const relationshipIndexTimer = this.relationshipIndexSyncTimers.get(workId);
+    if (relationshipIndexTimer) clearTimeout(relationshipIndexTimer);
+    this.relationshipIndexSyncTimers.delete(workId);
+    for (const taskId of taskIds) {
+      this.taskControllers.get(taskId)?.abort(new Error("作品已移入回收站"));
+    }
+    logger.info("ai.work_tasks.expired", { workId, taskCount: taskIds.length });
+    return taskIds;
+  }
+
   dispose(): void {
     logger.info("ai.manager.disposing", { scheduledWorks: this.autoRunTimers.size, activeTasks: this.taskControllers.size });
     if (this.autoRunStartupTimer) clearTimeout(this.autoRunStartupTimer);
