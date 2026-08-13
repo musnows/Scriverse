@@ -12,7 +12,7 @@ describe("角色抽取结果入库预览界面", () => {
     ]);
 
     expect(page).toContain('/styles.css?v=20260814-shelf-action-height-v1');
-    expect(page).toContain('/app.js?v=20260813-outline-board-page-v1');
+    expect(page).toContain('/app.js?v=20260814-toast-lifecycle-v1');
     expect(application).toContain("function renderCharacterExtractionPreview(task, result)");
     expect(application).toContain("function renderCharacterExtractionEditor(preview)");
     expect(application).toContain("function bindCharacterExtractionEditor(container, taskId)");
