@@ -65,6 +65,37 @@ export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
   }
   return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
 }
+
+export const WORK_AI_WRITE_TOOL_SWITCH_KEYS = [
+  "entity:settings",
+  "entity:characters",
+  "entity:races",
+  "entity:organizations",
+  "entity:timeline",
+  "entity:relationships",
+  "entity:outlines",
+  "annotation",
+  "analysis-task",
+  "ask-question"
+] as const;
+export type WorkAiWriteToolSwitchKey = (typeof WORK_AI_WRITE_TOOL_SWITCH_KEYS)[number];
+
+/** AI 可写工具默认全部关闭；只保留白名单内的开关键。 */
+export function normalizeWorkAiWriteTools(value: unknown): WorkAiWriteToolSwitchKey[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? json<unknown[]>(value, [])
+      : [];
+  const enabled = new Set<WorkAiWriteToolSwitchKey>();
+  for (const item of source) {
+    if (typeof item !== "string") continue;
+    if (WORK_AI_WRITE_TOOL_SWITCH_KEYS.includes(item as WorkAiWriteToolSwitchKey)) {
+      enabled.add(item as WorkAiWriteToolSwitchKey);
+    }
+  }
+  return WORK_AI_WRITE_TOOL_SWITCH_KEYS.filter((key) => enabled.has(key));
+}
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
 
 type PlatformPageSizes = {
@@ -1193,6 +1224,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, Number(row?.agent_tool_call_limit ?? 12) || 12)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, Number(row?.agent_tool_call_global_multiplier ?? 3) || 3)),
       agentTools: normalizeWorkAgentTools(row?.agent_tools_json),
+      aiWriteTools: normalizeWorkAiWriteTools(row?.ai_write_tools_json),
       imageToolModelId: row?.image_tool_model_id === null || row?.image_tool_model_id === undefined
         ? null
         : String(row.image_tool_model_id),
@@ -1217,6 +1249,7 @@ export class Store {
     agentToolCallLimit?: number;
     agentToolCallGlobalMultiplier?: number;
     agentTools?: string[];
+    aiWriteTools?: string[];
     imageToolModelId?: string | null;
     alwaysIncludeSettingInfo?: boolean;
     titleGenerationModelId?: string | null;
@@ -1238,6 +1271,7 @@ export class Store {
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
     const nextAgentToolCallGlobalMultiplier = input.agentToolCallGlobalMultiplier ?? Number(current.agentToolCallGlobalMultiplier);
     const nextAgentTools = normalizeWorkAgentTools(input.agentTools ?? current.agentTools);
+    const nextAiWriteTools = normalizeWorkAiWriteTools(input.aiWriteTools ?? current.aiWriteTools);
     const nextImageToolModelId = input.imageToolModelId === undefined
       ? (current.imageToolModelId ? String(current.imageToolModelId) : null)
       : input.imageToolModelId?.trim() || null;
@@ -1251,8 +1285,8 @@ export class Store {
          auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
-         agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         agent_tools_json, ai_write_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1270,6 +1304,7 @@ export class Store {
          agent_tool_call_limit = excluded.agent_tool_call_limit,
          agent_tool_call_global_multiplier = excluded.agent_tool_call_global_multiplier,
          agent_tools_json = excluded.agent_tools_json,
+         ai_write_tools_json = excluded.ai_write_tools_json,
          title_generation_model_id = excluded.title_generation_model_id,
          image_tool_model_id = excluded.image_tool_model_id,
          always_include_setting_info = excluded.always_include_setting_info,
@@ -1291,6 +1326,7 @@ export class Store {
       Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       JSON.stringify(nextAgentTools),
+      JSON.stringify(nextAiWriteTools),
       nextTitleGenerationModelId,
       nextImageToolModelId,
       nextAlwaysIncludeSettingInfo ? 1 : 0,
@@ -1309,6 +1345,7 @@ export class Store {
       agentToolCallLimit: Math.min(48, Math.max(5, nextAgentToolCallLimit)),
       agentToolCallGlobalMultiplier: Math.min(6, Math.max(1, nextAgentToolCallGlobalMultiplier)),
       agentTools: nextAgentTools,
+      aiWriteTools: nextAiWriteTools,
       imageToolModelId: nextImageToolModelId,
       alwaysIncludeSettingInfo: nextAlwaysIncludeSettingInfo,
       titleGenerationModelId: nextTitleGenerationModelId

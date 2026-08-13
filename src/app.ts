@@ -12,6 +12,7 @@ import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
+import { AiWriteApprovalManager, resolveAiWritePlanMaxOperations } from "./ai-write-approvals.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
@@ -494,6 +495,18 @@ const workAiSettingsSchema = z.object({
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  aiWriteTools: z.array(z.enum([
+    "entity:settings",
+    "entity:characters",
+    "entity:races",
+    "entity:organizations",
+    "entity:timeline",
+    "entity:relationships",
+    "entity:outlines",
+    "annotation",
+    "analysis-task",
+    "ask-question"
+  ])).max(10).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -992,6 +1005,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       retries: options.releaseCheckRetries
     }
   );
+  const aiWriteApprovals = new AiWriteApprovalManager(store, {
+    maxOperations: resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS, (message) => logger.warn("ai.write_plan.max_operations.invalid", { message })),
+    permissionResolver: (userId, workId) => {
+      const user = auth.getUser(userId);
+      if (!user || user.status !== "active") return null;
+      return auth.workModulePermissions(user, workId, true);
+    }
+  });
   const ai = new AiManager(
     store,
     new CredentialVault(options.masterSecret),
@@ -1012,7 +1033,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
     },
-    attachmentStorage
+    attachmentStorage,
+    aiWriteApprovals
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
@@ -2404,6 +2426,21 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           ? (suggestion.conversationMessage as Record<string, unknown>).createdAt
           : undefined
       });
+      const pendingPlans = Array.isArray(suggestion.pendingPlans) ? suggestion.pendingPlans : [];
+      for (const plan of pendingPlans) {
+        const record = plan as Record<string, unknown>;
+        sendEvent("plan_created", {
+          planId: record.id,
+          summary: record.summary,
+          status: record.status,
+          expiresAt: record.expiresAt,
+          plan: record.plan
+        });
+      }
+      const pendingQuestions = Array.isArray(suggestion.pendingQuestions) ? suggestion.pendingQuestions : [];
+      for (const question of pendingQuestions) {
+        sendEvent("question_created", question);
+      }
     } catch (error) {
       if (!controller.signal.aborted) {
         logger.error("ai.stream.failed", {
@@ -2415,6 +2452,68 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     } finally {
       if (!response.writableEnded && !response.destroyed) response.end();
     }
+  });
+
+  // AI 操作审批中心：修改计划持久化、整体确认/拒绝、撤销与提问交互。
+  app.get("/api/works/:workId/ai-write-plans", (request, response) => {
+    const pagination = parsePagination(request.query) ?? { page: 1, limit: 20, offset: 0 };
+    const status = typeof request.query.status === "string" && request.query.status !== "" ? request.query.status : undefined;
+    data(response, aiWriteApprovals.listPlansPage(request.params.workId, pagination, status));
+  });
+  app.get("/api/ai-write-plans/:planId", (request, response) => {
+    const plan = aiWriteApprovals.getPlan(request.params.planId);
+    data(response, aiWriteApprovals.getPlanDetail(
+      request.params.planId,
+      requestPermissions(request, String(plan.workId))
+    ));
+  });
+  app.post("/api/ai-write-plans/:planId/decision", (request, response) => {
+    const input = parse(z.object({
+      action: z.enum(["approve", "reject"])
+    }).strict(), request.body);
+    const plan = aiWriteApprovals.getPlan(request.params.planId);
+    const actorUserId = request.authUser?.userId;
+    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "确认审批前必须登录");
+    if (input.action === "reject") {
+      data(response, aiWriteApprovals.rejectPlan(request.params.planId, actorUserId));
+      return;
+    }
+    data(response, aiWriteApprovals.approvePlan(request.params.planId, actorUserId));
+  });
+  app.post("/api/ai-write-plans/:planId/revoke", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    const actorUserId = request.authUser?.userId;
+    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "撤销审批前必须登录");
+    data(response, aiWriteApprovals.revokePlan(request.params.planId, actorUserId));
+  });
+  app.get("/api/works/:workId/ai-approval-questions", (request, response) => {
+    data(response, aiWriteApprovals.listPendingQuestions(request.params.workId));
+  });
+  app.post("/api/ai-approval-questions/:questionId/answer", (request, response) => {
+    const input = parse(z.object({ answer: z.string().trim().min(1).max(10_000) }).strict(), request.body);
+    const question = aiWriteApprovals.getQuestion(request.params.questionId);
+    const actorUserId = request.authUser?.userId;
+    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "回答问题前必须登录");
+    const workPermissions = requestPermissions(request, String(question.workId));
+    const permissions = workPermissions as unknown as Record<string, string>;
+    const aiChatAccess = permissions["ai-chat"];
+    if (aiChatAccess !== "write" && aiChatAccess !== "read") {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有访问该作品 AI 对话的权限");
+    }
+    data(response, aiWriteApprovals.answerQuestion(request.params.questionId, input.answer, actorUserId));
+  });
+  app.post("/api/ai-approval-questions/:questionId/decline", (request, response) => {
+    parse(z.object({}).strict(), request.body ?? {});
+    const question = aiWriteApprovals.getQuestion(request.params.questionId);
+    const actorUserId = request.authUser?.userId;
+    if (!actorUserId) throw new AppError(401, "AUTH_REQUIRED", "拒绝提问前必须登录");
+    const workPermissions = requestPermissions(request, String(question.workId));
+    const permissions = workPermissions as unknown as Record<string, string>;
+    const aiChatAccess = permissions["ai-chat"];
+    if (aiChatAccess !== "write" && aiChatAccess !== "read") {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有访问该作品 AI 对话的权限");
+    }
+    data(response, aiWriteApprovals.declineQuestion(request.params.questionId, actorUserId));
   });
   app.get("/api/suggestions/:suggestionId", (request, response) => {
     const suggestion = ai.getSuggestion(request.params.suggestionId);

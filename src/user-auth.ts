@@ -190,7 +190,9 @@ function workIdFromPath(database: Database, pathname: string): string | null {
     reviews: "review_items",
     tasks: "analysis_tasks",
     "ai-conversations": "ai_conversations",
-    suggestions: "ai_suggestions"
+    suggestions: "ai_suggestions",
+    "ai-write-plans": "ai_write_plans",
+    "ai-approval-questions": "ai_approval_questions"
   };
   const table = tableByResource[resource];
   if (table && decoded[3]) {
@@ -1023,6 +1025,19 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   }
   if (/^\/api\/(?:works\/[^/]+\/(?:tasks|ai-calls)|tasks\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return write ? { write: ["ai-analysis"] } : { read: ["ai-analysis"] };
+  }
+  // AI 操作审批中心：中间件负责 ai-chat 基础门槛，模块级写权限由审批服务在执行前重校验。
+  if (/^\/api\/works\/[^/]+\/ai-write-plans$/u.test(pathname)) {
+    return direct("ai-chat");
+  }
+  if (/^\/api\/ai-write-plans\/[^/]+(?:\/(?:decision|revoke))?$/u.test(pathname)) {
+    return direct("ai-chat");
+  }
+  if (/^\/api\/works\/[^/]+\/ai-approval-questions$/u.test(pathname)) {
+    return direct("ai-chat");
+  }
+  if (/^\/api\/ai-approval-questions\/[^/]+\/(?:answer|decline)$/u.test(pathname)) {
+    return direct("ai-chat");
   }
   const conversationRoleplayWrite = /^\/api\/ai-conversations\/[^/]+\/roleplay$/u.test(pathname);
   if (write && conversationRoleplayWrite) {
