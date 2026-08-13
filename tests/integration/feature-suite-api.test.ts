@@ -772,6 +772,12 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const response = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
     expect(response.body.data).toMatchObject({
       workId,
+      page: 1,
+      limit: 30,
+      itemCount: 4,
+      total: 4,
+      pageCount: 1,
+      hasMore: false,
       stats: { chapterCount: 4, outlinedChapterCount: 2, foreshadowCount: 2, unresolvedForeshadowCount: 1 }
     });
     expect(response.body.data.volumes.map((volume: Record<string, unknown>) => volume.title)).toEqual(["第一卷", "第二卷", "空卷"]);
@@ -788,6 +794,28 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     ]);
     expect(JSON.stringify(response.body.data)).not.toContain("回收站章节");
     expect(JSON.stringify(response.body.data)).not.toContain("这一段正文不应出现在只读看板响应中");
+
+    const paged = await request(runtime.app).get(`/api/works/${workId}/outline-board?page=2&limit=1`).expect(200);
+    expect(paged.body.data).toMatchObject({ page: 2, limit: 1, itemCount: 1, total: 4, pageCount: 4, hasMore: true, nextPage: 3 });
+    expect(paged.body.data.volumes.flatMap((volume: { chapters: unknown[] }) => volume.chapters)).toHaveLength(1);
+
+    const searched = await request(runtime.app).get(`/api/works/${workId}/outline-board?q=${encodeURIComponent("旧信坐标")}`).expect(200);
+    expect(searched.body.data.total).toBe(2);
+    expect(searched.body.data.volumes.flatMap((volume: { chapters: Array<{ id: string }> }) => volume.chapters).map((chapter: { id: string }) => chapter.id))
+      .toEqual([chapters[0].id, fourthChapter.body.data.id]);
+
+    const completed = await request(runtime.app)
+      .get(`/api/works/${workId}/outline-board?volumeId=${secondVolume.body.data.id}&outlineStatus=completed&foreshadowStatus=unresolved`)
+      .expect(200);
+    expect(completed.body.data.total).toBe(1);
+    expect(completed.body.data.volumes[0].chapters[0].id).toBe(fourthChapter.body.data.id);
+
+    const empty = await request(runtime.app).get(`/api/works/${workId}/outline-board?volumeId=${emptyVolume.body.data.id}`).expect(200);
+    expect(empty.body.data).toMatchObject({ total: 0, itemCount: 0 });
+    expect(empty.body.data.volumes).toEqual([expect.objectContaining({ id: emptyVolume.body.data.id, chapterCount: 0, chapters: [] })]);
+
+    await request(runtime.app).get(`/api/works/${workId}/outline-board?outlineStatus=unknown`).expect(400);
+    await request(runtime.app).get(`/api/works/${workId}/outline-board?limit=101`).expect(400);
     const fullOutline = await request(runtime.app).get(`/api/chapters/${chapters[0].id}/outline`).expect(200);
     expect(fullOutline.body.data.goal).toBe(longGoal);
     expect({
@@ -800,6 +828,94 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     const isolated = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
     expect(JSON.stringify(isolated.body.data)).not.toContain("CROSS_WORK_OUTLINE_SECRET");
     await request(runtime.app).get("/api/works/not-a-work/outline-board").expect(404);
+  });
+
+  it("对五千章大作品保持看板响应、查询耗时和当前页关联有界", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "五千章看板 fixture" }).expect(201);
+    const workId = String(work.body.data.id);
+    const firstVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const secondVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第二卷" }).expect(201);
+    const emptyVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "空卷" }).expect(201);
+    const timestamp = "2026-08-13T00:00:00.000Z";
+    const targetIndex = 4_320;
+    const targetChapterId = `large-chapter-${targetIndex}`;
+
+    runtime.database.transaction(() => {
+      for (let index = 0; index < 5_000; index += 1) {
+        const chapterId = `large-chapter-${index}`;
+        runtime.database.run(
+          `INSERT INTO chapters (id, work_id, volume_id, title, content, sort_order, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          chapterId,
+          workId,
+          index < 2_500 ? firstVolume.body.data.id : secondVolume.body.data.id,
+          index === targetIndex ? `第 ${index + 1} 章 UNIQUE_NEEDLE` : `第 ${index + 1} 章`,
+          index === targetIndex ? "LARGE_BOARD_PROSE_SECRET" : "",
+          index,
+          timestamp,
+          timestamp
+        );
+        if (index % 10 === 0) {
+          runtime.database.run(
+            `INSERT INTO chapter_outlines (chapter_id, goal, conflict, turning_point, notes, status, created_at, updated_at)
+             VALUES (?, ?, '', '', '', ?, ?, ?)`,
+            chapterId,
+            index === targetIndex ? "找到 UNIQUE_NEEDLE 对应的旧信坐标" : `规划第 ${index + 1} 章`,
+            index % 20 === 0 ? "ready" : "draft",
+            timestamp,
+            timestamp
+          );
+        }
+      }
+    });
+    const foreshadow = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "五千章中的目标伏笔",
+      status: "planted",
+      plannedPayoffChapterId: targetChapterId,
+      occurrences: [{ chapterId: targetChapterId, role: "reminder" }]
+    }).expect(201);
+
+    const startedAt = performance.now();
+    const initial = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);
+    const elapsedMs = performance.now() - startedAt;
+    const serialized = JSON.stringify(initial.body.data);
+    expect(initial.body.data).toMatchObject({
+      page: 1,
+      limit: 30,
+      itemCount: 30,
+      total: 5_000,
+      hasMore: true,
+      nextPage: 2,
+      stats: { chapterCount: 5_000, outlinedChapterCount: 500, foreshadowCount: 1, unresolvedForeshadowCount: 1 }
+    });
+    expect(initial.body.data.volumes.flatMap((volume: { chapters: unknown[] }) => volume.chapters)).toHaveLength(30);
+    expect(initial.body.data.volumes).toContainEqual(expect.objectContaining({ id: emptyVolume.body.data.id, chapters: [] }));
+    expect(Buffer.byteLength(serialized)).toBeLessThan(150_000);
+    expect(serialized).not.toContain("LARGE_BOARD_PROSE_SECRET");
+    expect(elapsedMs).toBeLessThan(3_000);
+
+    const searchedAt = performance.now();
+    const searched = await request(runtime.app).get(`/api/works/${workId}/outline-board?q=UNIQUE_NEEDLE`).expect(200);
+    expect(performance.now() - searchedAt).toBeLessThan(3_000);
+    expect(searched.body.data).toMatchObject({ total: 1, itemCount: 1 });
+    expect(searched.body.data.volumes[0].chapters[0]).toMatchObject({
+      id: targetChapterId,
+      outline: { goal: "找到 UNIQUE_NEEDLE 对应的旧信坐标" },
+      foreshadows: [expect.objectContaining({ id: foreshadow.body.data.id, roles: ["reminder"], plannedPayoff: true })]
+    });
+
+    const crossVolume = await request(runtime.app)
+      .get(`/api/works/${workId}/outline-board?volumeId=${secondVolume.body.data.id}&outlineStatus=ready&page=2&limit=50`)
+      .expect(200);
+    expect(crossVolume.body.data).toMatchObject({ page: 2, limit: 50, itemCount: 50, total: 125 });
+    expect(crossVolume.body.data.volumes.every((volume: { id: string }) => volume.id === secondVolume.body.data.id)).toBe(true);
+
+    const unresolved = await request(runtime.app).get(`/api/works/${workId}/outline-board?foreshadowStatus=unresolved`).expect(200);
+    expect(unresolved.body.data).toMatchObject({ total: 1, itemCount: 1 });
+    expect(unresolved.body.data.volumes[0].chapters[0].id).toBe(targetChapterId);
+
+    const fullOutline = await request(runtime.app).get(`/api/chapters/${targetChapterId}/outline`).expect(200);
+    expect(fullOutline.body.data.goal).toBe("找到 UNIQUE_NEEDLE 对应的旧信坐标");
   });
 
   it("按当前章节返回伏笔提醒并通过现有版本与审计链标记回收", async () => {

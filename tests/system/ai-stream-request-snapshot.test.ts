@@ -15,7 +15,7 @@ describe("AI 流式请求快照", () => {
     expect(application).toContain("signal: request.signal");
     expect(application).toContain("request.conversationId,\n          \"assistant\"");
     expect(application).toContain("requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id })");
-    expect(page).toContain('/app.js?v=20260813-ai-context-compact-v1');
+    expect(page).toContain('/app.js?v=20260813-outline-board-page-v1');
   });
 
   it("对话和作品切换会取消旧流并拒绝过期回调", async () => {

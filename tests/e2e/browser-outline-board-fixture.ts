@@ -46,6 +46,22 @@ const fixture = runWithRequestActor(registered.session.user, () => {
     title: "第五章 未定",
     content: "本章仍在规划中。"
   });
+  const fixtureTimestamp = "2026-08-13T00:00:00.000Z";
+  runtime.database.transaction(() => {
+    for (let index = 6; index <= 45; index += 1) {
+      runtime.database.run(
+        `INSERT INTO chapters (id, work_id, volume_id, title, content, sort_order, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+        `outline-board-e2e-chapter-${index}`,
+        workId,
+        String(secondVolume.id),
+        `第${index}章 批量航路`,
+        index - 1,
+        fixtureTimestamp,
+        fixtureTimestamp
+      );
+    }
+  });
   const emptyVolume = runtime.store.createVolume(workId, { title: "第三卷 空卷" });
   runtime.store.upsertChapterOutline(String(firstChapter.id), {
     goal: `确认旧信来源。${"这是一段用于验证超长摘要收起与详情展开的文本。".repeat(80)}`,
@@ -104,6 +120,7 @@ const fixture = runWithRequestActor(registered.session.user, () => {
 });
 
 let failOutlineBoard = false;
+let outlineBoardDelayMs = 0;
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
   if (requestUrl.pathname === "/__e2e/login") {
@@ -123,9 +140,19 @@ const server = createServer((request, response) => {
     response.end(JSON.stringify({ failOutlineBoard }));
     return;
   }
+  if (requestUrl.pathname === "/__e2e/delay-outline-board") {
+    outlineBoardDelayMs = Math.min(2_000, Math.max(0, Number(requestUrl.searchParams.get("ms")) || 0));
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ outlineBoardDelayMs }));
+    return;
+  }
   if (failOutlineBoard && requestUrl.pathname === `/api/works/${fixture.workId}/outline-board`) {
     response.writeHead(503, { "Content-Type": "application/json" });
     response.end(JSON.stringify({ error: { code: "OUTLINE_BOARD_E2E_FAILURE", message: "大纲看板测试错误" } }));
+    return;
+  }
+  if (outlineBoardDelayMs > 0 && requestUrl.pathname === `/api/works/${fixture.workId}/outline-board`) {
+    setTimeout(() => runtime.app(request, response), outlineBoardDelayMs);
     return;
   }
   runtime.app(request, response);
