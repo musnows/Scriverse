@@ -8075,6 +8075,7 @@ async function renderTimeline(page = moduleListPages.timeline) {
   $("#module-content").querySelectorAll("[data-timeline-track-tab]").forEach((button) => button.addEventListener("click", async () => {
     const nextTrackId = button.dataset.timelineTrackTab ?? "";
     if (String(nextTrackId) === String(timelineActiveTrackId)) return;
+    clearTransientToasts();
     timelineActiveTrackId = nextTrackId;
     await renderTimeline(1);
   }));

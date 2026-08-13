@@ -45,6 +45,10 @@ describe("时间轴界面", () => {
     const showModuleStart = application.text.indexOf("async function showModule");
     const showModuleSource = application.text.slice(showModuleStart, application.text.indexOf("function emptyModule", showModuleStart));
     expect(showModuleSource).toContain("clearTransientToasts();");
+    const trackTabHandlerStart = application.text.indexOf('querySelectorAll("[data-timeline-track-tab]")');
+    const trackTabHandlerEnd = application.text.indexOf('querySelectorAll("[data-timeline-sort]")', trackTabHandlerStart);
+    expect(trackTabHandlerStart).toBeGreaterThan(-1);
+    expect(application.text.slice(trackTabHandlerStart, trackTabHandlerEnd)).toContain("clearTransientToasts();");
 
     const renderSource = application.text.slice(renderStart, application.text.indexOf("async function renderOutlines", renderStart));
     expect(renderSource).toContain('const canEditTimeline = canEditModule("timeline")');
