@@ -6,6 +6,7 @@ import { createRuntime } from "../../src/app.js";
 import { runWithRequestActor } from "../../src/request-context.js";
 
 const port = Number(process.env.E2E_READER_PORT ?? 13213);
+const restrictedPermissionMode = process.env.E2E_READER_PERMISSION_MODE === "restricted";
 const dataRoot = join(process.cwd(), ".data");
 await mkdir(dataRoot, { recursive: true });
 const isolatedDirectory = await mkdtemp(join(dataRoot, "e2e-browser-reader-"));
@@ -17,8 +18,15 @@ const runtime = createRuntime({
   serveUi: true,
   security: { enforceSameOrigin: false, apiRateLimit: 10_000 }
 });
-const actor = runtime.auth.register({ username: "reader-browser-e2e", password: "BrowserReaderE2E123!" });
+const actor = runtime.auth.register({
+  username: restrictedPermissionMode ? "reader-owner-e2e" : "reader-browser-e2e",
+  password: "BrowserReaderE2E123!"
+});
 runtime.auth.completeOnboarding(actor.session.user.userId);
+const restrictedActor = restrictedPermissionMode
+  ? runtime.auth.register({ username: "reader-restricted-e2e", password: "BrowserReaderE2E123!" })
+  : null;
+if (restrictedActor) runtime.auth.completeOnboarding(restrictedActor.session.user.userId);
 
 const fixture = runWithRequestActor(actor.session.user, () => {
   const work = runtime.store.createWork({ title: "阅读预览 E2E", author: "Codex" });
@@ -65,6 +73,27 @@ const fixture = runWithRequestActor(actor.session.user, () => {
   };
 });
 
+if (restrictedActor) {
+  runtime.auth.addMember(fixture.workId, restrictedActor.session.user.userId, {
+    permissions: {
+      prose: "none",
+      drafts: "none",
+      settings: "read",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    }
+  }, actor.session.user.userId);
+  runtime.database.run("UPDATE users SET status = 'disabled' WHERE id = ?", actor.session.user.userId);
+}
+
 let failureRemaining = 1;
 const server = createServer((request, response) => {
   const requestUrl = new URL(request.url ?? "/", `http://127.0.0.1:${port}`);
@@ -98,6 +127,7 @@ console.log(JSON.stringify({
   ready: true,
   baseUrl: `http://127.0.0.1:${port}`,
   readerUrl: `http://127.0.0.1:${port}/#view=reader&work=${fixture.workId}&chapter=${fixture.slowChapterId}`,
+  restrictedPermissionMode,
   ...fixture
 }));
 
