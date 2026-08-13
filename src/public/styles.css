@@ -3388,3 +3388,51 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+/* AI 可写工具审批中心 */
+.ai-approval-table .ai-approval-summary-cell { max-width: 320px; }
+.ai-approval-summary-cell small { display: block; color: var(--accent); margin-top: 3px; }
+.ai-approval-status { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.ai-approval-status.is-pending { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.ai-approval-status.is-success { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+.ai-approval-status.is-error { background: color-mix(in srgb, var(--red, #e5484d) 14%, transparent); color: var(--red, #e5484d); }
+.ai-approval-status.is-muted { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); }
+.ai-approval-status.is-running { background: color-mix(in srgb, var(--blue, #3b82f6) 14%, transparent); color: var(--blue, #3b82f6); }
+.ai-approval-detail { display: flex; flex-direction: column; gap: 12px; }
+.ai-approval-detail-header { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.ai-approval-detail-summary { font-size: 14px; font-weight: 700; margin-bottom: 6px; }
+.ai-approval-detail-header small { margin-left: 8px; color: var(--muted); }
+.ai-approval-detail-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.ai-approval-operations { display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; }
+.ai-approval-operation { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.ai-approval-operation header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ai-approval-operation header span { color: var(--muted); font-size: 11px; }
+.ai-approval-operation-summary { font-size: 12px; color: var(--text); margin: 6px 0; }
+.ai-approval-target { font-weight: 600; font-size: 12px; }
+.ai-approval-diff-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.ai-approval-diff-table th, .ai-approval-diff-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+.ai-approval-diff-table thead th { background: var(--panel-soft, var(--panel)); font-size: 11px; color: var(--muted); }
+.ai-approval-diff-table code { font-size: 11px; word-break: break-all; white-space: pre-wrap; }
+.ai-approval-empty { color: var(--muted); font-style: italic; }
+.ai-approval-added { display: inline-block; background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); border-radius: 4px; padding: 0 5px; margin-right: 6px; font-size: 11px; font-weight: 600; }
+.ai-approval-quote { border-left: 3px solid var(--accent); background: var(--panel-soft, var(--panel)); padding: 6px 10px; margin: 6px 0; font-size: 12px; white-space: pre-wrap; }
+.ai-approval-result { font-size: 12px; color: var(--green); margin-top: 6px; }
+.ai-approval-result.is-error { color: var(--red, #e5484d); }
+.ai-approval-dialog-actions { justify-content: flex-start; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.ai-approval-toast { max-width: 420px; }
+.ai-approval-toast p { margin: 4px 0; color: var(--text); }
+.ai-approval-toast .ai-approval-toast-operations { color: var(--muted); font-size: 11px; }
+
+/* AskUserQuestions 提问卡片 */
+.ai-question-card { border: 1px solid var(--accent); border-radius: 8px; background: var(--panel-soft, var(--panel)); padding: 10px 12px; margin: 8px 0; }
+.ai-question-card header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.ai-question-card header strong { font-size: 12px; color: var(--accent); }
+.ai-question-card header span { font-size: 11px; color: var(--muted); }
+.ai-question-text { font-size: 13px; margin-bottom: 8px; }
+.ai-question-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-question-option { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--panel); border-radius: 14px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.ai-question-option:hover { border-color: var(--accent); }
+.ai-question-option small { color: var(--accent); font-size: 10px; font-weight: 600; }
+.ai-question-custom { display: flex; gap: 6px; margin-top: 8px; }
+.ai-question-custom input { flex: 1; }
+.ai-question-answer { color: var(--green); font-size: 12px; margin-top: 4px; }

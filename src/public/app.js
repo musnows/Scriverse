@@ -55,6 +55,16 @@ import {
   timelineTrackColorIndex
 } from "/timeline-view.js?v=20260801-timeline-sort-actions-v1";
 import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260726-background-task-center-v1";
+import {
+  aiApprovalOperationChangesHtml,
+  aiApprovalOperationHtml,
+  aiApprovalStatusLabel,
+  aiApprovalStatusOptions,
+  aiApprovalStatusSummary,
+  aiApprovalStatusTone,
+  aiWriteOperationLabel,
+  formatApprovalDateTimeForDisplay
+} from "/ai-approvals.js?v=20260814-ai-write-approvals-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import {
@@ -310,10 +320,14 @@ function canManageWork(work = state.work) {
 }
 
 function canEditModule(module, work = state.work) {
+  // 审批中心没有整体编辑权限概念：操作能力由后端按计划内容与权限交集校验。
+  if (module === "ai-approvals") return false;
   return canWriteUiModule(work, module);
 }
 
 function canReadModule(module, work = state.work) {
+  // 审批中心基于 AI 对话读取权限开放。
+  if (module === "ai-approvals") return canReadPermissionModule(work, "ai-chat");
   return canReadUiModule(work, module);
 }
 
@@ -4784,6 +4798,7 @@ const moduleMeta = {
   comments: ["正文协作", "正文评论", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
+  "ai-approvals": ["AI 操作审批", "AI 操作审批中心", "查看并处理侧边栏 AI 提交的修改计划与提问；确认前不会写入任何内容。", ""],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
 };
 
@@ -4842,6 +4857,7 @@ async function showModule(module) {
     if (module === "comments") await renderWorkChapterComments();
     if (module === "reviews") await renderReviews();
     if (module === "tasks") await renderTasks(taskListPage);
+    if (module === "ai-approvals") await renderAiApprovals();
     if (module === "ai-settings") await renderBookAiSettings();
   } catch (error) {
     $("#module-content").innerHTML = `<div class="empty-state"><b>载入失败</b>${esc(error.message)}</div>`;
@@ -6108,6 +6124,239 @@ async function renderReviews(page = moduleListPages.reviews) {
       button.disabled = false;
     }
   }));
+}
+
+let aiApprovalListPage = 1;
+let aiApprovalStatusFilter = "";
+let aiApprovalFiltersPanelOpen = false;
+
+function mountAiApprovalFilterToggle() {
+  $("#module-header-actions").querySelector('[data-module-header-action="ai-approval-filter-toggle"]')?.remove();
+  $("#module-header-actions").insertAdjacentHTML("afterbegin", `<button type="button" class="module-filter-toggle" data-module-header-action="ai-approval-filter-toggle" aria-label="筛选审批" aria-controls="ai-approval-filter-panel" aria-expanded="${aiApprovalFiltersPanelOpen}" title="筛选审批"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 5h16l-6.5 7.2v5.3l-3 1.5v-6.8L4 5Z"></path></svg></button>`);
+  $("#module-header-actions").querySelector('[data-module-header-action="ai-approval-filter-toggle"]')?.addEventListener("click", async () => {
+    aiApprovalFiltersPanelOpen = !aiApprovalFiltersPanelOpen;
+    await renderAiApprovals();
+  });
+}
+
+async function renderAiApprovals(page = aiApprovalListPage, { refresh = false } = {}) {
+  mountAiApprovalFilterToggle();
+  const query = new URLSearchParams({ page: String(page), limit: "20" });
+  if (aiApprovalStatusFilter) query.set("status", aiApprovalStatusFilter);
+  const approvalPage = await moduleApiPage("ai-approvals", `/api/works/${state.work.id}/ai-approvals?${query.toString()}`, 1, 1, { refresh });
+  if (!approvalPage.items.length && page > 1) return renderAiApprovals(page - 1, { refresh });
+  aiApprovalListPage = approvalPage.page;
+  const plans = approvalPage.items;
+  const total = Number(approvalPage.total ?? plans.length);
+  mountModuleCount(total);
+  const filterPanel = aiApprovalFiltersPanelOpen
+    ? `<section id="ai-approval-filter-panel" class="module-filter-panel" aria-label="审批筛选">
+      <label>状态筛选
+        <select id="ai-approval-status-filter">${aiApprovalStatusOptions(aiApprovalStatusFilter)}</select>
+      </label>
+    </section>`
+    : "";
+  const pagination = plans.length && (approvalPage.page > 1 || approvalPage.hasMore)
+    ? `<nav class="module-pagination" aria-label="AI 操作审批分页">
+      <button type="button" data-approval-page="${approvalPage.page - 1}" ${approvalPage.page <= 1 ? "disabled" : ""}>上一页</button>
+      <span>第 ${approvalPage.page}/${Math.max(1, Math.ceil(total / approvalPage.limit))} 页 · 共 ${total} 份审批</span>
+      <button type="button" data-approval-page="${approvalPage.nextPage ?? approvalPage.page + 1}" ${approvalPage.hasMore ? "" : "disabled"}>下一页</button>
+    </nav>`
+    : "";
+  $("#module-content").innerHTML = `${filterPanel}${plans.length ? `<table class="table-list ai-approval-table"><thead><tr><th>计划简述</th><th>操作</th><th>发起人</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>${plans.map((plan) => `
+    <tr data-testid="ai-approval-row">
+      <td class="ai-approval-summary-cell"><strong>${esc(plan.summary)}</strong>${plan.invalidationReason ? `<small>${esc(plan.invalidationReason)}</small>` : ""}</td>
+      <td>${esc(plan.operations.map((operation) => aiWriteOperationLabel(operation.operationType)).join("、"))}</td>
+      <td>${esc(plan.requesterDisplayName || "未知")}</td>
+      <td><span class="ai-approval-status ${aiApprovalStatusTone(plan.status)}">${esc(aiApprovalStatusLabel(plan.status))}${plan.revokedAt ? " · 已撤销" : ""}</span></td>
+      <td>${esc(formatDateTime(plan.createdAt))}</td>
+      <td class="task-row-actions"><button class="ghost-button" type="button" data-approval-detail="${esc(plan.id)}">查看详情</button></td>
+    </tr>`).join("")}</tbody></table>${pagination}` : emptyModule("还没有 AI 修改计划", "当侧边栏 AI 提交修改计划后，会在这里等待你确认；确认前不会写入任何内容。")}`;
+
+  $("#module-content").querySelectorAll("[data-approval-page]").forEach((button) => button.addEventListener("click", async () => {
+    if (button.disabled) return;
+    $("#module-content").querySelectorAll("[data-approval-page]").forEach((control) => { control.disabled = true; });
+    await renderAiApprovals(Number(button.dataset.approvalPage));
+  }));
+  $("#ai-approval-status-filter")?.addEventListener("change", async () => {
+    aiApprovalStatusFilter = $("#ai-approval-status-filter").value;
+    aiApprovalListPage = 1;
+    await renderAiApprovals(1);
+  });
+  $("#module-content").querySelectorAll("[data-approval-detail]").forEach((button) => button.addEventListener("click", () => {
+    void openAiApprovalDetailDialog(button.dataset.approvalDetail);
+  }));
+}
+
+async function openAiApprovalDetailDialog(planId, { focus = false } = {}) {
+  let plan;
+  try {
+    plan = await api(`/api/ai-approvals/${planId}`);
+  } catch (error) {
+    toast(error.message, "error");
+    return;
+  }
+  const status = String(plan.status ?? "");
+  const showApprove = status === "pending";
+  const showReject = status === "pending";
+  const showRevoke = status === "succeeded" && !plan.revokedAt;
+  const statusSummary = aiApprovalStatusSummary(status, plan);
+  const actorLine = [plan.requesterDisplayName && `发起人：${plan.requesterDisplayName}`, plan.ownerDisplayName && `对话归属：${plan.ownerDisplayName}`].filter(Boolean).join(" · ");
+  const operationsHtml = plan.operations.map((operation, index) => aiApprovalOperationHtml(operation, index)).join("");
+  const actionsHtml = showApprove || showReject || showRevoke
+    ? `<div class="dialog-actions ai-approval-dialog-actions">
+        ${showApprove ? '<button id="ai-approval-approve" class="primary-button" type="button">确认执行</button>' : ""}
+        ${showReject ? '<button id="ai-approval-reject" class="ghost-button" type="button">整体拒绝</button>' : ""}
+        ${showRevoke ? '<button id="ai-approval-revoke" class="ghost-button" type="button">撤销本次审批</button>' : ""}
+      </div>`
+    : "";
+  openDialog(`AI 修改计划详情`, `
+      <section class="ai-approval-detail" data-testid="ai-approval-detail">
+        <header class="ai-approval-detail-header">
+          <p class="ai-approval-detail-summary">${esc(plan.summary)}</p>
+          <p><span class="ai-approval-status ${aiApprovalStatusTone(status)}">${esc(aiApprovalStatusLabel(status))}</span>${statusSummary ? `<small>${esc(statusSummary)}</small>` : ""}</p>
+          <p class="ai-approval-detail-meta">${esc(actorLine || "")} · 创建于 ${esc(formatDateTime(plan.createdAt))}${plan.expiresAt && status === "pending" ? ` · 过期时间 ${esc(formatApprovalDateTimeForDisplay(plan.expiresAt))}` : ""}</p>
+          ${plan.executedAt ? `<p class="ai-approval-detail-meta">执行于 ${esc(formatDateTime(plan.executedAt))}</p>` : ""}
+          ${plan.revokedAt ? `<p class="ai-approval-detail-meta">撤销于 ${esc(formatDateTime(plan.revokedAt))}</p>` : ""}
+        </header>
+        <div class="ai-approval-operations">${operationsHtml}</div>
+        ${actionsHtml}
+      </section>`, () => {}, "审批详情", { submitLabel: "关闭", wide: true, hideCancel: true });
+  const dialog = document.getElementById("form-dialog");
+  $("#ai-approval-approve")?.addEventListener("click", async () => {
+    const confirmed = await confirmToast("确认后将立即按系统生成的差异详情写入作品；任一操作失败整份计划都不会写入。", { title: "确认执行修改计划", confirmLabel: "确认执行", cancelLabel: "取消" });
+    if (!confirmed) return;
+    try {
+      const result = await api(`/api/ai-approvals/${planId}/approve`, { method: "POST", body: {} });
+      toast(`修改计划已执行成功，共 ${result.operations.length} 项操作`);
+      dialog?.close();
+      await renderAiApprovals(aiApprovalListPage, { refresh: true });
+    } catch (error) {
+      toast(error.message, "error");
+      await openAiApprovalDetailDialog(planId);
+    }
+  });
+  $("#ai-approval-reject")?.addEventListener("click", async () => {
+    const confirmed = await confirmToast("拒绝后这份修改计划不会执行，且无法再次确认。", { title: "整体拒绝修改计划", confirmLabel: "整体拒绝", cancelLabel: "取消" });
+    if (!confirmed) return;
+    try {
+      await api(`/api/ai-approvals/${planId}/reject`, { method: "POST", body: {} });
+      toast("修改计划已拒绝");
+      dialog?.close();
+      await renderAiApprovals(aiApprovalListPage, { refresh: true });
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  $("#ai-approval-revoke")?.addEventListener("click", async () => {
+    const confirmed = await confirmToast("撤销会将本次审批修改过的词条恢复为修改前的值；新建的词条不会被自动删除。仅当目标词条未被后续修改时才允许撤销。", { title: "撤销本次审批", confirmLabel: "确认撤销", cancelLabel: "取消" });
+    if (!confirmed) return;
+    try {
+      await api(`/api/ai-approvals/${planId}/revoke`, { method: "POST", body: {} });
+      toast("本次审批已撤销，修改过的词条已恢复");
+      dialog?.close();
+      await renderAiApprovals(aiApprovalListPage, { refresh: true });
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+  if (focus) dialog?.focus();
+}
+
+/** toast 形式的审批确认入口：展示操作对象与 AI 简述，并提供查看详情按钮。 */
+function showAiApprovalToast(planResult) {
+  const region = $("#toast-region");
+  const element = document.createElement("section");
+  element.className = "toast ai-approval-toast";
+  element.setAttribute("role", "status");
+  element.setAttribute("aria-label", "AI 提交了修改计划");
+  element.dataset.testid = "ai-approval-toast";
+  const heading = document.createElement("strong");
+  heading.textContent = "AI 提交了修改计划";
+  const description = document.createElement("p");
+  description.textContent = planResult.summary || "等待你确认后才会写入";
+  const operations = document.createElement("p");
+  operations.className = "ai-approval-toast-operations";
+  operations.textContent = (planResult.operations ?? []).map((operation) => `${aiWriteOperationLabel(operation.operationType)}：${operation.targetLabel ?? ""}`).join("；");
+  const actions = document.createElement("div");
+  actions.className = "toast-confirmation-actions";
+  const detail = document.createElement("button");
+  detail.className = "ghost-button";
+  detail.type = "button";
+  detail.textContent = "查看完整详情";
+  const center = document.createElement("button");
+  center.className = "ghost-button";
+  center.type = "button";
+  center.textContent = "打开审批中心";
+  const dismiss = document.createElement("button");
+  dismiss.className = "primary-button";
+  dismiss.type = "button";
+  dismiss.textContent = "知道了";
+  actions.append(detail, center, dismiss);
+  element.append(heading, description, operations, actions);
+  region.append(element);
+  raiseToastRegion();
+  const remove = () => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) region.hidePopover();
+  };
+  detail.addEventListener("click", () => { remove(); void openAiApprovalDetailDialog(planResult.planId); });
+  center.addEventListener("click", () => { remove(); void showModule("ai-approvals"); });
+  dismiss.addEventListener("click", remove);
+}
+
+/** 渲染 AskUserQuestions 提问卡片；回答必须由用户完成。 */
+async function renderAiQuestionCard(host, questionResult) {
+  const questionId = String(questionResult.questionId ?? "");
+  if (!questionId) return;
+  let question = questionResult;
+  if (!questionResult.status || questionResult.status === "pending") {
+    try {
+      question = await api(`/api/ai-questions/${questionId}`);
+    } catch {
+      question = questionResult;
+    }
+  }
+  const card = document.createElement("section");
+  card.className = "ai-question-card";
+  card.dataset.testid = "ai-question-card";
+  card.dataset.questionId = questionId;
+  card.setAttribute("aria-label", "AI 向你提问");
+  const answered = String(question.status ?? "") === "answered";
+  const answerText = answered
+    ? question.answer?.type === "option"
+      ? `已回答：${question.options?.[question.answer.index] ?? "预置选项"}`
+      : `已回答：${question.answer?.text ?? ""}`
+    : "";
+  const options = Array.isArray(question.options) ? question.options : [];
+  card.innerHTML = `<header><strong>AI 提问</strong><span>${answered ? "已回答" : "等待你的回答"}</span></header>
+    <p class="ai-question-text">${esc(question.question ?? "")}</p>
+    ${answered ? `<p class="ai-question-answer">${esc(answerText)}</p>` : `
+    <div class="ai-question-options" role="group" aria-label="预置选项">
+      ${options.map((option, index) => `<button type="button" class="ai-question-option" data-question-option="${index}">${esc(option)}${index === 0 ? '<small>（最推荐）</small>' : ""}</button>`).join("")}
+    </div>
+    ${question.allowCustomAnswer ? `<div class="ai-question-custom"><input type="text" maxlength="500" placeholder="或输入你自己的回答" aria-label="自定义回答"><button type="button" class="ghost-button" data-question-custom-answer>提交自定义回答</button></div>` : ""}`}`;
+  host.append(card);
+  if (answered) return;
+  const submit = async (body) => {
+    try {
+      const updated = await api(`/api/ai-questions/${questionId}/answer`, { method: "POST", body });
+      card.remove();
+      await renderAiQuestionCard(host, { ...updated, questionId });
+      toast("回答已记录，AI 将在下一轮对话中读取");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  card.querySelectorAll("[data-question-option]").forEach((button) => button.addEventListener("click", () => {
+    void submit({ type: "option", index: Number(button.dataset.questionOption) });
+  }));
+  const customInput = card.querySelector(".ai-question-custom input");
+  card.querySelector("[data-question-custom-answer]")?.addEventListener("click", () => {
+    const text = customInput?.value.trim();
+    if (!text) return toast("请先输入自定义回答", "error");
+    void submit({ type: "custom", text });
+  });
 }
 
 async function renderTasks(page = taskListPage, { refresh = false } = {}) {
@@ -7426,10 +7675,24 @@ async function renderBookAiSettings() {
   const quotaStatusText = dailyTokenQuota === null
     ? `今日已使用 ${quotaUsedTokens.toLocaleString("zh-CN")} Token，当前未启用额度限制。`
     : `今日已使用 ${quotaUsedTokens.toLocaleString("zh-CN")} / ${dailyTokenQuota.toLocaleString("zh-CN")} Token，剩余 ${Number(quotaRemainingTokens).toLocaleString("zh-CN")} Token。`;
+    const aiWriteTools = settings.aiWriteTools ?? {};
+  const writeToolKeys = [
+    ["settings", "世界设定", "允许 AI 提交新建或编辑世界设定词条的计划。"],
+    ["characters", "角色", "允许 AI 提交新建或编辑角色词条的计划。"],
+    ["races", "种族", "允许 AI 提交新建或编辑种族词条的计划。"],
+    ["organizations", "组织", "允许 AI 提交新建或编辑组织词条的计划。"],
+    ["timeline", "时间线", "允许 AI 提交新建或编辑时间线事件词条的计划。"],
+    ["relationships", "人物关系", "允许 AI 提交新建或编辑人物关系词条的计划。"],
+    ["outlines", "大纲/伏笔", "允许 AI 提交新建或编辑章节大纲与伏笔词条的计划。"],
+    ["chapter-annotations", "正文评论/待办", "允许 AI 为指定正文位置创建评论或待办；不会改动正文、标题、章节顺序或分卷归属。"],
+    ["analysis-tasks", "分析任务", "允许 AI 触发本书已有的分析任务；任务类型、模型与范围以计划确认为准。"],
+    ["ask-user-questions", "AskUserQuestions", "允许 AI 向作者提出单选问题；一次一个问题，预置选项或自定义回答。"]
+  ];
+  const writeToolsMarkup = `<section class="config-section"><div class="config-section-header"><div><h2>AI 可写工具</h2><p>所有可写工具默认关闭。开启后，侧边栏 AI 也只能提交修改计划或提问，必须经过你在审批中心确认才会真正写入；AI 不能删除词条，也不能编辑章节正文。执行前系统会重新校验权限、工具开关与目标版本，任一条件变化都会让计划失效。</p></div></div><div class="ai-agent-tools">${writeToolKeys.map(([key, title, help]) => `<label><input name="ai-write-tool" type="checkbox" value="${key}" ${aiWriteTools[key] === true ? "checked" : ""}><span><strong>${esc(title)}</strong><small>${esc(help)}</small></span></label>`).join("")}</div><div class="card-actions"><button id="save-ai-write-tools" class="ghost-button config-save-button" type="button">保存可写工具设置</button></div></section>`;
   host.innerHTML = `<section class="config-section">${tokenUsageOverviewMarkup(usage, {
     title: "本书 Token 用量",
     description: `仅统计《${state.work.title}》迄今产生的 AI Token 消耗与缓存命中情况。`
-  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
+  })}</section><section class="config-section"><div class="config-section-header"><div><h2>每日 Token 额度</h2><p>限制本书在后端部署时区（${esc(quotaTimezone)}）每个自然日可使用的输入与输出 Token 总量。额度最低为 10,000；达到额度后，新的 AI 请求会等到后端时区的次日零点重置后再执行。</p></div></div><div class="config-inline-save"><label><input id="daily-token-quota-enabled" type="checkbox" ${dailyTokenQuota === null ? "" : "checked"}>启用每日额度</label><label class="daily-token-quota-field">每日额度<input id="daily-token-quota" type="number" min="10000" max="2000000000" step="1000" value="${esc(String(dailyTokenQuota ?? 10000))}" aria-label="本书每日 Token 额度" ${dailyTokenQuota === null ? "disabled" : ""}></label><button id="save-daily-token-quota" class="ghost-button config-save-button" type="button">保存</button></div><p id="daily-token-quota-status" class="usage-measurement-note" role="status">${esc(quotaStatusText)}</p></section><section class="config-section"><div class="config-section-header"><div><h2>本书系统提示词</h2><p>会追加在内置系统提示词和平台全局系统提示词之后，只影响《${esc(state.work.title)}》的 AI 请求。</p></div></div><div class="field-label"><textarea id="work-system-prompt" rows="8" aria-label="本书系统提示词" placeholder="例如：叙事使用第三人称，哥斯拉不得离开地球。">${esc(settings.systemPrompt)}</textarea></div><div class="card-actions"><button id="save-work-system-prompt" class="ghost-button config-save-button" type="button">保存本书提示词</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>人物关系拼音索引</h2><p>平时由系统记录增量任务；“同步增量队列”只处理发生变化的来源，“完整重建索引”会将本书全部正文和设定来源重新排队。</p></div></div><div id="relationship-search-index-status" role="status" aria-live="polite">${relationshipIndexStatusMarkup(relationshipIndex)}</div><div class="relationship-index-actions"><button id="sync-relationship-search-index" class="primary-button config-save-button" type="button">同步增量队列</button><button id="refresh-relationship-search-index" class="ghost-button" type="button">刷新状态</button><button id="rebuild-relationship-search-index" class="ghost-button config-save-button" type="button">完整重建索引</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>全书概要引用配额</h2><p>引用全书概要时按分卷保留覆盖，并优先加入与当前问题相关的章节概要；该比例控制概要可使用的上下文预算。</p></div></div><div class="config-inline-save"><label class="book-summary-context-percent-field">上下文占比（%）<input id="book-summary-context-percent" type="number" min="1" max="90" value="${esc(String(settings.bookSummaryContextPercent ?? 50))}" aria-label="全书概要引用上下文占比"></label><button id="save-book-summary-context-percent" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>对话上下文 Compact</h2><p>对话 context 使用独立预算。达到该百分比阈值时先提醒；继续发送会对较早消息执行 compact，压缩上下文占用，并尽量保留最近八条原文。</p></div></div><div class="config-inline-save"><label class="context-compact-threshold-field">Compact 阈值（%）<input id="context-compact-threshold" type="number" min="50" max="90" value="${esc(String(settings.contextCompactThreshold ?? 85))}" aria-label="对话上下文 compact 阈值"></label><button id="save-context-compact-threshold" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>Agent 工具调用上限</h2><p>限制单次回答里 Agent 可调用工具的次数，并用「全局倍数」给整次回答加一道不会因 Compact 重置的熔断阀，防止工具死循环空耗 Token。调用上限 5–48（默认 12）；全局倍数 1–6（默认 3，全局上限 = 调用上限 × 倍数）。<a class="config-doc-link" href="https://scriverse.top/docs/global-tool-call-limit.html" target="_blank" rel="noopener noreferrer">了解原理与推荐设置</a></p></div></div><div class="config-inline-save"><label class="agent-tool-call-limit-field">调用上限<input id="agent-tool-call-limit" type="number" min="5" max="48" value="${esc(String(settings.agentToolCallLimit ?? 12))}" aria-label="Agent 工具调用上限"></label><div class="agent-tool-call-global-multiplier-field"><span id="agent-tool-call-global-multiplier-label">全局倍数</span><div class="settings-layout-toggle agent-tool-call-global-multiplier-toggle" role="group" aria-labelledby="agent-tool-call-global-multiplier-label">${[1, 2, 3, 4, 5, 6].map((value) => `<button type="button" data-global-multiplier="${value}" aria-pressed="${Number(settings.agentToolCallGlobalMultiplier ?? 3) === value}">${value}</button>`).join("")}</div><input id="agent-tool-call-global-multiplier" type="hidden" value="${esc(String(Math.min(6, Math.max(1, Number(settings.agentToolCallGlobalMultiplier ?? 3) || 3))))}" aria-label="Agent 工具调用全局倍数"></div><button id="save-agent-tool-call-limit" class="ghost-button config-save-button" type="button">保存</button></div></section><section class="config-section"><div class="config-section-header"><div><h2>AI 查询工具</h2><p>工具默认可用，作为已有上下文的补充。关闭后模型不会看到对应能力；所有工具只读且有数量、篇幅与调用轮次限制。已开始的对话会锁定创建时的工具集，修改后仅对新对话生效，避免打断 prompt cache。</p></div></div><div class="ai-agent-tools"><label><input name="agent-tool" type="checkbox" value="story_index" ${agentTools.has("story_index") ? "checked" : ""}><span><strong>作品目录与章节概要</strong><small>分页获取卷章、章节 ID 和当前概要，不返回正文。</small></span></label><label><input name="agent-tool" type="checkbox" value="read_chapters" ${agentTools.has("read_chapters") ? "checked" : ""}><span><strong>读取章节</strong><small>按章节 ID 获取概要或正文，每次最多 3 章。</small></span></label><label><input name="agent-tool" type="checkbox" value="search_story_entities" ${agentTools.has("search_story_entities") ? "checked" : ""}><span><strong>搜索作品实体</strong><small>按实体名、拼音或短关键词混合检索设定、人物、组织、时间线、关系、大纲和伏笔；非语义问答。</small></span></label></div><div class="card-actions"><button id="save-agent-tools" class="ghost-button config-save-button" type="button">保存工具设置</button></div></section>${writeToolsMarkup}${renderTaskDefaults(models, providers, taskDefaults, settings)}`;
   $("#daily-token-quota-status").closest(".config-section").insertAdjacentHTML("afterend", `<section class="config-section"><div class="config-section-header"><div><h2>设定上下文注入</h2><p>开启后，本书的普通 AI 请求会自动注入锁定设定、组织、种族与相关约束；即使本轮同时使用“@注入上下文设定”，也只会注入一次。</p></div></div><div class="config-inline-save"><label><input id="always-include-setting-info" type="checkbox" ${settings.alwaysIncludeSettingInfo ? "checked" : ""}>是否注入设定</label><button id="save-always-include-setting-info" class="ghost-button config-save-button" type="button">保存</button></div></section>`);
   bindUsageCalendarInteractions(host);
   scrollUsageCalendarsToLatest(host);
@@ -7630,6 +7893,21 @@ async function renderBookAiSettings() {
       const agentTools = [...host.querySelectorAll('input[name="agent-tool"]:checked')].map((input) => input.value);
       await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { agentTools } });
       toast("AI 查询工具设置已保存");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  $("#save-ai-write-tools")?.addEventListener("click", async () => {
+    const button = $("#save-ai-write-tools");
+    button.disabled = true;
+    try {
+      const aiWriteTools = Object.fromEntries(
+        [...host.querySelectorAll('input[name="ai-write-tool"]')].map((input) => [input.value, input.checked])
+      );
+      await api(`/api/works/${state.work.id}/ai-settings`, { method: "PATCH", body: { aiWriteTools } });
+      toast("AI 可写工具设置已保存；开启后 AI 提交的操作仍需你在审批中心确认");
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -10520,6 +10798,12 @@ async function streamChat(body) {
         renderAiProcessSteps(message, processSteps, finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom();
+        if (toolCall.name === "propose_writes" && toolCall.status === "completed" && toolCall.result?.ok && toolCall.result.planId) {
+          showAiApprovalToast(toolCall.result);
+        }
+        if (toolCall.name === "ask_user_question" && toolCall.status === "completed" && toolCall.result?.ok && toolCall.result.questionId) {
+          void renderAiQuestionCard(message.querySelector(".message-body"), toolCall.result);
+        }
       } else if (eventName === "context_compacted") {
         setAiContextMeter(payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
@@ -10603,6 +10887,14 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
       ? metadata.processSteps
       : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
     renderAiProcessSteps(message, processSteps, true, resolveAiProcessDuration(metadata, processSteps, createdAt));
+    const toolCalls = Array.isArray(metadata?.processSteps)
+      ? metadata.processSteps.filter((step) => step.type === "tool").map((step) => step.toolCall)
+      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []);
+    for (const toolCall of toolCalls) {
+      if (toolCall?.name === "ask_user_question" && toolCall.result?.ok && toolCall.result.questionId) {
+        void renderAiQuestionCard(message.querySelector(".message-body"), toolCall.result);
+      }
+    }
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
