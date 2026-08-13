@@ -328,7 +328,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260813-reader-volume-mobile-v3');
+    expect(page.text).toContain('/styles.css?v=20260813-scrollbar-stable-v1');
     expect(page.text).toContain('/app.js?v=20260813-reader-volume-mobile-v3');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
@@ -608,7 +608,11 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.vditor-editor-host.vditor--dark .vditor-reset table tbody tr:nth-child(2n) { background: var(--surface-soft); }');
     expect(styles.text).toContain(".vditor-upload-queue {");
     expect(styles.text).toContain(".image-upload-progress-panel {");
-    expect(styles.text).toContain(".is-scrollbar-visible::-webkit-scrollbar {");
+    expect(styles.text).toContain("* { scrollbar-width: thin; scrollbar-color: transparent transparent; }");
+    expect(styles.text).toContain("*::-webkit-scrollbar { width: 8px; }");
+    expect(styles.text).toContain(".is-scrollbar-visible::-webkit-scrollbar-thumb {");
+    expect(styles.text).not.toContain("* { scrollbar-width: none; }");
+    expect(styles.text).not.toContain("*::-webkit-scrollbar { width: 0; }");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host");
     expect(styles.text).toContain("#character-section-editor-view");
     expect(styles.text).toContain("#knowledge-section-editor-view");
