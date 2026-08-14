@@ -28,7 +28,7 @@ describe("实体存续状态界面", () => {
     expect(application.text).toContain('entityLifecycleBadge(item.isExtinct, "已灭绝")');
     expect(application.text).toContain('entityLifecycleBadge(item.isDissolved, "已解散")');
     expect(styles.text).toContain(".entity-lifecycle-badge");
-    expect(page.text).toContain('/styles.css?v=20260814-shelf-action-height-v1');
+    expect(page.text).toContain('/styles.css?v=20260814-brand-mark-v1');
     expect(page.text).toContain('/app.js?v=20260814-ai-roleplay-dead-label-v1');
   });
 });
