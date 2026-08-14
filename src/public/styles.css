@@ -3112,9 +3112,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }
 .vditor-editor-host .markdown-word-count { display: inline-flex; align-items: center; align-self: center; min-height: 28px; margin-left: 24px; padding: 0 10px; color: var(--muted); font: 10px/1 var(--font-latin), var(--font-cjk), sans-serif; white-space: nowrap; }
 .vditor-editor-host .vditor-content { position: relative; }
-.vditor-editor-host .vditor-line-numbers { display: none; position: absolute; z-index: 1; inset: 0 auto 0 0; width: 42px; padding: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 88%, transparent); color: var(--muted); font: 12px/1.75 var(--font-latin), monospace; text-align: right; user-select: none; pointer-events: none; will-change: transform; }
+.vditor-editor-host .vditor-line-numbers { display: none; position: absolute; z-index: 1; inset: 0 auto 0 0; width: 42px; padding: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 88%, transparent); color: var(--muted); font: 12px/1.75 var(--font-latin), monospace; text-align: center; user-select: none; pointer-events: none; will-change: transform; }
 .vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: block; }
-.vditor-editor-host .vditor-line-number { position: absolute; top: 0; right: 8px; left: 0; display: block; box-sizing: border-box; overflow: hidden; padding: 0; text-align: right; white-space: nowrap; }
+.vditor-editor-host .vditor-line-number { position: absolute; top: 0; right: 0; left: 0; display: block; box-sizing: border-box; overflow: hidden; padding: 0; text-align: center; white-space: nowrap; }
 .vditor-editor-host.vditor.show-line-numbers .vditor-sv, .vditor-editor-host.vditor.show-line-numbers .vditor-sv textarea { padding-left: 42px; }
 .vditor-editor-host .vditor-line-number-button[aria-pressed="true"] { color: var(--accent-dark); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .vditor-editor-host .vditor-content { min-height: 0; }
