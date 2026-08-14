@@ -38,10 +38,9 @@ describe("时间轴界面", () => {
     expect(deletionSource).toContain("await renderTimeline(page)");
     expect(deletionSource).toContain('toast(error.message, "error")');
 
-    expect(application.text).toContain("const TIMELINE_DELETE_TOAST_DURATION_MS = 15_000;");
     expect(application.text).toContain("function dismissTimelineDeleteToast()");
-    expect(application.text).toContain("function timelineDeleteToast(message)");
-    expect(deletionSource).toContain("timelineDeleteToast(`已删除时间事件“${item.name}”`);");
+    expect(deletionSource).toContain("toast(`已删除时间事件“${item.name}”`);");
+    expect(deletionSource).toContain('$("#toast-region").lastElementChild?.classList.add("timeline-delete-toast");');
     const showModuleStart = application.text.indexOf("async function showModule");
     const showModuleSource = application.text.slice(showModuleStart, application.text.indexOf("function emptyModule", showModuleStart));
     expect(showModuleSource).toContain("dismissTimelineDeleteToast();");

@@ -3740,33 +3740,12 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
-const TIMELINE_DELETE_TOAST_DURATION_MS = 15_000;
-
 function dismissTimelineDeleteToast() {
   const region = $("#toast-region");
   region.querySelectorAll(".timeline-delete-toast").forEach((element) => element.remove());
   if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
     region.hidePopover();
   }
-}
-
-function timelineDeleteToast(message) {
-  dismissTimelineDeleteToast();
-  const region = $("#toast-region");
-  const element = document.createElement("div");
-  element.className = "toast info timeline-delete-toast";
-  element.setAttribute("role", "status");
-  element.setAttribute("aria-atomic", "true");
-  element.textContent = message;
-  region.append(element);
-  raiseToastRegion();
-  window.setTimeout(() => {
-    if (!element.isConnected) return;
-    element.remove();
-    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
-      region.hidePopover();
-    }
-  }, TIMELINE_DELETE_TOAST_DURATION_MS);
 }
 
 function dismissChapterInsightToast() {
@@ -8009,7 +7988,8 @@ async function deleteTimelineEvent(item, page = moduleListPages.timeline) {
   try {
     await api(`/api/timeline/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderTimeline(page);
-    timelineDeleteToast(`已删除时间事件“${item.name}”`);
+    toast(`已删除时间事件“${item.name}”`);
+    $("#toast-region").lastElementChild?.classList.add("timeline-delete-toast");
   } catch (error) {
     toast(error.message, "error");
   }
