@@ -6143,7 +6143,12 @@ async function renderAiApprovals(page = aiApprovalListPage, { refresh = false } 
   mountAiApprovalFilterToggle();
   const query = new URLSearchParams({ page: String(page), limit: "20" });
   if (aiApprovalStatusFilter) query.set("status", aiApprovalStatusFilter);
-  const approvalPage = await moduleApiPage("ai-approvals", `/api/works/${state.work.id}/ai-approvals?${query.toString()}`, 1, 1, { refresh });
+  const approvalPage = await cachedModuleRequest(
+    "ai-approvals",
+    `page:ai-approvals:${page}:20:${aiApprovalStatusFilter}`,
+    () => api(`/api/works/${state.work.id}/ai-approvals?${query.toString()}`),
+    { refresh }
+  );
   if (!approvalPage.items.length && page > 1) return renderAiApprovals(page - 1, { refresh });
   aiApprovalListPage = approvalPage.page;
   const plans = approvalPage.items;
@@ -6336,7 +6341,8 @@ async function renderAiQuestionCard(host, questionResult) {
       ${options.map((option, index) => `<button type="button" class="ai-question-option" data-question-option="${index}">${esc(option)}${index === 0 ? '<small>（最推荐）</small>' : ""}</button>`).join("")}
     </div>
     ${question.allowCustomAnswer ? `<div class="ai-question-custom"><input type="text" maxlength="500" placeholder="或输入你自己的回答" aria-label="自定义回答"><button type="button" class="ghost-button" data-question-custom-answer>提交自定义回答</button></div>` : ""}`}`;
-  host.append(card);
+  // 插入到正文容器之前：流式 typewriter 会整体重写 message-body 的 innerHTML，卡片不能放在其中。
+  host.before(card);
   if (answered) return;
   const submit = async (body) => {
     try {
