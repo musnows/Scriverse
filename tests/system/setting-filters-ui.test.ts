@@ -20,7 +20,7 @@ describe("设定筛选界面", () => {
       request(runtime.app).get("/setting-filters.js").expect(200)
     ]);
 
-    expect(page.text).toContain('/styles.css?v=20260814-shelf-action-height-v1');
+    expect(page.text).toContain('/styles.css?v=20260814-brand-mark-v1');
     expect(page.text).toContain('/app.js?v=20260814-delete-toast-v2');
     expect(application.text).toContain('/setting-filters.js?v=20260810-setting-inline-filters-v1');
     expect(application.text).toContain('const settingFilters = { keyword: "", category: "", lockState: "all" };');
