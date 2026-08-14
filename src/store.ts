@@ -10,7 +10,7 @@ import {
 import { exportWorkDocx } from "./docx-export.js";
 import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
-import { normalizeWorkSearchQuery } from "./hybrid-search.js";
+import { documentParagraphLineRanges, normalizeWorkSearchQuery } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -2915,6 +2915,7 @@ export class Store {
         timestamp,
         chapterId
       );
+      this.syncChapterParagraphSearchVersion(chapterId, versionNo);
       this.insertChapterVersionRow({
         workId: String(lockedChapter.workId),
         chapterId,
@@ -3169,6 +3170,7 @@ export class Store {
           const versionNo = Number(chapter.versionNo) + 1;
           const sortOrder = orderedByVolume.get(action.volumeId)?.indexOf(chapterId) ?? 0;
           this.db.run("UPDATE chapters SET version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?", versionNo, timestamp, chapterId);
+          this.syncChapterParagraphSearchVersion(chapterId, versionNo);
           this.insertChapterVersionRow({
             workId,
             chapterId,
@@ -3362,6 +3364,11 @@ export class Store {
   }
 
   private syncChapterParagraphSearch(workId: string, chapterId: string, content: string): void {
+    const chapterVersion = numberValue(
+      this.db.get("SELECT version_no FROM chapters WHERE id = ? AND work_id = ?", chapterId, workId) ?? {},
+      "version_no"
+    );
+    const ranges = documentParagraphLineRanges(content);
     this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
     for (const [paragraphOrder, paragraph] of splitDocumentParagraphs(content).entries()) {
       const searchContent = normalizeDocumentSearchText(paragraph);
@@ -3374,6 +3381,17 @@ export class Store {
         paragraph,
         searchContent
       );
+      const range = ranges[paragraphOrder];
+      if (range) {
+        this.db.run(
+          `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
+           VALUES (?, ?, ?, ?)`,
+          inserted.lastInsertRowid,
+          chapterVersion,
+          range.startLine,
+          range.endLine
+        );
+      }
       for (const term of documentShortSearchTerms(searchContent)) {
         this.db.run(
           "INSERT INTO chapter_paragraph_short_terms (paragraph_id, term) VALUES (?, ?)",
@@ -3382,6 +3400,15 @@ export class Store {
         );
       }
     }
+  }
+
+  private syncChapterParagraphSearchVersion(chapterId: string, versionNo: number): void {
+    this.db.run(
+      `UPDATE chapter_paragraph_line_ranges SET chapter_version = ?
+       WHERE paragraph_id IN (SELECT id FROM chapter_paragraph_search WHERE chapter_id = ?)`,
+      versionNo,
+      chapterId
+    );
   }
 
   searchChapterParagraphs(workId: string, keyword: string, limit = 20): Array<{

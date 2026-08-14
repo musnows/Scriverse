@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildHybridSearchSnippet,
   documentParagraphLineRange,
+  documentParagraphLineRanges,
   fuseHybridSearchChannels,
   normalizeWorkSearchQuery,
   type HybridSearchCandidate
@@ -59,6 +60,11 @@ describe("混合检索摘要", () => {
 describe("正文段落行定位", () => {
   it("按空白行分段并返回一基行号", () => {
     const content = "第一行\n第二行\n\n  \n第三行\n第四行\n\n第五行";
+    expect(documentParagraphLineRanges(content)).toEqual([
+      { startLine: 1, endLine: 2 },
+      { startLine: 5, endLine: 6 },
+      { startLine: 8, endLine: 8 }
+    ]);
     expect(documentParagraphLineRange(content, 0)).toEqual({ startLine: 1, endLine: 2 });
     expect(documentParagraphLineRange(content, 1)).toEqual({ startLine: 5, endLine: 6 });
     expect(documentParagraphLineRange(content, 2)).toEqual({ startLine: 8, endLine: 8 });

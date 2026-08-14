@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import type { Runtime } from "../../src/app.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
@@ -108,6 +108,86 @@ describe("作品混合检索", () => {
       .query({ q: "星港通行证", type: "setting" })
       .expect(200);
     expect(updated.body.data).toEqual([expect.objectContaining({ id: setting.id, type: "setting" })]);
+  });
+
+  it("三条正文搜索路径复用版本化行号索引并对缺失索引执行有界自修复", async () => {
+    runtime = createTestRuntime();
+    const longPrefix = Array.from({ length: 2_000 }, (_, index) => `铺垫行 ${index + 1}`).join("\n");
+    const content = `${longPrefix}\n\n潮汐棱镜第一次发光。\n仍在发光。\n\n北港灯塔。\n\n北港备用航线。`;
+    const seeded = await seedChapter(runtime, content);
+    const workId = String(seeded.work.id);
+    const chapterId = String(seeded.chapter.id);
+    const allSpy = vi.spyOn(runtime.store.db, "all");
+    const getSpy = vi.spyOn(runtime.store.db, "get");
+
+    const fullText = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "潮汐棱镜", type: "chapter" })
+      .expect(200);
+    const shortText = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "北港", type: "chapter" })
+      .expect(200);
+    const phonetic = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "beigang", type: "chapter" })
+      .expect(200);
+
+    expect(fullText.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_002, endLine: 2_003 })
+    ]);
+    expect(shortText.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_005, endLine: 2_005 })
+    ]);
+    expect(phonetic.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_005, endLine: 2_005, matchKinds: ["phonetic"] })
+    ]);
+    expect(shortText.body.data).toHaveLength(1);
+    const observedSql = [...allSpy.mock.calls, ...getSpy.mock.calls].map(([sql]) => String(sql));
+    expect(observedSql.some((sql) => sql.includes("chapter.content AS chapter_content"))).toBe(false);
+    expect(observedSql.some((sql) => sql.includes("SELECT content, version_no FROM chapters"))).toBe(false);
+
+    const targetParagraph = runtime.store.db.get<{ id: number }>(
+      "SELECT id FROM chapter_paragraph_search WHERE chapter_id = ? AND content LIKE ?",
+      chapterId,
+      "%潮汐棱镜%"
+    );
+    expect(targetParagraph).toBeDefined();
+    runtime.store.db.run("DELETE FROM chapter_paragraph_line_ranges WHERE paragraph_id = ?", Number(targetParagraph?.id));
+    getSpy.mockClear();
+    const repaired = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "潮汐棱镜", type: "chapter" })
+      .expect(200);
+    expect(repaired.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_002, endLine: 2_003 })
+    ]);
+    expect(getSpy.mock.calls.filter(([sql]) => String(sql).includes("SELECT content, version_no FROM chapters"))).toHaveLength(1);
+    expect(runtime.store.db.get(
+      "SELECT start_line, end_line FROM chapter_paragraph_line_ranges WHERE paragraph_id = ?",
+      Number(targetParagraph?.id)
+    )).toEqual({ start_line: 2_002, end_line: 2_003 });
+
+    const secondVolume = runtime.store.createVolume(workId, { title: "第二卷" });
+    const moved = runtime.store.moveChapter(chapterId, { volumeId: String(secondVolume.id), sortOrder: 0 });
+    expect(runtime.store.db.get(
+      `SELECT COUNT(*) AS count FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       WHERE paragraph.chapter_id = ? AND line_range.chapter_version <> ?`,
+      chapterId,
+      Number(moved.versionNo)
+    )).toEqual({ count: 0 });
+
+    runtime.store.db.run(
+      "UPDATE chapters SET content = ?, version_no = version_no + 1 WHERE id = ?",
+      "当前正文已经替换，不应命中旧索引。",
+      chapterId
+    );
+    const stale = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "潮汐棱镜", type: "chapter" })
+      .expect(200);
+    expect(stale.body.data).toEqual([]);
   });
 
   it("通过增量全文索引检索 Agent history，并支持短词和标题更新", async () => {

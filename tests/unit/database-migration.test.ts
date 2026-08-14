@@ -257,6 +257,12 @@ describe("数据库版本化迁移", () => {
       "idx_presence_changes_saved_at"
     ]));
     expect(first.get("SELECT chapter_id, content FROM chapter_paragraph_search WHERE chapter_id = 'chapter-old'")).toEqual({ chapter_id: "chapter-old", content: "旧正文" });
+    expect(first.get(
+      `SELECT line_range.chapter_version, line_range.start_line, line_range.end_line
+       FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       WHERE paragraph.chapter_id = 'chapter-old'`
+    )).toEqual({ chapter_version: 1, start_line: 1, end_line: 1 });
     expect(first.all("PRAGMA index_list(chapter_paragraph_short_terms)").some(
       (index) => index.name === "idx_chapter_paragraph_short_terms_paragraph"
     )).toBe(true);

@@ -68,6 +68,7 @@ import {
   documentParagraphLineRange,
   fuseHybridSearchChannels,
   normalizeWorkSearchQuery,
+  type DocumentParagraphLineRange,
   type HybridSearchCandidate,
   type HybridSearchMatchKind,
   type HybridSearchType
@@ -453,6 +454,7 @@ const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
 const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
+const HYBRID_CHAPTER_LINE_RANGE_FALLBACK_LIMIT = 20;
 const RELATIONSHIP_PREFILTER_DISABLE_HINT = "请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览";
 
 function relationshipCandidateLimitMessage(message: string): string {
@@ -2244,10 +2246,13 @@ export class AiManager {
       const tokens = relationshipPinyinSearchTokens(query);
       if (tokens.length === 0) return [];
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_pinyin_fts pinyin
          JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
@@ -2260,10 +2265,13 @@ export class AiManager {
       );
     } else if ([...query].length < 3) {
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_short_terms term
          JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
@@ -2275,10 +2283,13 @@ export class AiManager {
       );
     } else {
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_search_fts fts
          JOIN chapter_paragraph_search paragraph ON paragraph.id = fts.rowid
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
@@ -2291,12 +2302,14 @@ export class AiManager {
       );
     }
     const seen = new Set<string>();
+    const fallbackState = { used: 0 };
     return rows.flatMap((row): HybridSearchCandidate[] => {
       const chapterId = String(row.chapter_id ?? "");
       const key = `chapter:${chapterId}`;
       if (!chapterId || seen.has(key)) return [];
+      const range = this.hybridChapterLineRange(workId, row, fallbackState);
+      if (!range) return [];
       seen.add(key);
-      const range = documentParagraphLineRange(String(row.chapter_content ?? ""), Number(row.paragraph_order));
       return [{
         key,
         type: "chapter",
@@ -2305,9 +2318,67 @@ export class AiManager {
         subtitle: String(row.volume_title ?? ""),
         snippet: buildHybridSearchSnippet(String(row.paragraph_content ?? ""), query),
         matchKind,
-        ...(range ?? {})
+        ...range
       }];
     });
+  }
+
+  private hybridChapterLineRange(
+    workId: string,
+    row: Row,
+    fallbackState: { used: number }
+  ): DocumentParagraphLineRange | null {
+    const chapterVersion = Number(row.chapter_version);
+    const rangeVersion = Number(row.range_chapter_version);
+    const startLine = Number(row.start_line);
+    const endLine = Number(row.end_line);
+    if (
+      Number.isSafeInteger(chapterVersion)
+      && chapterVersion >= 1
+      && rangeVersion === chapterVersion
+      && Number.isSafeInteger(startLine)
+      && Number.isSafeInteger(endLine)
+      && startLine >= 1
+      && endLine >= startLine
+    ) {
+      return { startLine, endLine };
+    }
+    if (fallbackState.used >= HYBRID_CHAPTER_LINE_RANGE_FALLBACK_LIMIT) return null;
+    fallbackState.used += 1;
+    const chapterId = String(row.chapter_id ?? "");
+    const paragraphOrder = Number(row.paragraph_order);
+    const paragraphId = Number(row.paragraph_id);
+    if (!chapterId || !Number.isSafeInteger(paragraphOrder) || paragraphOrder < 0 || !Number.isSafeInteger(paragraphId) || paragraphId < 1) {
+      return null;
+    }
+    const chapter = this.store.db.get<{ content: string; version_no: number }>(
+      "SELECT content, version_no FROM chapters WHERE id = ? AND work_id = ? AND deleted_at IS NULL",
+      chapterId,
+      workId
+    );
+    if (!chapter || Number(chapter.version_no) !== chapterVersion) return null;
+    const currentRange = documentParagraphLineRange(chapter.content, paragraphOrder);
+    if (!currentRange) return null;
+    const currentParagraph = chapter.content
+      .replace(/\r\n?/gu, "\n")
+      .split("\n")
+      .slice(currentRange.startLine - 1, currentRange.endLine)
+      .join("\n")
+      .trim();
+    if (currentParagraph !== String(row.paragraph_content ?? "")) return null;
+    this.store.db.run(
+      `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(paragraph_id) DO UPDATE SET
+         chapter_version = excluded.chapter_version,
+         start_line = excluded.start_line,
+         end_line = excluded.end_line`,
+      paragraphId,
+      chapterVersion,
+      currentRange.startLine,
+      currentRange.endLine
+    );
+    return currentRange;
   }
 
   private hybridIndexedSourceMatches(

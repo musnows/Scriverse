@@ -3183,6 +3183,31 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-Scriverse-API-Key", firstKey)
       .send({ content: "API Key 修改后的正文。", changeNote: "CLI 调整开场正文" })
       .expect(200);
+    await request(runtime.app)
+      .get(`/api/works/${adminWorkId}/search`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(401);
+    await admin.agent
+      .get(`/api/works/${adminWorkId}/search`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(200);
+    await admin.agent
+      .get(`/api/works/${writerWorkId}/search`)
+      .query({ q: "不存在的正文", type: "chapter" })
+      .expect(200);
+    const apiKeySearch = await request(runtime.app)
+      .get(`/api/works/${adminWorkId}/search`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(200);
+    expect(apiKeySearch.body.data).toEqual([
+      expect.objectContaining({ id: chapter.body.data.id, type: "chapter", startLine: 1, endLine: 1 })
+    ]);
+    await request(runtime.app)
+      .get(`/api/works/${writerWorkId}/search`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(403);
     const versions = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/versions`)
       .set("Authorization", `Bearer ${firstKey}`)
       .expect(200);
