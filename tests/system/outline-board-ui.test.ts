@@ -20,7 +20,7 @@ describe("章节大纲看板界面", () => {
       request(runtime.app).get("/outline-board.js").expect(200)
     ]);
 
-    expect(page.text).toContain('/styles.css?v=20260814-vditor-line-number-v1');
+    expect(page.text).toContain('/styles.css?v=20260814-character-markdown-v1');
     expect(page.text).toContain('/app.js?v=20260814-draft-delete-toast-v1');
     expect(application.text).toContain('/outline-board.js?v=20260813-outline-board-page-v1');
     expect(application.text).toContain('outlineBoardRequestPath(workId, outlineBoardFilters');

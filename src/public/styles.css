@@ -3231,7 +3231,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-section-editor-title-input::placeholder { color: var(--ink); opacity: .92; }
 .character-section-editor-title-input:focus { border-color: var(--accent); box-shadow: none; }
 .character-markdown-editor { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 12px; min-height: 0; padding: 16px 22px 18px; overflow: hidden; background: var(--surface-soft); }
-.character-markdown-editor > .vditor-editor-host { width: 100%; max-width: 960px; justify-self: center; }
+.character-markdown-editor > .vditor-editor-host { width: 100%; justify-self: stretch; }
 .character-markdown-editor > .vditor-editor-host.vditor { border-color: color-mix(in srgb, var(--accent) 22%, var(--line)); box-shadow: 0 12px 34px color-mix(in srgb, var(--ink) 12%, transparent); transition: border-color .16s ease, box-shadow .16s ease; }
 .character-markdown-editor > .vditor-editor-host.vditor:focus-within { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent), 0 16px 42px color-mix(in srgb, var(--ink) 16%, transparent); }
 .character-markdown-editor-meta { display: grid; grid-template-columns: minmax(160px, .55fr) minmax(280px, 1.45fr); gap: 12px; }
