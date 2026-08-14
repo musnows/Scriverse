@@ -7536,7 +7536,7 @@ export class Store {
         COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
        FROM ai_conversations conversation
        WHERE conversation.work_id = ?
-       ORDER BY conversation.updated_at DESC, conversation.created_at DESC
+       ORDER BY conversation.is_favorite DESC, conversation.updated_at DESC, conversation.created_at DESC
        LIMIT 100`,
       workId
     ).map((row) => this.mapAiConversation(row));
@@ -7551,7 +7551,7 @@ export class Store {
         COALESCE((SELECT content FROM ai_conversation_messages message WHERE message.conversation_id = conversation.id ORDER BY message.created_at DESC, message.rowid DESC LIMIT 1), '') AS preview
        FROM ai_conversations conversation
        WHERE conversation.work_id = ?
-       ORDER BY conversation.updated_at DESC, conversation.created_at DESC${page.sql}`,
+       ORDER BY conversation.is_favorite DESC, conversation.updated_at DESC, conversation.created_at DESC${page.sql}`,
       workId,
       ...page.params
     );
@@ -7803,6 +7803,35 @@ export class Store {
       this.syncAiHistorySearchShortTermsForSource("conversation", conversationId);
     });
     return this.getAiConversation(conversationId);
+  }
+
+  setAiConversationFavorite(conversationId: string, isFavorite: boolean): Record<string, unknown> {
+    const conversation = this.db.get("SELECT id, work_id, is_favorite FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    const workId = requiredString(conversation, "work_id");
+    const previousFavorite = booleanValue(conversation, "is_favorite");
+    if (previousFavorite === isFavorite) return this.getAiConversationSummary(conversationId);
+    this.db.transaction(() => {
+      this.db.run("UPDATE ai_conversations SET is_favorite = ? WHERE id = ?", isFavorite ? 1 : 0, conversationId);
+      this.audit(workId, "ai-conversation.favorite-updated", "ai-conversation", conversationId, {
+        previousFavorite,
+        isFavorite
+      });
+    });
+    return this.getAiConversationSummary(conversationId);
+  }
+
+  deleteAiConversation(conversationId: string): void {
+    const conversation = this.db.get("SELECT id, work_id, is_favorite FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (booleanValue(conversation, "is_favorite")) {
+      throw new AppError(409, "AI_CONVERSATION_FAVORITED", "收藏的对话不能清理，请先取消收藏");
+    }
+    const workId = requiredString(conversation, "work_id");
+    this.db.transaction(() => {
+      this.db.run("DELETE FROM ai_conversations WHERE id = ?", conversationId);
+      this.audit(workId, "ai-conversation.deleted", "ai-conversation", conversationId, {});
+    });
   }
 
   setAiConversationRoleplayCharacter(conversationId: string, characterId: string | null): Record<string, unknown> {
@@ -8318,6 +8347,7 @@ export class Store {
       id: requiredString(row, "id"),
       workId: requiredString(row, "work_id"),
       title: requiredString(row, "title"),
+      isFavorite: booleanValue(row, "is_favorite"),
       messageCount: numberValue(row, "message_count"),
       preview: requiredString(row, "preview"),
       compactedMessageCount: numberValue(row, "compacted_message_count"),

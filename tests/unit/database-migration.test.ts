@@ -313,10 +313,12 @@ describe("数据库版本化迁移", () => {
         "system_clock_text",
         "roleplay_character_id",
         "task_type",
-        "context_scope_json"
+        "context_scope_json",
+        "is_favorite"
       ])
     );
     expect(first.all("PRAGMA index_list(ai_conversations)").some((index) => index.name === "idx_ai_conversations_roleplay_character")).toBe(true);
+    expect(first.all("PRAGMA index_list(ai_conversations)").some((index) => index.name === "idx_ai_conversations_favorite")).toBe(true);
     expect(first.all("PRAGMA table_info(user_api_keys)").map((column) => column.name)).toEqual(
       expect.arrayContaining(["user_id", "key_hash", "key_prefix", "created_at", "rotated_at", "last_used_at"])
     );
