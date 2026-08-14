@@ -11945,7 +11945,7 @@ function knowledgeSectionEditorHtml(section = null) {
       <div><span class="eyebrow">${label} Markdown 设定</span><input id="knowledge-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建设定" aria-label="设定标题" required></div>
       <button class="entity-editor-back" type="button" data-knowledge-section-edit-close>返回设定列表</button>
     </header>
-    <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
+    <section class="character-markdown-editor knowledge-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
       <div id="knowledge-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
       <div class="character-markdown-editor-footer">
         <div class="character-markdown-editor-actions"><button type="button" data-knowledge-section-edit-cancel>取消</button><button type="button" class="primary-button" data-knowledge-section-edit-save>${section ? "保存设定" : "添加设定"}</button></div>
