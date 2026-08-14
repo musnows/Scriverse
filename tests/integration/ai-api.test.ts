@@ -166,6 +166,27 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(secondPage.body.data.items).toHaveLength(1);
   });
 
+  it("收藏对话后置顶历史并禁止清理", async () => {
+    const first = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "待收藏对话" }).expect(201);
+    const second = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ title: "普通对话" }).expect(201);
+    const firstId = String(first.body.data.id);
+    const secondId = String(second.body.data.id);
+
+    const favorited = await request(runtime.app).patch(`/api/ai-conversations/${firstId}/favorite`).send({ isFavorite: true }).expect(200);
+    expect(favorited.body.data).toMatchObject({ id: firstId, isFavorite: true });
+    const listed = await request(runtime.app).get(`/api/works/${workId}/ai-conversations`).expect(200);
+    expect(listed.body.data.items.slice(0, 2).map((item: { id: string }) => item.id)).toEqual([firstId, secondId]);
+
+    const protectedCleanup = await request(runtime.app).delete(`/api/ai-conversations/${firstId}`).expect(409);
+    expect(protectedCleanup.body.error).toMatchObject({
+      code: "AI_CONVERSATION_FAVORITED",
+      message: "收藏的对话不能清理，请先取消收藏"
+    });
+    await request(runtime.app).patch(`/api/ai-conversations/${firstId}/favorite`).send({ isFavorite: false }).expect(200);
+    await request(runtime.app).delete(`/api/ai-conversations/${firstId}`).expect(200);
+    await request(runtime.app).get(`/api/ai-conversations/${firstId}`).expect(404);
+  });
+
   it("将单个 AI 对话安全导出为与消息顺序一致的 Markdown", async () => {
     await configureAi();
     const created = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({

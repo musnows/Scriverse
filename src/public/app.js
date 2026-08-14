@@ -2144,11 +2144,27 @@ function closeAiHistoryActionMenu(restoreFocus = false) {
   aiHistoryActionAnchor = null;
 }
 
+function syncAiHistoryActionMenu(conversation) {
+  const menu = $("#ai-history-action-menu");
+  const isFavorite = conversation?.isFavorite === true;
+  const favorite = menu.querySelector('[data-ai-history-action="favorite"]');
+  const favoriteLabel = favorite?.querySelector("span");
+  const favoriteHint = favorite?.querySelector("small");
+  if (favoriteLabel) favoriteLabel.textContent = isFavorite ? "取消收藏" : "收藏对话";
+  if (favoriteHint) favoriteHint.textContent = isFavorite ? "取消收藏后才可以清理对话" : "收藏后不会被清理";
+  const deleteOption = menu.querySelector('[data-ai-history-action="delete"]');
+  if (deleteOption) {
+    deleteOption.disabled = isFavorite;
+    deleteOption.title = isFavorite ? "收藏的对话不能清理，请先取消收藏" : "清理后无法恢复";
+  }
+}
+
 function showAiHistoryActionMenu(anchor, conversation) {
   const menu = $("#ai-history-action-menu");
   closeAiHistoryActionMenu();
   aiHistoryActionConversation = conversation;
   aiHistoryActionAnchor = anchor;
+  syncAiHistoryActionMenu(conversation);
   menu.classList.remove("hidden");
   const anchorRect = anchor.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
@@ -2181,6 +2197,84 @@ async function downloadAiConversation(conversation) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
+function resetAiConversationAfterDelete() {
+  state.aiConversationId = null;
+  state.aiConversationModelId = null;
+  state.aiPromptSent = false;
+  state.aiCitations = [];
+  state.aiReferences = [];
+  applyAiConversationTaskType("chat");
+  applyAiConversationContextScope({ type: "none" });
+  applyAiRoleplayCharacter(null);
+  $("#ai-conversation-title").textContent = "新对话";
+  resetAiFeed();
+  hideAiContextWarning();
+  resetAiContextMeter();
+  setAiPromptText("");
+  renderAiCitations();
+  renderAiReferences();
+  renderAiQuickActions();
+}
+
+async function favoriteAiConversation(conversation) {
+  const updated = await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: conversation.isFavorite !== true }
+  });
+  upsertAiConversationSummary(updated);
+  toast(updated.isFavorite ? "对话已收藏" : "已取消收藏");
+}
+
+async function deleteAiConversation(conversation) {
+  if (conversation.isFavorite === true) {
+    toast("收藏的对话不能清理，请先取消收藏", "error");
+    return;
+  }
+  if (!await confirmToast(`清理“${conversation.title}”后，对话及其消息将无法恢复。确认继续吗？`, {
+    title: "清理对话",
+    confirmLabel: "确认清理"
+  })) return;
+  await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}`, { method: "DELETE" });
+  state.aiConversations = state.aiConversations.filter((item) => item.id !== conversation.id);
+  if (state.aiConversationId === conversation.id) resetAiConversationAfterDelete();
+  renderAiConversationHistory();
+  toast("对话已清理");
+}
+
+const aiConversationTaskTypeLabels = {
+  chat: "问答",
+  roleplay: "角色扮演",
+  continue: "续写",
+  polish: "润色选中文本"
+};
+
+function aiConversationTaskTypeLabel(taskType) {
+  return aiConversationTaskTypeLabels[String(taskType)] ?? aiConversationTaskTypeLabels.chat;
+}
+
+function aiConversationContextScopeLabel(scope) {
+  const normalizedScope = scope && typeof scope === "object" ? scope : {};
+  if (normalizedScope.type === "chapter" && normalizedScope.includeBookSummary === true) return "当前章节 + 全书概要";
+  return {
+    none: "无上下文",
+    chapter: "当前章节",
+    volume: "当前卷",
+    book: "全书",
+    "settings-catalog": "设定库"
+  }[String(normalizedScope.type)] ?? "无上下文";
+}
+
+function aiConversationHistoryMeta(conversation) {
+  const parts = [
+    `${Number(conversation.messageCount ?? 0)} 条`,
+    aiConversationTaskTypeLabel(conversation.taskType),
+    aiConversationContextScopeLabel(conversation.contextScope)
+  ];
+  if (conversation.roleplayCharacter?.name) parts.push(`扮演 ${conversation.roleplayCharacter.name}`);
+  parts.push(formatDateTime(conversation.updatedAt));
+  return parts.join(" · ");
+}
+
 function renderAiConversationHistory() {
   closeAiHistoryActionMenu();
   const host = $("#ai-history-list");
@@ -2202,11 +2296,21 @@ function renderAiConversationHistory() {
     button.type = "button";
     button.className = `ai-history-item${conversation.id === state.aiConversationId ? " is-active" : ""}`;
     button.dataset.aiConversationId = conversation.id;
+    const titleRow = document.createElement("span");
+    titleRow.className = "ai-history-title-row";
     const title = document.createElement("strong");
     title.textContent = conversation.title;
+    titleRow.append(title);
+    if (conversation.isFavorite === true) {
+      const favorite = document.createElement("small");
+      favorite.className = "ai-history-favorite";
+      favorite.textContent = "已收藏";
+      favorite.setAttribute("aria-label", "已收藏");
+      titleRow.append(favorite);
+    }
     const meta = document.createElement("small");
-    meta.textContent = `${conversation.messageCount} 条${conversation.roleplayCharacter?.name ? ` · 扮演 ${conversation.roleplayCharacter.name}` : ""} · ${formatDateTime(conversation.updatedAt)}`;
-    button.append(title, meta);
+    meta.textContent = aiConversationHistoryMeta(conversation);
+    button.append(titleRow, meta);
     button.addEventListener("click", () => openAiConversation(conversation.id));
     const more = document.createElement("button");
     more.type = "button";
@@ -2419,10 +2523,35 @@ function renderAiRoleplayCharacterSelect() {
   const canSelectCharacter = Boolean(state.work)
     && canReadModule("characters")
     && canWritePermissionModule(state.work, "ai-chat");
-  select.disabled = aiInteractionBusy() || !canSelectCharacter || state.aiPromptSent;
+  select.disabled = aiInteractionBusy() || !canSelectCharacter;
   select.title = canSelectCharacter
-    ? "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
+    ? state.aiPromptSent
+      ? aiConversationOptionLockedMessage
+      : "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
     : "当前账户没有角色模块读取权限";
+}
+
+const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
+
+function notifyAiConversationOptionLocked(select) {
+  if (!state.aiPromptSent) return false;
+  const now = Date.now();
+  const lastToastAt = Number(select.dataset.lockedToastAt ?? 0);
+  if (now - lastToastAt > 500) toast(aiConversationOptionLockedMessage);
+  select.dataset.lockedToastAt = String(now);
+  return true;
+}
+
+function blockLockedAiConversationOptionInteraction(event) {
+  const select = event.currentTarget;
+  if (!notifyAiConversationOptionLocked(select)) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function blockLockedAiConversationOptionKeydown(event) {
+  if (["Tab", "Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
+  blockLockedAiConversationOptionInteraction(event);
 }
 
 function syncAiTaskOptions() {
@@ -2432,14 +2561,14 @@ function syncAiTaskOptions() {
   $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
   $("#ai-roleplay-character").classList.toggle("hidden", !roleplaySelected);
   $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
-  $("#ai-task").disabled = interactionBusy || state.aiPromptSent;
-  $("#ai-task").title = state.aiPromptSent ? "对话开始后不能切换任务类型" : "";
-  $("#ai-scope").disabled = interactionBusy || roleplaySelected || state.aiPromptSent;
+  $("#ai-task").disabled = interactionBusy;
+  $("#ai-task").title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
+  $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
-    ? "对话开始后不能切换上下文引用"
+    ? aiConversationOptionLockedMessage
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
-  $("#ai-model").disabled = interactionBusy || state.aiPromptSent;
-  $("#ai-model").title = state.aiPromptSent ? "对话开始后不能切换模型" : "";
+  $("#ai-model").disabled = interactionBusy;
+  $("#ai-model").title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -15490,13 +15619,18 @@ $("#ai-prompt").addEventListener("input", async () => {
 $("#ai-prompt").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
+for (const select of [$("#ai-task"), $("#ai-scope"), $("#ai-roleplay-character"), $("#ai-model")]) {
+  select.addEventListener("pointerdown", blockLockedAiConversationOptionInteraction);
+  select.addEventListener("click", blockLockedAiConversationOptionInteraction);
+  select.addEventListener("keydown", blockLockedAiConversationOptionKeydown);
+}
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
 $("#ai-model").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
     event.currentTarget.value = state.aiConversationModelId ?? event.currentTarget.value;
-    return toast("当前对话已经开始，请新建对话后再切换模型", "error");
+    return toast(aiConversationOptionLockedMessage);
   }
   setAiContextMeter(null);
 });
@@ -15510,6 +15644,10 @@ $("#ai-roleplay-character").addEventListener("focus", async () => {
 });
 $("#ai-roleplay-character").addEventListener("change", async (event) => {
   const select = event.currentTarget;
+  if (state.aiPromptSent) {
+    renderAiRoleplayCharacterSelect();
+    return toast(aiConversationOptionLockedMessage);
+  }
   const characterId = select.value;
   select.disabled = true;
   try {
@@ -15527,7 +15665,7 @@ $("#ai-task").addEventListener("change", async (event) => {
   const nextTaskType = select.value;
   if (state.aiPromptSent) {
     applyAiConversationTaskType(previousTaskType);
-    return toast("当前对话已经开始，请新建对话后再切换任务类型", "error");
+    return toast(aiConversationOptionLockedMessage);
   }
   applyAiConversationTaskType(nextTaskType);
   if (state.aiConversationId) {
@@ -15547,7 +15685,7 @@ $("#ai-task").addEventListener("change", async (event) => {
 $("#ai-scope").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
     applyAiConversationContextScope(state.aiContextScope);
-    return toast("当前对话已经开始，请新建对话后再切换上下文引用", "error");
+    return toast(aiConversationOptionLockedMessage);
   }
   event.currentTarget.title = "";
   setAiContextMeter(null);
@@ -15860,9 +15998,37 @@ $("#ai-history-dialog").addEventListener("cancel", (event) => {
   closeAiHistoryActionMenu(true);
 });
 $("#ai-history-action-menu").addEventListener("click", async (event) => {
-  const option = event.target.closest("[data-ai-history-action=\"export\"]");
+  const option = event.target.closest("[data-ai-history-action]");
   const conversation = aiHistoryActionConversation;
   if (!option || !conversation || option.disabled) return;
+  const action = option.dataset.aiHistoryAction;
+  if (action === "favorite") {
+    option.disabled = true;
+    try {
+      await favoriteAiConversation(conversation);
+      closeAiHistoryActionMenu(true);
+    } catch (error) {
+      toast(`对话收藏状态更新失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action === "delete") {
+    option.disabled = true;
+    try {
+      await deleteAiConversation(conversation);
+      closeAiHistoryActionMenu(true);
+    } catch (error) {
+      toast(`对话清理失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action !== "export") return;
   const label = option.querySelector("span");
   option.disabled = true;
   if (label) label.textContent = "下载中";

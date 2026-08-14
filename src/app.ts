@@ -2544,6 +2544,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     response.setHeader("Content-Disposition", aiConversationExportContentDisposition(readableConversation));
     response.send(exportAiConversationMarkdown(readableConversation));
   });
+  app.patch("/api/ai-conversations/:conversationId/favorite", (request, response) => {
+    const input = parse(z.object({ isFavorite: z.boolean() }).strict(), request.body);
+    const updated = store.setAiConversationFavorite(request.params.conversationId, input.isFavorite);
+    const permissions = requestPermissions(request, String(updated.workId));
+    data(response, redactAiConversation(updated, permissions));
+  });
+  app.delete("/api/ai-conversations/:conversationId", (request, response) => {
+    store.deleteAiConversation(request.params.conversationId);
+    data(response, { deleted: true });
+  });
   app.post("/api/ai-conversations/:conversationId/fork", (request, response) => {
     const input = parse(z.object({
       messageId: identifier,
