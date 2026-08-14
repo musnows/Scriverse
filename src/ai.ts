@@ -5367,11 +5367,7 @@ export class AiManager {
     if (name === "story_index") {
       const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
-      const tree = this.store.getWorkTree(workId);
-      const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
-      const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
-        id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
-      })));
+      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit);
       const workRecords = structuralToolResultRecords([{
         id: work.id,
         title: work.title,
@@ -5382,7 +5378,7 @@ export class AiManager {
         chapterCount: work.chapterCount,
         wordCount: work.wordCount
       }], maximumRecordChars).map((record) => ({ ...record, _toolResultSection: "work" }));
-      const chapterRecords = structuralToolResultRecords(chapters.slice(offset, offset + limit), maximumRecordChars)
+      const chapterRecords = structuralToolResultRecords(chapterPage.chapters, maximumRecordChars)
         .map((record) => ({ ...record, _toolResultSection: "chapter" }));
       const result = paginateToolResultRecords([...workRecords, ...chapterRecords], cursor, (page, pagination) => {
         const pageWork = page.flatMap((record) => {
@@ -5400,10 +5396,10 @@ export class AiManager {
           data: {
             ...(pageWork[0] ? { work: pageWork[0] } : {}),
             ...(pageWork.length > 1 ? { workFragments: pageWork } : {}),
-            totalChapters: chapters.length,
+            totalChapters: chapterPage.totalChapters,
             offset,
             chapters: pageChapters,
-            nextOffset: pagination.nextCursor === null && offset + limit < chapters.length ? offset + limit : null
+            nextOffset: pagination.nextCursor === null && offset + limit < chapterPage.totalChapters ? offset + limit : null
           },
           pagination
         };

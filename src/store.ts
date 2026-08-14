@@ -579,6 +579,17 @@ export type AiConversationTitleContext = {
   messages: Array<{ role: "user" | "assistant"; content: string }>;
 };
 
+export type StoryIndexChapterPage = {
+  totalChapters: number;
+  chapters: Array<{
+    id: string;
+    volumeTitle: string;
+    title: string;
+    versionNo: number;
+    summary: string;
+  }>;
+};
+
 type RestorableFileSnapshotChapter = {
   title: string;
   content: string;
@@ -1923,6 +1934,62 @@ export class Store {
       chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
     }));
     return { ...work, volumes, directoryPage: pageResult };
+  }
+
+  getStoryIndexChapterPage(workId: string, offset: number, limit: number): StoryIndexChapterPage {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { totalChapters: 0, chapters: [] };
+    const countRow = this.db.get(
+      `SELECT COUNT(*) AS count FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL`,
+      workId
+    );
+    const chapterRows = this.db.all(
+      `SELECT chapter.id, chapter.title, chapter.version_no, volume.title AS volume_title
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+       ORDER BY volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at
+       LIMIT ? OFFSET ?`,
+      workId,
+      limit,
+      offset
+    );
+    const chapterIds = chapterRows.map((row) => requiredString(row, "id"));
+    const summaries = new Map<string, string>();
+    if (chapterIds.length > 0) {
+      const placeholders = chapterIds.map(() => "?").join(", ");
+      const insightRows = this.db.all(
+        `SELECT insight.chapter_id, insight.summary
+         FROM chapter_insights insight
+         JOIN chapters chapter ON chapter.id = insight.chapter_id AND chapter.version_no = insight.chapter_version
+         WHERE chapter.work_id = ? AND insight.chapter_id IN (${placeholders})
+           AND NOT EXISTS (
+             SELECT 1 FROM chapter_insights newer
+             WHERE newer.chapter_id = insight.chapter_id
+               AND newer.chapter_version = insight.chapter_version
+               AND (newer.created_at > insight.created_at OR (newer.created_at = insight.created_at AND newer.id > insight.id))
+           )`,
+        workId,
+        ...chapterIds
+      );
+      for (const row of insightRows) summaries.set(requiredString(row, "chapter_id"), requiredString(row, "summary"));
+    }
+    return {
+      totalChapters: numberValue(countRow ?? {}, "count"),
+      chapters: chapterRows.map((row) => {
+        const chapterId = requiredString(row, "id");
+        return {
+          id: chapterId,
+          volumeTitle: requiredString(row, "volume_title"),
+          title: requiredString(row, "title"),
+          versionNo: numberValue(row, "version_no"),
+          summary: summaries.get(chapterId) ?? ""
+        };
+      })
+    };
   }
 
   listFileVersions(workId: string): Record<string, unknown>[] {
