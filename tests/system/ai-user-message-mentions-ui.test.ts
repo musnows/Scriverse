@@ -11,7 +11,7 @@ describe("AI 用户消息角色引用横幅", () => {
     ]);
 
     expect(page).toContain('/styles.css?v=20260814-shelf-action-height-v1');
-    expect(page).toContain('/app.js?v=20260814-toast-lifecycle-v1');
+    expect(page).toContain('/app.js?v=20260814-ai-tps-v2');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");
     expect(application).toContain("userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)");

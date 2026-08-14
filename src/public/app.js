@@ -18,7 +18,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
-import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-tps-v2";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
@@ -13518,7 +13518,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       if (suggestionFailed) setAiAssistantStatus("error");
       setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
-      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
+      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent, processDurationMs: suggestion.processDurationMs };
     }
     try {
       const request = assertAiRequestCurrent(requestHolder.snapshot);
@@ -13808,10 +13808,12 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
-        const processDurationMs = elapsedProcessTime();
+        const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
+          ? payload.processDurationMs
+          : elapsedProcessTime();
         generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, cacheHitPercent: payload.cacheHitPercent, toolCalls, processSteps, processDurationMs };
         renderAiProcessSteps(message, processSteps, true, processDurationMs);
-        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent);
+        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent, "", processDurationMs);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "request_status") {
@@ -13929,11 +13931,16 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     }
     message.append(references);
   }
-  if (role === "assistant") {
-    const processSteps = Array.isArray(metadata?.processSteps) && metadata.processSteps.length
+  const processSteps = role === "assistant"
+    ? (Array.isArray(metadata?.processSteps) && metadata.processSteps.length
       ? metadata.processSteps
-      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
-    renderAiProcessSteps(message, processSteps, true, resolveAiProcessDuration(metadata, processSteps, createdAt));
+      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall)))
+    : [];
+  const processDurationMs = role === "assistant"
+    ? resolveAiProcessDuration(metadata, processSteps, createdAt)
+    : null;
+  if (role === "assistant") {
+    renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
@@ -13943,7 +13950,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     meta.className = "message-meta";
     meta.textContent = isInterrupted
       ? formatAiStreamInterruptionMeta(interruptionCode, text.length)
-      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
+      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent, "", processDurationMs);
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
@@ -13958,7 +13965,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`, suggestion.processDurationMs))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
   attachMessageHeading(message, "助手建议", createdAt ?? undefined);
   attachAssistantCopyAction(message, suggestion.content);
   attachMessageIdentity(message, messageId);

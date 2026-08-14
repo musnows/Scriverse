@@ -21,7 +21,7 @@ describe("章节大纲看板界面", () => {
     ]);
 
     expect(page.text).toContain('/styles.css?v=20260814-shelf-action-height-v1');
-    expect(page.text).toContain('/app.js?v=20260814-toast-lifecycle-v1');
+    expect(page.text).toContain('/app.js?v=20260814-ai-tps-v2');
     expect(application.text).toContain('/outline-board.js?v=20260813-outline-board-page-v1');
     expect(application.text).toContain('outlineBoardRequestPath(workId, outlineBoardFilters');
     expect(application.text).toContain('aria-label="筛选章节大纲看板"');

@@ -2891,6 +2891,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         model: suggestion.model,
         outputTokens: suggestion.outputTokens,
         cacheHitPercent: suggestion.cacheHitPercent,
+        processDurationMs: suggestion.processDurationMs,
         chapterVersion: suggestion.chapterVersion,
         toolCalls: suggestion.toolCalls,
         processSteps: suggestion.processSteps,

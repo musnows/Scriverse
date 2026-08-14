@@ -2595,6 +2595,11 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('"outputTokens":8,"cacheHitPercent":66.7');
     expect(streamed.text).toContain('"toolCalls":[{"id":"stream-tool"');
     expect(streamed.text).toContain('"processSteps":[{"id":"process_');
+    const completePayload = JSON.parse(streamed.text.match(/event: complete\ndata: ([^\n]+)/u)?.[1] ?? "{}") as { conversationId?: string; processDurationMs?: number };
+    expect(completePayload.processDurationMs).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(completePayload.processDurationMs)).toBe(true);
+    const streamedConversation = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
+    expect(streamedConversation.body.data.messages.at(-1).metadata.processDurationMs).toBe(completePayload.processDurationMs);
     const generatedSuggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
     expect(generatedSuggestions.body.data[0].content).toBe("我先读取作品目录。已读取目录。");
 
