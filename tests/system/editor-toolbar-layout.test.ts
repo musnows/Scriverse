@@ -129,7 +129,9 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-numbers { display: none; position: absolute;');
     expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: block; }');
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-number { position: absolute;');
-    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-sv,');
+    expect(styles.text).not.toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-ir,');
+    expect(styles.text).not.toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-wysiwyg,');
+    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-sv, .vditor-editor-host.vditor.show-line-numbers .vditor-sv textarea { padding-left: 42px; }');
     expect(application.text).toContain('name: "line-number"');
     expect(application.text).toContain('function toggleVditorLineNumbers(editor)');
     expect(application.text).toContain('function updateVditorLineNumbers(editor, markdown)');
