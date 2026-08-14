@@ -7431,28 +7431,17 @@ async function deleteDraft(item) {
   if (!await confirmToast(`确认删除想法“${item.title}”吗？想法将从当前列表移除。`, {
     title: "删除想法",
     confirmLabel: "继续删除"
-  })) {
-    openDraftDialog(item);
-    return;
-  }
+  })) return;
   if (!await confirmToast(`删除想法“${item.title}”后将从想法列表移除，版本历史仍会保留。仍要删除吗？`, {
     title: "删除操作需要再次确认",
     confirmLabel: "确认删除"
-  })) {
-    openDraftDialog(item);
-    return;
-  }
+  })) return;
   try {
     await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderDrafts(moduleListPages.drafts);
     deleteToast("想法已删除");
   } catch (error) {
     toast(error.message, "error");
-    try {
-      openDraftDialog(await api(`/api/drafts/${encodeURIComponent(item.id)}`));
-    } catch (reloadError) {
-      toast(reloadError.message, "error");
-    }
   }
 }
 

@@ -19,7 +19,7 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260814-draft-dialog-v1');
+    expect(page.text).toContain('/app.js?v=20260814-draft-delete-toast-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');
@@ -53,6 +53,8 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('title: "删除操作需要再次确认"');
     expect(application.text).toContain('confirmLabel: "继续删除"');
     expect(application.text).toContain('confirmLabel: "确认删除"');
+    const deleteDraftSource = application.text.slice(application.text.indexOf("async function deleteDraft"), application.text.indexOf("function openDraftDialog"));
+    expect(deleteDraftSource).not.toContain("openDraftDialog(item)");
     expect(application.text).toContain('const titleInput = $("#dialog-title-input");');
     expect(application.text).toContain('titleInput.name = options.titleInput ? "title" : "";');
     expect(application.text).toContain('editor: true');
