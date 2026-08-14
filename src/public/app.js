@@ -7460,19 +7460,14 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
   const volumeOptions = [["", "全局（不绑定分卷）"], ...(state.work?.volumes ?? []).map((volume) => [volume.id, volume.title])];
   const settingModuleOptions = [["", "全局（不绑定设定模块）"], ...draftSettingModules];
-  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="想法操作">
-    <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
-    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
-  </section>` : "";
   const fields = field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
     + `<div class="draft-binding-field" data-draft-binding-field="prose">${field("volumeId", "绑定分卷", "select", item?.volumeId ?? "", volumeOptions)}</div>`
     + `<div class="draft-binding-field" data-draft-binding-field="setting">${field("settingModule", "绑定设定模块", "select", item?.settingModule ?? "", settingModuleOptions)}</div>`
-    + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
       attachmentModule: "drafts",
       readOnly: viewOnly
-    }) + management;
+    });
   openDialog(item ? viewOnly ? "查看想法" : "编辑想法" : "新建想法", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
@@ -7497,7 +7492,9 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     hideCancel: viewOnly,
     editor: true,
     errorPrefix: "想法保存失败：",
-    meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。"
+    meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。",
+    titleInput: { value: item?.title ?? "", readOnly: viewOnly, placeholder: "输入想法标题", label: "想法标题" },
+    dangerAction: item && !viewOnly ? { label: "删除想法", onClick: () => deleteDraft(item) } : null
   });
   const draftTypeSelect = $("#dialog-fields").querySelector('select[name="draftType"]');
   const syncDraftBindingFields = () => {
@@ -7517,9 +7514,6 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       else control.readOnly = true;
     });
   }
-  $("#dialog-fields").querySelector("[data-dialog-draft-delete]")?.addEventListener("click", () => {
-    void deleteDraft(item);
-  });
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
@@ -10853,10 +10847,18 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   const submit = $("#dialog-submit");
   const submitStatus = $("#dialog-submit-status");
   const submitStatusMessage = $("#dialog-submit-status-message");
+  const titleInput = $("#dialog-title-input");
   const submitLabel = options.submitLabel ?? "保存";
   let submitting = false;
   let disabledStates = [];
   $("#dialog-title").textContent = title;
+  $("#dialog-title").classList.toggle("hidden", Boolean(options.titleInput));
+  titleInput.classList.toggle("hidden", !options.titleInput);
+  titleInput.name = options.titleInput ? "title" : "";
+  titleInput.value = options.titleInput ? String(options.titleInput.value ?? "") : "";
+  titleInput.placeholder = options.titleInput?.placeholder ?? "";
+  titleInput.readOnly = Boolean(options.titleInput?.readOnly);
+  titleInput.setAttribute("aria-label", options.titleInput?.label ?? "记录标题");
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-meta").textContent = options.meta ?? "";
   $("#dialog-meta").classList.toggle("hidden", !options.meta);
@@ -10867,6 +10869,17 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   form.classList.remove("is-submitting");
   form.removeAttribute("aria-busy");
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
+  const dialogActions = form.querySelector(".dialog-actions");
+  dialogActions?.querySelector("[data-dialog-danger-action]")?.remove();
+  if (options.dangerAction) {
+    const dangerButton = document.createElement("button");
+    dangerButton.className = "danger-button dialog-danger-action";
+    dangerButton.type = "button";
+    dangerButton.dataset.dialogDangerAction = "";
+    dangerButton.textContent = options.dangerAction.label;
+    dangerButton.addEventListener("click", () => { void options.dangerAction.onClick(); });
+    dialogActions?.insertBefore(dangerButton, dialogActions.querySelector("[value='cancel']"));
+  }
   dialog.classList.toggle("wide-dialog", Boolean(options.wide));
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   dialog.classList.toggle("large-dialog", Boolean(options.large));
