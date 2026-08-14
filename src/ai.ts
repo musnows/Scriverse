@@ -3801,7 +3801,9 @@ export class AiManager {
     const effectiveInput = input.taskType === "continue"
       ? { ...input, scope: this.enrichContinuationScope(input.workId, input.scope, input.instruction) }
       : input;
+    const processStartedAt = process.hrtime.bigint();
     const generated = await this.generate(effectiveInput);
+    const processDurationMs = Math.min(86_400_000, Math.max(0, Math.round(Number(process.hrtime.bigint() - processStartedAt) / 1_000_000)));
     const chapter = effectiveInput.scope.chapterId ? this.store.getChapter(effectiveInput.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3824,6 +3826,7 @@ export class AiManager {
     return {
       ...this.getSuggestion(suggestionId),
       outputTokens: generated.outputTokens,
+      processDurationMs,
       ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
       toolCalls: generated.toolCalls,
       processSteps: generated.processSteps,
@@ -3851,7 +3854,9 @@ export class AiManager {
       && titleModelId
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
+    const processStartedAt = process.hrtime.bigint();
     const generated = await this.generate({ ...input, taskType: "chat" }, onDelta);
+    const processDurationMs = Math.min(86_400_000, Math.max(0, Math.round(Number(process.hrtime.bigint() - processStartedAt) / 1_000_000)));
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
     this.store.db.run(
@@ -3877,6 +3882,7 @@ export class AiManager {
         metadata: {
           ...(modelDisplayName ? { modelDisplayName } : {}),
           outputTokens: generated.outputTokens,
+          processDurationMs,
           ...(generated.reasoningContent === undefined ? {} : { reasoningContent: generated.reasoningContent }),
           ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
           toolCalls: generated.toolCalls,
@@ -3900,6 +3906,7 @@ export class AiManager {
     return {
       ...this.getSuggestion(suggestionId),
       outputTokens: generated.outputTokens,
+      processDurationMs,
       ...(generated.cacheHitPercent === undefined ? {} : { cacheHitPercent: generated.cacheHitPercent }),
       toolCalls: generated.toolCalls,
       processSteps: generated.processSteps,
