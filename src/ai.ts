@@ -2131,13 +2131,16 @@ export class AiManager {
   async searchWork(
     workId: string,
     query: string,
-    options: { type?: HybridSearchType; limit?: number; includeAgentHistory?: boolean } = {}
+    options: { type?: HybridSearchType; limit?: number; allowedTypes?: readonly HybridSearchType[] } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
     const normalizedQuery = normalizeWorkSearchQuery(query);
     if (!normalizedQuery) return [];
     const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
-    if (options.includeAgentHistory === false) requestedTypes.delete("agent-history");
+    if (options.allowedTypes) {
+      const allowedTypes = new Set(options.allowedTypes);
+      for (const type of requestedTypes) if (!allowedTypes.has(type)) requestedTypes.delete(type);
+    }
     if (requestedTypes.size === 0) return [];
     const hasIndexedSourceTypes = [...requestedTypes].some((type) => type !== "chapter" && type !== "agent-history");
     if (requestedTypes.has("chapter") || hasIndexedSourceTypes) await this.ensureRelationshipSearchIndex(workId);
@@ -2147,7 +2150,7 @@ export class AiManager {
     const metadataDetails = new Map<string, Record<string, unknown>>();
 
     const metadataCandidates = [...requestedTypes].some((type) => type !== "agent-history")
-      ? this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
+      ? this.store.search(workId, normalizedQuery, requestedTypes).flatMap((item): HybridSearchCandidate[] => {
         const type = String(item.type);
         const itemId = String(item.id ?? "");
         if (!itemId || !accepts(type)) return [];
@@ -2391,13 +2394,17 @@ export class AiManager {
     const tokens = matchKind === "exact" ? relationshipCharacterTokens(query) : relationshipPinyinSearchTokens(query);
     if (tokens.length === 0) return [];
     const table = matchKind === "exact" ? "relationship_source_exact_fts" : "relationship_source_pinyin_fts";
+    const sourceTypes = [...requestedTypes].filter((type) => type !== "chapter" && type !== "agent-history");
+    if (sourceTypes.length === 0) return [];
+    const sourceTypePlaceholders = sourceTypes.map(() => "?").join(", ");
     const rows = this.store.db.all(
       `SELECT source.source_type, source.source_id FROM ${table} search_index
        JOIN relationship_source_search source ON source.id = search_index.rowid
-       WHERE source.work_id = ? AND ${table} MATCH ?
+       WHERE source.work_id = ? AND source.source_type IN (${sourceTypePlaceholders}) AND ${table} MATCH ?
        ORDER BY bm25(${table}), source.source_type, source.source_id
        LIMIT ?`,
       workId,
+      ...sourceTypes,
       ftsPhrase(tokens),
       limit
     );

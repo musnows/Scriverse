@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from
 import type { Request, RequestHandler, Response } from "express";
 import { Database, PLATFORM_AI_WORK_ID, type Row } from "./database.js";
 import { AppError, notFound } from "./errors.js";
+import { HYBRID_SEARCH_PERMISSION_MODULES, hybridSearchPermissionModule } from "./hybrid-search.js";
 import { sanitizeRequestPath } from "./http-logging.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
@@ -1086,10 +1087,10 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
       : { anyRead: [...aiInteractionModules] };
   }
   if (/^\/api\/works\/[^/]+\/search$/u.test(pathname)) {
-    const searchType = typeof request.query.type === "string" ? request.query.type : "";
-    return searchType === "agent-history"
-      ? { read: ["ai-chat"] }
-      : { read: [...contentPermissionModules] };
+    const permissionModule = hybridSearchPermissionModule(request.query.type);
+    return permissionModule
+      ? { read: [permissionModule] }
+      : { anyRead: [...HYBRID_SEARCH_PERMISSION_MODULES] };
   }
   if (/^\/api\/works\/[^/]+\/export$/u.test(pathname)) {
     return { read: exportReadPermissionModules(request.query.format) };
