@@ -2181,6 +2181,40 @@ async function downloadAiConversation(conversation) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
+const aiConversationTaskTypeLabels = {
+  chat: "问答",
+  roleplay: "角色扮演",
+  continue: "续写",
+  polish: "润色选中文本"
+};
+
+function aiConversationTaskTypeLabel(taskType) {
+  return aiConversationTaskTypeLabels[String(taskType)] ?? aiConversationTaskTypeLabels.chat;
+}
+
+function aiConversationContextScopeLabel(scope) {
+  const normalizedScope = scope && typeof scope === "object" ? scope : {};
+  if (normalizedScope.type === "chapter" && normalizedScope.includeBookSummary === true) return "当前章节 + 全书概要";
+  return {
+    none: "无上下文",
+    chapter: "当前章节",
+    volume: "当前卷",
+    book: "全书",
+    "settings-catalog": "设定库"
+  }[String(normalizedScope.type)] ?? "无上下文";
+}
+
+function aiConversationHistoryMeta(conversation) {
+  const parts = [
+    `${Number(conversation.messageCount ?? 0)} 条`,
+    aiConversationTaskTypeLabel(conversation.taskType),
+    aiConversationContextScopeLabel(conversation.contextScope)
+  ];
+  if (conversation.roleplayCharacter?.name) parts.push(`扮演 ${conversation.roleplayCharacter.name}`);
+  parts.push(formatDateTime(conversation.updatedAt));
+  return parts.join(" · ");
+}
+
 function renderAiConversationHistory() {
   closeAiHistoryActionMenu();
   const host = $("#ai-history-list");
@@ -2205,7 +2239,7 @@ function renderAiConversationHistory() {
     const title = document.createElement("strong");
     title.textContent = conversation.title;
     const meta = document.createElement("small");
-    meta.textContent = `${conversation.messageCount} 条${conversation.roleplayCharacter?.name ? ` · 扮演 ${conversation.roleplayCharacter.name}` : ""} · ${formatDateTime(conversation.updatedAt)}`;
+    meta.textContent = aiConversationHistoryMeta(conversation);
     button.append(title, meta);
     button.addEventListener("click", () => openAiConversation(conversation.id));
     const more = document.createElement("button");

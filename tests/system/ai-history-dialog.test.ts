@@ -41,6 +41,11 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('$("#ai-history-previous").addEventListener');
     expect(application.text).toContain('$("#ai-history-next").addEventListener');
     expect(application.text).toContain('more.setAttribute("aria-haspopup", "menu")');
+    expect(application.text).toContain("function aiConversationTaskTypeLabel(taskType)");
+    expect(application.text).toContain("function aiConversationContextScopeLabel(scope)");
+    expect(application.text).toContain("meta.textContent = aiConversationHistoryMeta(conversation);");
+    expect(application.text).toContain('book: "全书"');
+    expect(application.text).toContain('chat: "问答"');
     expect(application.text).toContain('/api/ai-conversations/${encodeURIComponent(conversation.id)}/export');
     expect(application.text).toContain('label.textContent = "下载中"');
     expect(application.text).toContain('toast(`对话导出失败：${error.message}`, "error")');
