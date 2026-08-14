@@ -19,6 +19,8 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("对话开始后不能切换任务类型");
     expect(application).toContain('$("#ai-task").disabled = interactionBusy || state.aiPromptSent;');
     expect(application).toContain('$("#ai-scope").disabled = interactionBusy || roleplaySelected || state.aiPromptSent;');
+    expect(application).toContain('$("#ai-model").disabled = interactionBusy || state.aiPromptSent;');
+    expect(application).toContain("对话开始后不能切换模型");
     expect(application).toContain("对话开始后不能切换上下文引用");
     expect(application).toContain("当前对话已经开始，请新建对话后再切换任务类型");
     expect(application).toContain("角色扮演模式只使用角色自身的记忆");

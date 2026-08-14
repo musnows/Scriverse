@@ -1655,6 +1655,24 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "analysis" }).expect(400);
   });
 
+  it("对话开始后锁定实际使用模型", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({ taskType: "chat" }).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/messages`).send({
+      role: "user",
+      content: "已锁定模型的对话",
+      metadata: { modelId: "model-a" }
+    }).expect(201);
+    const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
+    expect(reloaded.body.data.modelId).toBe("model-a");
+    const changed = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
+      instruction: "尝试切换模型",
+      scope: { type: "none" },
+      modelId: "model-b",
+      conversationId: conversation.body.data.id
+    }).expect(409);
+    expect(changed.body.error.code).toBe("AI_CONVERSATION_MODEL_LOCKED");
+  });
+
   it("对话开始后锁定实际上下文引用并在分支中保留", async () => {
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({
       taskType: "chat"

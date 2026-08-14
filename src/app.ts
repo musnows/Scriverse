@@ -1194,6 +1194,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     if (!resolvedWorkId) return fullWorkModulePermissions();
     return auth.workModulePermissions(request.authUser, resolvedWorkId, request.authMethod !== "api-key") ?? fullWorkModulePermissions();
   };
+  const resolveConversationModelId = (workId: string, conversationId: string | undefined, requestedModelId: string | undefined): string | undefined => {
+    if (!conversationId) return requestedModelId;
+    const lockedModelId = store.getAiConversationLockedModelId(conversationId, workId);
+    if (lockedModelId && requestedModelId && lockedModelId !== requestedModelId) {
+      throw new AppError(409, "AI_CONVERSATION_MODEL_LOCKED", "当前对话已经锁定模型，请新建对话后再切换模型");
+    }
+    return lockedModelId ?? requestedModelId;
+  };
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const credentialVault = new CredentialVault(options.masterSecret);
   const backups = new S3BackupManager(database, credentialVault, store, attachmentStorage, {
@@ -2575,6 +2583,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       citations: z.array(z.unknown()).max(100).optional(),
       requestId: identifier.optional(),
       metadata: z.object({
+        modelId: identifier.optional(),
         modelDisplayName: z.string().max(200).optional(),
         outputTokens: z.number().int().min(0).max(10_000_000).optional(),
         cacheHitPercent: z.number().min(0).max(100).optional(),
@@ -2691,6 +2700,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       instruction: nonEmpty.max(100_000),
       scope: contextSchema,
       modelId: identifier.optional(),
+      conversationId: identifier.optional(),
       parameters: jsonObject.optional(),
       citations: aiCitationsSchema.optional()
     }), request.body);
@@ -2698,12 +2708,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     for (const citation of citations) {
       if (store.getChapter(citation.chapterId).workId !== request.params.workId) throw new AppError(400, "CITATION_WORK_MISMATCH", "引用章节不属于当前作品");
     }
+    const modelId = resolveConversationModelId(request.params.workId, input.conversationId, input.modelId);
     data(response, redactSuggestion(await ai.createSuggestion({
       workId: request.params.workId,
       taskType: input.taskType,
       instruction: instructionWithCitations(input.instruction, citations),
       scope: input.scope as ContextScope,
-      ...(input.modelId ? { modelId: input.modelId } : {}),
+      ...(modelId ? { modelId } : {}),
+      ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       ...(input.parameters ? { parameters: input.parameters } : {})
     }), requestPermissions(request, request.params.workId)), 201);
   });
@@ -2742,6 +2754,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
     }
     const conversationId = String(conversation.id);
+    const modelId = resolveConversationModelId(request.params.workId, conversationId, input.modelId);
     const permissions = requestPermissions(request, request.params.workId);
     const controller = new AbortController();
     response.on("close", () => {
@@ -2774,7 +2787,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         preparedContext = await ai.prepareConversationContext({
           conversationId,
           workId: request.params.workId,
-          modelId: input.modelId,
+          modelId,
           scope: input.scope as ContextScope,
           instruction: resolvedInstruction,
           excludeConversationMessageId: input.currentMessageId
@@ -2819,7 +2832,10 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: input.instruction,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...(mentionCharacterIds.length ? { metadata: { mentionCharacterIds } } : {})
+          ...((modelId || mentionCharacterIds.length) ? { metadata: {
+            ...(modelId ? { modelId } : {}),
+            ...(mentionCharacterIds.length ? { mentionCharacterIds } : {})
+          } } : {})
         }
       });
       streamRequestId = begun.request.id;
@@ -2874,7 +2890,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         conversationId,
         excludeConversationMessageId: currentMessageId,
         ...(currentMessageId ? { assistantMessageRequestId: `assistant:${currentMessageId}` } : {}),
-        ...(input.modelId ? { modelId: input.modelId } : {}),
+        ...(modelId ? { modelId } : {}),
         ...(input.parameters ? { parameters: input.parameters } : {})
       }, (delta) => sendEvent("delta", { delta }));
       const assistantMessageId = typeof suggestion.conversationMessage === "object" && suggestion.conversationMessage !== null
