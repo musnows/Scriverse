@@ -1876,7 +1876,7 @@ function renderMessageCardActions(message) {
     fork.className = "message-fork-button";
     fork.setAttribute("aria-label", "从此消息续写为新对话");
     fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>从此续写</span>';
-    const forkRequestId = crypto.randomUUID();
+    const forkRequestId = createAiIdempotencyKey();
     fork.addEventListener("click", async () => {
       fork.disabled = true;
       try {
