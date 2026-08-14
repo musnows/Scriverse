@@ -18,7 +18,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
-import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
@@ -156,6 +156,7 @@ const state = {
   aiTaskType: "chat",
   aiContextScope: { type: "none" },
   aiConversationId: null,
+  aiConversationModelId: null,
   aiConversations: [],
   aiRoleplayCharacter: null,
   aiLastMessageAt: null,
@@ -2324,6 +2325,7 @@ async function openAiConversation(conversationId, hideHistory = true, focusMessa
     if (String(conversation.workId ?? "") !== navigation.workId) throw new Error("AI 对话不属于当前作品");
     upsertAiConversationSummary(conversation);
     state.aiConversationId = conversation.id;
+    state.aiConversationModelId = typeof conversation.modelId === "string" ? conversation.modelId : null;
     state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
     applyAiConversationTaskType(conversation.taskType);
     applyAiConversationContextScope(conversation.contextScope);
@@ -2366,6 +2368,7 @@ function focusAiConversationMessage(messageId) {
 function applyNewAiConversation(conversation) {
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
+  state.aiConversationModelId = null;
   state.aiPromptSent = false;
   applyAiConversationTaskType(conversation.taskType);
   applyAiConversationContextScope(conversation.contextScope);
@@ -2401,7 +2404,7 @@ function renderAiRoleplayCharacterSelect() {
   const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: String(character.name)
+    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
     options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
@@ -2435,6 +2438,8 @@ function syncAiTaskOptions() {
   $("#ai-scope").title = state.aiPromptSent
     ? "对话开始后不能切换上下文引用"
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
+  $("#ai-model").disabled = interactionBusy || state.aiPromptSent;
+  $("#ai-model").title = state.aiPromptSent ? "对话开始后不能切换模型" : "";
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -5667,6 +5672,7 @@ function resetWorkScopedUiCaches() {
   state.aiReferences = [];
   state.aiPromptSent = false;
   state.aiConversationId = null;
+  state.aiConversationModelId = null;
   state.aiConversations = [];
   state.aiRoleplayCharacter = null;
   renderAiCitations();
@@ -10468,7 +10474,11 @@ function applyAiModels(models) {
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
+  if (state.aiConversationModelId && state.models.some((model) => model.id === state.aiConversationModelId)) {
+    select.value = state.aiConversationModelId;
+  }
   setAiContextMeter(null);
+  syncAiTaskOptions();
 }
 
 async function ensureAiModelsLoaded() {
@@ -13454,12 +13464,13 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
           "user",
           instruction,
           citations,
-          {},
+          { modelId },
           { signal: request.signal }
         );
         assertAiRequestCurrent(request);
         updateAiConversationSummaryFromMessage(persistedUserMessage);
         requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
+        state.aiConversationModelId = modelId;
         state.aiPromptSent = true;
         syncAiTaskOptions();
         renderAiRoleplayCharacterSelect();
@@ -13497,7 +13508,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       suggestion = await api(`/api/works/${encodeURIComponent(request.workId)}/suggestions`, {
         method: "POST",
-        body: { taskType, instruction, scope, modelId, citations },
+        body: { taskType, instruction, scope, modelId, citations, conversationId: requestHolder.snapshot.conversationId },
         signal: request.signal
       });
       assertAiRequestCurrent(request);
@@ -13507,7 +13518,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       if (suggestionFailed) setAiAssistantStatus("error");
       setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
-      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
+      assistantMetadata = { modelId, modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent, processDurationMs: suggestion.processDurationMs };
     }
     try {
       const request = assertAiRequestCurrent(requestHolder.snapshot);
@@ -13727,6 +13738,10 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           }
           requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id });
           updateAiConversationSummaryFromMessage(persistedUserMessage);
+          const lockedModelId = typeof persistedUserMessage.metadata?.modelId === "string"
+            ? persistedUserMessage.metadata.modelId
+            : typeof body.modelId === "string" ? body.modelId : null;
+          state.aiConversationModelId = lockedModelId;
           state.aiPromptSent = true;
           syncAiTaskOptions();
           renderAiRoleplayCharacterSelect();
@@ -13797,10 +13812,12 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
-        const processDurationMs = elapsedProcessTime();
+        const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
+          ? payload.processDurationMs
+          : elapsedProcessTime();
         generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, cacheHitPercent: payload.cacheHitPercent, toolCalls, processSteps, processDurationMs };
         renderAiProcessSteps(message, processSteps, true, processDurationMs);
-        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent);
+        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent, "", processDurationMs);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "request_status") {
@@ -13918,11 +13935,16 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     }
     message.append(references);
   }
-  if (role === "assistant") {
-    const processSteps = Array.isArray(metadata?.processSteps) && metadata.processSteps.length
+  const processSteps = role === "assistant"
+    ? (Array.isArray(metadata?.processSteps) && metadata.processSteps.length
       ? metadata.processSteps
-      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
-    renderAiProcessSteps(message, processSteps, true, resolveAiProcessDuration(metadata, processSteps, createdAt));
+      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall)))
+    : [];
+  const processDurationMs = role === "assistant"
+    ? resolveAiProcessDuration(metadata, processSteps, createdAt)
+    : null;
+  if (role === "assistant") {
+    renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
@@ -13932,7 +13954,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     meta.className = "message-meta";
     meta.textContent = isInterrupted
       ? formatAiStreamInterruptionMeta(interruptionCode, text.length)
-      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
+      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent, "", processDurationMs);
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
@@ -13947,7 +13969,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`, suggestion.processDurationMs))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
   attachMessageHeading(message, "助手建议", createdAt ?? undefined);
   attachAssistantCopyAction(message, suggestion.content);
   attachMessageIdentity(message, messageId);
@@ -15471,7 +15493,13 @@ $("#ai-prompt").addEventListener("focus", () => {
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
-$("#ai-model").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-model").addEventListener("change", (event) => {
+  if (state.aiPromptSent) {
+    event.currentTarget.value = state.aiConversationModelId ?? event.currentTarget.value;
+    return toast("当前对话已经开始，请新建对话后再切换模型", "error");
+  }
+  setAiContextMeter(null);
+});
 $("#ai-roleplay-character").addEventListener("focus", async () => {
   try {
     await ensureAiReferencesLoaded();

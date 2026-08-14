@@ -487,6 +487,7 @@ type AiConversationMessageInput = {
   requestId?: string;
   metadata?: {
     mentionCharacterIds?: string[];
+    modelId?: string;
     modelDisplayName?: string;
     outputTokens?: number;
     cacheHitPercent?: number;
@@ -520,7 +521,7 @@ type BeginAiConversationStreamRequestInput = {
   userMessage: {
     content: string;
     citations?: unknown[];
-    metadata?: { mentionCharacterIds?: string[] };
+    metadata?: { mentionCharacterIds?: string[]; modelId?: string };
     existingMessageId?: string;
   };
 };
@@ -7555,6 +7556,21 @@ export class Store {
     };
   }
 
+  getAiConversationLockedModelId(conversationId: string, workId: string): string | null {
+    const conversation = this.db.get("SELECT work_id FROM ai_conversations WHERE id = ?", conversationId);
+    if (!conversation) throw notFound("AI 对话");
+    if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
+    const message = this.db.get(
+      `SELECT metadata_json FROM ai_conversation_messages
+       WHERE conversation_id = ? AND role = 'user'
+       ORDER BY created_at, rowid
+       LIMIT 1`,
+      conversationId
+    );
+    const metadata = message ? json<Record<string, unknown>>(requiredString(message, "metadata_json"), {}) : {};
+    return typeof metadata.modelId === "string" && metadata.modelId.trim() ? metadata.modelId.trim() : null;
+  }
+
   getAiConversationInjectedEntities(conversationId: string, workId: string): AiInjectedEntities {
     const conversation = this.db.get("SELECT work_id, injected_entities_json FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
@@ -8154,6 +8170,19 @@ export class Store {
 
   private mapAiConversation(row: Row): Record<string, unknown> {
     const roleplayCharacterId = optionalString(row, "roleplay_character_id");
+    const firstUserMessage = this.db.get(
+      `SELECT metadata_json FROM ai_conversation_messages
+       WHERE conversation_id = ? AND role = 'user'
+       ORDER BY created_at, rowid
+       LIMIT 1`,
+      requiredString(row, "id")
+    );
+    const firstUserMetadata = firstUserMessage
+      ? json<Record<string, unknown>>(requiredString(firstUserMessage, "metadata_json"), {})
+      : {};
+    const lockedModelId = typeof firstUserMetadata.modelId === "string" && firstUserMetadata.modelId.trim()
+      ? firstUserMetadata.modelId.trim()
+      : null;
     const roleplayCharacter = roleplayCharacterId
       ? this.db.get("SELECT id, name, code FROM characters WHERE id = ? AND work_id = ?", roleplayCharacterId, requiredString(row, "work_id"))
       : undefined;
@@ -8167,6 +8196,7 @@ export class Store {
       hasCompactedSummary: Boolean(requiredString(row, "compacted_summary")),
       contextWarningPending: Boolean(optionalString(row, "context_warning_at")),
       taskType: optionalString(row, "task_type") ?? (roleplayCharacterId ? "roleplay" : "chat"),
+      ...(lockedModelId ? { modelId: lockedModelId } : {}),
       contextScope: json<ContextScope>(optionalString(row, "context_scope_json") ?? "", { type: "none" }),
       roleplayCharacter: roleplayCharacter ? {
         id: requiredString(roleplayCharacter, "id"),
