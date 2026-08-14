@@ -5874,7 +5874,7 @@ export class Store {
   searchCharacterProfileSections(workId: string, query: string, limit = 20): Record<string, unknown>[] {
     this.getWork(workId);
     const normalized = normalizeDocumentSearchText(query);
-    const columns = `SELECT section.*, character.name AS character_name
+    const columns = `SELECT section.*, character.name AS character_name, character.is_dead AS character_is_dead
       FROM character_profile_section_search search
       JOIN character_profile_sections section ON section.id = search.section_id
       JOIN characters character ON character.id = search.character_id`;
@@ -5896,7 +5896,11 @@ export class Store {
         `"${normalized.replaceAll('"', '""')}"`,
         limit
       );
-    return rows.map((row) => ({ ...this.mapCharacterProfileSection(row), characterName: requiredString(row, "character_name") }));
+    return rows.map((row) => ({
+      ...this.mapCharacterProfileSection(row),
+      characterName: requiredString(row, "character_name"),
+      isDead: booleanValue(row, "character_is_dead")
+    }));
   }
 
   private mapAttachment(row: Row): Record<string, unknown> {
@@ -9896,7 +9900,7 @@ export class Store {
         title: `${String(section.characterName)} / ${String(section.title)}`,
         snippet: snippet(String(section.contentMarkdown)),
         sectionType: String(section.sectionType),
-        isDead: Boolean(this.getCharacter(String(section.characterId)).isDead)
+        isDead: Boolean(section.isDead)
       })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
       ...races.map((race) => {
