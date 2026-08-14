@@ -127,9 +127,13 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain('.vditor-editor-host .vditor-toolbar { display: flex; align-items: center; flex: 0 0 auto; }');
     expect(styles.text).toContain('.markdown-word-count { display: inline-flex; align-items: center; align-self: center; min-height: 28px; margin-left: 24px;');
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-numbers { display: none; position: absolute;');
+    expect(styles.text).toContain('.vditor-editor-host .vditor-line-numbers { display: none; position: absolute; z-index: 1; inset: 0 auto 0 0; width: 42px; padding: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-soft) 88%, transparent); color: var(--muted); font: 12px/1.75 var(--font-latin), monospace; text-align: center;');
     expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-line-numbers { display: block; }');
     expect(styles.text).toContain('.vditor-editor-host .vditor-line-number { position: absolute;');
-    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-sv,');
+    expect(styles.text).toContain('.vditor-editor-host .vditor-line-number { position: absolute; top: 0; right: 0; left: 0; display: block; box-sizing: border-box; overflow: hidden; padding: 0; text-align: center;');
+    expect(styles.text).not.toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-ir,');
+    expect(styles.text).not.toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-wysiwyg,');
+    expect(styles.text).toContain('.vditor-editor-host.vditor.show-line-numbers .vditor-sv, .vditor-editor-host.vditor.show-line-numbers .vditor-sv textarea { padding-left: 42px; }');
     expect(application.text).toContain('name: "line-number"');
     expect(application.text).toContain('function toggleVditorLineNumbers(editor)');
     expect(application.text).toContain('function updateVditorLineNumbers(editor, markdown)');
