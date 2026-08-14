@@ -1,14 +1,15 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { documentParagraphLineRanges } from "./hybrid-search.js";
 import { logger, sanitizeError } from "./logger.js";
 import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentParagraphs } from "./utils.js";
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 90;
+export const DATABASE_SCHEMA_VERSION = 91;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -3529,6 +3530,44 @@ export class Database {
         const foreignKeys = this.all("PRAGMA foreign_key_check");
         if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (90, ?)", new Date().toISOString());
+      });
+    }
+    if (!applied.has(91)) {
+      this.transaction(() => {
+        this.run(`CREATE TABLE IF NOT EXISTS chapter_paragraph_line_ranges (
+          paragraph_id INTEGER PRIMARY KEY REFERENCES chapter_paragraph_search(id) ON DELETE CASCADE,
+          chapter_version INTEGER NOT NULL CHECK(chapter_version >= 1),
+          start_line INTEGER NOT NULL CHECK(start_line >= 1),
+          end_line INTEGER NOT NULL CHECK(end_line >= start_line)
+        ) WITHOUT ROWID`);
+        const insertRange = this.raw.prepare(
+          `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
+           VALUES (?, ?, ?, ?)`
+        );
+        const chapters = this.all<{ id: string; content: string; version_no: number }>(
+          `SELECT DISTINCT chapter.id, chapter.content, chapter.version_no
+           FROM chapters chapter
+           JOIN chapter_paragraph_search paragraph ON paragraph.chapter_id = chapter.id
+           ORDER BY chapter.id`
+        );
+        for (const chapter of chapters) {
+          const ranges = documentParagraphLineRanges(chapter.content);
+          const paragraphs = this.all<{ id: number; paragraph_order: number }>(
+            "SELECT id, paragraph_order FROM chapter_paragraph_search WHERE chapter_id = ? ORDER BY paragraph_order",
+            chapter.id
+          );
+          for (const paragraph of paragraphs) {
+            const range = ranges[paragraph.paragraph_order];
+            if (range) insertRange.run(paragraph.id, chapter.version_no, range.startLine, range.endLine);
+          }
+        }
+        const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+        if (integrity.some((row) => row.integrity_check !== "ok")) {
+          throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+        }
+        const foreignKeys = this.all("PRAGMA foreign_key_check");
+        if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (91, ?)", new Date().toISOString());
       });
     }
   }

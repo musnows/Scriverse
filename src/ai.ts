@@ -65,9 +65,10 @@ import {
   HYBRID_SEARCH_TYPES,
   MAXIMUM_WORK_SEARCH_QUERY_LENGTH,
   buildHybridSearchSnippet,
-  documentParagraphLineRange,
+  documentParagraphLineRangesFromLines,
   fuseHybridSearchChannels,
   normalizeWorkSearchQuery,
+  type DocumentParagraphLineRange,
   type HybridSearchCandidate,
   type HybridSearchMatchKind,
   type HybridSearchType
@@ -454,6 +455,38 @@ const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
 const RELATIONSHIP_PREFILTER_DISABLE_HINT = "请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览";
+
+type HybridChapterLineRangeFallbackChapter = {
+  chapterVersion: number;
+  lines: string[];
+  ranges: DocumentParagraphLineRange[];
+};
+
+type HybridChapterLineRangeFallbackState = {
+  chapters: Map<string, HybridChapterLineRangeFallbackChapter | null>;
+  attemptedCandidates: number;
+  chapterLoads: number;
+  repairedCandidates: number;
+  invalidCandidateRows: number;
+  missingChapters: number;
+  chapterVersionMismatches: number;
+  missingParagraphRanges: number;
+  paragraphContentMismatches: number;
+};
+
+function createHybridChapterLineRangeFallbackState(): HybridChapterLineRangeFallbackState {
+  return {
+    chapters: new Map(),
+    attemptedCandidates: 0,
+    chapterLoads: 0,
+    repairedCandidates: 0,
+    invalidCandidateRows: 0,
+    missingChapters: 0,
+    chapterVersionMismatches: 0,
+    missingParagraphRanges: 0,
+    paragraphContentMismatches: 0
+  };
+}
 
 function relationshipCandidateLimitMessage(message: string): string {
   return `${message}；${RELATIONSHIP_PREFILTER_DISABLE_HINT}`;
@@ -2146,6 +2179,7 @@ export class AiManager {
     const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
     const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
     const metadataDetails = new Map<string, Record<string, unknown>>();
+    const chapterLineRangeFallbackState = createHybridChapterLineRangeFallbackState();
 
     const metadataCandidates = [...requestedTypes].some((type) => type !== "agent-history")
       ? this.store.search(workId, normalizedQuery, requestedTypes).flatMap((item): HybridSearchCandidate[] => {
@@ -2169,14 +2203,19 @@ export class AiManager {
       : [];
 
     const exactCandidates = [
-      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit) : []),
+      ...(requestedTypes.has("chapter")
+        ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit, chapterLineRangeFallbackState)
+        : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit) : []),
       ...(requestedTypes.has("agent-history") ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit) : [])
     ];
     const phoneticCandidates = [
-      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit) : []),
+      ...(requestedTypes.has("chapter")
+        ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit, chapterLineRangeFallbackState)
+        : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit) : [])
     ];
+    this.logHybridChapterLineRangeFallback(workId, chapterLineRangeFallbackState);
     return fuseHybridSearchChannels([
       { weight: 1.4, candidates: metadataCandidates },
       { weight: 1, candidates: exactCandidates },
@@ -2240,17 +2279,21 @@ export class AiManager {
     workId: string,
     query: string,
     matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
-    limit: number
+    limit: number,
+    fallbackState: HybridChapterLineRangeFallbackState
   ): HybridSearchCandidate[] {
     let rows: Row[];
     if (matchKind === "phonetic") {
       const tokens = relationshipPinyinSearchTokens(query);
       if (tokens.length === 0) return [];
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_pinyin_fts pinyin
          JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
@@ -2263,10 +2306,13 @@ export class AiManager {
       );
     } else if ([...query].length < 3) {
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_short_terms term
          JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
@@ -2278,10 +2324,13 @@ export class AiManager {
       );
     } else {
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_search_fts fts
          JOIN chapter_paragraph_search paragraph ON paragraph.id = fts.rowid
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
@@ -2298,8 +2347,9 @@ export class AiManager {
       const chapterId = String(row.chapter_id ?? "");
       const key = `chapter:${chapterId}`;
       if (!chapterId || seen.has(key)) return [];
+      const range = this.hybridChapterLineRange(workId, row, fallbackState);
+      if (!range) return [];
       seen.add(key);
-      const range = documentParagraphLineRange(String(row.chapter_content ?? ""), Number(row.paragraph_order));
       return [{
         key,
         type: "chapter",
@@ -2308,9 +2358,117 @@ export class AiManager {
         subtitle: String(row.volume_title ?? ""),
         snippet: buildHybridSearchSnippet(String(row.paragraph_content ?? ""), query),
         matchKind,
-        ...(range ?? {})
+        ...range
       }];
     });
+  }
+
+  private hybridChapterLineRange(
+    workId: string,
+    row: Row,
+    fallbackState: HybridChapterLineRangeFallbackState
+  ): DocumentParagraphLineRange | null {
+    const chapterVersion = Number(row.chapter_version);
+    const rangeVersion = Number(row.range_chapter_version);
+    const startLine = Number(row.start_line);
+    const endLine = Number(row.end_line);
+    if (
+      Number.isSafeInteger(chapterVersion)
+      && chapterVersion >= 1
+      && rangeVersion === chapterVersion
+      && Number.isSafeInteger(startLine)
+      && Number.isSafeInteger(endLine)
+      && startLine >= 1
+      && endLine >= startLine
+    ) {
+      return { startLine, endLine };
+    }
+    fallbackState.attemptedCandidates += 1;
+    const chapterId = String(row.chapter_id ?? "");
+    const paragraphOrder = Number(row.paragraph_order);
+    const paragraphId = Number(row.paragraph_id);
+    if (!chapterId || !Number.isSafeInteger(paragraphOrder) || paragraphOrder < 0 || !Number.isSafeInteger(paragraphId) || paragraphId < 1) {
+      fallbackState.invalidCandidateRows += 1;
+      return null;
+    }
+    let cachedChapter = fallbackState.chapters.get(chapterId);
+    if (!fallbackState.chapters.has(chapterId)) {
+      fallbackState.chapterLoads += 1;
+      const chapter = this.store.db.get<{ content: string; version_no: number }>(
+        "SELECT content, version_no FROM chapters WHERE id = ? AND work_id = ? AND deleted_at IS NULL",
+        chapterId,
+        workId
+      );
+      if (!chapter) {
+        fallbackState.chapters.set(chapterId, null);
+        cachedChapter = null;
+      } else {
+        const lines = chapter.content.replace(/\r\n?/gu, "\n").split("\n");
+        cachedChapter = {
+          chapterVersion: Number(chapter.version_no),
+          lines,
+          ranges: documentParagraphLineRangesFromLines(lines)
+        };
+        fallbackState.chapters.set(chapterId, cachedChapter);
+      }
+    }
+    if (!cachedChapter) {
+      fallbackState.missingChapters += 1;
+      return null;
+    }
+    if (cachedChapter.chapterVersion !== chapterVersion) {
+      fallbackState.chapterVersionMismatches += 1;
+      return null;
+    }
+    const currentRange = cachedChapter.ranges[paragraphOrder];
+    if (!currentRange) {
+      fallbackState.missingParagraphRanges += 1;
+      return null;
+    }
+    const currentParagraph = cachedChapter.lines
+      .slice(currentRange.startLine - 1, currentRange.endLine)
+      .join("\n")
+      .trim();
+    if (currentParagraph !== String(row.paragraph_content ?? "")) {
+      fallbackState.paragraphContentMismatches += 1;
+      return null;
+    }
+    this.store.db.run(
+      `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(paragraph_id) DO UPDATE SET
+         chapter_version = excluded.chapter_version,
+         start_line = excluded.start_line,
+         end_line = excluded.end_line`,
+      paragraphId,
+      chapterVersion,
+      currentRange.startLine,
+      currentRange.endLine
+    );
+    fallbackState.repairedCandidates += 1;
+    return currentRange;
+  }
+
+  private logHybridChapterLineRangeFallback(workId: string, state: HybridChapterLineRangeFallbackState): void {
+    if (state.attemptedCandidates === 0) return;
+    const fields = {
+      workId,
+      attemptedCandidates: state.attemptedCandidates,
+      chapterLoads: state.chapterLoads,
+      repairedCandidates: state.repairedCandidates,
+      invalidCandidateRows: state.invalidCandidateRows,
+      missingChapters: state.missingChapters,
+      chapterVersionMismatches: state.chapterVersionMismatches,
+      missingParagraphRanges: state.missingParagraphRanges,
+      paragraphContentMismatches: state.paragraphContentMismatches
+    };
+    const failedCandidates = state.invalidCandidateRows
+      + state.missingChapters
+      + state.chapterVersionMismatches
+      + state.missingParagraphRanges
+      + state.paragraphContentMismatches;
+    if (failedCandidates > 0) logger.warn("search.chapter_line_range_fallback", fields);
+    else logger.info("search.chapter_line_range_fallback", fields);
   }
 
   private hybridIndexedSourceMatches(

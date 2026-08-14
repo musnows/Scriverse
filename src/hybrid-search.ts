@@ -153,10 +153,10 @@ export function buildHybridSearchSnippet(value: string, query: string, maximumLe
   return `${start > 0 ? "…" : ""}${excerpt}${start + safeMaximum < compact.length ? "…" : ""}`;
 }
 
-export function documentParagraphLineRange(value: string, paragraphOrder: number): { startLine: number; endLine: number } | null {
-  if (!Number.isInteger(paragraphOrder) || paragraphOrder < 0) return null;
-  const lines = value.replace(/\r\n?/gu, "\n").split("\n");
-  const ranges: Array<{ startLine: number; endLine: number }> = [];
+export type DocumentParagraphLineRange = { startLine: number; endLine: number };
+
+export function documentParagraphLineRangesFromLines(lines: readonly string[]): DocumentParagraphLineRange[] {
+  const ranges: DocumentParagraphLineRange[] = [];
   let start: number | null = null;
   for (let index = 0; index <= lines.length; index += 1) {
     const line = lines[index];
@@ -167,5 +167,14 @@ export function documentParagraphLineRange(value: string, paragraphOrder: number
       start = null;
     }
   }
-  return ranges[paragraphOrder] ?? null;
+  return ranges;
+}
+
+export function documentParagraphLineRanges(value: string): DocumentParagraphLineRange[] {
+  return documentParagraphLineRangesFromLines(value.replace(/\r\n?/gu, "\n").split("\n"));
+}
+
+export function documentParagraphLineRange(value: string, paragraphOrder: number): DocumentParagraphLineRange | null {
+  if (!Number.isInteger(paragraphOrder) || paragraphOrder < 0) return null;
+  return documentParagraphLineRanges(value)[paragraphOrder] ?? null;
 }
