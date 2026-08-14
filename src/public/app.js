@@ -2419,10 +2419,35 @@ function renderAiRoleplayCharacterSelect() {
   const canSelectCharacter = Boolean(state.work)
     && canReadModule("characters")
     && canWritePermissionModule(state.work, "ai-chat");
-  select.disabled = aiInteractionBusy() || !canSelectCharacter || state.aiPromptSent;
+  select.disabled = aiInteractionBusy() || !canSelectCharacter;
   select.title = canSelectCharacter
-    ? "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
+    ? state.aiPromptSent
+      ? aiConversationOptionLockedMessage
+      : "为当前对话选择角色卡；角色扮演时 Agent 只能查询与该角色自身有关的记忆"
     : "当前账户没有角色模块读取权限";
+}
+
+const aiConversationOptionLockedMessage = "会话选项在会话开始后不支持修改，若需要修改，请新建会话";
+
+function notifyAiConversationOptionLocked(select) {
+  if (!state.aiPromptSent) return false;
+  const now = Date.now();
+  const lastToastAt = Number(select.dataset.lockedToastAt ?? 0);
+  if (now - lastToastAt > 500) toast(aiConversationOptionLockedMessage);
+  select.dataset.lockedToastAt = String(now);
+  return true;
+}
+
+function blockLockedAiConversationOptionInteraction(event) {
+  const select = event.currentTarget;
+  if (!notifyAiConversationOptionLocked(select)) return;
+  event.preventDefault();
+  event.stopPropagation();
+}
+
+function blockLockedAiConversationOptionKeydown(event) {
+  if (["Tab", "Shift", "Control", "Alt", "Meta"].includes(event.key)) return;
+  blockLockedAiConversationOptionInteraction(event);
 }
 
 function syncAiTaskOptions() {
@@ -2432,14 +2457,14 @@ function syncAiTaskOptions() {
   $("#ai-scope").setAttribute("aria-hidden", String(roleplaySelected));
   $("#ai-roleplay-character").classList.toggle("hidden", !roleplaySelected);
   $("#ai-roleplay-character").setAttribute("aria-hidden", String(!roleplaySelected));
-  $("#ai-task").disabled = interactionBusy || state.aiPromptSent;
-  $("#ai-task").title = state.aiPromptSent ? "对话开始后不能切换任务类型" : "";
-  $("#ai-scope").disabled = interactionBusy || roleplaySelected || state.aiPromptSent;
+  $("#ai-task").disabled = interactionBusy;
+  $("#ai-task").title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
+  $("#ai-scope").disabled = interactionBusy || roleplaySelected;
   $("#ai-scope").title = state.aiPromptSent
-    ? "对话开始后不能切换上下文引用"
+    ? aiConversationOptionLockedMessage
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
-  $("#ai-model").disabled = interactionBusy || state.aiPromptSent;
-  $("#ai-model").title = state.aiPromptSent ? "对话开始后不能切换模型" : "";
+  $("#ai-model").disabled = interactionBusy;
+  $("#ai-model").title = state.aiPromptSent ? aiConversationOptionLockedMessage : "";
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -15490,13 +15515,18 @@ $("#ai-prompt").addEventListener("input", async () => {
 $("#ai-prompt").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
+for (const select of [$("#ai-task"), $("#ai-scope"), $("#ai-roleplay-character"), $("#ai-model")]) {
+  select.addEventListener("pointerdown", blockLockedAiConversationOptionInteraction);
+  select.addEventListener("click", blockLockedAiConversationOptionInteraction);
+  select.addEventListener("keydown", blockLockedAiConversationOptionKeydown);
+}
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
 $("#ai-model").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
     event.currentTarget.value = state.aiConversationModelId ?? event.currentTarget.value;
-    return toast("当前对话已经开始，请新建对话后再切换模型", "error");
+    return toast(aiConversationOptionLockedMessage);
   }
   setAiContextMeter(null);
 });
@@ -15510,6 +15540,10 @@ $("#ai-roleplay-character").addEventListener("focus", async () => {
 });
 $("#ai-roleplay-character").addEventListener("change", async (event) => {
   const select = event.currentTarget;
+  if (state.aiPromptSent) {
+    renderAiRoleplayCharacterSelect();
+    return toast(aiConversationOptionLockedMessage);
+  }
   const characterId = select.value;
   select.disabled = true;
   try {
@@ -15527,7 +15561,7 @@ $("#ai-task").addEventListener("change", async (event) => {
   const nextTaskType = select.value;
   if (state.aiPromptSent) {
     applyAiConversationTaskType(previousTaskType);
-    return toast("当前对话已经开始，请新建对话后再切换任务类型", "error");
+    return toast(aiConversationOptionLockedMessage);
   }
   applyAiConversationTaskType(nextTaskType);
   if (state.aiConversationId) {
@@ -15547,7 +15581,7 @@ $("#ai-task").addEventListener("change", async (event) => {
 $("#ai-scope").addEventListener("change", (event) => {
   if (state.aiPromptSent) {
     applyAiConversationContextScope(state.aiContextScope);
-    return toast("当前对话已经开始，请新建对话后再切换上下文引用", "error");
+    return toast(aiConversationOptionLockedMessage);
   }
   event.currentTarget.title = "";
   setAiContextMeter(null);
