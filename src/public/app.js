@@ -18,7 +18,7 @@ import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260
 import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
-import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260726-cache-hit-percent";
+import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
 import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
@@ -156,6 +156,7 @@ const state = {
   aiTaskType: "chat",
   aiContextScope: { type: "none" },
   aiConversationId: null,
+  aiConversationModelId: null,
   aiConversations: [],
   aiRoleplayCharacter: null,
   aiLastMessageAt: null,
@@ -2324,6 +2325,7 @@ async function openAiConversation(conversationId, hideHistory = true, focusMessa
     if (String(conversation.workId ?? "") !== navigation.workId) throw new Error("AI 对话不属于当前作品");
     upsertAiConversationSummary(conversation);
     state.aiConversationId = conversation.id;
+    state.aiConversationModelId = typeof conversation.modelId === "string" ? conversation.modelId : null;
     state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
     applyAiConversationTaskType(conversation.taskType);
     applyAiConversationContextScope(conversation.contextScope);
@@ -2366,6 +2368,7 @@ function focusAiConversationMessage(messageId) {
 function applyNewAiConversation(conversation) {
   upsertAiConversationSummary(conversation);
   state.aiConversationId = conversation.id;
+  state.aiConversationModelId = null;
   state.aiPromptSent = false;
   applyAiConversationTaskType(conversation.taskType);
   applyAiConversationContextScope(conversation.contextScope);
@@ -2401,7 +2404,7 @@ function renderAiRoleplayCharacterSelect() {
   const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: String(character.name)
+    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
     options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
@@ -2435,6 +2438,8 @@ function syncAiTaskOptions() {
   $("#ai-scope").title = state.aiPromptSent
     ? "对话开始后不能切换上下文引用"
     : roleplaySelected ? "角色扮演模式只使用角色自身的记忆" : "";
+  $("#ai-model").disabled = interactionBusy || state.aiPromptSent;
+  $("#ai-model").title = state.aiPromptSent ? "对话开始后不能切换模型" : "";
 }
 
 function applyAiConversationTaskType(taskType) {
@@ -3597,7 +3602,8 @@ async function refreshAuthCaptcha(target = "login") {
 }
 
 function clearAuthenticationOverlays() {
-  clearToastRegion();
+  const toastRegion = $("#toast-region");
+  toastRegion.replaceChildren();
   document.querySelectorAll("[popover]").forEach((popover) => {
     if (typeof popover.hidePopover === "function" && popover.matches(":popover-open")) popover.hidePopover();
   });
@@ -3739,47 +3745,27 @@ function raiseToastRegion() {
   region.showPopover();
 }
 
-const TOAST_DURATION_MS = 15_000;
-const toastTimers = new Map();
-
-function hideToastRegionIfEmpty() {
+function dismissDeleteToasts() {
   const region = $("#toast-region");
+  region.querySelectorAll(".delete-toast").forEach((element) => element.remove());
   if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
     region.hidePopover();
   }
 }
 
-function removeToastElement(element) {
-  const timer = toastTimers.get(element);
-  if (timer !== undefined) {
-    window.clearTimeout(timer);
-    toastTimers.delete(element);
-  }
-  element.remove();
-  hideToastRegionIfEmpty();
-}
-
-function clearToastRegion() {
-  toastTimers.forEach((timer) => window.clearTimeout(timer));
-  toastTimers.clear();
-  $("#toast-region").replaceChildren();
-  hideToastRegionIfEmpty();
-}
-
-function clearTransientToasts() {
-  const region = $("#toast-region");
-  [...region.children]
-    .filter((element) => !element.classList.contains("toast-confirmation") && !element.classList.contains("chapter-insight-toast"))
-    .forEach(removeToastElement);
+function deleteToast(message) {
+  toast(message);
+  $("#toast-region").lastElementChild?.classList.add("delete-toast");
 }
 
 function dismissChapterInsightToast() {
   chapterInsightRequestId += 1;
   const region = $("#toast-region");
-  const element = region.querySelector(".chapter-insight-toast");
-  if (element) removeToastElement(element);
+  region.querySelector(".chapter-insight-toast")?.remove();
   $("#insight-button").setAttribute("aria-expanded", "false");
-  hideToastRegionIfEmpty();
+  if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+    region.hidePopover();
+  }
 }
 
 function toast(message, type = "info") {
@@ -3792,7 +3778,12 @@ function toast(message, type = "info") {
   element.textContent = message;
   region.append(element);
   raiseToastRegion();
-  toastTimers.set(element, window.setTimeout(() => removeToastElement(element), TOAST_DURATION_MS));
+  setTimeout(() => {
+    element.remove();
+    if (!region.childElementCount && typeof region.hidePopover === "function" && region.matches(":popover-open")) {
+      region.hidePopover();
+    }
+  }, 3600);
 }
 
 async function runEntityEditorSave({ busyTarget, button, prepare, save }) {
@@ -4290,7 +4281,7 @@ async function initializePage() {
 function showShelf() {
   stopBackgroundTaskCenter();
   dismissChapterInsightToast();
-  clearTransientToasts();
+  dismissDeleteToasts();
   state.dirty = false;
   settingsReturnContext = null;
   updateDocumentTitle();
@@ -4591,7 +4582,7 @@ async function showWorkAudit() {
   workAuditRecords = [];
   workAuditNextPage = null;
   dismissChapterInsightToast();
-  clearTransientToasts();
+  dismissDeleteToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -4769,7 +4760,7 @@ function renderS3BackupTargets() {
     try {
       await api(`/api/platform/backups/targets/${encodeURIComponent(target.id)}`, { method: "DELETE" });
       await loadS3BackupData();
-      toast(`备份目标“${target.name}”已删除`);
+      deleteToast(`备份目标“${target.name}”已删除`);
     } catch (error) {
       button.disabled = false;
       toast(error.message, "error");
@@ -5137,7 +5128,7 @@ function renderMembers(members) {
       const updated = await api(`/api/works/${encodeURIComponent(work.id)}/members/${encodeURIComponent(button.dataset.removeMember)}`, { method: "DELETE" });
       renderMembers(updated);
       renderMemberSelector();
-      toast("协作者已移除");
+      deleteToast("协作者已移除");
     } catch (error) { toast(error.message, "error"); }
   }));
 }
@@ -5514,7 +5505,7 @@ async function showSettingsHub() {
     state.dirty = false;
   }
   dismissChapterInsightToast();
-  clearTransientToasts();
+  dismissDeleteToasts();
   updateDocumentTitle(state.work);
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5562,7 +5553,7 @@ async function showPlatformAi() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入平台 AI 管理将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   dismissChapterInsightToast();
-  clearTransientToasts();
+  dismissDeleteToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5585,7 +5576,7 @@ async function showPlatformUsage() {
   if (state.dirty && !(await confirmDiscardChanges("当前章节有未保存修改，进入 Token 用量面板将放弃本地修改。是否继续？"))) return false;
   state.dirty = false;
   dismissChapterInsightToast();
-  clearTransientToasts();
+  dismissDeleteToasts();
   updateDocumentTitle();
   $("#app").classList.add("shelf-mode");
   $("#shelf-view").classList.add("hidden");
@@ -5681,6 +5672,7 @@ function resetWorkScopedUiCaches() {
   state.aiReferences = [];
   state.aiPromptSent = false;
   state.aiConversationId = null;
+  state.aiConversationModelId = null;
   state.aiConversations = [];
   state.aiRoleplayCharacter = null;
   renderAiCitations();
@@ -6140,7 +6132,7 @@ async function deleteChapter(chapterId) {
     } else {
       renderTree();
     }
-    toast(`已删除章节“${chapter.title}”，正文和版本记录已保留`);
+    deleteToast(`已删除章节“${chapter.title}”，正文和版本记录已保留`);
   } catch (error) {
     resumeAutoSave();
     toast(error.message, "error");
@@ -6349,6 +6341,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
     if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
     return false;
   }
+  dismissDeleteToasts();
   if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
   cancelChapterAutoSave();
   let selectedChapter = state.chapter;
@@ -6380,7 +6373,6 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
   clearChapterLineSelection();
   scheduleChapterLineNumbers();
   dismissChapterInsightToast();
-  clearTransientToasts();
   updateChapterStats();
   if (!canEditProse()) setSaveState("正文只读");
   else if (chapterEditorReadOnly) setSaveState("阅读模式");
@@ -6899,7 +6891,7 @@ function showWelcome(hasWork = false) {
   chapterSelectionRequestId += 1;
   clearChapterForeshadowReminders({ invalidateRequest: true });
   dismissChapterInsightToast();
-  clearTransientToasts();
+  dismissDeleteToasts();
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.add("hidden");
   $("#welcome-view").classList.remove("hidden");
@@ -6944,6 +6936,7 @@ async function showModule(module) {
   }
   if (module !== "editor" && state.module === "editor" && !(await confirmDiscardChanges())) return;
   if (module !== "editor" && state.module === "editor" && state.dirty) setSaveState("已放弃修改");
+  dismissDeleteToasts();
   state.module = module;
   if (module !== "editor") {
     chapterSelectionRequestId += 1;
@@ -6963,7 +6956,6 @@ async function showModule(module) {
   }
   showSystemStatus();
   dismissChapterInsightToast();
-  clearTransientToasts();
   $("#welcome-view").classList.add("hidden");
   $("#editor-view").classList.add("hidden");
   $("#module-view").classList.remove("hidden");
@@ -7143,7 +7135,7 @@ async function deleteManagedEntity({ typeLabel, item, endpoint, refresh, warning
     await onDeleted?.();
     await refresh();
     await loadAiReferences();
-    toast(`已删除${typeLabel}“${item.name}”`);
+    deleteToast(`已删除${typeLabel}“${item.name}”`);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -7445,28 +7437,17 @@ async function deleteDraft(item) {
   if (!await confirmToast(`确认删除想法“${item.title}”吗？想法将从当前列表移除。`, {
     title: "删除想法",
     confirmLabel: "继续删除"
-  })) {
-    openDraftDialog(item);
-    return;
-  }
+  })) return;
   if (!await confirmToast(`删除想法“${item.title}”后将从想法列表移除，版本历史仍会保留。仍要删除吗？`, {
     title: "删除操作需要再次确认",
     confirmLabel: "确认删除"
-  })) {
-    openDraftDialog(item);
-    return;
-  }
+  })) return;
   try {
     await api(`/api/drafts/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderDrafts(moduleListPages.drafts);
-    toast("想法已删除");
+    deleteToast("想法已删除");
   } catch (error) {
     toast(error.message, "error");
-    try {
-      openDraftDialog(await api(`/api/drafts/${encodeURIComponent(item.id)}`));
-    } catch (reloadError) {
-      toast(reloadError.message, "error");
-    }
   }
 }
 
@@ -7474,19 +7455,14 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
   const viewOnly = readOnly || !canEditModule("drafts");
   const volumeOptions = [["", "全局（不绑定分卷）"], ...(state.work?.volumes ?? []).map((volume) => [volume.id, volume.title])];
   const settingModuleOptions = [["", "全局（不绑定设定模块）"], ...draftSettingModules];
-  const management = item && !viewOnly ? `<section class="entity-dialog-management" aria-label="想法操作">
-    <div><strong>想法操作</strong><small>删除后将从想法列表移除，版本历史仍会保留。</small></div>
-    <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-draft-delete>删除想法</button></div>
-  </section>` : "";
   const fields = field("draftType", "想法类型", "select", item?.draftType ?? "prose", [["prose", "正文想法"], ["setting", "设定想法"]])
     + `<div class="draft-binding-field" data-draft-binding-field="prose">${field("volumeId", "绑定分卷", "select", item?.volumeId ?? "", volumeOptions)}</div>`
     + `<div class="draft-binding-field" data-draft-binding-field="setting">${field("settingModule", "绑定设定模块", "select", item?.settingModule ?? "", settingModuleOptions)}</div>`
-    + field("title", "标题", "text", item?.title ?? "")
     + field("content", "内容", "markdown", item?.content ?? "", {
       placeholder: "记录尚未定稿的片段、方向或设定想法……",
       attachmentModule: "drafts",
       readOnly: viewOnly
-    }) + management;
+    });
   openDialog(item ? viewOnly ? "查看想法" : "编辑想法" : "新建想法", fields, async (form) => {
     if (viewOnly) return;
     const title = String(form.get("title") ?? "").trim();
@@ -7511,7 +7487,9 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
     hideCancel: viewOnly,
     editor: true,
     errorPrefix: "想法保存失败：",
-    meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。"
+    meta: "这里记录未确认的临时想法，可能采用，也可能永远不会写入正文或正式设定。",
+    titleInput: { value: item?.title ?? "", readOnly: viewOnly, placeholder: "输入想法标题", label: "想法标题" },
+    dangerAction: item && !viewOnly ? { label: "删除想法", onClick: () => deleteDraft(item) } : null
   });
   const draftTypeSelect = $("#dialog-fields").querySelector('select[name="draftType"]');
   const syncDraftBindingFields = () => {
@@ -7531,9 +7509,6 @@ function openDraftDialog(item = null, { readOnly = false } = {}) {
       else control.readOnly = true;
     });
   }
-  $("#dialog-fields").querySelector("[data-dialog-draft-delete]")?.addEventListener("click", () => {
-    void deleteDraft(item);
-  });
 }
 
 async function renderDrafts(page = moduleListPages.drafts) {
@@ -8015,7 +7990,7 @@ async function deleteTimelineEvent(item, page = moduleListPages.timeline) {
   try {
     await api(`/api/timeline/${encodeURIComponent(item.id)}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
     await renderTimeline(page);
-    toast(`已删除时间事件“${item.name}”`);
+    deleteToast(`已删除时间事件“${item.name}”`);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -8075,6 +8050,7 @@ async function renderTimeline(page = moduleListPages.timeline) {
   $("#module-content").querySelectorAll("[data-timeline-track-tab]").forEach((button) => button.addEventListener("click", async () => {
     const nextTrackId = button.dataset.timelineTrackTab ?? "";
     if (String(nextTrackId) === String(timelineActiveTrackId)) return;
+    dismissDeleteToasts();
     timelineActiveTrackId = nextTrackId;
     await renderTimeline(1);
   }));
@@ -10498,7 +10474,11 @@ function applyAiModels(models) {
   select.innerHTML = state.models.length
     ? state.models.map((model) => `<option value="${esc(model.id)}">${esc(modelOptionLabel(model))}</option>`).join("")
     : '<option value="">请先配置模型</option>';
+  if (state.aiConversationModelId && state.models.some((model) => model.id === state.aiConversationModelId)) {
+    select.value = state.aiConversationModelId;
+  }
   setAiContextMeter(null);
+  syncAiTaskOptions();
 }
 
 async function ensureAiModelsLoaded() {
@@ -10866,10 +10846,18 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   const submit = $("#dialog-submit");
   const submitStatus = $("#dialog-submit-status");
   const submitStatusMessage = $("#dialog-submit-status-message");
+  const titleInput = $("#dialog-title-input");
   const submitLabel = options.submitLabel ?? "保存";
   let submitting = false;
   let disabledStates = [];
   $("#dialog-title").textContent = title;
+  $("#dialog-title").classList.toggle("hidden", Boolean(options.titleInput));
+  titleInput.classList.toggle("hidden", !options.titleInput);
+  titleInput.name = options.titleInput ? "title" : "";
+  titleInput.value = options.titleInput ? String(options.titleInput.value ?? "") : "";
+  titleInput.placeholder = options.titleInput?.placeholder ?? "";
+  titleInput.readOnly = Boolean(options.titleInput?.readOnly);
+  titleInput.setAttribute("aria-label", options.titleInput?.label ?? "记录标题");
   $("#dialog-eyebrow").textContent = eyebrow;
   $("#dialog-meta").textContent = options.meta ?? "";
   $("#dialog-meta").classList.toggle("hidden", !options.meta);
@@ -10880,6 +10868,17 @@ function openDialog(title, fields, onSubmit, eyebrow = "新增", options = {}) {
   form.classList.remove("is-submitting");
   form.removeAttribute("aria-busy");
   $("#dynamic-form .dialog-actions [value='cancel']").classList.toggle("hidden", Boolean(options.hideCancel));
+  const dialogActions = form.querySelector(".dialog-actions");
+  dialogActions?.querySelector("[data-dialog-danger-action]")?.remove();
+  if (options.dangerAction) {
+    const dangerButton = document.createElement("button");
+    dangerButton.className = "danger-button dialog-danger-action";
+    dangerButton.type = "button";
+    dangerButton.dataset.dialogDangerAction = "";
+    dangerButton.textContent = options.dangerAction.label;
+    dangerButton.addEventListener("click", () => { void options.dangerAction.onClick(); });
+    dialogActions?.insertBefore(dangerButton, dialogActions.querySelector("[value='cancel']"));
+  }
   dialog.classList.toggle("wide-dialog", Boolean(options.wide));
   dialog.classList.toggle("trace-dialog", Boolean(options.trace));
   dialog.classList.toggle("large-dialog", Boolean(options.large));
@@ -11006,7 +11005,7 @@ function bindWorkCoverControls(work) {
       Object.assign(work, updated);
       refreshWorkCoverField(work);
       renderShelf();
-      toast("封面已移除");
+      deleteToast("封面已移除");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -11193,7 +11192,7 @@ async function deleteWork(work) {
       state.chapter = null;
     }
     await loadWorks();
-    toast(`作品“${work.title}”已移入回收站`);
+    deleteToast(`作品“${work.title}”已移入回收站`);
   } catch (error) {
     if (deletingCurrentWork && state.dirty) scheduleChapterAutoSave();
     toast(error.message, "error");
@@ -11263,7 +11262,7 @@ async function deleteVolume(item) {
     state.collapsedVolumeIds.delete(item.id);
     state.work = await api(`/api/works/${state.work.id}`);
     renderTree();
-    toast(`分卷“${item.title}”已移入回收站`);
+    deleteToast(`分卷“${item.title}”已移入回收站`);
   } catch (error) {
     toast(error.message, "error");
     openVolumeDialog(item);
@@ -11956,7 +11955,7 @@ function knowledgeSectionEditorHtml(section = null) {
       <div><span class="eyebrow">${label} Markdown 设定</span><input id="knowledge-section-title" class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}" placeholder="新建设定" aria-label="设定标题" required></div>
       <button class="entity-editor-back" type="button" data-knowledge-section-edit-close>返回设定列表</button>
     </header>
-    <section class="character-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
+    <section class="character-markdown-editor knowledge-markdown-editor" aria-label="${section ? "编辑" : "新建"}${label} Markdown 设定">
       <div id="knowledge-section-markdown" class="vditor-editor-host" data-vditor-editor aria-label="Markdown 编辑器"></div>
       <div class="character-markdown-editor-footer">
         <div class="character-markdown-editor-actions"><button type="button" data-knowledge-section-edit-cancel>取消</button><button type="button" class="primary-button" data-knowledge-section-edit-save>${section ? "保存设定" : "添加设定"}</button></div>
@@ -12232,7 +12231,7 @@ function renderCharacterMarkdownSections() {
       characterEditorSections = await api(`/api/characters/${characterEditorItem.id}/sections`);
       renderCharacterMarkdownSections();
       await Promise.all([renderCharacters(), loadAiReferences()]);
-      toast("人物 Markdown 章节已删除");
+      deleteToast("人物 Markdown 章节已删除");
     } catch (error) {
       button.disabled = false;
       toast(error.message, "error");
@@ -12940,7 +12939,7 @@ async function openRelationshipDialog(item, options = {}) {
     try {
       await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
       await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
-      toast(`已删除人物关系“${relationshipName}”`);
+      deleteToast(`已删除人物关系“${relationshipName}”`);
     } catch (error) {
       reopenDialog();
       toast(error.message, "error");
@@ -13465,12 +13464,13 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
           "user",
           instruction,
           citations,
-          {},
+          { modelId },
           { signal: request.signal }
         );
         assertAiRequestCurrent(request);
         updateAiConversationSummaryFromMessage(persistedUserMessage);
         requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
+        state.aiConversationModelId = modelId;
         state.aiPromptSent = true;
         syncAiTaskOptions();
         renderAiRoleplayCharacterSelect();
@@ -13508,7 +13508,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       const request = assertAiRequestCurrent(requestHolder.snapshot);
       suggestion = await api(`/api/works/${encodeURIComponent(request.workId)}/suggestions`, {
         method: "POST",
-        body: { taskType, instruction, scope, modelId, citations },
+        body: { taskType, instruction, scope, modelId, citations, conversationId: requestHolder.snapshot.conversationId },
         signal: request.signal
       });
       assertAiRequestCurrent(request);
@@ -13518,7 +13518,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       if (suggestionFailed) setAiAssistantStatus("error");
       setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
-      assistantMetadata = { modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent };
+      assistantMetadata = { modelId, modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent, processDurationMs: suggestion.processDurationMs };
     }
     try {
       const request = assertAiRequestCurrent(requestHolder.snapshot);
@@ -13738,6 +13738,10 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           }
           requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id });
           updateAiConversationSummaryFromMessage(persistedUserMessage);
+          const lockedModelId = typeof persistedUserMessage.metadata?.modelId === "string"
+            ? persistedUserMessage.metadata.modelId
+            : typeof body.modelId === "string" ? body.modelId : null;
+          state.aiConversationModelId = lockedModelId;
           state.aiPromptSent = true;
           syncAiTaskOptions();
           renderAiRoleplayCharacterSelect();
@@ -13808,10 +13812,12 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         message.querySelector(".message-heading > span").textContent = "助手";
         toolCalls = Array.isArray(payload.toolCalls) ? payload.toolCalls : toolCalls;
         processSteps = Array.isArray(payload.processSteps) ? payload.processSteps : processSteps;
-        const processDurationMs = elapsedProcessTime();
+        const processDurationMs = Number.isFinite(payload.processDurationMs) && payload.processDurationMs >= 0
+          ? payload.processDurationMs
+          : elapsedProcessTime();
         generatedMetadata = { modelDisplayName: payload.model?.displayName, outputTokens: payload.outputTokens, cacheHitPercent: payload.cacheHitPercent, toolCalls, processSteps, processDurationMs };
         renderAiProcessSteps(message, processSteps, true, processDurationMs);
-        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent);
+        meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent, "", processDurationMs);
         attachAssistantCopyAction(message, streamedText);
         scrollAiFeedToBottom();
       } else if (eventName === "request_status") {
@@ -13929,11 +13935,16 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     }
     message.append(references);
   }
-  if (role === "assistant") {
-    const processSteps = Array.isArray(metadata?.processSteps) && metadata.processSteps.length
+  const processSteps = role === "assistant"
+    ? (Array.isArray(metadata?.processSteps) && metadata.processSteps.length
       ? metadata.processSteps
-      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall));
-    renderAiProcessSteps(message, processSteps, true, resolveAiProcessDuration(metadata, processSteps, createdAt));
+      : (Array.isArray(metadata?.toolCalls) ? metadata.toolCalls : []).map((toolCall) => aiToolProcessStep(toolCall)))
+    : [];
+  const processDurationMs = role === "assistant"
+    ? resolveAiProcessDuration(metadata, processSteps, createdAt)
+    : null;
+  if (role === "assistant") {
+    renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
@@ -13943,7 +13954,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     meta.className = "message-meta";
     meta.textContent = isInterrupted
       ? formatAiStreamInterruptionMeta(interruptionCode, text.length)
-      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent);
+      : formatAiMessageMeta(modelDisplayName, outputTokens, metadata?.cacheHitPercent, "", processDurationMs);
     message.append(meta);
     attachAssistantCopyAction(message, text);
   }
@@ -13958,7 +13969,7 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
-  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
+  message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`, suggestion.processDurationMs))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
   attachMessageHeading(message, "助手建议", createdAt ?? undefined);
   attachAssistantCopyAction(message, suggestion.content);
   attachMessageIdentity(message, messageId);
@@ -14270,7 +14281,7 @@ function renderWorkRecycleBin(result) {
       });
       await loadWorkRecycleBin();
       dialog.showModal();
-      toast(`已彻底删除作品“${work.title}”`);
+      deleteToast(`已彻底删除作品“${work.title}”`);
     } catch (error) {
       dialog.showModal();
       toast(error.message, "error");
@@ -14376,7 +14387,7 @@ function renderChapterRecycleBin(result) {
       renderTree();
       await loadChapterRecycleBin();
       dialog.showModal();
-      toast(`已彻底删除分卷“${volume.title}”`);
+      deleteToast(`已彻底删除分卷“${volume.title}”`);
     } catch (error) {
       dialog.showModal();
       toast(error.message, "error");
@@ -14432,7 +14443,7 @@ function renderChapterRecycleBin(result) {
       renderTree();
       await loadChapterRecycleBin();
       dialog.showModal();
-      toast(`已彻底删除章节“${chapter.title}”`);
+      deleteToast(`已彻底删除章节“${chapter.title}”`);
     } catch (error) {
       dialog.showModal();
       toast(error.message, "error");
@@ -14937,7 +14948,7 @@ $("#avatar-remove-button").addEventListener("click", async () => {
     const updated = await api("/api/auth/avatar", { method: "DELETE" });
     applyAuthenticatedUser({ user: updated, csrfToken: state.csrfToken });
     renderProfileAvatar();
-    toast("头像已移除");
+    deleteToast("头像已移除");
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -15482,7 +15493,13 @@ $("#ai-prompt").addEventListener("focus", () => {
 $("#ai-model").addEventListener("focus", () => {
   ensureAiModelsLoaded().catch((error) => toast(`模型加载失败：${error.message}`, "error"));
 });
-$("#ai-model").addEventListener("change", () => setAiContextMeter(null));
+$("#ai-model").addEventListener("change", (event) => {
+  if (state.aiPromptSent) {
+    event.currentTarget.value = state.aiConversationModelId ?? event.currentTarget.value;
+    return toast("当前对话已经开始，请新建对话后再切换模型", "error");
+  }
+  setAiContextMeter(null);
+});
 $("#ai-roleplay-character").addEventListener("focus", async () => {
   try {
     await ensureAiReferencesLoaded();
@@ -15990,7 +16007,10 @@ document.addEventListener("visibilitychange", () => {
   if (state.user?.role === "admin" && !systemRestartDetected) void refreshS3BackupEvents();
   void refreshSystemHealth();
 });
-window.addEventListener("pagehide", clearToastRegion);
+document.addEventListener("click", (event) => {
+  if (event.target instanceof Element && event.target.closest('[role="tab"]')) dismissDeleteToasts();
+}, true);
+window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
 });

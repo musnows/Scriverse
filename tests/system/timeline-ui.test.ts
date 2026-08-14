@@ -19,7 +19,7 @@ describe("时间轴界面", () => {
       request(runtime.app).get("/styles.css").expect(200)
     ]);
 
-    expect(page.text).toContain('/app.js?v=20260814-toast-lifecycle-v1');
+    expect(page.text).toContain('/app.js?v=20260814-vditor-ui-fixes-v1');
 
     const deletionStart = application.text.indexOf("async function deleteTimelineEvent");
     const renderStart = application.text.indexOf("async function renderTimeline", deletionStart);
@@ -38,14 +38,18 @@ describe("时间轴界面", () => {
     expect(deletionSource).toContain("await renderTimeline(page)");
     expect(deletionSource).toContain('toast(error.message, "error")');
 
-    expect(application.text).toContain("const TOAST_DURATION_MS = 15_000;");
-    expect(application.text).toContain("toastTimers.set(element, window.setTimeout(() => removeToastElement(element), TOAST_DURATION_MS));");
-    expect(application.text).toContain("function clearTransientToasts()");
-    expect(application.text).toContain("window.addEventListener(\"pagehide\", clearToastRegion);");
+    expect(application.text).toContain("function dismissDeleteToasts()");
+    expect(application.text).toContain("function deleteToast(message)");
+    expect(deletionSource).toContain("deleteToast(`已删除时间事件“${item.name}”`);");
+    expect(application.text).not.toContain("TIMELINE_DELETE_TOAST_DURATION_MS");
     const showModuleStart = application.text.indexOf("async function showModule");
     const showModuleSource = application.text.slice(showModuleStart, application.text.indexOf("function emptyModule", showModuleStart));
-    expect(showModuleSource).toContain("clearTransientToasts();");
-
+    expect(showModuleSource).toContain("dismissDeleteToasts();");
+    const trackTabHandlerStart = application.text.indexOf('querySelectorAll("[data-timeline-track-tab]")');
+    const trackTabHandlerEnd = application.text.indexOf('querySelectorAll("[data-timeline-sort]")', trackTabHandlerStart);
+    expect(trackTabHandlerStart).toBeGreaterThan(-1);
+    expect(application.text.slice(trackTabHandlerStart, trackTabHandlerEnd)).toContain("dismissDeleteToasts();");
+    expect(application.text).toContain("event.target.closest('[role=\"tab\"]')");
     const renderSource = application.text.slice(renderStart, application.text.indexOf("async function renderOutlines", renderStart));
     expect(renderSource).toContain('const canEditTimeline = canEditModule("timeline")');
     expect(renderSource).toContain('canEditTimeline ? `<button class="danger-button" data-delete-timeline-event=');

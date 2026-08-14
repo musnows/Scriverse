@@ -277,7 +277,8 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain("#setting-editor-form { display: grid; grid-template-rows: auto minmax(0, 1fr);");
     expect(styles.text).toContain(".setting-editor-workspace { display: grid; grid-template-rows: minmax(0, 1fr); min-height: 0; overflow: hidden; }");
     expect(styles.text).toContain(".setting-editor-content { height: auto; min-height: 70dvh; padding: 16px; }");
-    expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host { width: 100%; max-width: 960px; justify-self: center; }");
+    expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host { width: 100%; justify-self: stretch; }");
+    expect(styles.text).toContain(".knowledge-markdown-editor { grid-template-rows: minmax(0, 1fr) auto; }");
     expect(styles.text).toContain(".character-markdown-editor > .vditor-editor-host.vditor:focus-within");
     expect(application.text).toContain('placeholder: "从这里开始写 Markdown 设定…"');
     expect(application.text).toContain('placeholder: "从这里开始写人物章节…"');
@@ -289,6 +290,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".character-section-editor-title-input");
     expect(application.text).toContain('class="character-section-editor-title-input"');
     expect(application.text).toContain('class="character-section-editor-title-input" maxlength="200" value="${esc(section?.title ?? "")}"');
+    expect(application.text).toContain('class="character-markdown-editor knowledge-markdown-editor"');
     expect(application.text).not.toContain('<label>设定标题<input id="knowledge-section-title"');
     expect(application.text).not.toContain('<label>章节标题<input id="character-section-title"');
     expect(styles.text).toContain(".character-relationship-row");
@@ -328,8 +330,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260814-shelf-action-height-v1');
-    expect(page.text).toContain('/app.js?v=20260814-toast-lifecycle-v1');
+    expect(page.text).toContain('/styles.css?v=20260814-vditor-ui-fixes-v1');
+    expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
+    expect(page.text).toContain('/app.js?v=20260814-vditor-ui-fixes-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');

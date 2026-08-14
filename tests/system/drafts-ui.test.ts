@@ -19,7 +19,7 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260814-toast-lifecycle-v1');
+    expect(page.text).toContain('/app.js?v=20260814-vditor-ui-fixes-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');
@@ -45,11 +45,18 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
     expect(application.text).toContain('markdown-editor-field${options.readOnly ? " is-read-only" : ""}');
     expect(application.text).toContain('aria-readonly="true"');
-    expect(application.text).toContain('data-dialog-draft-delete');
+    expect(application.text).not.toContain('data-dialog-draft-delete');
+    expect(application.text).toContain('dangerAction: item && !viewOnly ? { label: "删除想法", onClick: () => deleteDraft(item) } : null');
+    expect(application.text).toContain('titleInput: { value: item?.title ?? "", readOnly: viewOnly, placeholder: "输入想法标题", label: "想法标题" }');
+    expect(application.text).toContain('dialogActions?.insertBefore(dangerButton, dialogActions.querySelector("[value=\'cancel\']"))');
     expect(application.text).not.toContain('data-delete-draft');
     expect(application.text).toContain('title: "删除操作需要再次确认"');
     expect(application.text).toContain('confirmLabel: "继续删除"');
     expect(application.text).toContain('confirmLabel: "确认删除"');
+    const deleteDraftSource = application.text.slice(application.text.indexOf("async function deleteDraft"), application.text.indexOf("function openDraftDialog"));
+    expect(deleteDraftSource).not.toContain("openDraftDialog(item)");
+    expect(application.text).toContain('const titleInput = $("#dialog-title-input");');
+    expect(application.text).toContain('titleInput.name = options.titleInput ? "title" : "";');
     expect(application.text).toContain('editor: true');
     expect(application.text).toContain('dialog.classList.toggle("editor-dialog", Boolean(options.editor))');
     expect(styles.text).toContain('.draft-filter-toolbar { grid-template-columns:');
@@ -59,7 +66,9 @@ describe("想法模块界面", () => {
     expect(styles.text).toContain('.editor-dialog { width: min(1180px, 94vw); max-height: calc(100dvh - 16px); }');
     expect(styles.text).toContain('.markdown-editor-field.is-read-only .vditor-ir pre.vditor-reset[contenteditable="false"]');
     expect(styles.text).toContain('.editor-dialog .dialog-fields input[readonly]');
-    expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 76dvh;');
+    expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: min(76dvh, calc(100dvh - 214px));');
+    expect(styles.text).toContain('.editor-dialog .dialog-fields { grid-template-columns: minmax(0, 1fr); max-height: min(76dvh, calc(100dvh - 264px)); }');
+    expect(styles.text).toContain('.dialog-title-input { display: block;');
     expect(styles.text).toContain('.editor-dialog .markdown-editor-field .vditor-editor-host.vditor { min-height: clamp(420px, 56dvh, 640px) !important; }');
   });
 });
