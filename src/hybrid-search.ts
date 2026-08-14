@@ -155,8 +155,7 @@ export function buildHybridSearchSnippet(value: string, query: string, maximumLe
 
 export type DocumentParagraphLineRange = { startLine: number; endLine: number };
 
-export function documentParagraphLineRanges(value: string): DocumentParagraphLineRange[] {
-  const lines = value.replace(/\r\n?/gu, "\n").split("\n");
+export function documentParagraphLineRangesFromLines(lines: readonly string[]): DocumentParagraphLineRange[] {
   const ranges: DocumentParagraphLineRange[] = [];
   let start: number | null = null;
   for (let index = 0; index <= lines.length; index += 1) {
@@ -169,6 +168,10 @@ export function documentParagraphLineRanges(value: string): DocumentParagraphLin
     }
   }
   return ranges;
+}
+
+export function documentParagraphLineRanges(value: string): DocumentParagraphLineRange[] {
+  return documentParagraphLineRangesFromLines(value.replace(/\r\n?/gu, "\n").split("\n"));
 }
 
 export function documentParagraphLineRange(value: string, paragraphOrder: number): DocumentParagraphLineRange | null {

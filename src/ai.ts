@@ -65,7 +65,7 @@ import {
   HYBRID_SEARCH_TYPES,
   MAXIMUM_WORK_SEARCH_QUERY_LENGTH,
   buildHybridSearchSnippet,
-  documentParagraphLineRange,
+  documentParagraphLineRangesFromLines,
   fuseHybridSearchChannels,
   normalizeWorkSearchQuery,
   type DocumentParagraphLineRange,
@@ -454,8 +454,39 @@ const RELATIONSHIP_MAX_FUZZY_SOURCES = 200;
 const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
-const HYBRID_CHAPTER_LINE_RANGE_FALLBACK_LIMIT = 20;
 const RELATIONSHIP_PREFILTER_DISABLE_HINT = "请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览";
+
+type HybridChapterLineRangeFallbackChapter = {
+  chapterVersion: number;
+  lines: string[];
+  ranges: DocumentParagraphLineRange[];
+};
+
+type HybridChapterLineRangeFallbackState = {
+  chapters: Map<string, HybridChapterLineRangeFallbackChapter | null>;
+  attemptedCandidates: number;
+  chapterLoads: number;
+  repairedCandidates: number;
+  invalidCandidateRows: number;
+  missingChapters: number;
+  chapterVersionMismatches: number;
+  missingParagraphRanges: number;
+  paragraphContentMismatches: number;
+};
+
+function createHybridChapterLineRangeFallbackState(): HybridChapterLineRangeFallbackState {
+  return {
+    chapters: new Map(),
+    attemptedCandidates: 0,
+    chapterLoads: 0,
+    repairedCandidates: 0,
+    invalidCandidateRows: 0,
+    missingChapters: 0,
+    chapterVersionMismatches: 0,
+    missingParagraphRanges: 0,
+    paragraphContentMismatches: 0
+  };
+}
 
 function relationshipCandidateLimitMessage(message: string): string {
   return `${message}；${RELATIONSHIP_PREFILTER_DISABLE_HINT}`;
@@ -2148,6 +2179,7 @@ export class AiManager {
     const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
     const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
     const metadataDetails = new Map<string, Record<string, unknown>>();
+    const chapterLineRangeFallbackState = createHybridChapterLineRangeFallbackState();
 
     const metadataCandidates = [...requestedTypes].some((type) => type !== "agent-history")
       ? this.store.search(workId, normalizedQuery, requestedTypes).flatMap((item): HybridSearchCandidate[] => {
@@ -2171,14 +2203,19 @@ export class AiManager {
       : [];
 
     const exactCandidates = [
-      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit) : []),
+      ...(requestedTypes.has("chapter")
+        ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit, chapterLineRangeFallbackState)
+        : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit) : []),
       ...(requestedTypes.has("agent-history") ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit) : [])
     ];
     const phoneticCandidates = [
-      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit) : []),
+      ...(requestedTypes.has("chapter")
+        ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit, chapterLineRangeFallbackState)
+        : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit) : [])
     ];
+    this.logHybridChapterLineRangeFallback(workId, chapterLineRangeFallbackState);
     return fuseHybridSearchChannels([
       { weight: 1.4, candidates: metadataCandidates },
       { weight: 1, candidates: exactCandidates },
@@ -2242,7 +2279,8 @@ export class AiManager {
     workId: string,
     query: string,
     matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
-    limit: number
+    limit: number,
+    fallbackState: HybridChapterLineRangeFallbackState
   ): HybridSearchCandidate[] {
     let rows: Row[];
     if (matchKind === "phonetic") {
@@ -2305,7 +2343,6 @@ export class AiManager {
       );
     }
     const seen = new Set<string>();
-    const fallbackState = { used: 0 };
     return rows.flatMap((row): HybridSearchCandidate[] => {
       const chapterId = String(row.chapter_id ?? "");
       const key = `chapter:${chapterId}`;
@@ -2329,7 +2366,7 @@ export class AiManager {
   private hybridChapterLineRange(
     workId: string,
     row: Row,
-    fallbackState: { used: number }
+    fallbackState: HybridChapterLineRangeFallbackState
   ): DocumentParagraphLineRange | null {
     const chapterVersion = Number(row.chapter_version);
     const rangeVersion = Number(row.range_chapter_version);
@@ -2346,29 +2383,56 @@ export class AiManager {
     ) {
       return { startLine, endLine };
     }
-    if (fallbackState.used >= HYBRID_CHAPTER_LINE_RANGE_FALLBACK_LIMIT) return null;
-    fallbackState.used += 1;
+    fallbackState.attemptedCandidates += 1;
     const chapterId = String(row.chapter_id ?? "");
     const paragraphOrder = Number(row.paragraph_order);
     const paragraphId = Number(row.paragraph_id);
     if (!chapterId || !Number.isSafeInteger(paragraphOrder) || paragraphOrder < 0 || !Number.isSafeInteger(paragraphId) || paragraphId < 1) {
+      fallbackState.invalidCandidateRows += 1;
       return null;
     }
-    const chapter = this.store.db.get<{ content: string; version_no: number }>(
-      "SELECT content, version_no FROM chapters WHERE id = ? AND work_id = ? AND deleted_at IS NULL",
-      chapterId,
-      workId
-    );
-    if (!chapter || Number(chapter.version_no) !== chapterVersion) return null;
-    const currentRange = documentParagraphLineRange(chapter.content, paragraphOrder);
-    if (!currentRange) return null;
-    const currentParagraph = chapter.content
-      .replace(/\r\n?/gu, "\n")
-      .split("\n")
+    let cachedChapter = fallbackState.chapters.get(chapterId);
+    if (!fallbackState.chapters.has(chapterId)) {
+      fallbackState.chapterLoads += 1;
+      const chapter = this.store.db.get<{ content: string; version_no: number }>(
+        "SELECT content, version_no FROM chapters WHERE id = ? AND work_id = ? AND deleted_at IS NULL",
+        chapterId,
+        workId
+      );
+      if (!chapter) {
+        fallbackState.chapters.set(chapterId, null);
+        cachedChapter = null;
+      } else {
+        const lines = chapter.content.replace(/\r\n?/gu, "\n").split("\n");
+        cachedChapter = {
+          chapterVersion: Number(chapter.version_no),
+          lines,
+          ranges: documentParagraphLineRangesFromLines(lines)
+        };
+        fallbackState.chapters.set(chapterId, cachedChapter);
+      }
+    }
+    if (!cachedChapter) {
+      fallbackState.missingChapters += 1;
+      return null;
+    }
+    if (cachedChapter.chapterVersion !== chapterVersion) {
+      fallbackState.chapterVersionMismatches += 1;
+      return null;
+    }
+    const currentRange = cachedChapter.ranges[paragraphOrder];
+    if (!currentRange) {
+      fallbackState.missingParagraphRanges += 1;
+      return null;
+    }
+    const currentParagraph = cachedChapter.lines
       .slice(currentRange.startLine - 1, currentRange.endLine)
       .join("\n")
       .trim();
-    if (currentParagraph !== String(row.paragraph_content ?? "")) return null;
+    if (currentParagraph !== String(row.paragraph_content ?? "")) {
+      fallbackState.paragraphContentMismatches += 1;
+      return null;
+    }
     this.store.db.run(
       `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
        VALUES (?, ?, ?, ?)
@@ -2381,7 +2445,30 @@ export class AiManager {
       currentRange.startLine,
       currentRange.endLine
     );
+    fallbackState.repairedCandidates += 1;
     return currentRange;
+  }
+
+  private logHybridChapterLineRangeFallback(workId: string, state: HybridChapterLineRangeFallbackState): void {
+    if (state.attemptedCandidates === 0) return;
+    const fields = {
+      workId,
+      attemptedCandidates: state.attemptedCandidates,
+      chapterLoads: state.chapterLoads,
+      repairedCandidates: state.repairedCandidates,
+      invalidCandidateRows: state.invalidCandidateRows,
+      missingChapters: state.missingChapters,
+      chapterVersionMismatches: state.chapterVersionMismatches,
+      missingParagraphRanges: state.missingParagraphRanges,
+      paragraphContentMismatches: state.paragraphContentMismatches
+    };
+    const failedCandidates = state.invalidCandidateRows
+      + state.missingChapters
+      + state.chapterVersionMismatches
+      + state.missingParagraphRanges
+      + state.paragraphContentMismatches;
+    if (failedCandidates > 0) logger.warn("search.chapter_line_range_fallback", fields);
+    else logger.info("search.chapter_line_range_fallback", fields);
   }
 
   private hybridIndexedSourceMatches(

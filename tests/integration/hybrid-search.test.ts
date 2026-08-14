@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import type { Runtime } from "../../src/app.js";
+import { logger } from "../../src/logger.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 
 describe("作品混合检索", () => {
@@ -9,6 +10,7 @@ describe("作品混合检索", () => {
   afterEach(async () => {
     await runtime?.close();
     runtime = null;
+    vi.restoreAllMocks();
   });
 
   it("统一检索正文和全部知识类型并返回正文行号", async () => {
@@ -188,6 +190,100 @@ describe("作品混合检索", () => {
       .query({ q: "潮汐棱镜", type: "chapter" })
       .expect(200);
     expect(stale.body.data).toEqual([]);
+  });
+
+  it("旧索引回退验证超过二十个候选并按章节复用正文解析", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "超过上限验证正文。");
+    const workId = String(seeded.work.id);
+    const volumeId = String(seeded.volume.id);
+    for (let index = 2; index <= 25; index += 1) {
+      runtime.store.createChapter(workId, {
+        volumeId,
+        title: `第 ${index} 章`,
+        content: "超过上限验证正文。"
+      });
+    }
+    runtime.store.db.run(
+      `UPDATE chapter_paragraph_line_ranges SET chapter_version = chapter_version + 1
+       WHERE paragraph_id IN (SELECT id FROM chapter_paragraph_search WHERE work_id = ?)`,
+      workId
+    );
+    const getSpy = vi.spyOn(runtime.store.db, "get");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "超过上限验证", type: "chapter", limit: 50 })
+      .expect(200);
+
+    expect(response.body.data).toHaveLength(25);
+    expect(response.body.data.every((item: { startLine?: number; endLine?: number }) => item.startLine === 1 && item.endLine === 1)).toBe(true);
+    expect(getSpy.mock.calls.filter(([sql]) => String(sql).includes("SELECT content, version_no FROM chapters"))).toHaveLength(25);
+    expect(runtime.store.db.get(
+      `SELECT COUNT(*) AS count FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+       WHERE paragraph.work_id = ? AND line_range.chapter_version <> chapter.version_no`,
+      workId
+    )).toEqual({ count: 0 });
+    const fallbackLog = infoSpy.mock.calls.find(([event]) => event === "search.chapter_line_range_fallback");
+    expect(fallbackLog?.[1]).toMatchObject({
+      attemptedCandidates: 25,
+      chapterLoads: 25,
+      repairedCandidates: 25,
+      paragraphContentMismatches: 0
+    });
+    expect(JSON.stringify(fallbackLog)).not.toContain("超过上限验证正文");
+  });
+
+  it("同章重复回退只读取正文一次并记录不含正文的失败计数", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "缓存命中当前第一段。\n\n缓存命中当前第二段。");
+    const workId = String(seeded.work.id);
+    const chapterId = String(seeded.chapter.id);
+    const paragraphs = runtime.store.db.all<{ id: number; paragraph_order: number }>(
+      "SELECT id, paragraph_order FROM chapter_paragraph_search WHERE chapter_id = ? ORDER BY paragraph_order",
+      chapterId
+    );
+    runtime.store.db.run(
+      "UPDATE chapter_paragraph_search SET content = ?, search_content = ? WHERE id = ?",
+      "缓存命中过期第一段。",
+      "缓存命中过期第一段。",
+      paragraphs[0]?.id ?? 0
+    );
+    runtime.store.db.run(
+      `DELETE FROM chapter_paragraph_line_ranges
+       WHERE paragraph_id IN (SELECT id FROM chapter_paragraph_search WHERE chapter_id = ?)`,
+      chapterId
+    );
+    const getSpy = vi.spyOn(runtime.store.db, "get");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "缓存命中", type: "chapter" })
+      .expect(200);
+
+    expect(response.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 3, endLine: 3, snippet: "缓存命中当前第二段。" })
+    ]);
+    expect(getSpy.mock.calls.filter(([sql]) => String(sql).includes("SELECT content, version_no FROM chapters"))).toHaveLength(1);
+    expect(runtime.store.db.get(
+      `SELECT COUNT(*) AS count FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       WHERE paragraph.chapter_id = ?`,
+      chapterId
+    )).toEqual({ count: 1 });
+    const fallbackLog = warnSpy.mock.calls.find(([event]) => event === "search.chapter_line_range_fallback");
+    expect(fallbackLog?.[1]).toMatchObject({
+      chapterLoads: 1,
+      repairedCandidates: 1,
+      paragraphContentMismatches: expect.any(Number)
+    });
+    expect(Number(fallbackLog?.[1]?.paragraphContentMismatches)).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(fallbackLog)).not.toContain("缓存命中过期第一段");
+    expect(JSON.stringify(fallbackLog)).not.toContain("缓存命中当前第二段");
   });
 
   it("通过增量全文索引检索 Agent history，并支持短词和标题更新", async () => {

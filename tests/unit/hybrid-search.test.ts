@@ -4,6 +4,7 @@ import {
   buildHybridSearchSnippet,
   documentParagraphLineRange,
   documentParagraphLineRanges,
+  documentParagraphLineRangesFromLines,
   fuseHybridSearchChannels,
   hybridSearchPermissionModule,
   normalizeWorkSearchQuery,
@@ -91,6 +92,7 @@ describe("正文段落行定位", () => {
       { startLine: 5, endLine: 6 },
       { startLine: 8, endLine: 8 }
     ]);
+    expect(documentParagraphLineRangesFromLines(content.split("\n"))).toEqual(documentParagraphLineRanges(content));
     expect(documentParagraphLineRange(content, 0)).toEqual({ startLine: 1, endLine: 2 });
     expect(documentParagraphLineRange(content, 1)).toEqual({ startLine: 5, endLine: 6 });
     expect(documentParagraphLineRange(content, 2)).toEqual({ startLine: 8, endLine: 8 });
