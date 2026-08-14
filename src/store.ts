@@ -7603,21 +7603,51 @@ export class Store {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
-    const rows = this.db.all(
-      "SELECT id, role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+    const countRow = this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
       conversationId
     );
-    const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    const totalMessageCount = numberValue(countRow ?? {}, "count");
+    const compactedMessageCount = Math.min(totalMessageCount, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    const tailMessageCount = totalMessageCount - compactedMessageCount;
+    let rows: Row[] = [];
+    if (tailMessageCount > 0 && compactedMessageCount === 0) {
+      rows = this.db.all(
+        `SELECT id, role, content, metadata_json FROM ai_conversation_messages
+         WHERE conversation_id = ? ORDER BY created_at, rowid LIMIT ?`,
+        conversationId,
+        tailMessageCount
+      );
+    } else if (tailMessageCount > 0) {
+      const boundary = this.db.get(
+        `SELECT created_at, rowid FROM ai_conversation_messages
+         WHERE conversation_id = ? ORDER BY created_at, rowid LIMIT 1 OFFSET ?`,
+        conversationId,
+        compactedMessageCount - 1
+      );
+      if (boundary) {
+        rows = this.db.all(
+          `SELECT id, role, content, metadata_json FROM ai_conversation_messages
+           WHERE conversation_id = ?
+             AND (created_at > ? OR (created_at = ? AND rowid > ?))
+           ORDER BY created_at, rowid LIMIT ?`,
+          conversationId,
+          requiredString(boundary, "created_at"),
+          requiredString(boundary, "created_at"),
+          numberValue(boundary, "rowid"),
+          tailMessageCount
+        );
+      }
+    }
     return {
       workId,
       roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
-      totalMessageCount: rows.length,
+      totalMessageCount,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
       injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
-      messages: rows.slice(compactedMessageCount)
-        .filter((message) => requiredString(message, "id") !== excludeMessageId)
+      messages: rows.filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
           id: requiredString(message, "id"),
           role: requiredString(message, "role") === "assistant" ? "assistant" : "user",
