@@ -579,6 +579,17 @@ export type AiConversationTitleContext = {
   messages: Array<{ role: "user" | "assistant"; content: string }>;
 };
 
+export type StoryIndexChapterPage = {
+  totalChapters: number;
+  chapters: Array<{
+    id: string;
+    volumeTitle: string;
+    title: string;
+    versionNo: number;
+    summary: string;
+  }>;
+};
+
 type RestorableFileSnapshotChapter = {
   title: string;
   content: string;
@@ -1923,6 +1934,62 @@ export class Store {
       chapters: chaptersByVolume.get(requiredString(row, "id")) ?? []
     }));
     return { ...work, volumes, directoryPage: pageResult };
+  }
+
+  getStoryIndexChapterPage(workId: string, offset: number, limit: number): StoryIndexChapterPage {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { totalChapters: 0, chapters: [] };
+    const countRow = this.db.get(
+      `SELECT COUNT(*) AS count FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL`,
+      workId
+    );
+    const chapterRows = this.db.all(
+      `SELECT chapter.id, chapter.title, chapter.version_no, volume.title AS volume_title
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+       ORDER BY volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at
+       LIMIT ? OFFSET ?`,
+      workId,
+      limit,
+      offset
+    );
+    const chapterIds = chapterRows.map((row) => requiredString(row, "id"));
+    const summaries = new Map<string, string>();
+    if (chapterIds.length > 0) {
+      const placeholders = chapterIds.map(() => "?").join(", ");
+      const insightRows = this.db.all(
+        `SELECT insight.chapter_id, insight.summary
+         FROM chapter_insights insight
+         JOIN chapters chapter ON chapter.id = insight.chapter_id AND chapter.version_no = insight.chapter_version
+         WHERE chapter.work_id = ? AND insight.chapter_id IN (${placeholders})
+           AND NOT EXISTS (
+             SELECT 1 FROM chapter_insights newer
+             WHERE newer.chapter_id = insight.chapter_id
+               AND newer.chapter_version = insight.chapter_version
+               AND (newer.created_at > insight.created_at OR (newer.created_at = insight.created_at AND newer.id > insight.id))
+           )`,
+        workId,
+        ...chapterIds
+      );
+      for (const row of insightRows) summaries.set(requiredString(row, "chapter_id"), requiredString(row, "summary"));
+    }
+    return {
+      totalChapters: numberValue(countRow ?? {}, "count"),
+      chapters: chapterRows.map((row) => {
+        const chapterId = requiredString(row, "id");
+        return {
+          id: chapterId,
+          volumeTitle: requiredString(row, "volume_title"),
+          title: requiredString(row, "title"),
+          versionNo: numberValue(row, "version_no"),
+          summary: summaries.get(chapterId) ?? ""
+        };
+      })
+    };
   }
 
   listFileVersions(workId: string): Record<string, unknown>[] {
@@ -7563,21 +7630,51 @@ export class Store {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
-    const rows = this.db.all(
-      "SELECT id, role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+    const countRow = this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
       conversationId
     );
-    const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    const totalMessageCount = numberValue(countRow ?? {}, "count");
+    const compactedMessageCount = Math.min(totalMessageCount, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    const tailMessageCount = totalMessageCount - compactedMessageCount;
+    let rows: Row[] = [];
+    if (tailMessageCount > 0 && compactedMessageCount === 0) {
+      rows = this.db.all(
+        `SELECT id, role, content, metadata_json FROM ai_conversation_messages
+         WHERE conversation_id = ? ORDER BY created_at, rowid LIMIT ?`,
+        conversationId,
+        tailMessageCount
+      );
+    } else if (tailMessageCount > 0) {
+      const boundary = this.db.get(
+        `SELECT created_at, rowid FROM ai_conversation_messages
+         WHERE conversation_id = ? ORDER BY created_at, rowid LIMIT 1 OFFSET ?`,
+        conversationId,
+        compactedMessageCount - 1
+      );
+      if (boundary) {
+        rows = this.db.all(
+          `SELECT id, role, content, metadata_json FROM ai_conversation_messages
+           WHERE conversation_id = ?
+             AND (created_at > ? OR (created_at = ? AND rowid > ?))
+           ORDER BY created_at, rowid LIMIT ?`,
+          conversationId,
+          requiredString(boundary, "created_at"),
+          requiredString(boundary, "created_at"),
+          numberValue(boundary, "rowid"),
+          tailMessageCount
+        );
+      }
+    }
     return {
       workId,
       roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
-      totalMessageCount: rows.length,
+      totalMessageCount,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
       injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
-      messages: rows.slice(compactedMessageCount)
-        .filter((message) => requiredString(message, "id") !== excludeMessageId)
+      messages: rows.filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
           id: requiredString(message, "id"),
           role: requiredString(message, "role") === "assistant" ? "assistant" : "user",

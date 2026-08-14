@@ -153,18 +153,21 @@ const mockAi = createServer(async (incoming, outgoing) => {
         toolCalls(outgoing, [{ id: "multi-index", name: "story_index", arguments: { limit: 1 } }]);
         return;
       }
-      if (results.size === 1) {
+      if (results.has("multi-read")) {
+        const readData = object(object(results.get("multi-read")).data);
+        assert.match(String(object(array(readData.chapters)[0]).content), /林舟启动跃迁/u);
+        multiTurnVerified = true;
+        completion(outgoing, { content: "已先定位章节，再根据正文确认林舟启动了跃迁。" });
+        return;
+      }
+      if (results.has("multi-index")) {
         const indexData = object(object(results.get("multi-index")).data);
         const firstChapter = object(array(indexData.chapters)[0]);
         assert.equal(firstChapter.id, chapterIds[0]);
         toolCalls(outgoing, [{ id: "multi-read", name: "read_chapters", arguments: { chapterIds: [String(firstChapter.id)], include: "content" } }]);
         return;
       }
-      const readData = object(object(results.get("multi-read")).data);
-      assert.match(String(object(array(readData.chapters)[0]).content), /林舟启动跃迁/u);
-      multiTurnVerified = true;
-      completion(outgoing, { content: "已先定位章节，再根据正文确认林舟启动了跃迁。" });
-      return;
+      throw new Error("Expected multi-turn tool results were not found.");
     }
     if (joined.includes("结构化中文长期记忆")) {
       assert.equal(body.tools, undefined);
@@ -269,9 +272,13 @@ try {
   const model = await api<JsonObject>("POST", `/providers/${String(provider.id)}/models`, {
     displayName: "E2E Agent Model",
     modelId: "e2e-agent-model",
-    contextWindow: 32_768
+    contextWindow: 32_768,
+    preset: { max_tokens: 4_096 }
   });
   const modelId = String(model.id);
+  await api("PATCH", `/works/${workId}/ai-settings`, {
+    agentTools: ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts"]
+  });
 
   const matrix = await api<JsonObject>("POST", `/works/${workId}/suggestions`, {
     taskType: "chat",
@@ -380,9 +387,18 @@ try {
   assert.equal(contextUsage.compactRecommended, true);
   assert.equal(Number(contextUsage.usagePercent) >= 50, true);
   assert.equal(contextUsage.contextWarningPending, true);
-  const compacted = await api<JsonObject>("POST", `/ai-conversations/${conversationId}/context/prepare`, prepareBody);
-  assert.equal(compacted.action, "compacted");
-  assert.equal(object(compacted.compaction).compactedMessageCount, 2);
+  const ignored = await api<JsonObject>("POST", `/ai-conversations/${conversationId}/context/prepare`, {
+    ...prepareBody,
+    ignoreContextWarning: true
+  });
+  assert.equal(ignored.action, "ready");
+  assert.equal(ignored.reason, "warning_ignored");
+  const compacted = await api<JsonObject>("POST", `/ai-conversations/${conversationId}/compact`, {
+    modelId,
+    scope: prepareBody.scope
+  });
+  assert.equal(compacted.changed, true);
+  assert.equal(compacted.compactedMessageCount, 2);
   assert.equal(compactRequestVerified, true);
   const current = await api<JsonObject>("POST", `/ai-conversations/${conversationId}/messages`, { role: "user", content: "E2E_AFTER_COMPACT" });
   const followup = await fetch(`${baseUrl}/api/works/${workId}/chat/stream`, {

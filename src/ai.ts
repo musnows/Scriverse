@@ -4507,23 +4507,33 @@ export class AiManager {
 
   private contextBudget(
     input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
-    model: ModelRow
+    model: ModelRow,
+    existingConversation?: AiConversationContext | null
   ): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const configuredOutputTokens = typeof preset.max_tokens === "number" ? preset.max_tokens : DEFAULT_MAX_TOKENS;
     const outputReserveTokens = Math.max(MIN_OUTPUT_RESERVE_TOKENS, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - MIN_OUTPUT_RESERVE_TOKENS));
     const availableInputTokens = Math.max(256, contextWindow - outputReserveTokens - 512);
-    const conversation = input.conversationId
-      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
-      : null;
+    const conversation = existingConversation === undefined
+      ? input.conversationId
+        ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+        : null
+      : existingConversation;
     const renderedMemory = conversation?.summary ? renderConversationMemory(conversation.summary) : "";
     const conversationTokens = conversation
       ? estimateAiTokens(renderedMemory) + conversation.messages.reduce((total, message) => total + estimateAiTokens(message.content), 0)
       : 0;
     const conversationBudgetTokens = Math.max(256, Math.floor(availableInputTokens * 0.32));
     const instructionTokens = estimateAiTokens(input.instruction);
-    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId)));
+    const roleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
+    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(
+      input.workId,
+      input.taskType,
+      input.agentToolIds,
+      input.conversationId,
+      roleplayCharacterId
+    )));
     const workContextBudgetTokens = Math.max(256, availableInputTokens
       - Math.min(conversationTokens, conversationBudgetTokens)
       - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
@@ -4546,10 +4556,17 @@ export class AiManager {
   getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">): Record<string, unknown> {
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const budget = this.contextBudget(input, model);
+    const conversation = budget.conversation as AiConversationContext | null;
     const contextPlan = this.buildContextPlan(input, model, budget);
     const context = contextPlan.context;
-    const messages = this.buildMessages(input, context);
-    const tools = this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
+    const messages = this.buildMessages(input, context, conversation);
+    const tools = this.enabledAgentTools(
+      input.workId,
+      input.taskType,
+      input.agentToolIds,
+      input.conversationId,
+      this.roleplayCharacterIdFromConversation(input.workId, conversation)
+    );
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const messageTokens = messages.reduce((total, message) => total + estimateAiTokens(completionMessageText(message.content)), 0);
     const systemPromptTokens = estimateAiTokens(completionMessageText(messages[0]?.content));
@@ -4560,7 +4577,6 @@ export class AiManager {
     // 超窗时把可交互上下文压到剩余份额，保证五段分布之和始终等于 contextWindow。
     const contextInteractionTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
-    const conversation = budget.conversation as AiConversationContext | null;
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
     const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
     const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
@@ -4665,8 +4681,7 @@ export class AiManager {
   ): Promise<Record<string, unknown>> {
     const inspection = this.inspectConversationContext(input);
     if (inspection.action === "ready") {
-      const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
-      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
+      if (inspection.usage.contextWarningPending === true) this.store.setAiConversationContextWarning(input.conversationId, false);
       return inspection;
     }
     if (inspection.action === "warn" && !options.ignoreWarning) {
@@ -4735,7 +4750,7 @@ export class AiManager {
       input.excludeConversationMessageId
     );
     const { model } = this.resolveModel(input.workId, "chat", input.modelId);
-    const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model);
+    const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model, conversation);
     const recentTokenBudget = Math.max(128, Math.floor(Number(budget.conversationBudgetTokens) * 0.75));
     let retainedMessageCount = 0;
     let retainedTokens = 0;
@@ -4794,12 +4809,27 @@ export class AiManager {
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): CompletionMessage[] {
-    const roleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+  private buildMessages(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
+    context: string,
+    existingConversation?: AiConversationContext | null
+  ): CompletionMessage[] {
+    const conversation = existingConversation === undefined
+      ? input.conversationId
+        ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+        : null
+      : existingConversation;
+    const roleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const roleplayPrompt = roleplayCharacterId ? this.buildRoleplaySystemPrompt(roleplayCharacterId) : "";
     const platformPrompt = roleplayCharacterId ? "" : String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = roleplayCharacterId ? "" : String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
-    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId);
+    const enabledToolIds = this.enabledAgentToolIds(
+      input.workId,
+      input.taskType,
+      input.agentToolIds,
+      input.conversationId,
+      roleplayCharacterId
+    );
     const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship")
       ? [
           `当前可用的内部记忆能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
@@ -4883,9 +4913,6 @@ export class AiManager {
       input.instruction,
       { escape: false }
     );
-    const conversation = input.conversationId
-      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
-      : null;
     if (!conversation) {
       return [
         { role: "system", content: systemPrompt },
@@ -4932,7 +4959,8 @@ export class AiManager {
     persistKeywordInjections = false
   ): ContextBuildPlan {
     const budget = existingBudget ?? this.contextBudget(input, model);
-    const roleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+    const conversation = budget.conversation as AiConversationContext | null;
+    const roleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const settings = this.store.getWorkAiSettings(input.workId);
     const configuredScope: ContextScope = {
       ...input.scope,
@@ -5025,14 +5053,20 @@ export class AiManager {
 
   private buildContext(
     input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
-    model: ModelRow
+    model: ModelRow,
+    existingBudget?: Record<string, unknown>
   ): string {
-    return collapseAiBlankLines(this.buildContextPlan(input, model, undefined, true).context);
+    return collapseAiBlankLines(this.buildContextPlan(input, model, existingBudget, true).context);
   }
 
   private roleplayCharacterId(workId: string, conversationId?: string): string | null {
     if (!conversationId) return null;
     const conversation = this.store.getAiConversationContext(conversationId, workId);
+    return this.roleplayCharacterIdFromConversation(workId, conversation);
+  }
+
+  private roleplayCharacterIdFromConversation(workId: string, conversation: AiConversationContext | null): string | null {
+    if (!conversation) return null;
     if (conversation.roleplayCharacterId) {
       const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
       if (!canReadWorkModule(permissions, "characters")) {
@@ -5073,9 +5107,17 @@ export class AiManager {
     ].join("\n");
   }
 
-  private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): AgentToolId[] {
+  private enabledAgentToolIds(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string,
+    roleplayCharacterIdOverride?: string | null
+  ): AgentToolId[] {
     if (taskType !== "chat" && requestedToolIds === undefined) return [];
-    const roleplayCharacterId = this.roleplayCharacterId(workId, conversationId);
+    const roleplayCharacterId = roleplayCharacterIdOverride === undefined
+      ? this.roleplayCharacterId(workId, conversationId)
+      : roleplayCharacterIdOverride;
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     if (roleplayCharacterId) {
       const requested = requestedToolIds ? new Set(requestedToolIds) : null;
@@ -5098,8 +5140,15 @@ export class AiManager {
       && this.canReadWithAgentTool(permissions, toolId));
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  private enabledAgentTools(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string,
+    roleplayCharacterIdOverride?: string | null
+  ): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId, roleplayCharacterIdOverride)
+      .map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private canReadWithAgentTool(permissions: WorkModulePermissions, toolId: ConfiguredAgentToolId): boolean {
@@ -5525,11 +5574,7 @@ export class AiManager {
     if (name === "story_index") {
       const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
-      const tree = this.store.getWorkTree(workId);
-      const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
-      const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
-        id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
-      })));
+      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit);
       const workRecords = structuralToolResultRecords([{
         id: work.id,
         title: work.title,
@@ -5540,7 +5585,7 @@ export class AiManager {
         chapterCount: work.chapterCount,
         wordCount: work.wordCount
       }], maximumRecordChars).map((record) => ({ ...record, _toolResultSection: "work" }));
-      const chapterRecords = structuralToolResultRecords(chapters.slice(offset, offset + limit), maximumRecordChars)
+      const chapterRecords = structuralToolResultRecords(chapterPage.chapters, maximumRecordChars)
         .map((record) => ({ ...record, _toolResultSection: "chapter" }));
       const result = paginateToolResultRecords([...workRecords, ...chapterRecords], cursor, (page, pagination) => {
         const pageWork = page.flatMap((record) => {
@@ -5558,10 +5603,10 @@ export class AiManager {
           data: {
             ...(pageWork[0] ? { work: pageWork[0] } : {}),
             ...(pageWork.length > 1 ? { workFragments: pageWork } : {}),
-            totalChapters: chapters.length,
+            totalChapters: chapterPage.totalChapters,
             offset,
             chapters: pageChapters,
-            nextOffset: pagination.nextCursor === null && offset + limit < chapters.length ? offset + limit : null
+            nextOffset: pagination.nextCursor === null && offset + limit < chapterPage.totalChapters ? offset + limit : null
           },
           pagination
         };
@@ -5796,7 +5841,10 @@ export class AiManager {
   }
 
   async generate(input: GenerateInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
-    const generationRoleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+    const conversation = input.conversationId
+      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+      : null;
+    const generationRoleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const requestedParameters = {
@@ -5806,14 +5854,15 @@ export class AiManager {
     const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
     const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     let effectiveInput = input;
-    let context = this.buildContext(effectiveInput, model);
-    let messages = this.buildMessages(effectiveInput, context);
+    let effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
+    let context = this.buildContext(effectiveInput, model, effectiveBudget);
+    let messages = this.buildMessages(effectiveInput, context, conversation);
     const allowedToolIds = new Set(input.disableTools
       ? []
-      : this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId));
+      : this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId, generationRoleplayCharacterId));
     let tools = input.disableTools
       ? []
-      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
+      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId, generationRoleplayCharacterId);
     let parameters: Record<string, unknown>;
     try {
       parameters = this.constrainParametersForContext(model, messages, requestedParameters, tools);
@@ -5821,8 +5870,9 @@ export class AiManager {
       if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
       if (tools.length === 0) throw initialContextWindowError(error, provider, model);
       effectiveInput = { ...input, agentToolIds: [] };
-      context = this.buildContext(effectiveInput, model);
-      messages = this.buildMessages(effectiveInput, context);
+      effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
+      context = this.buildContext(effectiveInput, model, effectiveBudget);
+      messages = this.buildMessages(effectiveInput, context, conversation);
       tools = [];
       allowedToolIds.clear();
       try {
