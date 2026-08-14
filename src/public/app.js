@@ -2404,7 +2404,7 @@ function renderAiRoleplayCharacterSelect() {
   const availableCharacters = state.characters.filter((character) => !character.mergedIntoCharacterId);
   const options = [{ id: "", name: "选择角色卡" }, ...availableCharacters.map((character) => ({
     id: String(character.id),
-    name: String(character.name)
+    name: `${String(character.name)}${character.isDead ? "（已死亡）" : ""}`
   }))];
   if (selectedId && !options.some((option) => option.id === selectedId)) {
     options.push({ id: selectedId, name: String(state.aiRoleplayCharacter.name) });
