@@ -2144,11 +2144,27 @@ function closeAiHistoryActionMenu(restoreFocus = false) {
   aiHistoryActionAnchor = null;
 }
 
+function syncAiHistoryActionMenu(conversation) {
+  const menu = $("#ai-history-action-menu");
+  const isFavorite = conversation?.isFavorite === true;
+  const favorite = menu.querySelector('[data-ai-history-action="favorite"]');
+  const favoriteLabel = favorite?.querySelector("span");
+  const favoriteHint = favorite?.querySelector("small");
+  if (favoriteLabel) favoriteLabel.textContent = isFavorite ? "取消收藏" : "收藏对话";
+  if (favoriteHint) favoriteHint.textContent = isFavorite ? "取消收藏后才可以清理对话" : "收藏后不会被清理";
+  const deleteOption = menu.querySelector('[data-ai-history-action="delete"]');
+  if (deleteOption) {
+    deleteOption.disabled = isFavorite;
+    deleteOption.title = isFavorite ? "收藏的对话不能清理，请先取消收藏" : "清理后无法恢复";
+  }
+}
+
 function showAiHistoryActionMenu(anchor, conversation) {
   const menu = $("#ai-history-action-menu");
   closeAiHistoryActionMenu();
   aiHistoryActionConversation = conversation;
   aiHistoryActionAnchor = anchor;
+  syncAiHistoryActionMenu(conversation);
   menu.classList.remove("hidden");
   const anchorRect = anchor.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
@@ -2179,6 +2195,50 @@ async function downloadAiConversation(conversation) {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+function resetAiConversationAfterDelete() {
+  state.aiConversationId = null;
+  state.aiConversationModelId = null;
+  state.aiPromptSent = false;
+  state.aiCitations = [];
+  state.aiReferences = [];
+  applyAiConversationTaskType("chat");
+  applyAiConversationContextScope({ type: "none" });
+  applyAiRoleplayCharacter(null);
+  $("#ai-conversation-title").textContent = "新对话";
+  resetAiFeed();
+  hideAiContextWarning();
+  resetAiContextMeter();
+  setAiPromptText("");
+  renderAiCitations();
+  renderAiReferences();
+  renderAiQuickActions();
+}
+
+async function favoriteAiConversation(conversation) {
+  const updated = await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}/favorite`, {
+    method: "PATCH",
+    body: { isFavorite: conversation.isFavorite !== true }
+  });
+  upsertAiConversationSummary(updated);
+  toast(updated.isFavorite ? "对话已收藏" : "已取消收藏");
+}
+
+async function deleteAiConversation(conversation) {
+  if (conversation.isFavorite === true) {
+    toast("收藏的对话不能清理，请先取消收藏", "error");
+    return;
+  }
+  if (!await confirmToast(`清理“${conversation.title}”后，对话及其消息将无法恢复。确认继续吗？`, {
+    title: "清理对话",
+    confirmLabel: "确认清理"
+  })) return;
+  await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}`, { method: "DELETE" });
+  state.aiConversations = state.aiConversations.filter((item) => item.id !== conversation.id);
+  if (state.aiConversationId === conversation.id) resetAiConversationAfterDelete();
+  renderAiConversationHistory();
+  toast("对话已清理");
 }
 
 const aiConversationTaskTypeLabels = {
@@ -2236,11 +2296,21 @@ function renderAiConversationHistory() {
     button.type = "button";
     button.className = `ai-history-item${conversation.id === state.aiConversationId ? " is-active" : ""}`;
     button.dataset.aiConversationId = conversation.id;
+    const titleRow = document.createElement("span");
+    titleRow.className = "ai-history-title-row";
     const title = document.createElement("strong");
     title.textContent = conversation.title;
+    titleRow.append(title);
+    if (conversation.isFavorite === true) {
+      const favorite = document.createElement("small");
+      favorite.className = "ai-history-favorite";
+      favorite.textContent = "已收藏";
+      favorite.setAttribute("aria-label", "已收藏");
+      titleRow.append(favorite);
+    }
     const meta = document.createElement("small");
     meta.textContent = aiConversationHistoryMeta(conversation);
-    button.append(title, meta);
+    button.append(titleRow, meta);
     button.addEventListener("click", () => openAiConversation(conversation.id));
     const more = document.createElement("button");
     more.type = "button";
@@ -15928,9 +15998,37 @@ $("#ai-history-dialog").addEventListener("cancel", (event) => {
   closeAiHistoryActionMenu(true);
 });
 $("#ai-history-action-menu").addEventListener("click", async (event) => {
-  const option = event.target.closest("[data-ai-history-action=\"export\"]");
+  const option = event.target.closest("[data-ai-history-action]");
   const conversation = aiHistoryActionConversation;
   if (!option || !conversation || option.disabled) return;
+  const action = option.dataset.aiHistoryAction;
+  if (action === "favorite") {
+    option.disabled = true;
+    try {
+      await favoriteAiConversation(conversation);
+      closeAiHistoryActionMenu(true);
+    } catch (error) {
+      toast(`对话收藏状态更新失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action === "delete") {
+    option.disabled = true;
+    try {
+      await deleteAiConversation(conversation);
+      closeAiHistoryActionMenu(true);
+    } catch (error) {
+      toast(`对话清理失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action !== "export") return;
   const label = option.querySelector("span");
   option.disabled = true;
   if (label) label.textContent = "下载中";
