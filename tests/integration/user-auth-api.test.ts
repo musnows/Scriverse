@@ -1574,12 +1574,17 @@ describe("用户、作品权限与操作者追踪 API", () => {
 
     await collaborator.agent.get(`/api/works/${workId}/audit-logs`).expect(403);
     await collaborator.agent.get(`/api/works/${workId}/unclassified-route`).expect(403);
-    await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(403);
-    const overlongSearchDenied = await collaborator.agent
+    const scopedSearch = await collaborator.agent.get(`/api/works/${workId}/search?q=边界`).expect(200);
+    expect(new Set(scopedSearch.body.data.map((item: { type: string }) => item.type))).toEqual(new Set([
+      "race",
+      "organization",
+      "review"
+    ]));
+    const overlongSearch = await collaborator.agent
       .get(`/api/works/${workId}/search`)
       .query({ q: "界".repeat(101) })
-      .expect(403);
-    expect(overlongSearchDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+      .expect(400);
+    expect(overlongSearch.body.error.code).toBe("VALIDATION_ERROR");
     await collaborator.agent.get(`/api/works/${workId}/file-versions`).expect(403);
     const commentReadDenied = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations`).expect(403);
     expect(commentReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
@@ -1656,6 +1661,98 @@ describe("用户、作品权限与操作者追踪 API", () => {
     const reviewReadDenied = await collaborator.agent.get(`/api/reviews/${reviewId}`).expect(403);
     expect(reviewReadDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("按成员可读模块限制显式与全局搜索并保持身份入口契约", async () => {
+    const admin = await register(runtime, "search_matrix_admin");
+    const owner = await register(runtime, "search_matrix_owner");
+    const proseReader = await register(runtime, "search_matrix_prose_reader");
+    const noAccessReader = await register(runtime, "search_matrix_no_access");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "搜索权限矩阵作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await owner.agent.post(`/api/works/${workId}/volumes`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "权限矩阵分卷" })
+      .expect(201);
+    const chapter = await owner.agent.post(`/api/works/${workId}/chapters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ volumeId: volume.body.data.id, title: "权限矩阵正文", content: "权限矩阵命中只应展示正文。" })
+      .expect(201);
+    const character = await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "权限矩阵保密角色", profile: { secret: "权限矩阵命中不可泄露人物档案" } })
+      .expect(201);
+    const noPermissions = {
+      prose: "none",
+      drafts: "none",
+      settings: "none",
+      characters: "none",
+      races: "none",
+      organizations: "none",
+      timeline: "none",
+      relationships: "none",
+      outlines: "none",
+      reviews: "none",
+      "ai-chat": "none",
+      "ai-analysis": "none",
+      "ai-settings": "none"
+    };
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: proseReader.user.userId, permissions: { ...noPermissions, prose: "read" } })
+      .expect(201);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ userId: noAccessReader.user.userId, permissions: noPermissions })
+      .expect(201);
+
+    await request(runtime.app).get(`/api/works/${workId}/search`).query({ q: "权限矩阵" }).expect(401);
+    const chapterSearch = await proseReader.agent.get(`/api/works/${workId}/search`)
+      .query({ q: "权限矩阵", type: "chapter" })
+      .expect(200);
+    expect(chapterSearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: chapter.body.data.id, type: "chapter" })
+    ]));
+    const characterDenied = await proseReader.agent.get(`/api/works/${workId}/search`)
+      .query({ q: "权限矩阵", type: "character" })
+      .expect(403);
+    expect(characterDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    expect(JSON.stringify(characterDenied.body)).not.toContain("权限矩阵保密角色");
+
+    const globalSearch = await proseReader.agent.get(`/api/works/${workId}/search`)
+      .query({ q: "权限矩阵" })
+      .expect(200);
+    expect(globalSearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: chapter.body.data.id, type: "chapter" })
+    ]));
+    expect(globalSearch.body.data.every((item: { type: string }) => item.type === "chapter")).toBe(true);
+    expect(JSON.stringify(globalSearch.body.data)).not.toContain(String(character.body.data.id));
+    expect(JSON.stringify(globalSearch.body.data)).not.toContain("权限矩阵保密角色");
+
+    const emptyPermissionSearch = await noAccessReader.agent.get(`/api/works/${workId}/search`)
+      .query({ q: "权限矩阵" })
+      .expect(403);
+    expect(emptyPermissionSearch.body.error.code).toBe("WORK_MODULE_READ_DENIED");
+    await owner.agent.get(`/api/works/${workId}/search`).query({ q: "权限矩阵", type: "character" }).expect(200);
+    await admin.agent.get(`/api/works/${workId}/search`).query({ q: "权限矩阵", type: "character" }).expect(200);
+
+    const proseReaderKeyReset = await proseReader.agent.post("/api/auth/api-key/reset")
+      .set("X-CSRF-Token", proseReader.csrfToken)
+      .send({})
+      .expect(200);
+    const proseReaderKey = String(proseReaderKeyReset.body.data.apiKey);
+    const apiKeyGlobalSearch = await request(runtime.app).get(`/api/works/${workId}/search`)
+      .set("Authorization", `Bearer ${proseReaderKey}`)
+      .query({ q: "权限矩阵" })
+      .expect(200);
+    expect(apiKeyGlobalSearch.body.data.every((item: { type: string }) => item.type === "chapter")).toBe(true);
+    await request(runtime.app).get(`/api/works/${workId}/search`)
+      .set("Authorization", `Bearer ${proseReaderKey}`)
+      .query({ q: "权限矩阵", type: "character" })
+      .expect(403);
   });
 
   it("JSON 导出拒绝缺少审核读取权限的协作者且正文格式保持可用", async () => {
@@ -1977,6 +2074,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(historyOnlySearch.body.data).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "agent-history", conversationId: historyOnlyConversation.body.data.id })
     ]));
+    const historyOnlyGlobalSearch = await historyOnly.agent
+      .get(`/api/works/${workId}/search?q=正文权限之外`)
+      .expect(200);
+    expect(historyOnlyGlobalSearch.body.data).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "agent-history", conversationId: historyOnlyConversation.body.data.id })
+    ]));
+    expect(historyOnlyGlobalSearch.body.data.every((item: { type: string }) => item.type === "agent-history")).toBe(true);
     await chatOnly.agent.get(`/api/works/${workId}/models`).expect(200);
     const chatTasksDenied = await chatOnly.agent.get(`/api/works/${workId}/tasks`).expect(403);
     expect(chatTasksDenied.body.error.code).toBe("WORK_MODULE_READ_DENIED");
@@ -3183,6 +3287,31 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-Scriverse-API-Key", firstKey)
       .send({ content: "API Key 修改后的正文。", changeNote: "CLI 调整开场正文" })
       .expect(200);
+    await request(runtime.app)
+      .get(`/api/works/${adminWorkId}/search`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(401);
+    await admin.agent
+      .get(`/api/works/${adminWorkId}/search`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(200);
+    await admin.agent
+      .get(`/api/works/${writerWorkId}/search`)
+      .query({ q: "不存在的正文", type: "chapter" })
+      .expect(200);
+    const apiKeySearch = await request(runtime.app)
+      .get(`/api/works/${adminWorkId}/search`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(200);
+    expect(apiKeySearch.body.data).toEqual([
+      expect.objectContaining({ id: chapter.body.data.id, type: "chapter", startLine: 1, endLine: 1 })
+    ]);
+    await request(runtime.app)
+      .get(`/api/works/${writerWorkId}/search`)
+      .set("Authorization", `Bearer ${firstKey}`)
+      .query({ q: "API Key 修改", type: "chapter" })
+      .expect(403);
     const versions = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/versions`)
       .set("Authorization", `Bearer ${firstKey}`)
       .expect(200);

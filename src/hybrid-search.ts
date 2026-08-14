@@ -1,3 +1,5 @@
+import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+
 export const HYBRID_SEARCH_TYPES = [
   "chapter",
   "setting",
@@ -25,6 +27,35 @@ export function normalizeWorkSearchQuery(value: string): string {
 
 export type HybridSearchType = typeof HYBRID_SEARCH_TYPES[number];
 export type HybridSearchMatchKind = "metadata" | "exact" | "phonetic";
+
+export const HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE = {
+  chapter: "prose",
+  setting: "settings",
+  character: "characters",
+  race: "races",
+  organization: "organizations",
+  "timeline-track": "timeline",
+  "timeline-event": "timeline",
+  relationship: "relationships",
+  "chapter-outline": "outlines",
+  foreshadow: "outlines",
+  review: "reviews",
+  "agent-history": "ai-chat"
+} as const satisfies Record<HybridSearchType, WorkPermissionModule>;
+
+export const HYBRID_SEARCH_PERMISSION_MODULES = [
+  ...new Set(HYBRID_SEARCH_TYPES.map((type) => HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE[type]))
+] satisfies WorkPermissionModule[];
+
+export function hybridSearchPermissionModule(type: unknown): WorkPermissionModule | null {
+  return typeof type === "string" && HYBRID_SEARCH_TYPES.includes(type as HybridSearchType)
+    ? HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE[type as HybridSearchType]
+    : null;
+}
+
+export function readableHybridSearchTypes(permissions: WorkModulePermissions): HybridSearchType[] {
+  return HYBRID_SEARCH_TYPES.filter((type) => canReadWorkModule(permissions, HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE[type]));
+}
 
 export type HybridSearchCandidate = {
   key: string;
@@ -122,10 +153,10 @@ export function buildHybridSearchSnippet(value: string, query: string, maximumLe
   return `${start > 0 ? "…" : ""}${excerpt}${start + safeMaximum < compact.length ? "…" : ""}`;
 }
 
-export function documentParagraphLineRange(value: string, paragraphOrder: number): { startLine: number; endLine: number } | null {
-  if (!Number.isInteger(paragraphOrder) || paragraphOrder < 0) return null;
-  const lines = value.replace(/\r\n?/gu, "\n").split("\n");
-  const ranges: Array<{ startLine: number; endLine: number }> = [];
+export type DocumentParagraphLineRange = { startLine: number; endLine: number };
+
+export function documentParagraphLineRangesFromLines(lines: readonly string[]): DocumentParagraphLineRange[] {
+  const ranges: DocumentParagraphLineRange[] = [];
   let start: number | null = null;
   for (let index = 0; index <= lines.length; index += 1) {
     const line = lines[index];
@@ -136,5 +167,14 @@ export function documentParagraphLineRange(value: string, paragraphOrder: number
       start = null;
     }
   }
-  return ranges[paragraphOrder] ?? null;
+  return ranges;
+}
+
+export function documentParagraphLineRanges(value: string): DocumentParagraphLineRange[] {
+  return documentParagraphLineRangesFromLines(value.replace(/\r\n?/gu, "\n").split("\n"));
+}
+
+export function documentParagraphLineRange(value: string, paragraphOrder: number): DocumentParagraphLineRange | null {
+  if (!Number.isInteger(paragraphOrder) || paragraphOrder < 0) return null;
+  return documentParagraphLineRanges(value)[paragraphOrder] ?? null;
 }

@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import type { Runtime } from "../../src/app.js";
+import { logger } from "../../src/logger.js";
 import { createTestRuntime, seedChapter } from "../helpers.js";
 
 describe("作品混合检索", () => {
@@ -9,6 +10,7 @@ describe("作品混合检索", () => {
   afterEach(async () => {
     await runtime?.close();
     runtime = null;
+    vi.restoreAllMocks();
   });
 
   it("统一检索正文和全部知识类型并返回正文行号", async () => {
@@ -110,6 +112,180 @@ describe("作品混合检索", () => {
     expect(updated.body.data).toEqual([expect.objectContaining({ id: setting.id, type: "setting" })]);
   });
 
+  it("三条正文搜索路径复用版本化行号索引并对缺失索引执行有界自修复", async () => {
+    runtime = createTestRuntime();
+    const longPrefix = Array.from({ length: 2_000 }, (_, index) => `铺垫行 ${index + 1}`).join("\n");
+    const content = `${longPrefix}\n\n潮汐棱镜第一次发光。\n仍在发光。\n\n北港灯塔。\n\n北港备用航线。`;
+    const seeded = await seedChapter(runtime, content);
+    const workId = String(seeded.work.id);
+    const chapterId = String(seeded.chapter.id);
+    const allSpy = vi.spyOn(runtime.store.db, "all");
+    const getSpy = vi.spyOn(runtime.store.db, "get");
+
+    const fullText = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "潮汐棱镜", type: "chapter" })
+      .expect(200);
+    const shortText = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "北港", type: "chapter" })
+      .expect(200);
+    const phonetic = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "beigang", type: "chapter" })
+      .expect(200);
+
+    expect(fullText.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_002, endLine: 2_003 })
+    ]);
+    expect(shortText.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_005, endLine: 2_005 })
+    ]);
+    expect(phonetic.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_005, endLine: 2_005, matchKinds: ["phonetic"] })
+    ]);
+    expect(shortText.body.data).toHaveLength(1);
+    const observedSql = [...allSpy.mock.calls, ...getSpy.mock.calls].map(([sql]) => String(sql));
+    expect(observedSql.some((sql) => sql.includes("chapter.content AS chapter_content"))).toBe(false);
+    expect(observedSql.some((sql) => sql.includes("SELECT content, version_no FROM chapters"))).toBe(false);
+
+    const targetParagraph = runtime.store.db.get<{ id: number }>(
+      "SELECT id FROM chapter_paragraph_search WHERE chapter_id = ? AND content LIKE ?",
+      chapterId,
+      "%潮汐棱镜%"
+    );
+    expect(targetParagraph).toBeDefined();
+    runtime.store.db.run("DELETE FROM chapter_paragraph_line_ranges WHERE paragraph_id = ?", Number(targetParagraph?.id));
+    getSpy.mockClear();
+    const repaired = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "潮汐棱镜", type: "chapter" })
+      .expect(200);
+    expect(repaired.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 2_002, endLine: 2_003 })
+    ]);
+    expect(getSpy.mock.calls.filter(([sql]) => String(sql).includes("SELECT content, version_no FROM chapters"))).toHaveLength(1);
+    expect(runtime.store.db.get(
+      "SELECT start_line, end_line FROM chapter_paragraph_line_ranges WHERE paragraph_id = ?",
+      Number(targetParagraph?.id)
+    )).toEqual({ start_line: 2_002, end_line: 2_003 });
+
+    const secondVolume = runtime.store.createVolume(workId, { title: "第二卷" });
+    const moved = runtime.store.moveChapter(chapterId, { volumeId: String(secondVolume.id), sortOrder: 0 });
+    expect(runtime.store.db.get(
+      `SELECT COUNT(*) AS count FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       WHERE paragraph.chapter_id = ? AND line_range.chapter_version <> ?`,
+      chapterId,
+      Number(moved.versionNo)
+    )).toEqual({ count: 0 });
+
+    runtime.store.db.run(
+      "UPDATE chapters SET content = ?, version_no = version_no + 1 WHERE id = ?",
+      "当前正文已经替换，不应命中旧索引。",
+      chapterId
+    );
+    const stale = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "潮汐棱镜", type: "chapter" })
+      .expect(200);
+    expect(stale.body.data).toEqual([]);
+  });
+
+  it("旧索引回退验证超过二十个候选并按章节复用正文解析", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "超过上限验证正文。");
+    const workId = String(seeded.work.id);
+    const volumeId = String(seeded.volume.id);
+    for (let index = 2; index <= 25; index += 1) {
+      runtime.store.createChapter(workId, {
+        volumeId,
+        title: `第 ${index} 章`,
+        content: "超过上限验证正文。"
+      });
+    }
+    runtime.store.db.run(
+      `UPDATE chapter_paragraph_line_ranges SET chapter_version = chapter_version + 1
+       WHERE paragraph_id IN (SELECT id FROM chapter_paragraph_search WHERE work_id = ?)`,
+      workId
+    );
+    const getSpy = vi.spyOn(runtime.store.db, "get");
+    const infoSpy = vi.spyOn(logger, "info");
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "超过上限验证", type: "chapter", limit: 50 })
+      .expect(200);
+
+    expect(response.body.data).toHaveLength(25);
+    expect(response.body.data.every((item: { startLine?: number; endLine?: number }) => item.startLine === 1 && item.endLine === 1)).toBe(true);
+    expect(getSpy.mock.calls.filter(([sql]) => String(sql).includes("SELECT content, version_no FROM chapters"))).toHaveLength(25);
+    expect(runtime.store.db.get(
+      `SELECT COUNT(*) AS count FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       JOIN chapters chapter ON chapter.id = paragraph.chapter_id
+       WHERE paragraph.work_id = ? AND line_range.chapter_version <> chapter.version_no`,
+      workId
+    )).toEqual({ count: 0 });
+    const fallbackLog = infoSpy.mock.calls.find(([event]) => event === "search.chapter_line_range_fallback");
+    expect(fallbackLog?.[1]).toMatchObject({
+      attemptedCandidates: 25,
+      chapterLoads: 25,
+      repairedCandidates: 25,
+      paragraphContentMismatches: 0
+    });
+    expect(JSON.stringify(fallbackLog)).not.toContain("超过上限验证正文");
+  });
+
+  it("同章重复回退只读取正文一次并记录不含正文的失败计数", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "缓存命中当前第一段。\n\n缓存命中当前第二段。");
+    const workId = String(seeded.work.id);
+    const chapterId = String(seeded.chapter.id);
+    const paragraphs = runtime.store.db.all<{ id: number; paragraph_order: number }>(
+      "SELECT id, paragraph_order FROM chapter_paragraph_search WHERE chapter_id = ? ORDER BY paragraph_order",
+      chapterId
+    );
+    runtime.store.db.run(
+      "UPDATE chapter_paragraph_search SET content = ?, search_content = ? WHERE id = ?",
+      "缓存命中过期第一段。",
+      "缓存命中过期第一段。",
+      paragraphs[0]?.id ?? 0
+    );
+    runtime.store.db.run(
+      `DELETE FROM chapter_paragraph_line_ranges
+       WHERE paragraph_id IN (SELECT id FROM chapter_paragraph_search WHERE chapter_id = ?)`,
+      chapterId
+    );
+    const getSpy = vi.spyOn(runtime.store.db, "get");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const response = await request(runtime.app)
+      .get(`/api/works/${workId}/search`)
+      .query({ q: "缓存命中", type: "chapter" })
+      .expect(200);
+
+    expect(response.body.data).toEqual([
+      expect.objectContaining({ id: chapterId, startLine: 3, endLine: 3, snippet: "缓存命中当前第二段。" })
+    ]);
+    expect(getSpy.mock.calls.filter(([sql]) => String(sql).includes("SELECT content, version_no FROM chapters"))).toHaveLength(1);
+    expect(runtime.store.db.get(
+      `SELECT COUNT(*) AS count FROM chapter_paragraph_line_ranges line_range
+       JOIN chapter_paragraph_search paragraph ON paragraph.id = line_range.paragraph_id
+       WHERE paragraph.chapter_id = ?`,
+      chapterId
+    )).toEqual({ count: 1 });
+    const fallbackLog = warnSpy.mock.calls.find(([event]) => event === "search.chapter_line_range_fallback");
+    expect(fallbackLog?.[1]).toMatchObject({
+      chapterLoads: 1,
+      repairedCandidates: 1,
+      paragraphContentMismatches: expect.any(Number)
+    });
+    expect(Number(fallbackLog?.[1]?.paragraphContentMismatches)).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(fallbackLog)).not.toContain("缓存命中过期第一段");
+    expect(JSON.stringify(fallbackLog)).not.toContain("缓存命中当前第二段");
+  });
+
   it("通过增量全文索引检索 Agent history，并支持短词和标题更新", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "正文记录了跃迁冷却规则，作者后来继续追问。 ");
@@ -199,7 +375,7 @@ describe("作品混合检索", () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "马克博士曾经守护北港。马克·罗素接替了他。 ");
     const workId = String(seeded.work.id);
-    const source = runtime.store.createCharacter(workId, { name: "马克博士" });
+    const source = runtime.store.createCharacter(workId, { name: "马克博士", isDead: true });
     const target = runtime.store.createCharacter(workId, { name: "马克·罗素" });
     runtime.store.createCharacterProfileSection(String(source.id), {
       sectionType: "background",
@@ -219,11 +395,11 @@ describe("作品混合检索", () => {
       expect.objectContaining({ type: "character", id: source.id })
     ]));
     expect(metadataResults).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素" })
+      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素", isDead: false })
     ]));
     const sectionResults = runtime.store.searchCharacterProfileSections(workId, "旧身份");
     expect(sectionResults).toEqual(expect.arrayContaining([
-      expect.objectContaining({ characterId: target.id, characterName: "马克·罗素" })
+      expect.objectContaining({ characterId: target.id, characterName: "马克·罗素", isDead: false })
     ]));
     expect(sectionResults).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ characterId: source.id })
@@ -280,6 +456,61 @@ describe("作品混合检索", () => {
     const relationshipData = relationshipResult.data as Record<string, unknown>;
     expect(relationshipExecution.status).toBe("completed");
     expect(relationshipData.unresolvedCharacters).toEqual([source.id]);
+  });
+
+  it("资料段落搜索复用角色联表状态且不逐段查询角色详情", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime);
+    const workId = String(seeded.work.id);
+    const deadCharacter = runtime.store.createCharacter(workId, { name: "岑夜", isDead: true });
+    const livingCharacter = runtime.store.createCharacter(workId, { name: "林昼" });
+    const firstDeadSection = runtime.store.createCharacterProfileSection(String(deadCharacter.id), {
+      sectionType: "background",
+      title: "星轨密令上篇",
+      contentMarkdown: "星轨密令刻在北港旧碑上。"
+    });
+    const secondDeadSection = runtime.store.createCharacterProfileSection(String(deadCharacter.id), {
+      sectionType: "experience",
+      title: "星轨密令下篇",
+      contentMarkdown: "岑夜曾经守护星轨密令。"
+    });
+    const livingSection = runtime.store.createCharacterProfileSection(String(livingCharacter.id), {
+      sectionType: "ability",
+      title: "星轨密令解读",
+      contentMarkdown: "林昼能够解读星轨密令。"
+    });
+    const databaseGet = vi.spyOn(runtime.store.db, "get");
+
+    const fullTextSections = runtime.store.searchCharacterProfileSections(workId, "星轨密令");
+    expect(fullTextSections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: firstDeadSection.id,
+        characterId: deadCharacter.id,
+        characterName: "岑夜",
+        title: "星轨密令上篇",
+        isDead: true
+      }),
+      expect.objectContaining({ id: secondDeadSection.id, characterId: deadCharacter.id, isDead: true }),
+      expect.objectContaining({ id: livingSection.id, characterId: livingCharacter.id, isDead: false })
+    ]));
+
+    const fullTextResults = runtime.store.search(workId, "星轨密令")
+      .filter((item) => typeof item.sectionId === "string");
+    expect(fullTextResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sectionId: firstDeadSection.id,
+        title: "岑夜 / 星轨密令上篇",
+        snippet: expect.stringContaining("星轨密令"),
+        isDead: true
+      }),
+      expect.objectContaining({ sectionId: secondDeadSection.id, isDead: true }),
+      expect.objectContaining({ sectionId: livingSection.id, isDead: false })
+    ]));
+
+    const shortTermResults = runtime.store.search(workId, "星轨")
+      .filter((item) => typeof item.sectionId === "string");
+    expect(shortTermResults).toHaveLength(3);
+    expect(databaseGet.mock.calls.filter(([sql]) => sql === "SELECT * FROM characters WHERE id = ?")).toHaveLength(0);
   });
 
   it("限制查询长度并按字面量搜索 LIKE 特殊字符", async () => {

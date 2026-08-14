@@ -10,7 +10,7 @@ import {
 import { exportWorkDocx } from "./docx-export.js";
 import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
-import { normalizeWorkSearchQuery } from "./hybrid-search.js";
+import { documentParagraphLineRanges, normalizeWorkSearchQuery, type HybridSearchType } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -577,6 +577,17 @@ export type AiConversationContext = {
 export type AiConversationTitleContext = {
   title: string;
   messages: Array<{ role: "user" | "assistant"; content: string }>;
+};
+
+export type StoryIndexChapterPage = {
+  totalChapters: number;
+  chapters: Array<{
+    id: string;
+    volumeTitle: string;
+    title: string;
+    versionNo: number;
+    summary: string;
+  }>;
 };
 
 type RestorableFileSnapshotChapter = {
@@ -1925,6 +1936,62 @@ export class Store {
     return { ...work, volumes, directoryPage: pageResult };
   }
 
+  getStoryIndexChapterPage(workId: string, offset: number, limit: number): StoryIndexChapterPage {
+    const work = this.getWork(workId);
+    const permissions = work.modulePermissions as WorkModulePermissions;
+    if (permissions.prose === "none") return { totalChapters: 0, chapters: [] };
+    const countRow = this.db.get(
+      `SELECT COUNT(*) AS count FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL`,
+      workId
+    );
+    const chapterRows = this.db.all(
+      `SELECT chapter.id, chapter.title, chapter.version_no, volume.title AS volume_title
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+       ORDER BY volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at
+       LIMIT ? OFFSET ?`,
+      workId,
+      limit,
+      offset
+    );
+    const chapterIds = chapterRows.map((row) => requiredString(row, "id"));
+    const summaries = new Map<string, string>();
+    if (chapterIds.length > 0) {
+      const placeholders = chapterIds.map(() => "?").join(", ");
+      const insightRows = this.db.all(
+        `SELECT insight.chapter_id, insight.summary
+         FROM chapter_insights insight
+         JOIN chapters chapter ON chapter.id = insight.chapter_id AND chapter.version_no = insight.chapter_version
+         WHERE chapter.work_id = ? AND insight.chapter_id IN (${placeholders})
+           AND NOT EXISTS (
+             SELECT 1 FROM chapter_insights newer
+             WHERE newer.chapter_id = insight.chapter_id
+               AND newer.chapter_version = insight.chapter_version
+               AND (newer.created_at > insight.created_at OR (newer.created_at = insight.created_at AND newer.id > insight.id))
+           )`,
+        workId,
+        ...chapterIds
+      );
+      for (const row of insightRows) summaries.set(requiredString(row, "chapter_id"), requiredString(row, "summary"));
+    }
+    return {
+      totalChapters: numberValue(countRow ?? {}, "count"),
+      chapters: chapterRows.map((row) => {
+        const chapterId = requiredString(row, "id");
+        return {
+          id: chapterId,
+          volumeTitle: requiredString(row, "volume_title"),
+          title: requiredString(row, "title"),
+          versionNo: numberValue(row, "version_no"),
+          summary: summaries.get(chapterId) ?? ""
+        };
+      })
+    };
+  }
+
   listFileVersions(workId: string): Record<string, unknown>[] {
     this.getWork(workId);
     return this.db
@@ -2915,6 +2982,7 @@ export class Store {
         timestamp,
         chapterId
       );
+      this.syncChapterParagraphSearchVersion(chapterId, versionNo);
       this.insertChapterVersionRow({
         workId: String(lockedChapter.workId),
         chapterId,
@@ -3169,6 +3237,7 @@ export class Store {
           const versionNo = Number(chapter.versionNo) + 1;
           const sortOrder = orderedByVolume.get(action.volumeId)?.indexOf(chapterId) ?? 0;
           this.db.run("UPDATE chapters SET version_no = ?, analysis_status = 'expired', updated_at = ? WHERE id = ?", versionNo, timestamp, chapterId);
+          this.syncChapterParagraphSearchVersion(chapterId, versionNo);
           this.insertChapterVersionRow({
             workId,
             chapterId,
@@ -3362,6 +3431,11 @@ export class Store {
   }
 
   private syncChapterParagraphSearch(workId: string, chapterId: string, content: string): void {
+    const chapterVersion = numberValue(
+      this.db.get("SELECT version_no FROM chapters WHERE id = ? AND work_id = ?", chapterId, workId) ?? {},
+      "version_no"
+    );
+    const ranges = documentParagraphLineRanges(content);
     this.db.run("DELETE FROM chapter_paragraph_search WHERE chapter_id = ?", chapterId);
     for (const [paragraphOrder, paragraph] of splitDocumentParagraphs(content).entries()) {
       const searchContent = normalizeDocumentSearchText(paragraph);
@@ -3374,6 +3448,17 @@ export class Store {
         paragraph,
         searchContent
       );
+      const range = ranges[paragraphOrder];
+      if (range) {
+        this.db.run(
+          `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
+           VALUES (?, ?, ?, ?)`,
+          inserted.lastInsertRowid,
+          chapterVersion,
+          range.startLine,
+          range.endLine
+        );
+      }
       for (const term of documentShortSearchTerms(searchContent)) {
         this.db.run(
           "INSERT INTO chapter_paragraph_short_terms (paragraph_id, term) VALUES (?, ?)",
@@ -3382,6 +3467,15 @@ export class Store {
         );
       }
     }
+  }
+
+  private syncChapterParagraphSearchVersion(chapterId: string, versionNo: number): void {
+    this.db.run(
+      `UPDATE chapter_paragraph_line_ranges SET chapter_version = ?
+       WHERE paragraph_id IN (SELECT id FROM chapter_paragraph_search WHERE chapter_id = ?)`,
+      versionNo,
+      chapterId
+    );
   }
 
   searchChapterParagraphs(workId: string, keyword: string, limit = 20): Array<{
@@ -5874,7 +5968,7 @@ export class Store {
   searchCharacterProfileSections(workId: string, query: string, limit = 20): Record<string, unknown>[] {
     this.getWork(workId);
     const normalized = normalizeDocumentSearchText(query);
-    const columns = `SELECT section.*, character.name AS character_name
+    const columns = `SELECT section.*, character.name AS character_name, character.is_dead AS character_is_dead
       FROM character_profile_section_search search
       JOIN character_profile_sections section ON section.id = search.section_id
       JOIN characters character ON character.id = search.character_id`;
@@ -5896,7 +5990,11 @@ export class Store {
         `"${normalized.replaceAll('"', '""')}"`,
         limit
       );
-    return rows.map((row) => ({ ...this.mapCharacterProfileSection(row), characterName: requiredString(row, "character_name") }));
+    return rows.map((row) => ({
+      ...this.mapCharacterProfileSection(row),
+      characterName: requiredString(row, "character_name"),
+      isDead: booleanValue(row, "character_is_dead")
+    }));
   }
 
   private mapAttachment(row: Row): Record<string, unknown> {
@@ -7532,21 +7630,51 @@ export class Store {
     const conversation = this.db.get("SELECT * FROM ai_conversations WHERE id = ?", conversationId);
     if (!conversation) throw notFound("AI 对话");
     if (requiredString(conversation, "work_id") !== workId) throw new AppError(400, "CONVERSATION_WORK_MISMATCH", "AI 对话不属于当前作品");
-    const rows = this.db.all(
-      "SELECT id, role, content, metadata_json FROM ai_conversation_messages WHERE conversation_id = ? ORDER BY created_at, rowid",
+    const countRow = this.db.get(
+      "SELECT COUNT(*) AS count FROM ai_conversation_messages WHERE conversation_id = ?",
       conversationId
     );
-    const compactedMessageCount = Math.min(rows.length, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    const totalMessageCount = numberValue(countRow ?? {}, "count");
+    const compactedMessageCount = Math.min(totalMessageCount, Math.max(0, numberValue(conversation, "compacted_message_count")));
+    const tailMessageCount = totalMessageCount - compactedMessageCount;
+    let rows: Row[] = [];
+    if (tailMessageCount > 0 && compactedMessageCount === 0) {
+      rows = this.db.all(
+        `SELECT id, role, content, metadata_json FROM ai_conversation_messages
+         WHERE conversation_id = ? ORDER BY created_at, rowid LIMIT ?`,
+        conversationId,
+        tailMessageCount
+      );
+    } else if (tailMessageCount > 0) {
+      const boundary = this.db.get(
+        `SELECT created_at, rowid FROM ai_conversation_messages
+         WHERE conversation_id = ? ORDER BY created_at, rowid LIMIT 1 OFFSET ?`,
+        conversationId,
+        compactedMessageCount - 1
+      );
+      if (boundary) {
+        rows = this.db.all(
+          `SELECT id, role, content, metadata_json FROM ai_conversation_messages
+           WHERE conversation_id = ?
+             AND (created_at > ? OR (created_at = ? AND rowid > ?))
+           ORDER BY created_at, rowid LIMIT ?`,
+          conversationId,
+          requiredString(boundary, "created_at"),
+          requiredString(boundary, "created_at"),
+          numberValue(boundary, "rowid"),
+          tailMessageCount
+        );
+      }
+    }
     return {
       workId,
       roleplayCharacterId: optionalString(conversation, "roleplay_character_id"),
       summary: requiredString(conversation, "compacted_summary"),
       compactedMessageCount,
-      totalMessageCount: rows.length,
+      totalMessageCount,
       warningPending: Boolean(optionalString(conversation, "context_warning_at")),
       injectedEntities: parseAiInjectedEntities(optionalString(conversation, "injected_entities_json") ?? EMPTY_AI_INJECTED_ENTITIES),
-      messages: rows.slice(compactedMessageCount)
-        .filter((message) => requiredString(message, "id") !== excludeMessageId)
+      messages: rows.filter((message) => requiredString(message, "id") !== excludeMessageId)
         .map((message) => ({
           id: requiredString(message, "id"),
           role: requiredString(message, "role") === "assistant" ? "assistant" : "user",
@@ -9805,35 +9933,42 @@ export class Store {
     return [{ type: "unknown", scope }];
   }
 
-  search(workId: string, query: string): Record<string, unknown>[] {
+  search(workId: string, query: string, requestedTypes?: ReadonlySet<HybridSearchType>): Record<string, unknown>[] {
     this.getWork(workId);
     const normalizedQuery = normalizeWorkSearchQuery(query);
     if (!normalizedQuery) return [];
     const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
-    const chapters = this.db.all(
-      "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern
-    );
-    const races = this.listRaces(workId).filter((race) => {
-      const lineage = race.lineage as Array<{ name: string }>;
-      const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
-      return [
-        race.name,
-        race.description,
-        ...(race.settings as string[]),
-        ...lineage.map((item) => item.name),
-        ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
-      ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
-    }).slice(0, 50);
-    const settings = this.db.all(
-      "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern
-    );
-    const characters = this.db.all(
+    const accepts = (type: HybridSearchType): boolean => !requestedTypes || requestedTypes.has(type);
+    const chapters = accepts("chapter")
+      ? this.db.all(
+        "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
+        workId,
+        pattern,
+        pattern
+      )
+      : [];
+    const races = accepts("race")
+      ? this.listRaces(workId).filter((race) => {
+        const lineage = race.lineage as Array<{ name: string }>;
+        const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
+        return [
+          race.name,
+          race.description,
+          ...(race.settings as string[]),
+          ...lineage.map((item) => item.name),
+          ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
+        ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+      }).slice(0, 50)
+      : [];
+    const settings = accepts("setting")
+      ? this.db.all(
+        "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
+        workId,
+        pattern,
+        pattern
+      )
+      : [];
+    const characters = accepts("character") ? this.db.all(
       `WITH RECURSIVE character_race_lineage(character_id, race_id, parent_race_id, name, path) AS (
          SELECT character.id, race.id, race.parent_race_id, race.name, race.name
          FROM characters character JOIN races race ON race.id = character.race_id
@@ -9857,15 +9992,17 @@ export class Store {
       pattern,
       pattern,
       pattern
-    );
-    const organizations = this.db.all(
-      "SELECT id, name, description, is_dissolved, settings_json FROM organizations WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern,
-      pattern
-    );
-    const characterSections = this.searchCharacterProfileSections(workId, normalizedQuery, 30);
+    ) : [];
+    const organizations = accepts("organization")
+      ? this.db.all(
+        "SELECT id, name, description, is_dissolved, settings_json FROM organizations WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
+        workId,
+        pattern,
+        pattern,
+        pattern
+      )
+      : [];
+    const characterSections = accepts("character") ? this.searchCharacterProfileSections(workId, normalizedQuery, 30) : [];
     const snippet = (content: string): string => {
       const index = content.toLocaleLowerCase().indexOf(normalizedQuery);
       const start = Math.max(0, index - 40);
@@ -9887,7 +10024,7 @@ export class Store {
         title: `${String(section.characterName)} / ${String(section.title)}`,
         snippet: snippet(String(section.contentMarkdown)),
         sectionType: String(section.sectionType),
-        isDead: Boolean(this.getCharacter(String(section.characterId)).isDead)
+        isDead: Boolean(section.isDead)
       })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),
       ...races.map((race) => {

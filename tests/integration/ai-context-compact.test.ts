@@ -344,6 +344,41 @@ describe("AI 对话上下文压缩", () => {
     expect(compacted.body.data.memoryItemCount).toBeGreaterThan(0);
   });
 
+  it("上下文估算和压缩复用同一份未压缩尾部快照", async () => {
+    const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
+    const conversationId = conversation.body.data.id;
+    for (let index = 0; index < 12; index += 1) {
+      await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `第 ${index + 1} 条对话，记录跃迁计划。`
+      }).expect(201);
+    }
+    const contextSpy = vi.spyOn(runtime.store, "getAiConversationContext");
+
+    const usage = runtime.ai.getContextUsage({
+      workId,
+      taskType: "chat",
+      modelId,
+      scope: { type: "chapter", chapterId },
+      instruction: "继续整理跃迁计划。",
+      conversationId
+    });
+
+    expect(usage).toMatchObject({ conversationTokens: expect.any(Number), compactedMessageCount: 0 });
+    expect(Number(usage.conversationTokens)).toBeGreaterThan(0);
+    expect(contextSpy).toHaveBeenCalledTimes(1);
+
+    contextSpy.mockClear();
+    const compacted = await runtime.ai.compactConversation({
+      workId,
+      modelId,
+      scope: { type: "chapter", chapterId },
+      conversationId
+    });
+    expect(compacted).toMatchObject({ compactedMessageCount: 4, retainedMessageCount: 8, changed: true });
+    expect(contextSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("正文区块过长时降级正文并标记上下文兜底", async () => {
     runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 16_384, modelId);
     runtime.store.saveChapter(chapterId, { content: `当前章节开头。${"非常长的章节正文。".repeat(2_000)}当前章节结尾。` });

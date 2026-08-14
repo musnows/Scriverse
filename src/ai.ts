@@ -65,9 +65,10 @@ import {
   HYBRID_SEARCH_TYPES,
   MAXIMUM_WORK_SEARCH_QUERY_LENGTH,
   buildHybridSearchSnippet,
-  documentParagraphLineRange,
+  documentParagraphLineRangesFromLines,
   fuseHybridSearchChannels,
   normalizeWorkSearchQuery,
+  type DocumentParagraphLineRange,
   type HybridSearchCandidate,
   type HybridSearchMatchKind,
   type HybridSearchType
@@ -454,6 +455,38 @@ const RELATIONSHIP_MAX_FUZZY_SCAN_CHARACTERS = 4_000_000;
 const RELATIONSHIP_MAX_FUZZY_MATCHES = 600;
 const RELATIONSHIP_MAX_SOURCE_MATCHES = 256;
 const RELATIONSHIP_PREFILTER_DISABLE_HINT = "请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览";
+
+type HybridChapterLineRangeFallbackChapter = {
+  chapterVersion: number;
+  lines: string[];
+  ranges: DocumentParagraphLineRange[];
+};
+
+type HybridChapterLineRangeFallbackState = {
+  chapters: Map<string, HybridChapterLineRangeFallbackChapter | null>;
+  attemptedCandidates: number;
+  chapterLoads: number;
+  repairedCandidates: number;
+  invalidCandidateRows: number;
+  missingChapters: number;
+  chapterVersionMismatches: number;
+  missingParagraphRanges: number;
+  paragraphContentMismatches: number;
+};
+
+function createHybridChapterLineRangeFallbackState(): HybridChapterLineRangeFallbackState {
+  return {
+    chapters: new Map(),
+    attemptedCandidates: 0,
+    chapterLoads: 0,
+    repairedCandidates: 0,
+    invalidCandidateRows: 0,
+    missingChapters: 0,
+    chapterVersionMismatches: 0,
+    missingParagraphRanges: 0,
+    paragraphContentMismatches: 0
+  };
+}
 
 function relationshipCandidateLimitMessage(message: string): string {
   return `${message}；${RELATIONSHIP_PREFILTER_DISABLE_HINT}`;
@@ -2129,13 +2162,16 @@ export class AiManager {
   async searchWork(
     workId: string,
     query: string,
-    options: { type?: HybridSearchType; limit?: number; includeAgentHistory?: boolean } = {}
+    options: { type?: HybridSearchType; limit?: number; allowedTypes?: readonly HybridSearchType[] } = {}
   ): Promise<Record<string, unknown>[]> {
     this.store.getWork(workId);
     const normalizedQuery = normalizeWorkSearchQuery(query);
     if (!normalizedQuery) return [];
     const requestedTypes = options.type ? new Set<HybridSearchType>([options.type]) : new Set(HYBRID_SEARCH_TYPES);
-    if (options.includeAgentHistory === false) requestedTypes.delete("agent-history");
+    if (options.allowedTypes) {
+      const allowedTypes = new Set(options.allowedTypes);
+      for (const type of requestedTypes) if (!allowedTypes.has(type)) requestedTypes.delete(type);
+    }
     if (requestedTypes.size === 0) return [];
     const hasIndexedSourceTypes = [...requestedTypes].some((type) => type !== "chapter" && type !== "agent-history");
     if (requestedTypes.has("chapter") || hasIndexedSourceTypes) await this.ensureRelationshipSearchIndex(workId);
@@ -2143,9 +2179,10 @@ export class AiManager {
     const channelLimit = Math.min(200, Math.max(50, resultLimit * 4));
     const accepts = (type: string): type is HybridSearchType => requestedTypes.has(type as HybridSearchType);
     const metadataDetails = new Map<string, Record<string, unknown>>();
+    const chapterLineRangeFallbackState = createHybridChapterLineRangeFallbackState();
 
     const metadataCandidates = [...requestedTypes].some((type) => type !== "agent-history")
-      ? this.store.search(workId, normalizedQuery).flatMap((item): HybridSearchCandidate[] => {
+      ? this.store.search(workId, normalizedQuery, requestedTypes).flatMap((item): HybridSearchCandidate[] => {
         const type = String(item.type);
         const itemId = String(item.id ?? "");
         if (!itemId || !accepts(type)) return [];
@@ -2166,14 +2203,19 @@ export class AiManager {
       : [];
 
     const exactCandidates = [
-      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit) : []),
+      ...(requestedTypes.has("chapter")
+        ? this.hybridChapterMatches(workId, normalizedQuery, "exact", channelLimit, chapterLineRangeFallbackState)
+        : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "exact", requestedTypes, channelLimit) : []),
       ...(requestedTypes.has("agent-history") ? this.hybridAgentHistoryMatches(workId, normalizedQuery, channelLimit) : [])
     ];
     const phoneticCandidates = [
-      ...(requestedTypes.has("chapter") ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit) : []),
+      ...(requestedTypes.has("chapter")
+        ? this.hybridChapterMatches(workId, normalizedQuery, "phonetic", channelLimit, chapterLineRangeFallbackState)
+        : []),
       ...(hasIndexedSourceTypes ? this.hybridIndexedSourceMatches(workId, normalizedQuery, "phonetic", requestedTypes, channelLimit) : [])
     ];
+    this.logHybridChapterLineRangeFallback(workId, chapterLineRangeFallbackState);
     return fuseHybridSearchChannels([
       { weight: 1.4, candidates: metadataCandidates },
       { weight: 1, candidates: exactCandidates },
@@ -2237,17 +2279,21 @@ export class AiManager {
     workId: string,
     query: string,
     matchKind: Extract<HybridSearchMatchKind, "exact" | "phonetic">,
-    limit: number
+    limit: number,
+    fallbackState: HybridChapterLineRangeFallbackState
   ): HybridSearchCandidate[] {
     let rows: Row[];
     if (matchKind === "phonetic") {
       const tokens = relationshipPinyinSearchTokens(query);
       if (tokens.length === 0) return [];
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_pinyin_fts pinyin
          JOIN chapter_paragraph_search paragraph ON paragraph.id = pinyin.rowid
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
@@ -2260,10 +2306,13 @@ export class AiManager {
       );
     } else if ([...query].length < 3) {
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_short_terms term
          JOIN chapter_paragraph_search paragraph ON paragraph.id = term.paragraph_id
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
@@ -2275,10 +2324,13 @@ export class AiManager {
       );
     } else {
       rows = this.store.db.all(
-        `SELECT paragraph.chapter_id, paragraph.paragraph_order, paragraph.content AS paragraph_content,
-                chapter.title AS chapter_title, chapter.content AS chapter_content, volume.title AS volume_title
+        `SELECT paragraph.id AS paragraph_id, paragraph.chapter_id, paragraph.paragraph_order,
+                paragraph.content AS paragraph_content, line_range.chapter_version AS range_chapter_version,
+                line_range.start_line, line_range.end_line, chapter.version_no AS chapter_version,
+                chapter.title AS chapter_title, volume.title AS volume_title
          FROM chapter_paragraph_search_fts fts
          JOIN chapter_paragraph_search paragraph ON paragraph.id = fts.rowid
+         LEFT JOIN chapter_paragraph_line_ranges line_range ON line_range.paragraph_id = paragraph.id
          JOIN chapters chapter ON chapter.id = paragraph.chapter_id
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL
@@ -2295,8 +2347,9 @@ export class AiManager {
       const chapterId = String(row.chapter_id ?? "");
       const key = `chapter:${chapterId}`;
       if (!chapterId || seen.has(key)) return [];
+      const range = this.hybridChapterLineRange(workId, row, fallbackState);
+      if (!range) return [];
       seen.add(key);
-      const range = documentParagraphLineRange(String(row.chapter_content ?? ""), Number(row.paragraph_order));
       return [{
         key,
         type: "chapter",
@@ -2305,9 +2358,117 @@ export class AiManager {
         subtitle: String(row.volume_title ?? ""),
         snippet: buildHybridSearchSnippet(String(row.paragraph_content ?? ""), query),
         matchKind,
-        ...(range ?? {})
+        ...range
       }];
     });
+  }
+
+  private hybridChapterLineRange(
+    workId: string,
+    row: Row,
+    fallbackState: HybridChapterLineRangeFallbackState
+  ): DocumentParagraphLineRange | null {
+    const chapterVersion = Number(row.chapter_version);
+    const rangeVersion = Number(row.range_chapter_version);
+    const startLine = Number(row.start_line);
+    const endLine = Number(row.end_line);
+    if (
+      Number.isSafeInteger(chapterVersion)
+      && chapterVersion >= 1
+      && rangeVersion === chapterVersion
+      && Number.isSafeInteger(startLine)
+      && Number.isSafeInteger(endLine)
+      && startLine >= 1
+      && endLine >= startLine
+    ) {
+      return { startLine, endLine };
+    }
+    fallbackState.attemptedCandidates += 1;
+    const chapterId = String(row.chapter_id ?? "");
+    const paragraphOrder = Number(row.paragraph_order);
+    const paragraphId = Number(row.paragraph_id);
+    if (!chapterId || !Number.isSafeInteger(paragraphOrder) || paragraphOrder < 0 || !Number.isSafeInteger(paragraphId) || paragraphId < 1) {
+      fallbackState.invalidCandidateRows += 1;
+      return null;
+    }
+    let cachedChapter = fallbackState.chapters.get(chapterId);
+    if (!fallbackState.chapters.has(chapterId)) {
+      fallbackState.chapterLoads += 1;
+      const chapter = this.store.db.get<{ content: string; version_no: number }>(
+        "SELECT content, version_no FROM chapters WHERE id = ? AND work_id = ? AND deleted_at IS NULL",
+        chapterId,
+        workId
+      );
+      if (!chapter) {
+        fallbackState.chapters.set(chapterId, null);
+        cachedChapter = null;
+      } else {
+        const lines = chapter.content.replace(/\r\n?/gu, "\n").split("\n");
+        cachedChapter = {
+          chapterVersion: Number(chapter.version_no),
+          lines,
+          ranges: documentParagraphLineRangesFromLines(lines)
+        };
+        fallbackState.chapters.set(chapterId, cachedChapter);
+      }
+    }
+    if (!cachedChapter) {
+      fallbackState.missingChapters += 1;
+      return null;
+    }
+    if (cachedChapter.chapterVersion !== chapterVersion) {
+      fallbackState.chapterVersionMismatches += 1;
+      return null;
+    }
+    const currentRange = cachedChapter.ranges[paragraphOrder];
+    if (!currentRange) {
+      fallbackState.missingParagraphRanges += 1;
+      return null;
+    }
+    const currentParagraph = cachedChapter.lines
+      .slice(currentRange.startLine - 1, currentRange.endLine)
+      .join("\n")
+      .trim();
+    if (currentParagraph !== String(row.paragraph_content ?? "")) {
+      fallbackState.paragraphContentMismatches += 1;
+      return null;
+    }
+    this.store.db.run(
+      `INSERT INTO chapter_paragraph_line_ranges (paragraph_id, chapter_version, start_line, end_line)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(paragraph_id) DO UPDATE SET
+         chapter_version = excluded.chapter_version,
+         start_line = excluded.start_line,
+         end_line = excluded.end_line`,
+      paragraphId,
+      chapterVersion,
+      currentRange.startLine,
+      currentRange.endLine
+    );
+    fallbackState.repairedCandidates += 1;
+    return currentRange;
+  }
+
+  private logHybridChapterLineRangeFallback(workId: string, state: HybridChapterLineRangeFallbackState): void {
+    if (state.attemptedCandidates === 0) return;
+    const fields = {
+      workId,
+      attemptedCandidates: state.attemptedCandidates,
+      chapterLoads: state.chapterLoads,
+      repairedCandidates: state.repairedCandidates,
+      invalidCandidateRows: state.invalidCandidateRows,
+      missingChapters: state.missingChapters,
+      chapterVersionMismatches: state.chapterVersionMismatches,
+      missingParagraphRanges: state.missingParagraphRanges,
+      paragraphContentMismatches: state.paragraphContentMismatches
+    };
+    const failedCandidates = state.invalidCandidateRows
+      + state.missingChapters
+      + state.chapterVersionMismatches
+      + state.missingParagraphRanges
+      + state.paragraphContentMismatches;
+    if (failedCandidates > 0) logger.warn("search.chapter_line_range_fallback", fields);
+    else logger.info("search.chapter_line_range_fallback", fields);
   }
 
   private hybridIndexedSourceMatches(
@@ -2320,13 +2481,17 @@ export class AiManager {
     const tokens = matchKind === "exact" ? relationshipCharacterTokens(query) : relationshipPinyinSearchTokens(query);
     if (tokens.length === 0) return [];
     const table = matchKind === "exact" ? "relationship_source_exact_fts" : "relationship_source_pinyin_fts";
+    const sourceTypes = [...requestedTypes].filter((type) => type !== "chapter" && type !== "agent-history");
+    if (sourceTypes.length === 0) return [];
+    const sourceTypePlaceholders = sourceTypes.map(() => "?").join(", ");
     const rows = this.store.db.all(
       `SELECT source.source_type, source.source_id FROM ${table} search_index
        JOIN relationship_source_search source ON source.id = search_index.rowid
-       WHERE source.work_id = ? AND ${table} MATCH ?
+       WHERE source.work_id = ? AND source.source_type IN (${sourceTypePlaceholders}) AND ${table} MATCH ?
        ORDER BY bm25(${table}), source.source_type, source.source_id
        LIMIT ?`,
       workId,
+      ...sourceTypes,
       ftsPhrase(tokens),
       limit
     );
@@ -4342,23 +4507,33 @@ export class AiManager {
 
   private contextBudget(
     input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
-    model: ModelRow
+    model: ModelRow,
+    existingConversation?: AiConversationContext | null
   ): Record<string, unknown> {
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const configuredOutputTokens = typeof preset.max_tokens === "number" ? preset.max_tokens : DEFAULT_MAX_TOKENS;
     const outputReserveTokens = Math.max(MIN_OUTPUT_RESERVE_TOKENS, Math.min(configuredOutputTokens, Math.floor(contextWindow * 0.25), contextWindow - MIN_OUTPUT_RESERVE_TOKENS));
     const availableInputTokens = Math.max(256, contextWindow - outputReserveTokens - 512);
-    const conversation = input.conversationId
-      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
-      : null;
+    const conversation = existingConversation === undefined
+      ? input.conversationId
+        ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+        : null
+      : existingConversation;
     const renderedMemory = conversation?.summary ? renderConversationMemory(conversation.summary) : "";
     const conversationTokens = conversation
       ? estimateAiTokens(renderedMemory) + conversation.messages.reduce((total, message) => total + estimateAiTokens(message.content), 0)
       : 0;
     const conversationBudgetTokens = Math.max(256, Math.floor(availableInputTokens * 0.32));
     const instructionTokens = estimateAiTokens(input.instruction);
-    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId)));
+    const roleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
+    const functionTokens = estimateAiTokens(JSON.stringify(this.enabledAgentTools(
+      input.workId,
+      input.taskType,
+      input.agentToolIds,
+      input.conversationId,
+      roleplayCharacterId
+    )));
     const workContextBudgetTokens = Math.max(256, availableInputTokens
       - Math.min(conversationTokens, conversationBudgetTokens)
       - Math.min(instructionTokens, Math.floor(availableInputTokens * 0.25))
@@ -4381,10 +4556,17 @@ export class AiManager {
   getContextUsage(input: Pick<GenerateInput, "workId" | "taskType" | "modelId" | "scope" | "instruction" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">): Record<string, unknown> {
     const { model } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const budget = this.contextBudget(input, model);
+    const conversation = budget.conversation as AiConversationContext | null;
     const contextPlan = this.buildContextPlan(input, model, budget);
     const context = contextPlan.context;
-    const messages = this.buildMessages(input, context);
-    const tools = this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
+    const messages = this.buildMessages(input, context, conversation);
+    const tools = this.enabledAgentTools(
+      input.workId,
+      input.taskType,
+      input.agentToolIds,
+      input.conversationId,
+      this.roleplayCharacterIdFromConversation(input.workId, conversation)
+    );
     const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
     const messageTokens = messages.reduce((total, message) => total + estimateAiTokens(completionMessageText(message.content)), 0);
     const systemPromptTokens = estimateAiTokens(completionMessageText(messages[0]?.content));
@@ -4395,7 +4577,6 @@ export class AiManager {
     // 超窗时把可交互上下文压到剩余份额，保证五段分布之和始终等于 contextWindow。
     const contextInteractionTokens = Math.max(0, contextWindow - systemPromptTokens - functionTokens - skillsTokens - remainingTokens);
     const threshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
-    const conversation = budget.conversation as AiConversationContext | null;
     const conversationUsagePercent = Number(budget.conversationUsagePercent) || 0;
     const configuredOutputTokens = Number(budget.configuredOutputTokens) || DEFAULT_MAX_TOKENS;
     const maxOutputUsagePercent = Math.min(100, Math.round(configuredOutputTokens / contextWindow * 100));
@@ -4500,8 +4681,7 @@ export class AiManager {
   ): Promise<Record<string, unknown>> {
     const inspection = this.inspectConversationContext(input);
     if (inspection.action === "ready") {
-      const conversation = this.store.getAiConversationContext(input.conversationId, input.workId);
-      if (conversation.warningPending) this.store.setAiConversationContextWarning(input.conversationId, false);
+      if (inspection.usage.contextWarningPending === true) this.store.setAiConversationContextWarning(input.conversationId, false);
       return inspection;
     }
     if (inspection.action === "warn" && !options.ignoreWarning) {
@@ -4570,7 +4750,7 @@ export class AiManager {
       input.excludeConversationMessageId
     );
     const { model } = this.resolveModel(input.workId, "chat", input.modelId);
-    const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model);
+    const budget = this.contextBudget({ ...input, taskType: "chat", instruction: "" }, model, conversation);
     const recentTokenBudget = Math.max(128, Math.floor(Number(budget.conversationBudgetTokens) * 0.75));
     let retainedMessageCount = 0;
     let retainedTokens = 0;
@@ -4629,12 +4809,27 @@ export class AiManager {
     };
   }
 
-  private buildMessages(input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">, context: string): CompletionMessage[] {
-    const roleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+  private buildMessages(
+    input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "extraSystemPrompt" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
+    context: string,
+    existingConversation?: AiConversationContext | null
+  ): CompletionMessage[] {
+    const conversation = existingConversation === undefined
+      ? input.conversationId
+        ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+        : null
+      : existingConversation;
+    const roleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const roleplayPrompt = roleplayCharacterId ? this.buildRoleplaySystemPrompt(roleplayCharacterId) : "";
     const platformPrompt = roleplayCharacterId ? "" : String(this.store.getPlatformAiSettings().systemPrompt ?? "").trim();
     const workPrompt = roleplayCharacterId ? "" : String(this.store.getWorkAiSettings(input.workId).systemPrompt ?? "").trim();
-    const enabledToolIds = this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId);
+    const enabledToolIds = this.enabledAgentToolIds(
+      input.workId,
+      input.taskType,
+      input.agentToolIds,
+      input.conversationId,
+      roleplayCharacterId
+    );
     const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship")
       ? [
           `当前可用的内部记忆能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
@@ -4718,9 +4913,6 @@ export class AiManager {
       input.instruction,
       { escape: false }
     );
-    const conversation = input.conversationId
-      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
-      : null;
     if (!conversation) {
       return [
         { role: "system", content: systemPrompt },
@@ -4767,7 +4959,8 @@ export class AiManager {
     persistKeywordInjections = false
   ): ContextBuildPlan {
     const budget = existingBudget ?? this.contextBudget(input, model);
-    const roleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+    const conversation = budget.conversation as AiConversationContext | null;
+    const roleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const settings = this.store.getWorkAiSettings(input.workId);
     const configuredScope: ContextScope = {
       ...input.scope,
@@ -4860,14 +5053,20 @@ export class AiManager {
 
   private buildContext(
     input: Pick<GenerateInput, "workId" | "taskType" | "instruction" | "scope" | "conversationId" | "excludeConversationMessageId" | "agentToolIds">,
-    model: ModelRow
+    model: ModelRow,
+    existingBudget?: Record<string, unknown>
   ): string {
-    return collapseAiBlankLines(this.buildContextPlan(input, model, undefined, true).context);
+    return collapseAiBlankLines(this.buildContextPlan(input, model, existingBudget, true).context);
   }
 
   private roleplayCharacterId(workId: string, conversationId?: string): string | null {
     if (!conversationId) return null;
     const conversation = this.store.getAiConversationContext(conversationId, workId);
+    return this.roleplayCharacterIdFromConversation(workId, conversation);
+  }
+
+  private roleplayCharacterIdFromConversation(workId: string, conversation: AiConversationContext | null): string | null {
+    if (!conversation) return null;
     if (conversation.roleplayCharacterId) {
       const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
       if (!canReadWorkModule(permissions, "characters")) {
@@ -4908,9 +5107,17 @@ export class AiManager {
     ].join("\n");
   }
 
-  private enabledAgentToolIds(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): AgentToolId[] {
+  private enabledAgentToolIds(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string,
+    roleplayCharacterIdOverride?: string | null
+  ): AgentToolId[] {
     if (taskType !== "chat" && requestedToolIds === undefined) return [];
-    const roleplayCharacterId = this.roleplayCharacterId(workId, conversationId);
+    const roleplayCharacterId = roleplayCharacterIdOverride === undefined
+      ? this.roleplayCharacterId(workId, conversationId)
+      : roleplayCharacterIdOverride;
     const permissions = this.store.getWork(workId).modulePermissions as WorkModulePermissions;
     if (roleplayCharacterId) {
       const requested = requestedToolIds ? new Set(requestedToolIds) : null;
@@ -4933,8 +5140,15 @@ export class AiManager {
       && this.canReadWithAgentTool(permissions, toolId));
   }
 
-  private enabledAgentTools(workId: string, taskType: TaskType, requestedToolIds?: AgentToolId[], conversationId?: string): Record<string, unknown>[] {
-    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId).map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
+  private enabledAgentTools(
+    workId: string,
+    taskType: TaskType,
+    requestedToolIds?: AgentToolId[],
+    conversationId?: string,
+    roleplayCharacterIdOverride?: string | null
+  ): Record<string, unknown>[] {
+    return this.enabledAgentToolIds(workId, taskType, requestedToolIds, conversationId, roleplayCharacterIdOverride)
+      .map((toolId) => AGENT_TOOL_DEFINITIONS[toolId]);
   }
 
   private canReadWithAgentTool(permissions: WorkModulePermissions, toolId: ConfiguredAgentToolId): boolean {
@@ -5360,11 +5574,7 @@ export class AiManager {
     if (name === "story_index") {
       const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
-      const tree = this.store.getWorkTree(workId);
-      const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
-      const chapters = (tree.volumes as Record<string, unknown>[]).flatMap((volume) => (volume.chapters as Record<string, unknown>[]).map((chapter) => ({
-        id: String(chapter.id), volumeTitle: String(volume.title), title: String(chapter.title), versionNo: Number(chapter.versionNo), summary: summaries.get(String(chapter.id)) ?? ""
-      })));
+      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit);
       const workRecords = structuralToolResultRecords([{
         id: work.id,
         title: work.title,
@@ -5375,7 +5585,7 @@ export class AiManager {
         chapterCount: work.chapterCount,
         wordCount: work.wordCount
       }], maximumRecordChars).map((record) => ({ ...record, _toolResultSection: "work" }));
-      const chapterRecords = structuralToolResultRecords(chapters.slice(offset, offset + limit), maximumRecordChars)
+      const chapterRecords = structuralToolResultRecords(chapterPage.chapters, maximumRecordChars)
         .map((record) => ({ ...record, _toolResultSection: "chapter" }));
       const result = paginateToolResultRecords([...workRecords, ...chapterRecords], cursor, (page, pagination) => {
         const pageWork = page.flatMap((record) => {
@@ -5393,10 +5603,10 @@ export class AiManager {
           data: {
             ...(pageWork[0] ? { work: pageWork[0] } : {}),
             ...(pageWork.length > 1 ? { workFragments: pageWork } : {}),
-            totalChapters: chapters.length,
+            totalChapters: chapterPage.totalChapters,
             offset,
             chapters: pageChapters,
-            nextOffset: pagination.nextCursor === null && offset + limit < chapters.length ? offset + limit : null
+            nextOffset: pagination.nextCursor === null && offset + limit < chapterPage.totalChapters ? offset + limit : null
           },
           pagination
         };
@@ -5631,7 +5841,10 @@ export class AiManager {
   }
 
   async generate(input: GenerateInput, onDelta?: (delta: string) => void): Promise<GenerateResult> {
-    const generationRoleplayCharacterId = this.roleplayCharacterId(input.workId, input.conversationId);
+    const conversation = input.conversationId
+      ? this.store.getAiConversationContext(input.conversationId, input.workId, input.excludeConversationMessageId)
+      : null;
+    const generationRoleplayCharacterId = this.roleplayCharacterIdFromConversation(input.workId, conversation);
     const { model, provider } = this.resolveModel(input.workId, input.taskType, input.modelId);
     const preset = safeJsonObject(stringValue(model, "preset_json"));
     const requestedParameters = {
@@ -5641,14 +5854,15 @@ export class AiManager {
     const configuredOutputTokens = Number(requestedParameters.max_tokens) || DEFAULT_MAX_TOKENS;
     const contextCompactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(input.workId).contextCompactThreshold) || 85));
     let effectiveInput = input;
-    let context = this.buildContext(effectiveInput, model);
-    let messages = this.buildMessages(effectiveInput, context);
+    let effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
+    let context = this.buildContext(effectiveInput, model, effectiveBudget);
+    let messages = this.buildMessages(effectiveInput, context, conversation);
     const allowedToolIds = new Set(input.disableTools
       ? []
-      : this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId));
+      : this.enabledAgentToolIds(input.workId, input.taskType, input.agentToolIds, input.conversationId, generationRoleplayCharacterId));
     let tools = input.disableTools
       ? []
-      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId);
+      : this.enabledAgentTools(input.workId, input.taskType, input.agentToolIds, input.conversationId, generationRoleplayCharacterId);
     let parameters: Record<string, unknown>;
     try {
       parameters = this.constrainParametersForContext(model, messages, requestedParameters, tools);
@@ -5656,8 +5870,9 @@ export class AiManager {
       if (!(error instanceof AppError) || error.code !== "CONTEXT_WINDOW_EXCEEDED") throw error;
       if (tools.length === 0) throw initialContextWindowError(error, provider, model);
       effectiveInput = { ...input, agentToolIds: [] };
-      context = this.buildContext(effectiveInput, model);
-      messages = this.buildMessages(effectiveInput, context);
+      effectiveBudget = this.contextBudget(effectiveInput, model, conversation);
+      context = this.buildContext(effectiveInput, model, effectiveBudget);
+      messages = this.buildMessages(effectiveInput, context, conversation);
       tools = [];
       allowedToolIds.clear();
       try {

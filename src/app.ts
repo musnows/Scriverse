@@ -30,7 +30,7 @@ import { EPUB_MIME_TYPE, epubContentDisposition } from "./epub-export.js";
 import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
-import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH } from "./hybrid-search.js";
+import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
@@ -2995,7 +2995,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, await ai.searchWork(request.params.workId, query.q, {
       type: query.type,
       limit: query.limit,
-      includeAgentHistory: permissions["ai-chat"] !== "none"
+      allowedTypes: readableHybridSearchTypes(permissions)
     }));
   });
   app.head("/api/works/:workId/export", (request, response) => {

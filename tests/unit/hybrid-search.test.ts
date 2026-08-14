@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE,
   buildHybridSearchSnippet,
   documentParagraphLineRange,
+  documentParagraphLineRanges,
+  documentParagraphLineRangesFromLines,
   fuseHybridSearchChannels,
+  hybridSearchPermissionModule,
   normalizeWorkSearchQuery,
+  readableHybridSearchTypes,
   type HybridSearchCandidate
 } from "../../src/hybrid-search.js";
+import { emptyWorkModulePermissions } from "../../src/work-permissions.js";
 
 function candidate(key: string, matchKind: HybridSearchCandidate["matchKind"], overrides: Partial<HybridSearchCandidate> = {}): HybridSearchCandidate {
   return {
@@ -46,6 +52,28 @@ describe("作品搜索输入边界", () => {
   });
 });
 
+describe("作品搜索权限映射", () => {
+  it("按搜索类型解析唯一的作品模块并列出当前可读类型", () => {
+    expect(HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE).toMatchObject({
+      chapter: "prose",
+      character: "characters",
+      "timeline-track": "timeline",
+      "timeline-event": "timeline",
+      "chapter-outline": "outlines",
+      foreshadow: "outlines",
+      review: "reviews",
+      "agent-history": "ai-chat"
+    });
+    expect(hybridSearchPermissionModule("character")).toBe("characters");
+    expect(hybridSearchPermissionModule("unknown")).toBeNull();
+
+    const permissions = emptyWorkModulePermissions();
+    permissions.prose = "read";
+    permissions["ai-chat"] = "write";
+    expect(readableHybridSearchTypes(permissions)).toEqual(["chapter", "agent-history"]);
+  });
+});
+
 describe("混合检索摘要", () => {
   it("优先截取关键词附近内容并清理 JSON 符号", () => {
     const snippet = buildHybridSearchSnippet(`{"content":"${"前文".repeat(40)}北港议会通过了新章程${"后文".repeat(40)}"}`, "北港", 60);
@@ -59,6 +87,12 @@ describe("混合检索摘要", () => {
 describe("正文段落行定位", () => {
   it("按空白行分段并返回一基行号", () => {
     const content = "第一行\n第二行\n\n  \n第三行\n第四行\n\n第五行";
+    expect(documentParagraphLineRanges(content)).toEqual([
+      { startLine: 1, endLine: 2 },
+      { startLine: 5, endLine: 6 },
+      { startLine: 8, endLine: 8 }
+    ]);
+    expect(documentParagraphLineRangesFromLines(content.split("\n"))).toEqual(documentParagraphLineRanges(content));
     expect(documentParagraphLineRange(content, 0)).toEqual({ startLine: 1, endLine: 2 });
     expect(documentParagraphLineRange(content, 1)).toEqual({ startLine: 5, endLine: 6 });
     expect(documentParagraphLineRange(content, 2)).toEqual({ startLine: 8, endLine: 8 });
