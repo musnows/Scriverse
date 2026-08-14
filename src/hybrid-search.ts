@@ -1,3 +1,5 @@
+import { canReadWorkModule, type WorkModulePermissions, type WorkPermissionModule } from "./work-permissions.js";
+
 export const HYBRID_SEARCH_TYPES = [
   "chapter",
   "setting",
@@ -25,6 +27,35 @@ export function normalizeWorkSearchQuery(value: string): string {
 
 export type HybridSearchType = typeof HYBRID_SEARCH_TYPES[number];
 export type HybridSearchMatchKind = "metadata" | "exact" | "phonetic";
+
+export const HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE = {
+  chapter: "prose",
+  setting: "settings",
+  character: "characters",
+  race: "races",
+  organization: "organizations",
+  "timeline-track": "timeline",
+  "timeline-event": "timeline",
+  relationship: "relationships",
+  "chapter-outline": "outlines",
+  foreshadow: "outlines",
+  review: "reviews",
+  "agent-history": "ai-chat"
+} as const satisfies Record<HybridSearchType, WorkPermissionModule>;
+
+export const HYBRID_SEARCH_PERMISSION_MODULES = [
+  ...new Set(HYBRID_SEARCH_TYPES.map((type) => HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE[type]))
+] satisfies WorkPermissionModule[];
+
+export function hybridSearchPermissionModule(type: unknown): WorkPermissionModule | null {
+  return typeof type === "string" && HYBRID_SEARCH_TYPES.includes(type as HybridSearchType)
+    ? HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE[type as HybridSearchType]
+    : null;
+}
+
+export function readableHybridSearchTypes(permissions: WorkModulePermissions): HybridSearchType[] {
+  return HYBRID_SEARCH_TYPES.filter((type) => canReadWorkModule(permissions, HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE[type]));
+}
 
 export type HybridSearchCandidate = {
   key: string;

@@ -10,7 +10,7 @@ import {
 import { exportWorkDocx } from "./docx-export.js";
 import { createEpubArchive } from "./epub-export.js";
 import { AppError, notFound } from "./errors.js";
-import { normalizeWorkSearchQuery } from "./hybrid-search.js";
+import { normalizeWorkSearchQuery, type HybridSearchType } from "./hybrid-search.js";
 import { accountReference, logger } from "./logger.js";
 import { paginated, paginationSql, type PaginatedResult, type Pagination } from "./pagination.js";
 import { currentRequestActor } from "./request-context.js";
@@ -9805,35 +9805,42 @@ export class Store {
     return [{ type: "unknown", scope }];
   }
 
-  search(workId: string, query: string): Record<string, unknown>[] {
+  search(workId: string, query: string, requestedTypes?: ReadonlySet<HybridSearchType>): Record<string, unknown>[] {
     this.getWork(workId);
     const normalizedQuery = normalizeWorkSearchQuery(query);
     if (!normalizedQuery) return [];
     const pattern = `%${escapeSqlLikePattern(normalizedQuery)}%`;
-    const chapters = this.db.all(
-      "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern
-    );
-    const races = this.listRaces(workId).filter((race) => {
-      const lineage = race.lineage as Array<{ name: string }>;
-      const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
-      return [
-        race.name,
-        race.description,
-        ...(race.settings as string[]),
-        ...lineage.map((item) => item.name),
-        ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
-      ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
-    }).slice(0, 50);
-    const settings = this.db.all(
-      "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern
-    );
-    const characters = this.db.all(
+    const accepts = (type: HybridSearchType): boolean => !requestedTypes || requestedTypes.has(type);
+    const chapters = accepts("chapter")
+      ? this.db.all(
+        "SELECT id, title, content, volume_id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
+        workId,
+        pattern,
+        pattern
+      )
+      : [];
+    const races = accepts("race")
+      ? this.listRaces(workId).filter((race) => {
+        const lineage = race.lineage as Array<{ name: string }>;
+        const effectiveSettings = race.effectiveSettings as Array<{ value: string; sourceRaceName: string }>;
+        return [
+          race.name,
+          race.description,
+          ...(race.settings as string[]),
+          ...lineage.map((item) => item.name),
+          ...effectiveSettings.flatMap((item) => [item.value, item.sourceRaceName])
+        ].join("\n").toLocaleLowerCase("zh-CN").includes(normalizedQuery);
+      }).slice(0, 50)
+      : [];
+    const settings = accepts("setting")
+      ? this.db.all(
+        "SELECT id, title, content, category FROM settings WHERE work_id = ? AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') LIMIT 50",
+        workId,
+        pattern,
+        pattern
+      )
+      : [];
+    const characters = accepts("character") ? this.db.all(
       `WITH RECURSIVE character_race_lineage(character_id, race_id, parent_race_id, name, path) AS (
          SELECT character.id, race.id, race.parent_race_id, race.name, race.name
          FROM characters character JOIN races race ON race.id = character.race_id
@@ -9857,15 +9864,17 @@ export class Store {
       pattern,
       pattern,
       pattern
-    );
-    const organizations = this.db.all(
-      "SELECT id, name, description, is_dissolved, settings_json FROM organizations WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
-      workId,
-      pattern,
-      pattern,
-      pattern
-    );
-    const characterSections = this.searchCharacterProfileSections(workId, normalizedQuery, 30);
+    ) : [];
+    const organizations = accepts("organization")
+      ? this.db.all(
+        "SELECT id, name, description, is_dissolved, settings_json FROM organizations WHERE work_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR settings_json LIKE ? ESCAPE '\\') LIMIT 50",
+        workId,
+        pattern,
+        pattern,
+        pattern
+      )
+      : [];
+    const characterSections = accepts("character") ? this.searchCharacterProfileSections(workId, normalizedQuery, 30) : [];
     const snippet = (content: string): string => {
       const index = content.toLocaleLowerCase().indexOf(normalizedQuery);
       const start = Math.max(0, index - 40);

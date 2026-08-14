@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE,
   buildHybridSearchSnippet,
   documentParagraphLineRange,
   fuseHybridSearchChannels,
+  hybridSearchPermissionModule,
   normalizeWorkSearchQuery,
+  readableHybridSearchTypes,
   type HybridSearchCandidate
 } from "../../src/hybrid-search.js";
+import { emptyWorkModulePermissions } from "../../src/work-permissions.js";
 
 function candidate(key: string, matchKind: HybridSearchCandidate["matchKind"], overrides: Partial<HybridSearchCandidate> = {}): HybridSearchCandidate {
   return {
@@ -43,6 +47,28 @@ describe("作品搜索输入边界", () => {
     expect(normalizeWorkSearchQuery("\nＡ北港\n议会\n")).toBe("a北港\n议会");
     expect(normalizeWorkSearchQuery("界".repeat(100))).toHaveLength(100);
     expect(normalizeWorkSearchQuery(`${"界".repeat(100)}外`)).toBe("界".repeat(100));
+  });
+});
+
+describe("作品搜索权限映射", () => {
+  it("按搜索类型解析唯一的作品模块并列出当前可读类型", () => {
+    expect(HYBRID_SEARCH_PERMISSION_MODULE_BY_TYPE).toMatchObject({
+      chapter: "prose",
+      character: "characters",
+      "timeline-track": "timeline",
+      "timeline-event": "timeline",
+      "chapter-outline": "outlines",
+      foreshadow: "outlines",
+      review: "reviews",
+      "agent-history": "ai-chat"
+    });
+    expect(hybridSearchPermissionModule("character")).toBe("characters");
+    expect(hybridSearchPermissionModule("unknown")).toBeNull();
+
+    const permissions = emptyWorkModulePermissions();
+    permissions.prose = "read";
+    permissions["ai-chat"] = "write";
+    expect(readableHybridSearchTypes(permissions)).toEqual(["chapter", "agent-history"]);
   });
 });
 
