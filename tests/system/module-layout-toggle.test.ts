@@ -25,7 +25,7 @@ describe("知识模块布局切换", () => {
 
     expect(page.text).toContain('/styles.css?v=20260815-ai-history-favorite-v1');
     expect(page.text).toContain('/app.js?v=20260815-ai-message-fork-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260815-ai-message-fork-v1"></script>')
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260815-ai-message-fork-v1&feature=ai-tool-call-copy-v1"></script>')
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');

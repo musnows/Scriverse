@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260815-ai-history-favorite-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260815-ai-history-favorite-v1&feature=ai-tool-call-copy-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -1099,8 +1099,8 @@
           <div><dt>函数信息</dt><dd id="ai-tool-call-description"></dd></div>
           <div><dt>返回字符数</dt><dd id="ai-tool-call-result-length"></dd></div>
         </dl>
-        <section><h3>参数</h3><pre id="ai-tool-call-arguments"></pre></section>
-        <section><h3>返回值</h3><pre id="ai-tool-call-result"></pre></section>
+        <section class="ai-tool-call-code-section"><h3>参数</h3><div class="ai-tool-call-code-block"><button class="ai-tool-call-copy-button" type="button" data-ai-tool-call-copy data-copy-target="ai-tool-call-arguments" data-copy-label="参数" aria-label="复制参数" title="复制参数"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg></button><pre id="ai-tool-call-arguments"></pre></div></section>
+        <section class="ai-tool-call-code-section"><h3>返回值</h3><div class="ai-tool-call-code-block"><button class="ai-tool-call-copy-button" type="button" data-ai-tool-call-copy data-copy-target="ai-tool-call-result" data-copy-label="返回值" aria-label="复制返回值" title="复制返回值"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg></button><pre id="ai-tool-call-result"></pre></div></section>
       </div>
     </dialog>
 
@@ -1164,6 +1164,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260815-ai-message-fork-v1"></script>
+    <script type="module" src="/app.js?v=20260815-ai-message-fork-v1&feature=ai-tool-call-copy-v1"></script>
   </body>
 </html>
