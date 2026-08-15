@@ -198,8 +198,23 @@ const annotationCreateSchema = z.object({
   message: "批注结束行不能早于开始行"
 });
 
+export const AI_WRITE_ANALYSIS_TASK_TYPES = [
+  "structure",
+  "chapter-analysis",
+  "character-extraction",
+  "character-summary",
+  "character-identity-audit",
+  "timeline-analysis",
+  "worldview-analysis",
+  "setting-extraction",
+  "consistency-check",
+  "report-update",
+  "book-analysis",
+  "relationship-analysis"
+] as const;
+
 const analysisTaskCreateSchema = z.object({
-  taskType: z.string().trim().min(1).max(100),
+  taskType: z.enum(AI_WRITE_ANALYSIS_TASK_TYPES),
   scope: recordSchema.optional(),
   modelId: identifierSchema.optional(),
   summary: summarySchema.optional()

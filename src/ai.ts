@@ -14,7 +14,7 @@ import {
   type CompletionPayload,
   type CompletionToolCall
 } from "./ai-protocol.js";
-import { AI_WRITE_TOOL_NAMES, AiWriteService, type AiWriteToolName } from "./ai-write.js";
+import { AI_WRITE_ANALYSIS_TASK_TYPES, AI_WRITE_TOOL_NAMES, AiWriteService, type AiWriteToolName } from "./ai-write.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
   DEFAULT_AGENT_TOOL_CALL_GLOBAL_MULTIPLIER,
@@ -961,7 +961,7 @@ const AI_WRITE_TOOL_DEFINITIONS: Record<AiWriteToolName, Record<string, unknown>
     summary: writeSummaryProperty
   }, ["chapterId", "kind", "startLine", "endLine", "note", "summary"]),
   create_analysis_task: aiWriteToolDefinition("create_analysis_task", "提交一条创建分析任务的可写修改计划。任务类型、模型和分析范围会原样写入计划，用户确认后进入既有任务队列。", {
-    taskType: { type: "string", minLength: 1, maxLength: 100 },
+    taskType: { type: "string", enum: AI_WRITE_ANALYSIS_TASK_TYPES },
     scope: { type: "object" },
     modelId: { type: "string", minLength: 1, maxLength: 200 },
     summary: writeSummaryProperty
