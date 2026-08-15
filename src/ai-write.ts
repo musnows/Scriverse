@@ -249,7 +249,7 @@ export const AI_WRITE_TOOL_NAMES = [
   "update_foreshadow",
   "create_chapter_annotation",
   "create_analysis_task",
-  "ask_user_questions",
+  "AskUserQuestions",
   "submit_write_plan"
 ] as const;
 export type AiWriteToolName = (typeof AI_WRITE_TOOL_NAMES)[number];
@@ -315,7 +315,7 @@ const TOOL_TO_KEY: Partial<Record<AiWriteToolName, AiWriteToolKey>> = {
   create_chapter_annotation: "annotations",
   create_analysis_task: "analysis",
   submit_write_plan: "analysis",
-  ask_user_questions: "askUserQuestions"
+  AskUserQuestions: "AskUserQuestions"
 };
 
 export const AI_WRITE_OPERATION_TOOL_KEYS: Record<AiWriteOperationType, AiWriteToolKey> = {
@@ -566,7 +566,7 @@ export class AiWriteService {
           return canWriteWorkModule(requesterPermissions, "ai-analysis")
             && canWriteWorkModule(ownerPermissions, "ai-analysis");
         }
-        if (key === "askUserQuestions") {
+        if (key === "AskUserQuestions") {
           return (canWriteWorkModule(requesterPermissions, "ai-chat") || canWriteWorkModule(requesterPermissions, "ai-analysis"))
             && (canWriteWorkModule(ownerPermissions, "ai-chat") || canWriteWorkModule(ownerPermissions, "ai-analysis"));
         }
@@ -1611,7 +1611,7 @@ export class AiWriteService {
     });
     if (!parsed.success) throw zodError(parsed.error);
     this.store.getWork(input.workId);
-    this.assertToolEnabled(input.workId, "askUserQuestions");
+    this.assertToolEnabled(input.workId, "AskUserQuestions");
     if (input.requester) {
       this.auth.assertWorkAccess(input.requester, input.workId, { anyWrite: ["ai-chat", "ai-analysis"] }, false, input.requesterAllowAdminAccess);
     }

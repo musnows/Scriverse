@@ -75,7 +75,7 @@ export const AI_WRITE_TOOL_KEYS = [
   "outlines",
   "annotations",
   "analysis",
-  "askUserQuestions"
+  "AskUserQuestions"
 ] as const;
 export type AiWriteToolKey = (typeof AI_WRITE_TOOL_KEYS)[number];
 export type AiWriteToolSettings = Record<AiWriteToolKey, boolean>;
@@ -87,7 +87,7 @@ export function normalizeAiWriteTools(value: unknown): AiWriteToolSettings {
       ? json<Record<string, unknown>>(value, {})
       : {};
   return Object.fromEntries(
-    AI_WRITE_TOOL_KEYS.map((key) => [key, source[key] === true])
+    AI_WRITE_TOOL_KEYS.map((key) => [key, source[key] === true || (key === "AskUserQuestions" && source.askUserQuestions === true)])
   ) as AiWriteToolSettings;
 }
 

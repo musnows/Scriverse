@@ -966,7 +966,7 @@ const AI_WRITE_TOOL_DEFINITIONS: Record<AiWriteToolName, Record<string, unknown>
     modelId: { type: "string", minLength: 1, maxLength: 200 },
     summary: writeSummaryProperty
   }, ["taskType", "summary"]),
-  ask_user_questions: aiWriteToolDefinition("ask_user_questions", "一次只向用户提出一个问题。必须提供至少两个预置选项，并把最推荐的选项放在第一个；可允许用户自定义回答。系统会持久化提问，用户未回答、拒绝、过期或失效时不得伪造回答或继续写操作。", {
+  AskUserQuestions: aiWriteToolDefinition("AskUserQuestions", "一次只向用户提出一个问题。必须提供至少两个预置选项，并把最推荐的选项放在第一个；可允许用户自定义回答。系统会持久化提问，用户未回答、拒绝、过期或失效时不得伪造回答或继续写操作。", {
     question: { type: "string", minLength: 1, maxLength: 500 },
     options: { type: "array", items: { type: "string", minLength: 1, maxLength: 300 }, minItems: 2, maxItems: 10 },
     allowCustomAnswer: { type: "boolean", description: "是否允许用户输入自定义回答。" },
@@ -4766,7 +4766,7 @@ export class AiManager {
         };
       }
       try {
-        if (writeToolName === "ask_user_questions") {
+        if (writeToolName === "AskUserQuestions") {
           const question = this.requireAiWriteService().askQuestion({
             workId,
             conversationId,

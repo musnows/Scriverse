@@ -505,7 +505,7 @@ const workAiSettingsSchema = z.object({
     outlines: z.boolean().optional(),
     annotations: z.boolean().optional(),
     analysis: z.boolean().optional(),
-    askUserQuestions: z.boolean().optional()
+    AskUserQuestions: z.boolean().optional()
   }).strict().optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),

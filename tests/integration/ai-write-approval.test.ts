@@ -66,7 +66,7 @@ describe("AI 可写工具审批流", () => {
     const settings = await owner.agent.get(`/api/works/${workId}/ai-settings`).expect(200);
     expect(settings.body.data.writeTools).toEqual({
       settings: false, characters: false, races: false, organizations: false, timeline: false,
-      relationships: false, outlines: false, annotations: false, analysis: false, askUserQuestions: false
+      relationships: false, outlines: false, annotations: false, analysis: false, AskUserQuestions: false
     });
     await owner.agent.post(`/api/works/${workId}/ai-write/plans`).set("X-CSRF-Token", owner.csrfToken).send({
       summary: "未开启工具的计划",
@@ -164,7 +164,7 @@ describe("AI 可写工具审批流", () => {
     const owner = await register(runtime, "question_owner");
     const work = await owner.agent.post("/api/works").set("X-CSRF-Token", owner.csrfToken).send({ title: "提问" }).expect(201);
     const workId = work.body.data.id;
-    await enableWriteTool(runtime, workId, owner, { askUserQuestions: true });
+    await enableWriteTool(runtime, workId, owner, { AskUserQuestions: true });
     const asked = await owner.agent.post(`/api/ai-write-questions/${"missing"}/answer`).set("X-CSRF-Token", owner.csrfToken).send({ answer: "x" }).expect(404);
     expect(asked.body.error.code).toBe("NOT_FOUND");
     // 直接调用持久化服务，并通过 API 读取

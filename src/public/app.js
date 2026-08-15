@@ -93,7 +93,7 @@ const AI_WRITE_TOOL_KEYS = Object.freeze([
   "outlines",
   "annotations",
   "analysis",
-  "askUserQuestions"
+  "AskUserQuestions"
 ]);
 
 function normalizePageSize(value, fallback = 30) {
@@ -1522,7 +1522,7 @@ const AI_TOOL_DISPLAY_NAMES = {
   update_foreshadow: "编辑伏笔",
   create_chapter_annotation: "创建正文评论或待办",
   create_analysis_task: "创建分析任务",
-  ask_user_questions: "向用户提问",
+  AskUserQuestions: "向用户提问",
   submit_write_plan: "提交修改计划"
 };
 
@@ -1554,7 +1554,7 @@ const AI_TOOL_DESCRIPTIONS = {
   update_foreshadow: "提交编辑已有伏笔词条的可写修改计划，必须经用户确认后才执行。",
   create_chapter_annotation: "复用既有正文批注能力，为指定正文位置创建评论或待办；不修改正文。",
   create_analysis_task: "提交创建分析任务的可写修改计划，必须经用户确认后才进入任务队列。",
-  ask_user_questions: "一次提出一个问题，必须提供至少两个预置选项，并把最推荐的选项放在第一个。",
+  AskUserQuestions: "一次提出一个问题，必须提供至少两个预置选项，并把最推荐的选项放在第一个。",
   submit_write_plan: "提交一份包含多项操作的可写修改计划，必须经用户确认后才执行。"
 };
 
@@ -7720,7 +7720,7 @@ function aiWriteToolsSectionMarkup(writeTools = {}) {
     ["outlines", "大纲/伏笔", "允许侧边栏 AI 新建和编辑章节大纲与伏笔。"],
     ["annotations", "正文评论/待办", "允许侧边栏 AI 为指定正文行号创建评论或待办，不修改正文。"],
     ["analysis", "分析任务", "允许侧边栏 AI 创建已确认的分析任务并进入任务队列。"],
-    ["askUserQuestions", "AskUserQuestions", "允许侧边栏 AI 向用户提出单个问题。"]
+    ["AskUserQuestions", "AskUserQuestions", "允许侧边栏 AI 向用户提出单个问题。"]
   ];
   const options = entries.map(([key, title, description]) => `
     <label><input name="ai-write-tool" type="checkbox" value="${key}" ${writeTools[key] === true ? "checked" : ""}><span><strong>${title}</strong><small>${description}</small></span></label>`).join("");
