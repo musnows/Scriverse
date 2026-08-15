@@ -1656,11 +1656,11 @@ export class ContextBuilder {
       ? [wrapAiContextRegion("work", `作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`)]
       : [];
     const contentSections: string[] = [];
-    const availableSettings = this.store.listSettings(workId);
+    const availableSettings = includeSettingInfo ? this.store.listSettings(workId) : [];
     const contextualSettings = !includeSettingInfo
       ? []
       : scope.includeAllSettings ? availableSettings : availableSettings.filter((item) => item.locked);
-    const allCharacters = this.store.listCharacters(workId);
+    const allCharacters = includeSettingInfo ? this.store.listCharacters(workId) : [];
     const lockedCharacters = includeSettingInfo
       ? allCharacters.filter((item) => Array.isArray(item.lockedFields) && item.lockedFields.length > 0)
       : [];
@@ -3426,7 +3426,18 @@ export class AiManager {
         ? "从本批正文抽取可复用的世界设定候选，并为每条候选提供原文证据。"
         : "从本批正文抽取人物候选，并为每位候选提供原文首次出现证据。";
     } else if (taskType === "relationship-analysis") {
-      const characters = this.store.listCharacters(workId);
+      const targeted = Boolean(scope.characterIds?.length);
+      const characters = targeted
+        ? this.store.db.all(
+          `SELECT id, name, aliases_json FROM characters
+           WHERE work_id = ? AND merged_into_character_id IS NULL ORDER BY name`,
+          workId
+        ).map((row) => ({
+          id: String(row.id),
+          name: String(row.name),
+          aliases: json<string[]>(String(row.aliases_json), [])
+        }))
+        : this.store.listCharacters(workId);
       const roster = characters.map((character) => `${String(character.id)} | ${String(character.name)}${Array.isArray(character.aliases) && character.aliases.length ? ` | 别名：${(character.aliases as string[]).join("、")}` : ""}`).join("\n");
       let selection = "本次范围没有可注入的正文或设定数据。";
       if (scope.type === "settings") {
@@ -3434,12 +3445,30 @@ export class AiManager {
         selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
         previewScope = { type: "settings", selection };
       } else {
-        const chunks = this.buildChapterChunks(this.getScopeChapters(workId, scope), 12_000);
-        selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
+        if (targeted && scope.type === "book") {
+          const stats = this.store.db.get(
+            `SELECT COUNT(*) AS chapter_count,
+               COALESCE(SUM(LENGTH(chapter.content)), 0) AS total_characters
+             FROM chapters chapter
+             JOIN volumes volume ON volume.id = chapter.volume_id
+             WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+               AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'`,
+            workId
+          ) ?? {};
+          const chapterCount = Number(stats.chapter_count ?? 0);
+          const totalCharacters = Number(stats.total_characters ?? 0);
+          if (chapterCount > 0 && totalCharacters > 0) {
+            const previewCharacters = Math.min(totalCharacters + chapterCount * 80, 12_000);
+            selection = `<CHAPTER id="context-preview" title="上下文预检">\n${"字".repeat(previewCharacters)}\n</CHAPTER>`;
+          }
+        } else {
+          const chunks = this.buildChapterChunks(this.getScopeChapters(workId, scope), 12_000);
+          selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
+        }
         previewScope = {
           type: "selection",
           selection,
-          ...(scope.characterIds?.length ? { suppressAutomaticContext: true } : {})
+          ...(targeted ? { suppressAutomaticContext: true } : {})
         };
       }
       instruction = `抽取本批正文或设定中的人物长期关系候选，只使用原文证据。角色规范表：\n${roster}`;
@@ -3546,12 +3575,7 @@ export class AiManager {
       ? input.scope as ContextScope
       : null;
     if (relationshipScope && Array.isArray(relationshipScope.relationshipSourceRefs)) {
-      this.relationshipSourcesFromRefs(
-        workId,
-        relationshipScope,
-        this.store.listCharacters(workId),
-        relationshipScope.relationshipSourceRefs
-      );
+      this.validateRelationshipSourceRefs(workId, relationshipScope, relationshipScope.relationshipSourceRefs);
     }
     if (modelId) {
       const contextPreview = this.previewAnalysisTaskContext(workId, {
@@ -9152,6 +9176,105 @@ export class AiManager {
       requestedRefs.has(this.relationshipIndexedSourceKey(source.sourceType, source.sourceId))
     );
     return { chapters, settings };
+  }
+
+  private validateRelationshipSourceRefs(
+    workId: string,
+    scope: ContextScope,
+    refs: Array<{ sourceType: string; sourceId: string; sourceVersion: string }>
+  ): void {
+    for (const ref of refs) {
+      const currentVersion = this.relationshipSourceRefVersion(workId, scope, ref.sourceType, ref.sourceId);
+      if (currentVersion === null || currentVersion !== ref.sourceVersion) {
+        throw new AppError(409, "RELATIONSHIP_SOURCE_PREVIEW_STALE", "来源已在预检后发生变化，请重新预览", {
+          sourceType: ref.sourceType,
+          sourceId: ref.sourceId
+        });
+      }
+    }
+  }
+
+  private relationshipSourceRefVersion(
+    workId: string,
+    scope: ContextScope,
+    sourceType: string,
+    sourceId: string
+  ): string | null {
+    if (sourceType === "chapter") {
+      if (scope.type === "settings") return null;
+      const chapter = this.store.db.get(
+        `SELECT chapter.version_no, chapter.volume_id, chapter.chapter_type, chapter.excluded_from_analysis
+         FROM chapters chapter
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE chapter.id = ? AND chapter.work_id = ?
+           AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL`,
+        sourceId,
+        workId
+      );
+      if (!chapter) return null;
+      if (scope.type === "chapter" && scope.chapterId !== sourceId) return null;
+      if (scope.type === "volume" && scope.volumeId !== String(chapter.volume_id)) return null;
+      if ((scope.type === "book" || scope.type === "volume")
+        && (Boolean(chapter.excluded_from_analysis) || String(chapter.chapter_type) === "作者的话")) return null;
+      return String(chapter.version_no);
+    }
+
+    if (scope.type !== "settings" && scope.includeAllSettings !== true) return null;
+    if (sourceType === "work") {
+      const work = this.store.db.get("SELECT version_no FROM works WHERE id = ? AND id = ? AND deleted_at IS NULL", sourceId, workId);
+      return work ? String(work.version_no) : null;
+    }
+    if (sourceType === "character") {
+      const character = this.store.db.get(
+        "SELECT version_no FROM characters WHERE id = ? AND work_id = ? AND merged_into_character_id IS NULL",
+        sourceId,
+        workId
+      );
+      return character ? String(character.version_no) : null;
+    }
+    if (sourceType === "review") {
+      const review = this.store.db.get("SELECT updated_at FROM review_items WHERE id = ? AND work_id = ?", sourceId, workId);
+      return review ? String(review.updated_at) : null;
+    }
+    if (sourceType === "chapter-outline") {
+      const outline = this.store.db.get(
+        `SELECT outline.chapter_id FROM chapter_outlines outline
+         JOIN chapters chapter ON chapter.id = outline.chapter_id
+         WHERE outline.chapter_id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
+        sourceId,
+        workId
+      );
+      if (!outline) return null;
+      const version = this.store.db.get(
+        `SELECT COALESCE(MAX(version_no), 0) AS version_no FROM entity_versions
+         WHERE work_id = ? AND entity_type = 'chapter-outline' AND entity_id = ?`,
+        workId,
+        sourceId
+      );
+      return String(Number(version?.version_no ?? 0));
+    }
+
+    const tableBySourceType = {
+      setting: "settings",
+      race: "races",
+      organization: "organizations",
+      "timeline-track": "timeline_tracks",
+      "timeline-event": "timeline_events",
+      relationship: "relationships",
+      foreshadow: "foreshadows"
+    } as const;
+    const table = tableBySourceType[sourceType as keyof typeof tableBySourceType];
+    if (!table) return null;
+    const source = this.store.db.get(`SELECT id FROM ${table} WHERE id = ? AND work_id = ?`, sourceId, workId);
+    if (!source) return null;
+    const version = this.store.db.get(
+      `SELECT COALESCE(MAX(version_no), 0) AS version_no FROM entity_versions
+       WHERE work_id = ? AND entity_type = ? AND entity_id = ?`,
+      workId,
+      sourceType,
+      sourceId
+    );
+    return String(Number(version?.version_no ?? 0));
   }
 
   async previewRelationshipSources(workId: string, scope: ContextScope, modelId?: string): Promise<Record<string, unknown>> {

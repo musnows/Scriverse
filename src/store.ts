@@ -8479,41 +8479,76 @@ export class Store {
 
   private relationshipRosterSourceVersions(workId: string): Record<string, number | string> {
     const versions: Record<string, number | string> = {};
-    for (const character of this.listCharacters(workId, false)) {
-      versions[`character:${String(character.id)}`] = Number(character.versionNo);
+    for (const row of this.db.all(
+      "SELECT id, version_no FROM characters WHERE work_id = ? AND merged_into_character_id IS NULL",
+      workId
+    )) {
+      versions[`character:${requiredString(row, "id")}`] = numberValue(row, "version_no");
     }
-    for (const race of this.listRaces(workId)) versions[`race:${String(race.id)}`] = Number(race.versionNo);
-    for (const organization of this.listOrganizations(workId)) {
-      versions[`organization:${String(organization.id)}`] = Number(organization.versionNo);
-    }
-    for (const relationship of this.listRelationships(workId)) {
-      versions[`relationship:${String(relationship.id)}`] = Number(relationship.versionNo);
-    }
+    this.appendVersionedEntitySourceVersions(versions, workId, "race", "races");
+    this.appendVersionedEntitySourceVersions(versions, workId, "organization", "organizations");
+    this.appendVersionedEntitySourceVersions(versions, workId, "relationship", "relationships");
     return versions;
+  }
+
+  private appendVersionedEntitySourceVersions(
+    versions: Record<string, number | string>,
+    workId: string,
+    entityType: VersionedEntityType,
+    table: "settings" | "races" | "organizations" | "timeline_tracks" | "timeline_events" | "relationships" | "foreshadows"
+  ): void {
+    const rows = this.db.all(
+      `SELECT entity.id, COALESCE(MAX(version.version_no), 0) AS version_no
+       FROM ${table} entity
+       LEFT JOIN entity_versions version
+         ON version.work_id = entity.work_id AND version.entity_type = ? AND version.entity_id = entity.id
+       WHERE entity.work_id = ?
+       GROUP BY entity.id`,
+      entityType,
+      workId
+    );
+    for (const row of rows) {
+      versions[`${entityType}:${requiredString(row, "id")}`] = numberValue(row, "version_no");
+    }
   }
 
   private relationshipSettingsSourceVersions(workId: string): Record<string, number | string> {
     const versions = this.relationshipRosterSourceVersions(workId);
-    const work = this.getWork(workId);
-    versions[`work:${workId}`] = Number(work.versionNo);
-    for (const setting of this.listSettings(workId)) versions[`setting:${String(setting.id)}`] = Number(setting.versionNo);
-    for (const character of this.listCharacters(workId, true)) {
-      for (const section of this.listCharacterProfileSections(String(character.id))) {
-        versions[`character-section:${String(section.id)}`] = Number(section.versionNo);
-      }
+    const work = this.db.get("SELECT version_no FROM works WHERE id = ? AND deleted_at IS NULL", workId);
+    if (!work) throw notFound("作品");
+    versions[`work:${workId}`] = numberValue(work, "version_no");
+    this.appendVersionedEntitySourceVersions(versions, workId, "setting", "settings");
+    for (const row of this.db.all(
+      `SELECT section.id, section.version_no
+       FROM character_profile_sections section
+       JOIN characters character ON character.id = section.character_id
+       WHERE section.work_id = ? AND character.merged_into_character_id IS NULL`,
+      workId
+    )) {
+      versions[`character-section:${requiredString(row, "id")}`] = numberValue(row, "version_no");
     }
-    for (const track of this.listTimelineTracks(workId)) versions[`timeline-track:${String(track.id)}`] = Number(track.versionNo);
-    for (const event of this.listTimelineEvents(workId)) versions[`timeline-event:${String(event.id)}`] = Number(event.versionNo);
-    for (const outline of this.listChapterOutlines(workId)) {
-      const chapterId = String(outline.chapterId);
-      versions[`chapter-meta:${chapterId}`] = Number(this.getChapter(chapterId).versionNo);
-      versions[`chapter-outline:${chapterId}`] = this.currentEntityVersionNo("chapter-outline", chapterId);
+    this.appendVersionedEntitySourceVersions(versions, workId, "timeline-track", "timeline_tracks");
+    this.appendVersionedEntitySourceVersions(versions, workId, "timeline-event", "timeline_events");
+    for (const row of this.db.all(
+      `SELECT chapter.id, chapter.version_no AS chapter_version_no,
+         COALESCE(MAX(version.version_no), 0) AS outline_version_no
+       FROM chapter_outlines outline
+       JOIN chapters chapter ON chapter.id = outline.chapter_id
+       LEFT JOIN entity_versions version
+         ON version.work_id = chapter.work_id
+         AND version.entity_type = 'chapter-outline'
+         AND version.entity_id = chapter.id
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL
+       GROUP BY chapter.id, chapter.version_no`,
+      workId
+    )) {
+      const chapterId = requiredString(row, "id");
+      versions[`chapter-meta:${chapterId}`] = numberValue(row, "chapter_version_no");
+      versions[`chapter-outline:${chapterId}`] = numberValue(row, "outline_version_no");
     }
-    for (const foreshadow of this.listForeshadows(workId)) {
-      versions[`foreshadow:${String(foreshadow.id)}`] = Number(foreshadow.versionNo);
-    }
-    for (const review of this.listReviewItems(workId)) {
-      versions[`review:${String(review.id)}`] = String(review.updatedAt);
+    this.appendVersionedEntitySourceVersions(versions, workId, "foreshadow", "foreshadows");
+    for (const row of this.db.all("SELECT id, updated_at FROM review_items WHERE work_id = ?", workId)) {
+      versions[`review:${requiredString(row, "id")}`] = requiredString(row, "updated_at");
     }
     return versions;
   }
@@ -8525,25 +8560,44 @@ export class Store {
       ...(Array.isArray(scope.chapterIds) ? scope.chapterIds.filter((value): value is string => typeof value === "string") : [])
     ];
     for (const chapterId of [...new Set(selectedChapterIds)]) {
-      const chapter = this.getChapter(chapterId);
-      if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-      sourceVersions[chapterId] = Number(chapter.versionNo);
+      const chapter = this.db.get(
+        "SELECT work_id, version_no FROM chapters WHERE id = ? AND deleted_at IS NULL",
+        chapterId
+      );
+      if (!chapter) throw notFound("章节");
+      if (requiredString(chapter, "work_id") !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+      sourceVersions[chapterId] = numberValue(chapter, "version_no");
     }
     if (scope.type === "book" || scope.type === "volume") {
-      const tree = this.getWorkTree(workId);
-      const volumes = tree.volumes as Record<string, unknown>[];
       const selectedVolumeIds = [
         ...(typeof scope.volumeId === "string" ? [scope.volumeId] : []),
         ...(Array.isArray(scope.volumeIds) ? scope.volumeIds.filter((value): value is string => typeof value === "string") : [])
       ];
       const selectedVolumeIdSet = new Set(selectedVolumeIds);
-      const selectedVolumes = scope.type === "volume"
-        ? volumes.filter((volume) => selectedVolumeIdSet.has(String(volume.id)))
-        : volumes;
-      if (scope.type === "volume" && selectedVolumes.length === 0) throw notFound("卷");
-      if (scope.type === "volume" && selectedVolumes.length !== selectedVolumeIdSet.size) throw notFound("卷");
-      for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
-        sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
+      if (scope.type === "volume") {
+        if (selectedVolumeIdSet.size === 0) throw notFound("卷");
+        const volumePlaceholders = [...selectedVolumeIdSet].map(() => "?").join(", ");
+        const volumes = this.db.all(
+          `SELECT id FROM volumes WHERE work_id = ? AND deleted_at IS NULL AND id IN (${volumePlaceholders})`,
+          workId,
+          ...selectedVolumeIdSet
+        );
+        if (volumes.length !== selectedVolumeIdSet.size) throw notFound("卷");
+      }
+      const volumeFilter = scope.type === "volume"
+        ? `AND chapter.volume_id IN (${[...selectedVolumeIdSet].map(() => "?").join(", ")})`
+        : "";
+      const chapterRows = this.db.all(
+        `SELECT chapter.id, chapter.version_no
+         FROM chapters chapter
+         JOIN volumes volume ON volume.id = chapter.volume_id
+         WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+           ${volumeFilter}`,
+        workId,
+        ...(scope.type === "volume" ? [...selectedVolumeIdSet] : [])
+      );
+      for (const chapter of chapterRows) {
+        sourceVersions[requiredString(chapter, "id")] = numberValue(chapter, "version_no");
       }
     }
     if (scope.previewRelationshipChanges === true) {
@@ -8584,9 +8638,10 @@ export class Store {
     if (Array.isArray(scope.characterIds)) {
       for (const characterId of scope.characterIds) {
         if (typeof characterId !== "string") throw new AppError(400, "CHARACTER_REQUIRED", "被分析角色标识无效");
-        const character = this.getCharacter(characterId);
-        if (character.workId !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
-        targetCharacters.push({ id: characterId, name: String(character.name) });
+        const character = this.db.get("SELECT work_id, name FROM characters WHERE id = ?", characterId);
+        if (!character) throw notFound("角色");
+        if (requiredString(character, "work_id") !== workId) throw new AppError(400, "CHARACTER_WORK_MISMATCH", "被分析角色不属于当前作品");
+        targetCharacters.push({ id: characterId, name: requiredString(character, "name") });
       }
       if (targetCharacters.length > 0) scope.targetCharacters = targetCharacters;
     }

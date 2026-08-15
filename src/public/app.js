@@ -13221,6 +13221,7 @@ async function openTaskDialog() {
     modelId
   });
   openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["volume", "指定分卷"], ["book", "全书"]]) + chapterField + volumeField + relationshipFields, async (form) => {
+    const workId = state.work.id;
     const taskType = String(form.get("taskType"));
     const modelId = String(form.get("modelId"));
     const scope = buildRelationshipScope(form);
@@ -13235,26 +13236,19 @@ async function openTaskDialog() {
           sourceVersion: input.dataset.sourceVersion
         }));
     }
-    const contextPreview = await api(`/api/works/${state.work.id}/tasks/context-preview`, {
-      method: "POST",
-      body: { taskType, scope, modelId }
-    });
-    if (contextPreview.allowed !== true) {
-      contextWarning.textContent = String(contextPreview.message || "当前分析范围超过模型上下文阈值，请切换到上下文更长的模型后重试。");
-      contextWarning.classList.remove("hidden");
-      throw new Error(contextWarning.textContent);
-    }
-    contextWarning.textContent = "";
-    contextWarning.classList.add("hidden");
-    await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
-    await refreshBackgroundTaskCenter({ announce: false });
-    taskListPage = 1;
+    clearContextWarning();
     try {
-      await renderTasks(1);
-      toast("分析任务已创建，已进入任务队列");
+      await api(`/api/works/${workId}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     } catch (error) {
-      toast(`任务已创建，但列表刷新失败：${error.message}`, "error");
+      if (error.code === "AI_CONTEXT_TOO_LARGE") {
+        contextWarning.textContent = error.message || "当前分析范围超过模型上下文阈值，请切换到上下文更长的模型后重试。";
+        contextWarning.classList.remove("hidden");
+      }
+      throw error;
     }
+    taskListPage = 1;
+    toast("分析任务已创建，已进入任务队列");
+    void refreshAnalysisTaskViewsAfterCreate(workId);
   }, "AI 分析", {
     submitLabel: "创建任务",
     pendingLabel: "创建中…",
@@ -13559,6 +13553,20 @@ async function openTaskDialog() {
     syncChapterField();
   });
   syncRelationshipOptions();
+}
+
+async function refreshAnalysisTaskViewsAfterCreate(workId) {
+  try {
+    await Promise.all([
+      refreshBackgroundTaskCenter({ announce: false }),
+      state.module === "tasks" && state.work?.id === workId
+        ? renderTasks(1, { refresh: true })
+        : Promise.resolve()
+    ]);
+  } catch (error) {
+    console.error("Failed to refresh analysis task views after creation", error);
+    toast(`任务已创建，但列表刷新失败：${error.message}`, "error");
+  }
 }
 
 function openProviderDialog(item) {

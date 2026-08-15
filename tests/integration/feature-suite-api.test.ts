@@ -1112,6 +1112,55 @@ describe("AI 分析目标导航 API", () => {
     });
     expect(taskPage.body.data.items.find((item: { id: string }) => item.id === multipleCharacterTask.body.data.id)?.scopeTarget).toBeNull();
   });
+
+  it("创建定向关系任务时只读取来源版本元数据", async () => {
+    const { workId, chapters } = await seedWork(runtime);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟",
+      profile: { identity: "调查员", background: "长期人物档案".repeat(2_000) }
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "北港旧约",
+      category: "人物关系",
+      content: "林舟与沈星共同遵守北港旧约。".repeat(2_000)
+    }).expect(201);
+    const fullReadSpies = [
+      vi.spyOn(runtime.store, "getWorkTree"),
+      vi.spyOn(runtime.store, "getCharacter"),
+      vi.spyOn(runtime.store, "listCharacters"),
+      vi.spyOn(runtime.store, "listSettings"),
+      vi.spyOn(runtime.store, "listRaces"),
+      vi.spyOn(runtime.store, "listOrganizations"),
+      vi.spyOn(runtime.store, "listRelationships")
+    ];
+
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [character.body.data.id],
+        preFilterRelationshipSources: true,
+        previewRelationshipChanges: true,
+        relationshipSourceRefs: [
+          { sourceType: "chapter", sourceId: chapters[0].id, sourceVersion: String(chapters[0].versionNo) },
+          { sourceType: "setting", sourceId: setting.body.data.id, sourceVersion: String(setting.body.data.versionNo) }
+        ]
+      }
+    }).expect(201);
+
+    expect(task.body.data).toMatchObject({
+      status: "pending",
+      scope: { targetCharacters: [{ id: character.body.data.id, name: "林舟" }] }
+    });
+    expect(task.body.data.sourceVersions).toMatchObject({
+      [chapters[0].id]: chapters[0].versionNo,
+      [`character:${character.body.data.id}`]: character.body.data.versionNo,
+      [`setting:${setting.body.data.id}`]: setting.body.data.versionNo
+    });
+    for (const spy of fullReadSpies) expect(spy).not.toHaveBeenCalled();
+  });
 });
 
 describe("续写守卫和全书关系 Map-Reduce", () => {

@@ -28,9 +28,10 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('const volumeIds = form.getAll("volumeIds").map(String).filter(Boolean)');
     expect(application).toContain('kind === "chapter" ? "chapterIds" : "volumeIds"');
     expect(application).toContain('body: { taskType, scope, modelId }');
-    expect(application).toContain('/tasks/context-preview');
+    expect(application).not.toContain('/tasks/context-preview');
     expect(application).toContain('data-analysis-context-warning');
     expect(application).toContain('上下文更长的模型');
+    expect(application).toContain('error.code === "AI_CONTEXT_TOO_LARGE"');
     expect(application).not.toContain('taskType === "character-identity-audit" || scopeType === "book"');
     expect(application).toContain('const activeKind = ["chapter", "volume"].includes(scopeTypeSelect.value) ? scopeTypeSelect.value : null');
     expect(application).toContain('scopeFields[kind].setAttribute("aria-disabled", String(!enabled))');
@@ -73,7 +74,9 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('pendingLabel: "创建中…"');
     expect(application).toContain('pendingMessage: "正在创建分析任务，请稍候"');
     expect(application).toContain('errorPrefix: "任务创建失败："');
-    expect(application).toContain('await renderTasks(1);\n      toast("分析任务已创建，已进入任务队列")');
+    expect(application).toContain('toast("分析任务已创建，已进入任务队列");\n    void refreshAnalysisTaskViewsAfterCreate(workId)');
+    expect(application).toContain('async function refreshAnalysisTaskViewsAfterCreate(workId)');
+    expect(application).toContain('renderTasks(1, { refresh: true })');
     expect(application).toContain('toast(`任务已创建，但列表刷新失败：${error.message}`, "error")');
     expect(page).toContain('id="dialog-submit-status"');
     expect(page).toContain('class="dialog-submit-progress" role="progressbar"');
