@@ -669,6 +669,50 @@ export class AiWriteService {
     return key && typeof input[key] === "string" ? String(input[key]) : null;
   }
 
+  private assertAnalysisScopeReferences(workId: string, scope: Record<string, unknown>): void {
+    const assertIds = (field: string, resolve: (entityId: string) => Record<string, unknown>, label: string): void => {
+      const values = Array.isArray(scope[field]) ? scope[field] : [];
+      for (const value of values) {
+        if (typeof value !== "string") throw new AppError(400, "AI_WRITE_SCOPE_INVALID", `${label}标识无效`);
+        const entity = resolve(value);
+        if (String(entity.workId) !== workId) throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", `${label}不属于当前作品`);
+      }
+    };
+    if (typeof scope.chapterId === "string") {
+      const chapter = this.store.getChapter(scope.chapterId);
+      if (String(chapter.workId) !== workId) throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "章节不属于当前作品");
+    }
+    if (typeof scope.volumeId === "string") {
+      const volume = this.store.getVolume(scope.volumeId);
+      if (String(volume.workId) !== workId) throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "分卷不属于当前作品");
+    }
+    assertIds("chapterIds", (entityId) => this.store.getChapter(entityId), "章节");
+    assertIds("settingIds", (entityId) => this.store.getSetting(entityId), "设定");
+    assertIds("characterIds", (entityId) => this.store.getCharacter(entityId), "角色");
+    assertIds("mentionCharacterIds", (entityId) => this.store.getCharacter(entityId), "角色");
+    assertIds("raceIds", (entityId) => this.store.getRace(entityId), "种族");
+    assertIds("organizationIds", (entityId) => this.store.getOrganization(entityId), "组织");
+  }
+
+  private assertTimelineReferences(workId: string, input: Record<string, unknown>): void {
+    if (typeof input.trackId === "string" && input.trackId) {
+      const track = this.store.getTimelineTrack(input.trackId);
+      if (String(track.workId) !== workId) throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "独立时间轴不属于当前作品");
+    }
+    const chapterIds = Array.isArray(input.chapterIds) ? input.chapterIds : [];
+    for (const chapterId of chapterIds) {
+      if (typeof chapterId !== "string") throw new AppError(400, "AI_WRITE_SCOPE_INVALID", "章节标识无效");
+      const chapter = this.store.getChapter(chapterId);
+      if (String(chapter.workId) !== workId) throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "时间线事件引用的章节不属于当前作品");
+    }
+    const participantIds = Array.isArray(input.participantIds) ? input.participantIds : [];
+    for (const characterId of participantIds) {
+      if (typeof characterId !== "string") throw new AppError(400, "AI_WRITE_SCOPE_INVALID", "角色标识无效");
+      const character = this.store.getCharacter(characterId);
+      if (String(character.workId) !== workId) throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "时间线事件引用的角色不属于当前作品");
+    }
+  }
+
   private currentEntity(entityType: string, entityId: string | null, operationType: AiWriteOperationType): Record<string, unknown> | null {
     if (!entityId) return null;
     switch (entityType) {
@@ -823,6 +867,12 @@ export class AiWriteService {
   ): AiWriteOperationRecord {
     const input = parseAiWriteOperation(operationType, rawInput);
     const entityType = operationEntityType(operationType);
+    if (operationType === "analysis-task.create") {
+      this.assertAnalysisScopeReferences(workId, parseRecord(input.scope) ?? { type: "book" });
+    }
+    if (operationType === "timeline-event.create" || operationType === "timeline-event.update") {
+      this.assertTimelineReferences(workId, input);
+    }
     const targetId = this.targetIdFor(input, operationType);
     const current = this.currentEntity(entityType, targetId, operationType);
     if (current && String(current.workId) !== workId) {
