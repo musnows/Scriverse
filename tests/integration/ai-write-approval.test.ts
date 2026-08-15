@@ -265,6 +265,47 @@ describe("AI 可写工具审批流", () => {
     expect(annotations.body.data[0]).toMatchObject({ kind: "todo", startLine: 2, endLine: 2, quote: "第二行正文" });
   });
 
+  it("章节大纲创建计划可以确认执行，不会误判目标不存在", async () => {
+    runtime = createRuntimeForTest({ authEnabled: false });
+    const work = await request(runtime.app).post("/api/works").send({ title: "大纲创建" }).expect(201);
+    const workId = work.body.data.id;
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "第一章",
+      content: "正文"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ writeTools: { outlines: true } }).expect(200);
+    const plan = await request(runtime.app).post(`/api/works/${workId}/ai-write/plans`).send({
+      summary: "创建章节大纲",
+      operations: [{ operationType: "chapter-outline.create", input: { chapterId: chapter.body.data.id, goal: "章节目标", summary: "创建章节大纲" } }]
+    }).expect(201);
+    const approved = await request(runtime.app).post(`/api/ai-write-approvals/${plan.body.data.id}/approve`).send({}).expect(200);
+    expect(approved.body.data.status).toBe("succeeded");
+    const outline = await request(runtime.app).get(`/api/chapters/${chapter.body.data.id}/outline`).expect(200);
+    expect(outline.body.data.goal).toBe("章节目标");
+  });
+
+  it("拒绝为其他作品的章节创建大纲", async () => {
+    runtime = createRuntimeForTest({ authEnabled: false });
+    const workA = await request(runtime.app).post("/api/works").send({ title: "作品 A" }).expect(201);
+    const workB = await request(runtime.app).post("/api/works").send({ title: "作品 B" }).expect(201);
+    const volumeB = await request(runtime.app).post(`/api/works/${workB.body.data.id}/volumes`).send({ title: "B 卷" }).expect(201);
+    const chapterB = await request(runtime.app).post(`/api/works/${workB.body.data.id}/chapters`).send({
+      volumeId: volumeB.body.data.id,
+      title: "B 章",
+      content: "B 正文"
+    }).expect(201);
+    await request(runtime.app).patch(`/api/works/${workA.body.data.id}/ai-settings`).send({ writeTools: { outlines: true } }).expect(200);
+    const plan = await request(runtime.app).post(`/api/works/${workA.body.data.id}/ai-write/plans`).send({
+      summary: "跨作品大纲",
+      operations: [{ operationType: "chapter-outline.create", input: { chapterId: chapterB.body.data.id, goal: "越权目标", summary: "跨作品大纲" } }]
+    }).expect(400);
+    expect(plan.body.error.code).toBe("AI_WRITE_TARGET_WORK_MISMATCH");
+    const outlinesB = await request(runtime.app).get(`/api/works/${workB.body.data.id}/outlines`).expect(200);
+    expect(outlinesB.body.data[0].goal ?? "").toBe("");
+  });
+
   it("分析任务计划确认后进入既有任务队列，且任务类型、模型和范围一致", async () => {
     runtime = createRuntimeForTest({ authEnabled: false });
     const work = await request(runtime.app).post("/api/works").send({ title: "分析任务计划" }).expect(201);

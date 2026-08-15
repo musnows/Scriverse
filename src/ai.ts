@@ -5819,6 +5819,9 @@ export class AiManager {
         }
       };
       let toolRound = 0;
+      // 提问挂起后置真：后续补全请求不再携带工具，模型只能输出收尾文本，
+      // 结构上阻止“未获回答就继续调用写工具或依据伪造回答操作”。
+      let questionPending = false;
       while (choice?.message?.tool_calls?.length) {
         const round = toolRound + 1;
         recordChoiceProcess(choice, round, true);
@@ -5881,6 +5884,9 @@ export class AiManager {
           executedToolCalls.push(execution);
           toolCallQuotaUsed += 1;
           globalToolCallUsed += 1;
+          if (execution.name === "AskUserQuestions" && execution.status === "completed" && execution.result?.ok === true) {
+            questionPending = true;
+          }
           const remainingToolCalls = Math.max(0, agentToolCallLimit - toolCallQuotaUsed);
           execution.result = withAgentToolCallQuotaNotice(execution.result, remainingToolCalls, agentToolCallLimit);
           toolTraceRound?.toolExecutions.push(execution);
@@ -5898,8 +5904,17 @@ export class AiManager {
           await compactToolContext(currentRoundMessages, round);
         }
         toolRound += 1;
-        payload = await requestCompletion("auto");
+        payload = await requestCompletion(questionPending ? "none" : "auto");
         choice = payload.choices?.[0];
+        // 提问挂起后，即使提供方违规返回工具调用也一律丢弃，本轮不得再执行任何工具。
+        if (questionPending && choice?.message?.tool_calls?.length) {
+          logger.warn("ai.tool_call.discarded_after_question", {
+            callId,
+            workId: input.workId,
+            discarded: choice.message.tool_calls.map((toolCall) => toolCall.function.name)
+          });
+          choice = { ...choice, message: { ...choice.message, tool_calls: [] } };
+        }
       }
       recordChoiceProcess(choice, toolRound + 1, false);
       const content = choice?.message?.content;

@@ -875,6 +875,12 @@ export class AiWriteService {
       this.assertTimelineReferences(workId, input);
     }
     const targetId = this.targetIdFor(input, operationType);
+    if (entityType === "chapter-outline" && typeof input.chapterId === "string") {
+      const chapter = this.store.getChapter(String(input.chapterId));
+      if (String(chapter.workId) !== workId) {
+        throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "章节不属于当前作品，已拒绝执行");
+      }
+    }
     const current = this.currentEntity(entityType, targetId, operationType);
     if (current && String(current.workId) !== workId) {
       throw new AppError(400, "AI_WRITE_TARGET_WORK_MISMATCH", "操作对象不属于当前作品，已拒绝执行");
@@ -1186,7 +1192,9 @@ export class AiWriteService {
           restricted: true,
           targetLabel: "受限对象",
           fields: [{ field: "restricted", label: "内容受限", before: null, after: null, changed: false }]
-        }
+        },
+        result: null,
+        failure: null
       };
     };
     const redacted = { ...record };
@@ -1334,7 +1342,7 @@ export class AiWriteService {
           }
         }
       }
-      if (operation.operationType !== "analysis-task.create" && operation.targetId) {
+      if (operation.operationType !== "analysis-task.create" && operation.targetId && operation.operationType !== "chapter-outline.create") {
         const current = this.currentEntity(operation.entityType, operation.targetId, operation.operationType);
         if (!current) {
           problems.push(`${AI_WRITE_ENTITY_LABELS[operation.entityType] ?? operation.entityType} 已不存在`);
@@ -1345,6 +1353,10 @@ export class AiWriteService {
             problems.push(`${AI_WRITE_ENTITY_LABELS[operation.entityType] ?? operation.entityType} 目标版本已变化（计划 v${String(operation.targetVersion)}，当前 v${String(currentVersion)}）`);
           }
         }
+      }
+      if (operation.operationType === "chapter-outline.create" && operation.targetId) {
+        const chapter = this.store.getChapter(operation.targetId);
+        if (String(chapter.workId) !== workId) problems.push("章节不属于当前作品");
       }
       if (operation.operationType === "chapter-annotation.create" && operation.targetId) {
         const chapter = this.store.getChapter(operation.targetId);
@@ -1582,6 +1594,9 @@ export class AiWriteService {
         });
       });
     } catch (error) {
+      if (error instanceof AppError && error.code === "AI_WRITE_APPROVAL_NOT_PENDING") {
+        throw error;
+      }
       failure = error instanceof Error ? error.message : "审批执行失败";
       const publicFailure = error instanceof AppError ? error.message : "审批执行失败，已回滚全部修改";
       logger.warn("ai-write.approval.execution_failed", {
