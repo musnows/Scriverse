@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
+import { AiWriteService, resolveAiWritePlanMaxOperations } from "./ai-write.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
@@ -494,6 +495,18 @@ const workAiSettingsSchema = z.object({
   agentToolCallLimit: z.number().int().min(5).max(48).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
   agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  writeTools: z.object({
+    settings: z.boolean().optional(),
+    characters: z.boolean().optional(),
+    races: z.boolean().optional(),
+    organizations: z.boolean().optional(),
+    timeline: z.boolean().optional(),
+    relationships: z.boolean().optional(),
+    outlines: z.boolean().optional(),
+    annotations: z.boolean().optional(),
+    analysis: z.boolean().optional(),
+    askUserQuestions: z.boolean().optional()
+  }).strict().optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -580,6 +593,47 @@ const analysisTaskSchema = z.union([
   })
 ]);
 
+const aiWriteOperationTypeSchema = z.enum([
+  "setting.create",
+  "setting.update",
+  "character.create",
+  "character.update",
+  "race.create",
+  "race.update",
+  "organization.create",
+  "organization.update",
+  "timeline-event.create",
+  "timeline-event.update",
+  "relationship.create",
+  "relationship.update",
+  "chapter-outline.create",
+  "chapter-outline.update",
+  "foreshadow.create",
+  "foreshadow.update",
+  "chapter-annotation.create",
+  "analysis-task.create"
+]);
+const aiWritePlanCreateSchema = z.object({
+  conversationId: identifier.nullable().optional(),
+  summary: nonEmpty.max(500),
+  operations: z.array(z.object({
+    operationType: aiWriteOperationTypeSchema,
+    input: jsonObject
+  }).strict()).min(1).max(20)
+}).strict();
+const aiWriteApprovalActionSchema = z.object({
+  reason: z.string().trim().max(500).optional()
+}).strict();
+const aiWriteQuestionAnswerSchema = z.object({
+  answer: z.string().trim().min(1).max(2_000).optional(),
+  optionIndex: z.number().int().min(0).max(20).nullable().optional(),
+  refuse: z.boolean().optional()
+}).strict().refine((input) => input.answer !== undefined || input.optionIndex !== undefined || input.refuse === true, {
+  message: "请选择预置选项、输入自定义回答或明确拒绝"
+});
+
+
+
 export type RuntimeOptions = {
   databasePath: string;
   masterSecret: string;
@@ -601,6 +655,8 @@ export type RuntimeOptions = {
   devAuthBypass?: boolean;
   /** 测试用：在验证码接口中回显答案 */
   revealCaptchaAnswer?: boolean;
+  /** 测试用：覆盖 AI 可写计划单次最大操作数。 */
+  aiWritePlanMaxOperations?: number;
   /** 当前服务是否由开发模式启动。 */
   developmentServer?: boolean;
 };
@@ -610,6 +666,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  aiWrite: AiWriteService;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -951,6 +1008,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const aiWrite = new AiWriteService(
+    store,
+    auth,
+    options.aiWritePlanMaxOperations ?? resolveAiWritePlanMaxOperations(process.env.AI_WRITE_PLAN_MAX_OPERATIONS)
+  );
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -1014,6 +1076,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     },
     attachmentStorage
   );
+  ai.setAiWriteService(aiWrite);
   const app = express();
   enforceCaseInsensitiveRouting(app);
   const upload = multer({
@@ -2127,6 +2190,73 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     }
     data(response, updated);
   });
+  const aiWriteActor = (request: Request): AuthUser => request.authUser as AuthUser;
+  const aiWriteAllowAdmin = (request: Request): boolean => request.authMethod !== "api-key";
+  const aiWritePagination = (request: Request): { page: number; limit: number; offset: number } => {
+    const parsed = parsePagination({
+      page: request.query.page ?? "1",
+      limit: request.query.limit ?? "20"
+    });
+    return parsed ?? { page: 1, limit: 20, offset: 0 };
+  };
+  app.get("/api/works/:workId/ai-write/approvals", (request, response) => {
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    data(response, aiWrite.listApprovalsPage(
+      request.params.workId,
+      aiWriteActor(request),
+      aiWriteAllowAdmin(request),
+      aiWritePagination(request),
+      status
+    ));
+  });
+  app.post("/api/works/:workId/ai-write/plans", (request, response) => {
+    const input = parse(aiWritePlanCreateSchema, request.body);
+    data(response, aiWrite.createPlan({
+      workId: request.params.workId,
+      conversationId: input.conversationId ?? null,
+      aiSummary: input.summary,
+      operations: input.operations as Array<{ operationType: never; input: Record<string, unknown> }>,
+      requester: aiWriteActor(request),
+      requesterAllowAdminAccess: aiWriteAllowAdmin(request)
+    }), 201);
+  });
+  app.get("/api/ai-write-approvals/:approvalId", (request, response) => {
+    data(response, aiWrite.getApproval(request.params.approvalId, aiWriteActor(request), aiWriteAllowAdmin(request)));
+  });
+  app.post("/api/ai-write-approvals/:approvalId/approve", (request, response) => {
+    parse(aiWriteApprovalActionSchema, request.body ?? {});
+    data(response, aiWrite.approve(request.params.approvalId, aiWriteActor(request), aiWriteAllowAdmin(request)));
+  });
+  app.post("/api/ai-write-approvals/:approvalId/reject", (request, response) => {
+    const input = parse(aiWriteApprovalActionSchema, request.body ?? {});
+    data(response, aiWrite.rejectApproval(request.params.approvalId, aiWriteActor(request), aiWriteAllowAdmin(request), input.reason ?? ""));
+  });
+  app.post("/api/ai-write-approvals/:approvalId/undo", (request, response) => {
+    const input = parse(aiWriteApprovalActionSchema, request.body ?? {});
+    data(response, aiWrite.undoApproval(request.params.approvalId, aiWriteActor(request), aiWriteAllowAdmin(request), input.reason ?? ""));
+  });
+  app.get("/api/works/:workId/ai-write/questions", (request, response) => {
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    data(response, aiWrite.listQuestionsPage(
+      request.params.workId,
+      aiWriteActor(request),
+      aiWriteAllowAdmin(request),
+      aiWritePagination(request),
+      status
+    ));
+  });
+  app.get("/api/ai-write-questions/:questionId", (request, response) => {
+    data(response, aiWrite.getQuestion(request.params.questionId, aiWriteActor(request), aiWriteAllowAdmin(request)));
+  });
+  app.post("/api/ai-write-questions/:questionId/answer", (request, response) => {
+    const input = parse(aiWriteQuestionAnswerSchema, request.body);
+    data(response, aiWrite.answerQuestion(request.params.questionId, aiWriteActor(request), aiWriteAllowAdmin(request), {
+      answer: input.answer,
+      optionIndex: input.optionIndex,
+      refuse: input.refuse
+    }));
+  });
+
   app.get("/api/works/:workId/ai-conversations", (request, response) => {
     const pagination = parsePagination({
       page: request.query.page ?? "1",
@@ -2613,7 +2743,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, aiWrite, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
     ai.dispose();
     database.close();
