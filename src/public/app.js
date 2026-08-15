@@ -13108,23 +13108,55 @@ async function openTaskDialog() {
     toast(`分析任务配置加载失败：${error.message}`, "error");
     return;
   }
-  const taskScopePicker = (kind, label, options, emptyLabel) => `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
-    <span id="task-${kind}-label">${esc(label)}（可多选）</span>
-    <div class="task-scope-picker">
-      <button class="task-scope-trigger" type="button" data-task-scope-trigger="${kind}" aria-expanded="false" aria-controls="task-${kind}-bubble" aria-labelledby="task-${kind}-label task-${kind}-summary" disabled>
-        <span id="task-${kind}-summary">${esc(emptyLabel)}</span>
-        <span class="task-scope-trigger-meta"><span data-task-scope-count="${kind}">未选择</span><span class="task-scope-chevron" aria-hidden="true">⌄</span></span>
-      </button>
-      <div id="task-${kind}-bubble" class="task-scope-bubble hidden" data-task-scope-bubble="${kind}">
-        <label class="task-scope-search">筛选${esc(label)}<input type="search" data-task-scope-search="${kind}" placeholder="输入名称" autocomplete="off"></label>
-        <div class="task-scope-bubble-meta"><span>共 ${options.length} ${kind === "chapter" ? "章" : "卷"}</span><button type="button" data-task-scope-clear="${kind}" disabled>清空选择</button></div>
-        <div class="task-scope-options" role="group" aria-labelledby="task-${kind}-label">
-          ${options.map((item) => `<label class="task-scope-option" data-task-scope-search-name="${esc(`${item.title} ${item.volumeTitle ?? ""}`.toLocaleLowerCase())}"><input type="checkbox" name="${kind === "chapter" ? "chapterIds" : "volumeIds"}" value="${esc(item.id)}" data-task-scope-input="${kind}"><span><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}</small>` : ""}</span></label>`).join("")}
-        </div>
-        <p class="task-scope-empty hidden" data-task-scope-empty="${kind}">没有匹配的${esc(label)}</p>
+  const taskScopePicker = (kind, label, options, emptyLabel) => {
+    const inputName = kind === "chapter" ? "chapterIds" : "volumeIds";
+    const countLabel = kind === "chapter" ? "章" : "卷";
+    const renderOption = (item) => `<label class="task-scope-option" data-task-scope-search-name="${esc(`${item.title} ${item.volumeTitle ?? ""}`.toLocaleLowerCase())}">
+      <input type="checkbox" name="${inputName}" value="${esc(item.id)}" data-task-scope-input="${kind}" data-task-scope-title="${esc(item.title)}" data-task-scope-subtitle="${esc(item.volumeTitle ?? "")}">
+      <span class="task-scope-checkbox" aria-hidden="true"></span>
+      <span class="task-scope-option-copy"><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}</small>` : ""}</span>
+    </label>`;
+    const optionMarkup = kind === "chapter"
+      ? [...options.reduce((groups, item) => {
+        const groupTitle = String(item.volumeTitle || "未分卷章节");
+        const group = groups.get(groupTitle) ?? [];
+        group.push(item);
+        groups.set(groupTitle, group);
+        return groups;
+      }, new Map())].map(([groupTitle, groupOptions]) => `<section class="task-scope-volume-group" data-task-scope-group>
+        <header><strong>${esc(groupTitle)}</strong><span>${groupOptions.length} 章</span></header>
+        ${groupOptions.map(renderOption).join("")}
+      </section>`).join("")
+      : options.map(renderOption).join("");
+    return `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
+      <div class="task-scope-field-heading"><span id="task-${kind}-label">${esc(label)}（可多选）</span><small>从左侧选择，右侧确认已选内容</small></div>
+      <div class="task-scope-picker">
+        <button class="task-scope-trigger" type="button" data-task-scope-trigger="${kind}" aria-expanded="false" aria-controls="task-${kind}-bubble" aria-labelledby="task-${kind}-label task-${kind}-summary" disabled>
+          <span id="task-${kind}-summary">${esc(emptyLabel)}</span>
+          <span class="task-scope-trigger-meta"><span data-task-scope-count="${kind}">未选择</span><span class="task-scope-chevron" aria-hidden="true">⌄</span></span>
+        </button>
+        <section id="task-${kind}-bubble" class="task-scope-panel hidden" data-task-scope-bubble="${kind}" aria-hidden="true" aria-labelledby="task-${kind}-label">
+          <header class="task-scope-panel-header">
+            <div><strong>选择${esc(label)}</strong><small>支持搜索和按分卷浏览，右侧会实时汇总。</small></div>
+            <button type="button" class="task-scope-clear" data-task-scope-clear="${kind}" disabled>清空已选</button>
+          </header>
+          <div class="task-scope-panel-grid">
+            <section class="task-scope-available" aria-label="待选${esc(label)}">
+              <header class="task-scope-panel-section-header"><strong>待选${esc(label)}</strong><span data-task-scope-available-count="${kind}">${options.length} ${countLabel}</span></header>
+              <label class="task-scope-search"><span>筛选${esc(label)}</span><input type="search" data-task-scope-search="${kind}" placeholder="输入名称" autocomplete="off"></label>
+              <div class="task-scope-options" role="group" aria-labelledby="task-${kind}-label">${optionMarkup}</div>
+              <p class="task-scope-empty hidden" data-task-scope-empty="${kind}">没有匹配的${esc(label)}</p>
+            </section>
+            <aside class="task-scope-selected" aria-label="已选${esc(label)}汇总">
+              <header class="task-scope-panel-section-header"><strong>已选汇总</strong><span data-task-scope-summary-count="${kind}">0 ${countLabel}</span></header>
+              <p class="task-scope-selected-note">创建任务时只会分析这里列出的${esc(label)}。</p>
+              <div class="task-scope-selected-list" data-task-scope-selected-list="${kind}" role="list" aria-live="polite"><p class="task-scope-selected-empty">暂未选择${esc(label)}</p></div>
+            </aside>
+          </div>
+        </section>
       </div>
-    </div>
-  </div>`;
+    </div>`;
+  };
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const availableTaskModels = taskModels.filter((model) => isSelectableModel(model));
   const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
@@ -13250,6 +13282,7 @@ async function openTaskDialog() {
     toast("分析任务已创建，已进入任务队列");
     void refreshAnalysisTaskViewsAfterCreate(workId);
   }, "AI 分析", {
+    large: true,
     submitLabel: "创建任务",
     pendingLabel: "创建中…",
     pendingMessage: "正在创建分析任务，请稍候",
@@ -13294,6 +13327,18 @@ async function openTaskDialog() {
     chapter: $("#dialog-fields").querySelector('[data-task-scope-empty="chapter"]'),
     volume: $("#dialog-fields").querySelector('[data-task-scope-empty="volume"]')
   };
+  const scopeSelectedLists = {
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-selected-list="chapter"]'),
+    volume: $("#dialog-fields").querySelector('[data-task-scope-selected-list="volume"]')
+  };
+  const scopeSummaryCounts = {
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-summary-count="chapter"]'),
+    volume: $("#dialog-fields").querySelector('[data-task-scope-summary-count="volume"]')
+  };
+  const scopeAvailableCounts = {
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-available-count="chapter"]'),
+    volume: $("#dialog-fields").querySelector('[data-task-scope-available-count="volume"]')
+  };
   const description = $("#analysis-type-description");
   const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
   const relationshipPrompt = relationshipOptions.querySelector('textarea[name="additionalPrompt"]');
@@ -13325,18 +13370,30 @@ async function openTaskDialog() {
   const setTaskScopeBubbleOpen = (kind, open) => {
     scopeBubbles[kind].classList.toggle("hidden", !open);
     scopeTriggers[kind].setAttribute("aria-expanded", String(open));
-    if (open) scopeSearches[kind].focus();
+    scopeBubbles[kind].setAttribute("aria-hidden", String(!open));
+    if (open) {
+      scopeBubbles[kind].scrollIntoView({ block: "start" });
+      scopeSearches[kind].focus({ preventScroll: true });
+    }
   };
   const syncTaskScopePicker = (kind) => {
     const selected = scopeInputs[kind].filter((input) => input.checked);
-    const selectedNames = selected.map((input) => input.closest(".task-scope-option")?.querySelector("strong")?.textContent ?? "");
+    const countLabel = kind === "chapter" ? "章" : "卷";
+    const selectedNames = selected.map((input) => input.dataset.taskScopeTitle ?? "");
     const label = kind === "chapter" ? "选择需要分析的章节" : "选择需要分析的分卷";
     scopeSummaries[kind].textContent = selectedNames.length
-      ? `${selectedNames.slice(0, 2).join("、")}${selectedNames.length > 2 ? ` 等 ${selectedNames.length} 个` : ""}`
+      ? selectedNames.length === 1 ? selectedNames[0] : `已选择 ${selectedNames.length} 个${countLabel}`
       : label;
     scopeCounts[kind].textContent = selected.length ? `已选 ${selected.length}` : "未选择";
+    scopeSummaryCounts[kind].textContent = `${selected.length} ${countLabel}`;
     scopeClearButtons[kind].disabled = selected.length === 0;
     scopeTriggers[kind].setAttribute("aria-label", `筛选${kind === "chapter" ? "章节" : "分卷"}，已选择 ${selected.length} 个`);
+    scopeSelectedLists[kind].innerHTML = selected.length
+      ? selected.map((input) => `<div class="task-scope-selected-item" role="listitem">
+          <span class="task-scope-selected-copy"><strong>${esc(input.dataset.taskScopeTitle ?? "")}</strong>${input.dataset.taskScopeSubtitle ? `<small>${esc(input.dataset.taskScopeSubtitle)}</small>` : ""}</span>
+          <button type="button" data-task-scope-remove="${kind}" data-task-scope-remove-id="${esc(input.value)}" aria-label="移除${esc(input.dataset.taskScopeTitle ?? "")}">×</button>
+        </div>`).join("")
+      : `<p class="task-scope-selected-empty">暂未选择${kind === "chapter" ? "章节" : "分卷"}</p>`;
   };
   const filterTaskScopeOptions = (kind) => {
     const query = scopeSearches[kind].value.trim().toLocaleLowerCase();
@@ -13347,6 +13404,12 @@ async function openTaskDialog() {
       option.classList.toggle("hidden", !visible);
       if (visible) visibleCount += 1;
     }
+    scopeFields[kind].querySelectorAll("[data-task-scope-group]").forEach((group) => {
+      group.classList.toggle("hidden", !group.querySelector(".task-scope-option:not(.hidden)"));
+    });
+    scopeAvailableCounts[kind].textContent = query
+      ? `${visibleCount} / ${scopeInputs[kind].length} ${kind === "chapter" ? "章" : "卷"}`
+      : `${scopeInputs[kind].length} ${kind === "chapter" ? "章" : "卷"}`;
     scopeEmptyMessages[kind].classList.toggle("hidden", visibleCount > 0);
   };
   const syncChapterField = () => {
@@ -13523,6 +13586,16 @@ async function openTaskDialog() {
     });
     scopeClearButtons[kind].addEventListener("click", () => {
       for (const input of scopeInputs[kind]) input.checked = false;
+      syncTaskScopePicker(kind);
+      clearContextWarning();
+      invalidateRelationshipSourcePreview();
+    });
+    scopeSelectedLists[kind].addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-task-scope-remove]");
+      if (!removeButton) return;
+      const input = scopeInputs[kind].find((candidate) => candidate.value === removeButton.dataset.taskScopeRemoveId);
+      if (!input) return;
+      input.checked = false;
       syncTaskScopePicker(kind);
       clearContextWarning();
       invalidateRelationshipSourcePreview();

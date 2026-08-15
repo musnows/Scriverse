@@ -38,6 +38,10 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('scopeTriggers[kind].disabled = !enabled');
     expect(application).toContain('data-task-scope-search');
     expect(application).toContain('data-task-scope-clear');
+    expect(application).toContain('data-task-scope-selected-list');
+    expect(application).toContain('data-task-scope-remove');
+    expect(application).toContain('scopeSelectedLists[kind].addEventListener');
+    expect(application).toContain('scopeBubbles[kind].scrollIntoView({ block: "start" })');
     expect(application).toContain('scopeTypeSelect.addEventListener("change", () =>');
     expect(application).toContain('name="additionalPrompt" maxlength="10000"');
     expect(application).toContain('class="relationship-character-trigger"');
@@ -83,7 +87,11 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
     expect(styles).toContain(".task-scope-picker { display: grid; gap: 8px; min-width: 0; }");
-    expect(styles).toContain(".task-scope-options { display: grid; gap: 6px;");
+    expect(styles).toContain(".task-scope-options { display: grid; align-content: start; gap: 6px;");
+    expect(styles).toContain(".task-scope-panel-grid { display: grid;");
+    expect(styles).toContain(".task-scope-selected-list { display: grid;");
+    expect(styles).toContain(".task-scope-checkbox { display: inline-grid;");
+    expect(styles).toContain(".dialog-fields .task-scope-search input { min-height: 34px;");
     expect(styles).toContain(".relationship-character-bubble {");
     expect(styles).toContain(".relationship-character-options {");
     expect(styles).toContain(".relationship-analysis-helper {");
