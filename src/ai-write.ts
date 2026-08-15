@@ -421,6 +421,7 @@ export type AiWriteOperationRecord = {
   targetId: string | null;
   targetVersion: number | null;
   targetLabel: string;
+  permissionRequirements: { writeModules: WorkPermissionModule[]; readModules: WorkPermissionModule[] };
   input: Record<string, unknown>;
   diff: Record<string, unknown>;
   status: "pending" | "executed" | "failed" | "undone";
@@ -909,6 +910,7 @@ export class AiWriteService {
       targetId,
       targetVersion,
       targetLabel,
+      permissionRequirements: { writeModules: [module], readModules },
       input,
       diff,
       status: "pending",
@@ -999,6 +1001,7 @@ export class AiWriteService {
         targetId: operation.targetId,
         targetVersion: operation.targetVersion,
         targetLabel: operation.targetLabel,
+        permissionRequirements: operation.permissionRequirements,
         input: operation.input,
         diff: operation.diff
       }))
@@ -1109,6 +1112,12 @@ export class AiWriteService {
         targetId: row.target_id === null ? null : String(row.target_id),
         targetVersion: row.target_version === null ? null : Number(row.target_version),
         targetLabel: typeof diff.targetLabel === "string" ? diff.targetLabel : String(row.target_id ?? input.title ?? input.name ?? ""),
+        permissionRequirements: {
+          writeModules: [String(row.module) as WorkPermissionModule],
+          readModules: String(row.operation_type) === "analysis-task.create"
+            ? analysisTaskReadModules(input.taskType, input.scope)
+            : []
+        },
         input,
         diff,
         status: String(row.status) as AiWriteOperationRecord["status"],
