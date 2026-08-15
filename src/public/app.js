@@ -553,7 +553,7 @@ function cancelActiveAiRequest(reason) {
 
 function beginAiConversationNavigation(reason, action = "切换会话") {
   if (aiRequestManager.hasActive()) {
-    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+    toast(`当前 turn 尚未结束，${action}会中断生成；\n已收到的内容会保留在历史记录中`, "warning");
   }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = aiConversationNavigationGeneration;
@@ -579,7 +579,7 @@ function finishAiConversationNavigation(navigation) {
 
 function invalidateAiConversationNavigation(reason, action = "切换作品") {
   if (aiRequestManager.hasActive()) {
-    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+    toast(`当前 turn 尚未结束，${action}会中断生成；\n已收到的内容会保留在历史记录中`, "warning");
   }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = null;
@@ -16355,7 +16355,7 @@ window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
   if (aiRequestManager.hasActive()) {
-    toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
+    toast("当前 turn 尚未结束，刷新会中断生成；\n已收到的内容会保留在历史记录中", "warning");
   }
 });
 window.addEventListener("online", () => {
