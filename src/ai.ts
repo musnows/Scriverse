@@ -3448,8 +3448,7 @@ export class AiManager {
         if (targeted && scope.type === "book") {
           const stats = this.store.db.get(
             `SELECT COUNT(*) AS chapter_count,
-               COALESCE(SUM(LENGTH(chapter.content)), 0) AS total_characters,
-               COALESCE(MAX(LENGTH(chapter.content)), 0) AS maximum_chapter_characters
+               COALESCE(SUM(LENGTH(chapter.content)), 0) AS total_characters
              FROM chapters chapter
              JOIN volumes volume ON volume.id = chapter.volume_id
              WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
@@ -3458,12 +3457,8 @@ export class AiManager {
           ) ?? {};
           const chapterCount = Number(stats.chapter_count ?? 0);
           const totalCharacters = Number(stats.total_characters ?? 0);
-          const maximumChapterCharacters = Number(stats.maximum_chapter_characters ?? 0);
           if (chapterCount > 0 && totalCharacters > 0) {
-            const previewCharacters = Math.max(
-              maximumChapterCharacters + 80,
-              Math.min(totalCharacters + chapterCount * 80, 12_000)
-            );
+            const previewCharacters = Math.min(totalCharacters + chapterCount * 80, 12_000);
             selection = `<CHAPTER id="context-preview" title="上下文预检">\n${"字".repeat(previewCharacters)}\n</CHAPTER>`;
           }
         } else {

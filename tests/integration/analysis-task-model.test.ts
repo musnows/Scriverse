@@ -179,7 +179,7 @@ describe("AI 分析任务模型", () => {
       name: "林舟",
       profile: { background: "长期人物档案".repeat(2_000) }
     });
-    runtime.store.createCharacter(workId, { name: "沈星" });
+    const secondCharacter = runtime.store.createCharacter(workId, { name: "沈星" });
     const provider = runtime.ai.createProvider({
       name: "上下文预检模型",
       baseUrl: "https://context-preview.test/v1",
@@ -191,6 +191,11 @@ describe("AI 分析任务模型", () => {
       displayName: "上下文预检模型",
       modelId: "context-preview-model",
       contextWindow: 200_000
+    });
+    const compactModel = runtime.ai.createModel(String(provider.id), {
+      displayName: "短上下文预检模型",
+      modelId: "compact-context-preview-model",
+      contextWindow: 20_000
     });
     const getWorkTree = vi.spyOn(runtime.store, "getWorkTree");
     const listCharacters = vi.spyOn(runtime.store, "listCharacters");
@@ -204,5 +209,12 @@ describe("AI 分析任务模型", () => {
     expect(preview).toMatchObject({ allowed: true, overThreshold: false });
     expect(getWorkTree).not.toHaveBeenCalled();
     expect(listCharacters).not.toHaveBeenCalled();
+
+    const compactPreview = runtime.ai.previewAnalysisTaskContext(workId, {
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [String(secondCharacter.id)] },
+      modelId: String(compactModel.id)
+    });
+    expect(compactPreview).toMatchObject({ allowed: true, overThreshold: false });
   });
 });
