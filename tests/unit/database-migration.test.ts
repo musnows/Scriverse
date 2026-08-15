@@ -1364,4 +1364,114 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
+
+  it("迁移 93 为既有库补建伏笔计划回收章节索引并优化直接关联查询", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-foreshadow-payoff-index-existing-"));
+    roots.push(root);
+    const filename = join(root, "foreshadow-payoff-index-existing.db");
+    const current = new Database(filename);
+    const timestamp = "2026-08-15T00:00:00.000Z";
+    current.run(
+      `INSERT INTO works (id, title, created_at, updated_at)
+       VALUES ('work-payoff-index', '伏笔索引迁移', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO volumes (id, work_id, title, sort_order, created_at, updated_at)
+       VALUES ('volume-payoff-index', 'work-payoff-index', '第一卷', 0, ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO chapters (id, work_id, volume_id, title, sort_order, created_at, updated_at)
+       VALUES ('chapter-payoff-index', 'work-payoff-index', 'volume-payoff-index', '第一章', 0, ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO foreshadows
+         (id, work_id, title, status, importance, planned_payoff_chapter_id, created_at, updated_at)
+       VALUES ('foreshadow-before-index', 'work-payoff-index', '迁移前伏笔', 'planted', 'high',
+         'chapter-payoff-index', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run("DROP INDEX idx_foreshadows_work_payoff_status");
+    current.run("DELETE FROM schema_migrations WHERE version = 93");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 93")).toEqual({ count: 1 });
+    expect(migrated.all("PRAGMA index_xinfo('idx_foreshadows_work_payoff_status')")
+      .filter((column) => column.key === 1)
+      .map((column) => column.name)).toEqual(["work_id", "planned_payoff_chapter_id", "status"]);
+    expect(migrated.get("SELECT title FROM foreshadows WHERE id = 'foreshadow-before-index'")).toEqual({ title: "迁移前伏笔" });
+
+    const statusFilterPlan = migrated.all(
+      `EXPLAIN QUERY PLAN SELECT chapter.id FROM chapters chapter
+       WHERE chapter.work_id = ? AND EXISTS (
+         SELECT 1 FROM foreshadows foreshadow
+         WHERE foreshadow.work_id = chapter.work_id
+           AND foreshadow.planned_payoff_chapter_id = chapter.id
+           AND foreshadow.status IN ('planned', 'planted')
+       )`,
+      "work-payoff-index"
+    );
+    expect(statusFilterPlan.some((step) => String(step.detail).includes(
+      "USING COVERING INDEX idx_foreshadows_work_payoff_status (work_id=? AND planned_payoff_chapter_id=? AND status=?)"
+    ))).toBe(true);
+
+    const searchPlan = migrated.all(
+      `EXPLAIN QUERY PLAN SELECT chapter.id FROM chapters chapter
+       WHERE chapter.work_id = ? AND EXISTS (
+         SELECT 1 FROM foreshadows foreshadow
+         WHERE foreshadow.work_id = chapter.work_id
+           AND foreshadow.planned_payoff_chapter_id = chapter.id
+           AND lower(foreshadow.title) LIKE ? ESCAPE '\\'
+       )`,
+      "work-payoff-index",
+      "%迁移前伏笔%"
+    );
+    expect(searchPlan.some((step) => String(step.detail).includes(
+      "USING INDEX idx_foreshadows_work_payoff_status (work_id=? AND planned_payoff_chapter_id=?)"
+    ))).toBe(true);
+
+    const associationPlan = migrated.all(
+      `EXPLAIN QUERY PLAN SELECT chapter.id, foreshadow.id
+       FROM chapters chapter
+       JOIN foreshadows foreshadow ON foreshadow.planned_payoff_chapter_id = chapter.id
+       WHERE chapter.id IN (?) AND chapter.work_id = ? AND chapter.deleted_at IS NULL
+         AND foreshadow.work_id = ?`,
+      "chapter-payoff-index",
+      "work-payoff-index",
+      "work-payoff-index"
+    );
+    expect(associationPlan.some((step) => String(step.detail).includes(
+      "USING INDEX idx_foreshadows_work_payoff_status (work_id=? AND planned_payoff_chapter_id=?)"
+    ))).toBe(true);
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 93 在空库预建索引后可幂等登记并重启", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-foreshadow-payoff-index-fresh-"));
+    roots.push(root);
+    const filename = join(root, "foreshadow-payoff-index-fresh.db");
+
+    const first = new Database(filename);
+    expect(first.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 93")).toEqual({ count: 1 });
+    expect(first.all("PRAGMA index_list(foreshadows)")
+      .filter((index) => index.name === "idx_foreshadows_work_payoff_status")).toHaveLength(1);
+    first.close();
+
+    const restarted = new Database(filename);
+    expect(restarted.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 93")).toEqual({ count: 1 });
+    expect(restarted.all("PRAGMA index_list(foreshadows)")
+      .filter((index) => index.name === "idx_foreshadows_work_payoff_status")).toHaveLength(1);
+    expect(restarted.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(restarted.all("PRAGMA foreign_key_check")).toEqual([]);
+    restarted.close();
+  });
 });
