@@ -13236,18 +13236,16 @@ async function openTaskDialog() {
           sourceVersion: input.dataset.sourceVersion
         }));
     }
-    const contextPreview = await api(`/api/works/${workId}/tasks/context-preview`, {
-      method: "POST",
-      body: { taskType, scope, modelId }
-    });
-    if (contextPreview.allowed !== true) {
-      contextWarning.textContent = String(contextPreview.message || "当前分析范围超过模型上下文阈值，请切换到上下文更长的模型后重试。");
-      contextWarning.classList.remove("hidden");
-      throw new Error(contextWarning.textContent);
+    clearContextWarning();
+    try {
+      await api(`/api/works/${workId}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
+    } catch (error) {
+      if (error.code === "AI_CONTEXT_TOO_LARGE") {
+        contextWarning.textContent = error.message || "当前分析范围超过模型上下文阈值，请切换到上下文更长的模型后重试。";
+        contextWarning.classList.remove("hidden");
+      }
+      throw error;
     }
-    contextWarning.textContent = "";
-    contextWarning.classList.add("hidden");
-    await api(`/api/works/${workId}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
     void refreshAnalysisTaskViewsAfterCreate(workId);
