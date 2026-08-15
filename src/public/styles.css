@@ -313,6 +313,10 @@
 .is-scrollbar-visible { scrollbar-color: var(--muted) transparent; }
 .is-scrollbar-visible::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--muted); }
 
+/* 普通界面不产生文本选区；正文、预览和编辑控件保留必要的文本操作。 */
+body { user-select: none; }
+body :is(input, textarea, select, [contenteditable="true"], .reader-content, .message-body, .record-markdown-preview, .knowledge-markdown-block, .vditor-reset, pre, code) { user-select: text; }
+
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 
 button, input, textarea, select { font: inherit; color: inherit; }
