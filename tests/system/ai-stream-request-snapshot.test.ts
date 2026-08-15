@@ -15,7 +15,7 @@ describe("AI 流式请求快照", () => {
     expect(application).toContain("signal: request.signal");
     expect(application).toContain("request.conversationId,\n          \"assistant\"");
     expect(application).toContain("requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id })");
-    expect(page).toContain('/app.js?v=20260815-ai-stream-persistence-v1');
+    expect(page).toContain('/app.js?v=20260815-ai-stream-persistence-v2');
   });
 
   it("对话和作品切换会取消旧流并拒绝过期回调", async () => {
@@ -29,6 +29,6 @@ describe("AI 流式请求快照", () => {
     expect(application).toContain("persistAiRequestInterruption(request, error?.streamInterruption)");
     expect(application).toContain('当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中');
     expect(application).toContain('当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中');
-    expect(application).toContain('event.returnValue = "";');
+    expect(application).not.toContain('event.returnValue = "";');
   });
 });

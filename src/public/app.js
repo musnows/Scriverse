@@ -16356,8 +16356,6 @@ window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
   if (aiRequestManager.hasActive()) {
     toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
-    event.preventDefault();
-    event.returnValue = "";
   }
 });
 window.addEventListener("online", () => {
