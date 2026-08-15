@@ -96,7 +96,7 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".task-scope-options { display: grid; align-content: start; gap: 6px;");
     expect(styles).toContain(".task-scope-panel-grid { display: grid;");
     expect(styles).toContain(".task-scope-selected-list { display: grid;");
-    expect(styles).toContain(".task-scope-checkbox { display: inline-grid;");
+    expect(styles).toContain(".task-scope-checkbox { display: inline-grid; width: 18px; height: 18px; place-items: center; border: 1px solid var(--line);");
     expect(styles).toContain(".task-scope-author-note-banner {");
     expect(styles).toContain(".dialog-fields .task-scope-search input { min-height: 34px;");
     expect(styles).toContain(".relationship-character-bubble {");
