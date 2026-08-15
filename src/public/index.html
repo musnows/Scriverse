@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260801-ui-font-scale-shelf-v3">
+<link rel="stylesheet" href="/styles.css?v=20260815-s3-backup-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -209,6 +209,7 @@
             <button id="platform-usage-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">T</span><strong>Token 用量</strong><small>总消耗、缓存命中率、每日网格与作品明细</small></button>
             <button id="user-management-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">人</span><strong>用户管理</strong><small>管理员、普通用户与账户状态</small></button>
             <button id="platform-ui-settings-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">界</span><strong>界面与分页</strong><small>设置通知位置及各模块的单页数量</small></button>
+            <button id="s3-backup-button" class="settings-hub-card hidden" type="button"><span class="settings-card-mark">备</span><strong>S3 备份</strong><small>配置多个 S3 兼容目标，定时备份系统数据库与图片</small></button>
             <button id="collaboration-button" class="settings-hub-card" type="button"><span class="settings-card-mark">协</span><strong>作品协作</strong><small>邀请注册用户共同编辑当前作品</small></button>
             <button id="writing-progress-button" class="settings-hub-card" type="button"><span class="settings-card-mark">字</span><strong>写作目标</strong><small>每日目标、总字数目标与近 30 天趋势</small></button>
             <button id="work-audit-button" class="settings-hub-card" type="button"><span class="settings-card-mark">录</span><strong>操作记录</strong><small>查看作品修改、操作者、对象与时间</small></button>
@@ -752,6 +753,13 @@
       </div>
     </dialog>
 
+    <dialog id="s3-backup-dialog" class="dialog wide-dialog" aria-labelledby="s3-backup-dialog-title">
+      <div class="dialog-header"><div><span class="eyebrow">系统管理员</span><h2 id="s3-backup-dialog-title">S3 备份</h2><p class="dialog-header-meta">把整个系统的 SQLite 数据库和附件图片同步到多个 S3 兼容目标。</p></div><div class="settings-dialog-header-actions"><button id="s3-backup-settings-return" class="ghost-button settings-parent-button" type="button">返回设置</button><button id="s3-backup-dialog-close" class="dialog-close" aria-label="关闭" type="button">×</button></div></div>
+      <div class="access-dialog-body">
+        <div id="s3-backup-content" class="s3-backup-content"></div>
+      </div>
+    </dialog>
+
     <dialog id="chapter-annotations-dialog" class="dialog wide-dialog chapter-annotations-dialog" aria-labelledby="chapter-annotations-title">
       <div class="dialog-header"><div><span class="eyebrow">正文协作</span><h2 id="chapter-annotations-title">正文评论</h2><p id="chapter-annotations-meta" class="dialog-header-meta">在正文行上点击右键即可添加评论。</p></div><button id="chapter-annotations-close" class="dialog-close" aria-label="关闭正文评论" type="button">×</button></div>
       <div id="chapter-annotations-list" class="chapter-annotations-list" aria-live="polite"></div>
@@ -951,6 +959,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260801-timeline-lifecycle-v1"></script>
+    <script type="module" src="/app.js?v=20260815-s3-backup-v1"></script>
   </body>
 </html>
