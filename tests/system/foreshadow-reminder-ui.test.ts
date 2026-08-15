@@ -20,7 +20,7 @@ describe("编辑器伏笔提醒界面", () => {
       request(runtime.app).get("/foreshadow-reminder.js").expect(200)
     ]);
 
-    expect(page.text).toContain('/styles.css?v=20260815-ai-history-favorite-v3');
+    expect(page.text).toContain('/styles.css?v=20260816-novel-tree-indent-v1');
     expect(page.text).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
     expect(page.text).toContain('id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden"');
     expect(page.text).toContain('aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title"');
