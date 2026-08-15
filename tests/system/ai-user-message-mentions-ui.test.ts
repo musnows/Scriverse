@@ -11,7 +11,7 @@ describe("AI 用户消息角色引用横幅", () => {
     ]);
 
     expect(page).toContain('/styles.css?v=20260815-ai-history-favorite-v1');
-    expect(page).toContain('/app.js?v=20260815-analysis-task-create-v1');
+    expect(page).toContain('/app.js?v=20260815-ai-message-fork-v1');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");
     expect(application).toContain("userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)");
