@@ -13091,7 +13091,8 @@ async function openTaskDialog() {
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
     id: String(chapter.id),
     title: String(chapter.title),
-    volumeTitle: String(volume.title)
+    volumeTitle: String(volume.title),
+    chapterType: String(chapter.chapterType || "正文")
   })));
   let relationshipCharacters = [];
   let taskModels = [];
@@ -13114,7 +13115,7 @@ async function openTaskDialog() {
     const renderOption = (item) => `<label class="task-scope-option" data-task-scope-search-name="${esc(`${item.title} ${item.volumeTitle ?? ""}`.toLocaleLowerCase())}">
       <input type="checkbox" name="${inputName}" value="${esc(item.id)}" data-task-scope-input="${kind}" data-task-scope-title="${esc(item.title)}" data-task-scope-subtitle="${esc(item.volumeTitle ?? "")}">
       <span class="task-scope-checkbox" aria-hidden="true"></span>
-      <span class="task-scope-option-copy"><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}</small>` : ""}</span>
+      <span class="task-scope-option-copy"><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}${item.chapterType && item.chapterType !== "正文" ? ` · ${esc(item.chapterType)}` : ""}</small>` : ""}</span>
     </label>`;
     const optionMarkup = kind === "chapter"
       ? [...options.reduce((groups, item) => {
@@ -13140,6 +13141,10 @@ async function openTaskDialog() {
             <div><strong>选择${esc(label)}</strong><small>支持搜索和按分卷浏览，右侧会实时汇总。</small></div>
             <button type="button" class="task-scope-clear" data-task-scope-clear="${kind}" disabled>清空已选</button>
           </header>
+          <div class="task-scope-author-note-banner" role="note">
+            <span class="task-scope-author-note-banner-icon" aria-hidden="true">i</span>
+            <div><strong>范围提示</strong><span>标记为“作者的话”的章节不会纳入 AI 分析输入；即使被选中，也只会保留在作品目录中。</span></div>
+          </div>
           <div class="task-scope-panel-grid">
             <section class="task-scope-available" aria-label="待选${esc(label)}">
               <header class="task-scope-panel-section-header"><strong>待选${esc(label)}</strong><span data-task-scope-available-count="${kind}">${options.length} ${countLabel}</span></header>
@@ -13149,7 +13154,7 @@ async function openTaskDialog() {
             </section>
             <aside class="task-scope-selected" aria-label="已选${esc(label)}汇总">
               <header class="task-scope-panel-section-header"><strong>已选汇总</strong><span data-task-scope-summary-count="${kind}">0 ${countLabel}</span></header>
-              <p class="task-scope-selected-note">创建任务时只会分析这里列出的${esc(label)}。</p>
+              <p class="task-scope-selected-note">创建任务时会分析这里列出的${esc(label)}；标记为“作者的话”的章节除外。</p>
               <div class="task-scope-selected-list" data-task-scope-selected-list="${kind}" role="list" aria-live="polite"><p class="task-scope-selected-empty">暂未选择${esc(label)}</p></div>
             </aside>
           </div>

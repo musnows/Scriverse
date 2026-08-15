@@ -40,6 +40,9 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('data-task-scope-clear');
     expect(application).toContain('data-task-scope-selected-list');
     expect(application).toContain('data-task-scope-remove');
+    expect(application).toContain('class="task-scope-author-note-banner" role="note"');
+    expect(application).toContain('标记为“作者的话”的章节不会纳入 AI 分析输入');
+    expect(application).toContain('标记为“作者的话”的章节除外');
     expect(application).toContain('scopeSelectedLists[kind].addEventListener');
     expect(application).toContain('scopeBubbles[kind].scrollIntoView({ block: "start" })');
     expect(application).toContain('scopeTypeSelect.addEventListener("change", () =>');
@@ -91,6 +94,7 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".task-scope-panel-grid { display: grid;");
     expect(styles).toContain(".task-scope-selected-list { display: grid;");
     expect(styles).toContain(".task-scope-checkbox { display: inline-grid;");
+    expect(styles).toContain(".task-scope-author-note-banner {");
     expect(styles).toContain(".dialog-fields .task-scope-search input { min-height: 34px;");
     expect(styles).toContain(".relationship-character-bubble {");
     expect(styles).toContain(".relationship-character-options {");

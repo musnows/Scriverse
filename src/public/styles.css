@@ -2902,6 +2902,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-scope-panel-header > div, .task-scope-panel-section-header > div { display: grid; gap: 3px; min-width: 0; }
 .task-scope-panel-header strong, .task-scope-panel-section-header strong { color: var(--ink); font-size: 11px; font-weight: 650; }
 .task-scope-panel-header small { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.task-scope-author-note-banner { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 8px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line)); border-left: 3px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 8%, var(--surface)); color: var(--muted); font-size: 9px; line-height: 1.55; }
+.task-scope-author-note-banner-icon { display: grid; width: 18px; height: 18px; place-items: center; border-radius: 50%; background: var(--accent); color: #fff; font-family: var(--font-latin), monospace; font-size: 11px; font-weight: 700; line-height: 1; }
+.task-scope-author-note-banner div { display: grid; gap: 2px; min-width: 0; }
+.task-scope-author-note-banner strong { color: var(--accent-dark); font-size: 10px; }
 .task-scope-clear { flex: 0 0 auto; padding: 5px 7px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--accent-dark); font-size: 9px; }
 .task-scope-clear:hover:not(:disabled), .task-scope-clear:focus-visible { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, transparent); outline: none; }
 .task-scope-clear:disabled { cursor: default; opacity: .45; }

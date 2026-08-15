@@ -171,6 +171,10 @@ function isInteractiveStreamError(error: unknown): error is AppError {
   return error instanceof AppError && interactiveStreamErrorCodes.has(error.code);
 }
 
+function isAuthorNoteChapter(chapter: Record<string, unknown>): boolean {
+  return String(chapter.chapterType ?? "") === "作者的话";
+}
+
 function interactiveStreamRequestCancelledError(): AppError {
   return new AppError(499, "AI_STREAM_REQUEST_CANCELLED", "AI 流式请求已取消");
 }
@@ -1728,9 +1732,13 @@ export class ContextBuilder {
 
     if (scope.type === "selection") {
       if (!scope.selection) throw new AppError(400, "SELECTION_REQUIRED", "选中文本上下文不能为空");
+      const selectionChapter = scope.chapterId ? this.store.getChapter(scope.chapterId) : null;
+      if (selectionChapter && selectionChapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
       // 分析任务会在 selection 中放入服务端 CHAPTER 标记，不能转义
-      contentSections.push(wrapAiContextRegion("selection", `当前选中文本：\n${scope.selection}`, { escape: false }));
-      if (scope.chapterId) this.appendChapter(contentSections, workId, scope.chapterId, false);
+      if (!selectionChapter || !isAuthorNoteChapter(selectionChapter)) {
+        contentSections.push(wrapAiContextRegion("selection", `当前选中文本：\n${scope.selection}`, { escape: false }));
+        if (scope.chapterId) this.appendChapter(contentSections, workId, scope.chapterId, false);
+      }
     } else if (scope.type === "chapter") {
       const chapterIds = [...new Set([
         ...(scope.chapterId ? [scope.chapterId] : []),
@@ -1739,7 +1747,9 @@ export class ContextBuilder {
       if (chapterIds.length === 0) throw new AppError(400, "CHAPTER_REQUIRED", "章节上下文缺少章节标识");
       if (chapterIds.length === 1 && scope.chapterId) this.appendPreviousChapterTail(contentSections, workId, scope.chapterId);
       for (const chapterId of chapterIds) this.appendChapter(contentSections, workId, chapterId, true);
-      if (scope.selection) contentSections.push(wrapAiContextRegion("selection", `当前选中文本（本次修改目标）：\n${scope.selection}`, { escape: false }));
+      if (scope.selection && (!scope.chapterId || !isAuthorNoteChapter(this.store.getChapter(scope.chapterId)))) {
+        contentSections.push(wrapAiContextRegion("selection", `当前选中文本（本次修改目标）：\n${scope.selection}`, { escape: false }));
+      }
     } else if (scope.type === "volume") {
       const volumeIds = [...new Set([
         ...(scope.volumeId ? [scope.volumeId] : []),
@@ -1751,7 +1761,7 @@ export class ContextBuilder {
       for (const volumeId of volumeIds) {
         const volume = volumes.find((item) => item.id === volumeId);
         if (!volume) throw notFound("卷");
-        const chapters = volume.chapters as Record<string, unknown>[];
+        const chapters = (volume.chapters as Record<string, unknown>[]).filter((chapter) => !isAuthorNoteChapter(chapter));
         contentSections.push(wrapAiContextRegion("volume", `当前卷：${String(volume.title)}`));
         for (const chapter of chapters) {
           contentSections.push(wrapAiContextRegion(
@@ -1765,7 +1775,7 @@ export class ContextBuilder {
       const volumes = tree.volumes as Record<string, unknown>[];
       contentSections.push(wrapAiContextRegion("book", "全书正文（按问题相关度选取原文，完整结构见章节概要）："));
       for (const volume of volumes) {
-        for (const chapter of volume.chapters as Record<string, unknown>[]) {
+        for (const chapter of (volume.chapters as Record<string, unknown>[]).filter((item) => !isAuthorNoteChapter(item))) {
           contentSections.push(wrapAiContextRegion(
             "chapter",
             `[# ${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`
@@ -1875,10 +1885,11 @@ export class ContextBuilder {
       for (const chapter of chapters) {
         if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "引用章节不属于当前作品");
       }
-      if (chapters.length) {
+      const eligibleChapters = chapters.filter((chapter) => !isAuthorNoteChapter(chapter));
+      if (eligibleChapters.length) {
         contentSections.push(wrapAiContextRegion(
           "referenced_chapters",
-          `作者主动引用的章节：\n${chapters
+          `作者主动引用的章节：\n${eligibleChapters
             .map((chapter) => `[${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`)
             .join("\n\n")}`
         ));
@@ -1985,6 +1996,7 @@ export class ContextBuilder {
   private appendChapter(sections: string[], workId: string, chapterId: string, includeContent: boolean): void {
     const chapter = this.store.getChapter(chapterId);
     if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+    if (isAuthorNoteChapter(chapter)) return;
     sections.push(wrapAiContextRegion(
       "chapter",
       includeContent
@@ -2001,7 +2013,7 @@ export class ContextBuilder {
     if (!volumes.length) return;
     const perVolumeBudget = Math.max(24, Math.floor(maximumTokens / volumes.length));
     for (const volume of volumes) {
-      const chapters = volume.chapters as Record<string, unknown>[];
+      const chapters = (volume.chapters as Record<string, unknown>[]).filter((chapter) => !isAuthorNoteChapter(chapter));
       const ranked = chapters.map((chapter, order) => {
         const summary = summaryByChapterId.get(String(chapter.id)) ?? "";
         const line = `- ${String(chapter.title)}：${summary || "尚无章节概要"}`;
@@ -2029,9 +2041,11 @@ export class ContextBuilder {
   }
 
   private appendPreviousChapterTail(sections: string[], workId: string, chapterId: string): void {
+    const current = this.store.getChapter(chapterId);
+    if (current.workId !== workId || isAuthorNoteChapter(current)) return;
     const tree = this.store.getWorkTree(workId);
     const chapters = (tree.volumes as Record<string, unknown>[])
-      .flatMap((volume) => volume.chapters as Record<string, unknown>[]);
+      .flatMap((volume) => (volume.chapters as Record<string, unknown>[]).filter((chapter) => !isAuthorNoteChapter(chapter)));
     const index = chapters.findIndex((chapter) => chapter.id === chapterId);
     if (index <= 0) return;
     const previous = chapters[index - 1];
@@ -2044,6 +2058,8 @@ export class ContextBuilder {
   }
 
   private appendChapterKnowledge(sections: string[], workId: string, chapterId: string): void {
+    const chapter = this.store.getChapter(chapterId);
+    if (chapter.workId !== workId || isAuthorNoteChapter(chapter)) return;
     const outline = this.store.getChapterOutline(chapterId);
     if (outline) {
       sections.push(wrapAiContextRegion(
@@ -5527,7 +5543,7 @@ export class AiManager {
       };
     }
     const args = parsed.data;
-    const scopedChapterIds = scope && (scope.type === "chapter" || scope.type === "volume")
+    const scopedChapterIds = scope && (scope.type === "chapter" || scope.type === "volume" || scope.type === "book")
       ? new Set(this.getScopeChapters(workId, scope).map((chapter) => String(chapter.id)))
       : null;
     if (name === "recall_relationship") {
@@ -5722,7 +5738,7 @@ export class AiManager {
           .map((item) => item.trim()).filter(Boolean).slice(0, 10);
         const seenParagraphs = new Set<string>();
         for (const identityTerm of identityTerms) {
-          for (const paragraph of this.store.searchChapterParagraphs(workId, identityTerm, 50)) {
+          for (const paragraph of this.store.searchChapterParagraphs(workId, identityTerm, 50, { excludeAuthorNotes: true })) {
             const key = `${String(paragraph.chapterId)}:${String(paragraph.paragraph)}`;
             if (seenParagraphs.has(key)) continue;
             seenParagraphs.add(key);
@@ -5755,7 +5771,7 @@ export class AiManager {
     if (name === "story_index") {
       const { offset, limit, cursor } = args as z.infer<typeof storyIndexArguments>;
       const work = this.store.getWork(workId);
-      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit);
+      const chapterPage = this.store.getStoryIndexChapterPage(workId, offset, limit, { excludeAuthorNotes: true });
       const workRecords = structuralToolResultRecords([{
         id: work.id,
         title: work.title,
@@ -5811,6 +5827,7 @@ export class AiManager {
         try {
           const chapter = this.store.getChapter(chapterId);
           if (chapter.workId !== workId) return { chapterId, error: { code: "CHAPTER_WORK_MISMATCH", message: "The requested chapter belongs to a different work." } };
+          if (isAuthorNoteChapter(chapter)) return { chapterId, error: { code: "CHAPTER_AUTHOR_NOTE_EXCLUDED", message: "Author notes are excluded from AI context." } };
           const content = collapseAiBlankLines(String(chapter.content));
           return { chapterId, title: chapter.title, versionNo: chapter.versionNo, ...(include !== "content" ? { summary: summaries.get(chapterId) ?? "" } : {}), ...(include !== "summary" ? { content } : {}) };
         } catch {
@@ -5827,7 +5844,7 @@ export class AiManager {
     }
     if (name === "grep") {
       const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
-      const matches = this.store.searchChapterParagraphs(workId, keyword, limit)
+      const matches = this.store.searchChapterParagraphs(workId, keyword, limit, { excludeAuthorNotes: true })
         .filter((match) => !scopedChapterIds || scopedChapterIds.has(String(match.chapterId)));
       const records = structuralToolResultRecords(matches, maximumRecordChars);
       const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
@@ -5855,6 +5872,13 @@ export class AiManager {
           ? "timeline"
           : sourceType === "chapter-outline" ? "outline" : sourceType;
         if (!requestedCategories.has(type as AgentEntityCategory)) return [];
+        if (sourceType === "chapter") {
+          try {
+            if (isAuthorNoteChapter(this.store.getChapter(String(item.id)))) return [];
+          } catch {
+            return [];
+          }
+        }
         return [{
           ...item,
           ...this.hybridAiSearchDetails(workId, sourceType, String(item.id)),
@@ -8238,7 +8262,13 @@ export class AiManager {
         const chapter = this.store.getChapter(chapterId);
         if (String(chapter.workId) !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
       }
-      return new Set(chapterIds);
+      return new Set(chapterIds.filter((chapterId) => {
+        try {
+          return !isAuthorNoteChapter(this.store.getChapter(chapterId));
+        } catch {
+          return false;
+        }
+      }));
     }
     if (scope.type === "volume") {
       const volumeIds = [...new Set([
@@ -8270,6 +8300,7 @@ export class AiManager {
       try {
         const chapter = this.store.getChapter(sourceId);
         if (String(chapter.workId) !== workId) return null;
+        if (isAuthorNoteChapter(chapter)) return null;
         return {
           sourceType,
           sourceId,
@@ -9214,8 +9245,7 @@ export class AiManager {
       if (!chapter) return null;
       if (scope.type === "chapter" && scope.chapterId !== sourceId) return null;
       if (scope.type === "volume" && scope.volumeId !== String(chapter.volume_id)) return null;
-      if ((scope.type === "book" || scope.type === "volume")
-        && (Boolean(chapter.excluded_from_analysis) || String(chapter.chapter_type) === "作者的话")) return null;
+      if (Boolean(chapter.excluded_from_analysis) || String(chapter.chapter_type) === "作者的话") return null;
       return String(chapter.version_no);
     }
 
@@ -10208,7 +10238,7 @@ export class AiManager {
   }
 
   private isAutomaticAnalysisChapter(chapter: Record<string, unknown>): boolean {
-    return !chapter.excludedFromAnalysis && chapter.chapterType !== "作者的话";
+    return !chapter.excludedFromAnalysis && !isAuthorNoteChapter(chapter);
   }
 
   private buildChapterChunks(chapters: Record<string, unknown>[], maximumChars = 10_000): Array<{ text: string; chapterIds: string[] }> {

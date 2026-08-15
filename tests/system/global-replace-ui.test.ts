@@ -29,7 +29,7 @@ describe("全局替换界面", () => {
     expect(page.text).toContain('name="replaceScope" value="prose" checked');
     expect(page.text).toContain('name="replaceScope" value="settings"');
     expect(page.text).toContain('name="replaceScope" value="prose-and-settings"');
-    expect(page.text).toContain('/app.js?v=20260815-character-extraction-ui-v1');
+    expect(page.text).toContain('/app.js?v=20260815-author-note-analysis-v1');
     expect(application.text).toContain("function submitGlobalReplace(");
     expect(application.text).toContain("function syncGlobalReplaceScopeOptions(");
     expect(application.text).toContain('/replace`');
