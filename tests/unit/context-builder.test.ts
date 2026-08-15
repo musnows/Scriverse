@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ContextBuilder, estimateAiTokens } from "../../src/ai.js";
-import { createTestRuntime, seedChapter } from "../helpers.js";
+import { createTestRuntime, createWork, seedChapter } from "../helpers.js";
 
 describe("AI 上下文组装", () => {
   const runtimes: ReturnType<typeof createTestRuntime>[] = [];
@@ -158,6 +158,65 @@ describe("AI 上下文组装", () => {
     });
     expect(volumeContext).toContain("第一章正文范围标记");
     expect(volumeContext).toContain("第二章正文范围标记");
+  });
+
+  it("所有 AI 正文范围都排除作者的话章节", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = await createWork(runtime, "正文过滤作品");
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    const firstChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "正常正文内容。"
+    });
+    const authorNote = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "作者的话",
+      chapterType: "作者的话",
+      content: "AUTHOR_NOTE_CONTENT"
+    });
+    const secondChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第二章",
+      content: "第二章正常正文内容。"
+    });
+    runtime.store.db.run(
+      `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+       settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, '[]', '[]', '[]', '[]', '[]', 'review', ?)`,
+      "author-note-insight",
+      String(authorNote.id),
+      Number(authorNote.versionNo),
+      "AUTHOR_NOTE_SUMMARY",
+      "2026-08-15T00:00:00.000Z"
+    );
+    const builder = new ContextBuilder(runtime.store);
+    const scopes = [
+      { type: "chapter" as const, chapterId: String(secondChapter.id), includeSettingInfo: false },
+      { type: "volume" as const, volumeId: String(volume.id), includeSettingInfo: false },
+      { type: "book" as const, includeSettingInfo: false },
+      { type: "none" as const, chapterIds: [String(authorNote.id)] },
+      { type: "entities" as const, includeBookSummary: true }
+    ];
+
+    for (const scope of scopes) {
+      const context = builder.build(String(work.id), scope);
+      expect(context).not.toContain("AUTHOR_NOTE_CONTENT");
+      expect(context).not.toContain("AUTHOR_NOTE_SUMMARY");
+      expect(context).not.toContain("作者的话");
+    }
+
+    const selectedAuthorNote = builder.build(String(work.id), {
+      type: "selection",
+      chapterId: String(authorNote.id),
+      selection: "AUTHOR_NOTE_SELECTION",
+      includeSettingInfo: false
+    });
+    expect(selectedAuthorNote).not.toContain("AUTHOR_NOTE_SELECTION");
+    expect(selectedAuthorNote).not.toContain("AUTHOR_NOTE_CONTENT");
+    expect(builder.build(String(work.id), { type: "book", includeSettingInfo: false })).toContain("正常正文内容");
+    expect(builder.build(String(work.id), { type: "book", includeSettingInfo: false })).toContain("第二章正常正文内容");
+    expect(builder.build(String(work.id), { type: "none", chapterIds: [String(firstChapter.id)] })).toContain("正常正文内容");
   });
 
   it("无正文上下文时可通过显式能力注入锁定设定", async () => {

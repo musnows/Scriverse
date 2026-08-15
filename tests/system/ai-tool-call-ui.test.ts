@@ -18,6 +18,9 @@ describe("AI 工具调用记录界面", () => {
     expect(page).toContain('<dt>返回字符数</dt><dd id="ai-tool-call-result-length"></dd>');
     expect(page).toContain('id="ai-tool-call-arguments"');
     expect(page).toContain('id="ai-tool-call-result"');
+    expect(page).toContain('data-copy-target="ai-tool-call-arguments"');
+    expect(page).toContain('data-copy-target="ai-tool-call-result"');
+    expect(page).toContain('class="ai-tool-call-copy-button"');
     expect(application).toContain('eventName === "tool_call"');
     expect(application).toContain('eventName === "process_step"');
     expect(application).toContain('`调用了 ${name} 工具`');
@@ -44,11 +47,16 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('new Intl.DateTimeFormat("zh-CN"');
     expect(application).toContain('formatAiToolCallResult(toolCall?.result)');
     expect(application).toContain('`${resultDetails.characterCount.toLocaleString("zh-CN")} 字符`');
+    expect(application).toContain("async function copyAiToolCallCode(button)");
+    expect(application).toContain("await copyAiRawMarkdown(target.textContent)");
+    expect(application).toContain('data-ai-tool-call-copy');
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");
     expect(styles).toContain(".ai-process-details > summary");
     expect(styles).toContain(".ai-process-step-body");
     expect(styles).toContain(".ai-tool-call-detail { display: grid; grid-template-columns: minmax(0, 1fr);");
     expect(styles).toContain(".ai-tool-call-info { display: grid;");
+    expect(styles).toContain(".ai-tool-call-copy-button { position: absolute;");
+    expect(styles).toContain(".ai-tool-call-code-block { position: relative;");
     expect(styles).not.toContain("ai-stream-cursor");
     expect(styles).not.toContain(".is-streaming .message-body:empty::after");
   });

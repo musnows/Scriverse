@@ -1092,6 +1092,62 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
   });
 
+  it("所有 AI 查询工具都排除作者的话章节", async () => {
+    const chapter = runtime.store.getChapter(chapterId);
+    const authorNote = runtime.store.createChapter(workId, {
+      volumeId: String(chapter.volumeId),
+      title: "作者的话",
+      chapterType: "作者的话",
+      content: "AUTHOR_NOTE_TOOL_MARKER"
+    });
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities"]
+    }).expect(200);
+
+    const calls = [
+      { id: "author-index", name: "story_index", arguments: {} },
+      { id: "author-read", name: "read_chapters", arguments: { chapterIds: [String(authorNote.id)], include: "content" } },
+      { id: "author-grep", name: "grep", arguments: { keyword: "AUTHOR_NOTE_TOOL_MARKER" } }
+    ];
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: calls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: { name: call.name, arguments: call.arguments }
+        })) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const results = new Map(body.messages.filter((message) => message.role === "tool").map((message) => [
+        message.tool_call_id,
+        JSON.parse(message.content ?? "{}") as Record<string, unknown>
+      ]));
+      expect(results.get("author-index")).toMatchObject({ ok: true, data: { totalChapters: 1, chapters: [{ id: chapterId }] } });
+      expect(results.get("author-index")).not.toContain("AUTHOR_NOTE_TOOL_MARKER");
+      expect(results.get("author-read")).toMatchObject({
+        ok: true,
+        data: { chapters: [{ chapterId: authorNote.id, error: { code: "CHAPTER_AUTHOR_NOTE_EXCLUDED" } }] }
+      });
+      expect(results.get("author-grep")).toMatchObject({ ok: true, data: { matches: [] } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "作者的话未进入查询结果。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "查询正文。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("作者的话未进入查询结果。");
+    expect(response.body.data.toolCalls).toHaveLength(calls.length);
+    expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
+  });
+
   it("长工具结果按完整结构限制在一万字符内并通过游标续读", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
