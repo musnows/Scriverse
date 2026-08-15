@@ -57,4 +57,25 @@ describe("章节段落关键字索引", () => {
     runtime.store.deleteChapter(String(chapter.id));
     expect(runtime.store.searchChapterParagraphs(String(work.id), "新关键字")).toEqual([]);
   });
+
+  it("供 AI 检索时排除作者的话章节", async () => {
+    runtime = createTestRuntime();
+    const work = await createWork(runtime, "作者的话检索作品");
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "作者的话",
+      chapterType: "作者的话",
+      content: "AUTHOR_NOTE_SEARCH_MARKER"
+    });
+    const chapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "正文 AUTHOR_NOTE_SEARCH_MARKER。"
+    });
+
+    const matches = runtime.store.searchChapterParagraphs(String(work.id), "AUTHOR_NOTE_SEARCH_MARKER", 20, { excludeAuthorNotes: true });
+
+    expect(matches).toEqual([expect.objectContaining({ chapterId: chapter.id, chapterTitle: "第一章" })]);
+  });
 });

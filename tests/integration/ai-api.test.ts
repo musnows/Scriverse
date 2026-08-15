@@ -1092,6 +1092,62 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
   });
 
+  it("所有 AI 查询工具都排除作者的话章节", async () => {
+    const chapter = runtime.store.getChapter(chapterId);
+    const authorNote = runtime.store.createChapter(workId, {
+      volumeId: String(chapter.volumeId),
+      title: "作者的话",
+      chapterType: "作者的话",
+      content: "AUTHOR_NOTE_TOOL_MARKER"
+    });
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      agentTools: ["story_index", "read_chapters", "grep", "search_story_entities"]
+    }).expect(200);
+
+    const calls = [
+      { id: "author-index", name: "story_index", arguments: {} },
+      { id: "author-read", name: "read_chapters", arguments: { chapterIds: [String(authorNote.id)], include: "content" } },
+      { id: "author-grep", name: "grep", arguments: { keyword: "AUTHOR_NOTE_TOOL_MARKER" } }
+    ];
+    let completionCount = 0;
+    fetchMock.mockImplementation(async (_input, init) => {
+      completionCount += 1;
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ role: string; tool_call_id?: string; content?: string }> };
+      if (completionCount === 1) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: calls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: { name: call.name, arguments: call.arguments }
+        })) } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const results = new Map(body.messages.filter((message) => message.role === "tool").map((message) => [
+        message.tool_call_id,
+        JSON.parse(message.content ?? "{}") as Record<string, unknown>
+      ]));
+      expect(results.get("author-index")).toMatchObject({ ok: true, data: { totalChapters: 1, chapters: [{ id: chapterId }] } });
+      expect(results.get("author-index")).not.toContain("AUTHOR_NOTE_TOOL_MARKER");
+      expect(results.get("author-read")).toMatchObject({
+        ok: true,
+        data: { chapters: [{ chapterId: authorNote.id, error: { code: "CHAPTER_AUTHOR_NOTE_EXCLUDED" } }] }
+      });
+      expect(results.get("author-grep")).toMatchObject({ ok: true, data: { matches: [] } });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "作者的话未进入查询结果。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    const response = await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "查询正文。",
+      scope: { type: "none" },
+      modelId
+    }).expect(201);
+
+    expect(response.body.data.content).toBe("作者的话未进入查询结果。");
+    expect(response.body.data.toolCalls).toHaveLength(calls.length);
+    expect(response.body.data.toolCalls.every((call: { status: string }) => call.status === "completed")).toBe(true);
+  });
+
   it("长工具结果按完整结构限制在一万字符内并通过游标续读", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -2107,7 +2163,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
-  it("浏览器中断流式连接会取消上游且只保留原对话用户消息", async () => {
+  it("浏览器中断流式连接会取消上游且保留已收到的助手正文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -2160,28 +2216,35 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(received).toContain("event: user_message");
     expect(received).toContain("不应落库的部分回复");
 
+    const inProgressReloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(inProgressReloaded.body.data.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "不应落库的部分回复"
+    });
+
     controller.abort();
     await reader.read().catch(() => ({ done: true, value: undefined }));
     for (let index = 0; index < 50 && !upstreamAborted; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
     expect(upstreamAborted).toBe(true);
 
     let streamRequest = runtime.database.get<Record<string, unknown>>(
-      "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+      "SELECT status, terminal_reason, assistant_message_id FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
       "disconnect-request-0001"
     );
     for (let index = 0; index < 50 && streamRequest?.status === "in_progress"; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2));
       streamRequest = runtime.database.get(
-        "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+        "SELECT status, terminal_reason, assistant_message_id FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
         "disconnect-request-0001"
       );
     }
-    expect(streamRequest).toMatchObject({ status: "cancelled" });
+    expect(streamRequest).toMatchObject({ status: "cancelled", assistant_message_id: expect.any(String) });
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(reloaded.body.data.title).toBe("切换对话时取消旧流");
     expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
-      { role: "user", content: "切换对话时取消旧流" }
+      { role: "user", content: "切换对话时取消旧流" },
+      { role: "assistant", content: "不应落库的部分回复" }
     ]);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions WHERE work_id = ?", workId)).toEqual({ count: 0 });
 
@@ -2391,11 +2454,11 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).not.toContain("event: complete");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).not.toContain("sk-sensitive-");
-    expect(assistantMessages).toEqual([]);
+    expect(assistantMessages).toEqual([{ content: "安全前缀 sk-s*****" }]);
     expect(failedCall).toEqual({ status: "failed", output_chars: "安全前缀 sk-s*****".length });
   });
 
-  it("用户取消流式请求时安全刷新尾部但不保存临时助手正文", async () => {
+  it("用户取消流式请求时安全刷新尾部并保存临时助手正文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -2443,7 +2506,7 @@ describe("AI 供应商、模型与建议 API", () => {
     );
 
     expect(deltas.join("")).toBe("取消正文末尾s");
-    expect(assistantMessages).toEqual([]);
+    expect(assistantMessages).toEqual([{ content: "取消正文末尾s" }]);
     expect(failedCall).toEqual({ status: "failed", output_chars: "取消正文末尾s".length });
   });
 

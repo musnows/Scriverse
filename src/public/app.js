@@ -19,7 +19,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelCo
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260815-ai-stream-typewriter-v4";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
@@ -551,7 +551,15 @@ function cancelActiveAiRequest(reason) {
   return cancelled;
 }
 
-function beginAiConversationNavigation(reason) {
+function beginAiConversationNavigation(reason, action = "切换会话") {
+  if (aiRequestManager.hasActive()) {
+    const isNewConversation = action === "新建会话";
+    toast(
+      `当前 turn 尚未结束，${action}会中断生成；${isNewConversation ? "\n" : ""}已收到的内容会保留在历史记录中`,
+      "warning",
+      isNewConversation ? "ai-new-conversation-toast" : ""
+    );
+  }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = aiConversationNavigationGeneration;
   const navigation = Object.freeze({
@@ -574,7 +582,10 @@ function finishAiConversationNavigation(navigation) {
   return true;
 }
 
-function invalidateAiConversationNavigation(reason) {
+function invalidateAiConversationNavigation(reason, action = "切换作品") {
+  if (aiRequestManager.hasActive()) {
+    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+  }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = null;
   cancelActiveAiRequest(reason);
@@ -1871,7 +1882,7 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId) {
+  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
@@ -2001,6 +2012,29 @@ function formatAiToolCallTime(value) {
   }).format(date);
 }
 
+function setAiToolCallCopyButtonState(button, copied) {
+  const label = button.dataset.copyLabel ?? "代码块";
+  button.dataset.copyState = copied ? "copied" : "idle";
+  button.classList.toggle("is-copied", copied);
+  button.setAttribute("aria-label", copied ? `${label}已复制` : `复制${label}`);
+  button.title = copied ? "已复制" : `复制${label}`;
+}
+
+async function copyAiToolCallCode(button) {
+  const targetId = button.dataset.copyTarget;
+  const target = targetId ? document.getElementById(targetId) : null;
+  if (!target) return;
+  try {
+    await copyAiRawMarkdown(target.textContent);
+    setAiToolCallCopyButtonState(button, true);
+    window.setTimeout(() => {
+      if (button.isConnected && button.dataset.copyState === "copied") setAiToolCallCopyButtonState(button, false);
+    }, 1200);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function openAiToolCallDetail(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
   const status = toolCall?.status === "failed" ? "调用失败" : "调用成功";
@@ -2017,6 +2051,7 @@ function openAiToolCallDetail(toolCall) {
   $("#ai-tool-call-arguments").textContent = JSON.stringify(toolCall?.arguments ?? {}, null, 2);
   $("#ai-tool-call-result-length").textContent = `${resultDetails.characterCount.toLocaleString("zh-CN")} 字符`;
   $("#ai-tool-call-result").textContent = resultDetails.text;
+  document.querySelectorAll("[data-ai-tool-call-copy]").forEach((button) => setAiToolCallCopyButtonState(button, false));
   $("#ai-tool-call-dialog").showModal();
 }
 
@@ -2418,7 +2453,7 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   if (!state.work) return null;
-  const navigation = beginAiConversationNavigation("已切换 AI 对话");
+  const navigation = beginAiConversationNavigation("已切换 AI 对话", "切换会话");
   try {
     const parameters = new URLSearchParams({ page: "1", limit: "100" });
     if (focusMessageId) parameters.set("messageId", String(focusMessageId));
@@ -2488,7 +2523,7 @@ function applyNewAiConversation(conversation) {
 
 async function createNewAiConversation(taskType = "chat") {
   if (!state.work) return null;
-  const navigation = beginAiConversationNavigation("已新建 AI 对话");
+  const navigation = beginAiConversationNavigation("已新建 AI 对话", "新建会话");
   try {
     const conversation = await api(`/api/works/${navigation.workId}/ai-conversations`, { method: "POST", body: { taskType } });
     if (!isAiConversationNavigationCurrent(navigation)) return null;
@@ -3898,11 +3933,11 @@ function dismissChapterInsightToast() {
   }
 }
 
-function toast(message, type = "info") {
+function toast(message, type = "info", extraClass = "") {
   if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
-  element.className = `toast ${type}`;
+  element.className = `toast ${type}${extraClass ? ` ${extraClass}` : ""}`;
   element.setAttribute("role", type === "error" ? "alert" : "status");
   element.setAttribute("aria-atomic", "true");
   element.textContent = message;
@@ -9320,7 +9355,8 @@ function renderCharacterExtractionEditor(preview) {
   if (!items.length) return '<p class="character-extraction-empty">没有可应用的角色候选。</p>';
   return `<div class="character-extraction-editor" data-character-extraction-editor data-preview-token="${esc(preview.previewToken)}">
     <div class="character-extraction-policy" role="note"><strong>合并规则</strong><span>优先使用任务保存的稳定角色引用，其次使用当前标准名和别名匹配。合并只追加无冲突别名、空缺身份、种族和首次登场；已有非空字段保持不变。</span></div>
-    <div class="character-extraction-editor-toolbar"><span data-character-extraction-selected-count>已选择 0 项</span><button class="ghost-button" type="button" data-character-extraction-select-all>全选可处理项</button><button class="ghost-button" type="button" data-character-extraction-clear>全部跳过</button></div>
+    <div class="character-extraction-editor-toolbar"><button class="primary-button character-extraction-apply-button" type="button" data-apply-character-extraction>确认并应用所选候选</button><span data-character-extraction-selected-count>已选择 0 项</span><button class="ghost-button" type="button" data-character-extraction-select-all>全选可处理项</button><button class="ghost-button" type="button" data-character-extraction-clear>全部跳过</button></div>
+    <p class="character-extraction-apply-note">确认采用整批事务；任一新建项名称冲突时全部回滚。重复点击或网络重试不会重复创建。</p>
     <div class="character-extraction-candidate-list">${items.map((item, index) => {
       const matches = Array.isArray(item.matchCandidates) ? item.matchCandidates : [];
       const suggestedAction = item.suggestedAction === "merge" && matches.length ? "merge" : item.suggestedAction === "skip" ? "skip" : "create";
@@ -9351,7 +9387,6 @@ function renderCharacterExtractionEditor(preview) {
       </article>`;
     }).join("")}</div>
     <p class="character-extraction-apply-error hidden" data-character-extraction-error role="alert"></p>
-    <div class="character-extraction-apply-actions"><button class="primary-button" type="button" data-apply-character-extraction>确认并应用所选候选</button><small>确认采用整批事务；任一新建项名称冲突时全部回滚。重复点击或网络重试不会重复创建。</small></div>
   </div>`;
 }
 
@@ -13087,11 +13122,12 @@ function openReviewDialog() {
 }
 
 async function openTaskDialog() {
-  const volumeOptions = state.work.volumes.map((volume) => ({ id: String(volume.id), title: String(volume.title) }));
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
     id: String(chapter.id),
     title: String(chapter.title),
-    volumeTitle: String(volume.title)
+    volumeId: String(volume.id),
+    volumeTitle: String(volume.title),
+    chapterType: String(chapter.chapterType || "正文")
   })));
   let relationshipCharacters = [];
   let taskModels = [];
@@ -13108,23 +13144,67 @@ async function openTaskDialog() {
     toast(`分析任务配置加载失败：${error.message}`, "error");
     return;
   }
-  const taskScopePicker = (kind, label, options, emptyLabel) => `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
-    <span id="task-${kind}-label">${esc(label)}（可多选）</span>
-    <div class="task-scope-picker">
-      <button class="task-scope-trigger" type="button" data-task-scope-trigger="${kind}" aria-expanded="false" aria-controls="task-${kind}-bubble" aria-labelledby="task-${kind}-label task-${kind}-summary" disabled>
-        <span id="task-${kind}-summary">${esc(emptyLabel)}</span>
-        <span class="task-scope-trigger-meta"><span data-task-scope-count="${kind}">未选择</span><span class="task-scope-chevron" aria-hidden="true">⌄</span></span>
-      </button>
-      <div id="task-${kind}-bubble" class="task-scope-bubble hidden" data-task-scope-bubble="${kind}">
-        <label class="task-scope-search">筛选${esc(label)}<input type="search" data-task-scope-search="${kind}" placeholder="输入名称" autocomplete="off"></label>
-        <div class="task-scope-bubble-meta"><span>共 ${options.length} ${kind === "chapter" ? "章" : "卷"}</span><button type="button" data-task-scope-clear="${kind}" disabled>清空选择</button></div>
-        <div class="task-scope-options" role="group" aria-labelledby="task-${kind}-label">
-          ${options.map((item) => `<label class="task-scope-option" data-task-scope-search-name="${esc(`${item.title} ${item.volumeTitle ?? ""}`.toLocaleLowerCase())}"><input type="checkbox" name="${kind === "chapter" ? "chapterIds" : "volumeIds"}" value="${esc(item.id)}" data-task-scope-input="${kind}"><span><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}</small>` : ""}</span></label>`).join("")}
-        </div>
-        <p class="task-scope-empty hidden" data-task-scope-empty="${kind}">没有匹配的${esc(label)}</p>
+  const taskScopePicker = (options, emptyLabel) => {
+    const kind = "chapter";
+    const label = "章节";
+    const inputName = "chapterIds";
+    const renderOption = (item) => `<label class="task-scope-option" data-task-scope-search-name="${esc(`${item.title} ${item.volumeTitle ?? ""}`.toLocaleLowerCase())}">
+      <input type="checkbox" name="${inputName}" value="${esc(item.id)}" data-task-scope-input="${kind}" data-task-scope-title="${esc(item.title)}" data-task-scope-subtitle="${esc(item.volumeTitle ?? "")}">
+      <span class="task-scope-checkbox" aria-hidden="true"></span>
+      <span class="task-scope-option-copy"><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}${item.chapterType && item.chapterType !== "正文" ? ` · ${esc(item.chapterType)}` : ""}</small>` : ""}</span>
+    </label>`;
+    const optionMarkup = [...options.reduce((groups, item) => {
+        const groupId = String(item.volumeId || "");
+        const groupTitle = String(item.volumeTitle || "未分卷章节");
+        const groupKey = `${groupId}:${groupTitle}`;
+        const group = groups.get(groupKey)?.options ?? [];
+        group.push(item);
+        groups.set(groupKey, { id: groupId, title: groupTitle, options: group });
+        return groups;
+      }, new Map())].map(([, group]) => `<section class="task-scope-volume-group" data-task-scope-group data-task-scope-volume-id="${esc(group.id)}">
+        <header>
+          ${group.id ? `<label class="task-scope-volume-option">
+            <input type="checkbox" data-task-scope-volume-input="${esc(group.id)}" data-task-scope-volume-title="${esc(group.title)}" aria-label="全选${esc(group.title)}章节">
+            <span class="task-scope-checkbox" aria-hidden="true"></span>
+            <span class="task-scope-volume-copy"><strong>${esc(group.title)}</strong><small>勾选以全选本卷章节</small></span>
+          </label>` : `<strong>${esc(group.title)}</strong>`}
+          <span>${group.options.length} 章</span>
+        </header>
+        ${group.options.map(renderOption).join("")}
+      </section>`).join("");
+    return `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
+      <div class="task-scope-field-heading"><span id="task-${kind}-label">${esc(label)}（可多选）</span><small>从左侧选择，右侧确认已选内容</small></div>
+      <div class="task-scope-picker">
+        <button class="task-scope-trigger" type="button" data-task-scope-trigger="${kind}" aria-expanded="false" aria-controls="task-${kind}-bubble" aria-labelledby="task-${kind}-label task-${kind}-summary" disabled>
+          <span id="task-${kind}-summary">${esc(emptyLabel)}</span>
+          <span class="task-scope-trigger-meta"><span data-task-scope-count="${kind}">未选择</span><span class="task-scope-chevron" aria-hidden="true">⌄</span></span>
+        </button>
+        <section id="task-${kind}-bubble" class="task-scope-panel hidden" data-task-scope-bubble="${kind}" aria-hidden="true" aria-labelledby="task-${kind}-label">
+          <header class="task-scope-panel-header">
+            <div><strong>选择${esc(label)}</strong><small>支持搜索和按分卷浏览，右侧会实时汇总。</small></div>
+            <button type="button" class="task-scope-clear" data-task-scope-clear="${kind}" disabled>清空已选</button>
+          </header>
+          <div class="task-scope-author-note-banner" role="note">
+            <span class="task-scope-author-note-banner-icon" aria-hidden="true">i</span>
+            <div><strong>范围提示</strong><span>标记为“作者的话”的章节不会纳入 AI 分析输入；即使被选中，也只会保留在作品目录中。</span></div>
+          </div>
+          <div class="task-scope-panel-grid">
+            <section class="task-scope-available" aria-label="待选${esc(label)}">
+              <header class="task-scope-panel-section-header"><strong>待选章节</strong><span data-task-scope-available-count="${kind}">${options.length} 章</span></header>
+              <label class="task-scope-search"><span>筛选${esc(label)}</span><input type="search" data-task-scope-search="${kind}" placeholder="输入名称" autocomplete="off"></label>
+              <div class="task-scope-options" role="group" aria-labelledby="task-${kind}-label">${optionMarkup}</div>
+              <p class="task-scope-empty hidden" data-task-scope-empty="${kind}">没有匹配的${esc(label)}</p>
+            </section>
+            <aside class="task-scope-selected" aria-label="已选章节汇总">
+              <header class="task-scope-panel-section-header"><strong>已选汇总</strong><span data-task-scope-summary-count="${kind}">0 章</span></header>
+              <p class="task-scope-selected-note">创建任务时会分析这里列出的章节；标记为“作者的话”的章节除外。</p>
+              <div class="task-scope-selected-list" data-task-scope-selected-list="${kind}" role="list" aria-live="polite"><p class="task-scope-selected-empty">暂未选择章节</p></div>
+            </aside>
+          </div>
+        </section>
       </div>
-    </div>
-  </div>`;
+    </div>`;
+  };
   const defaultModelByTask = new Map(taskDefaults.map((item) => [item.taskType, item.model.id]));
   const availableTaskModels = taskModels.filter((model) => isSelectableModel(model));
   const characterOptions = relationshipCharacters.map((character) => [character.id, character.name]);
@@ -13152,8 +13232,7 @@ async function openTaskDialog() {
     <option value="" ${availableTaskModels.some((model) => model.id === defaultModelId) ? "" : "selected"} disabled>${availableTaskModels.length ? "请选择模型" : "没有可用模型"}</option>
     ${availableTaskModels.map((model) => `<option value="${esc(model.id)}" ${model.id === defaultModelId ? "selected" : ""}>${esc(modelOptionLabel(model))}</option>`).join("")}
   </select><small id="analysis-task-model-help">默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。</small><p class="analysis-context-warning hidden" data-analysis-context-warning role="alert"></p></label>`;
-  const chapterField = taskScopePicker("chapter", "章节", chapterOptions, "选择需要分析的章节");
-  const volumeField = taskScopePicker("volume", "分卷", volumeOptions, "选择需要分析的分卷");
+  const chapterField = taskScopePicker(chapterOptions, "选择需要分析的章节");
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
     <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。默认仅追加不存在的关系，不修改或删除已有关系。</span></p>
@@ -13191,42 +13270,33 @@ async function openTaskDialog() {
     const previewRelationshipChanges = taskType === "relationship-analysis" && form.get("previewRelationshipChanges") === "on";
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
     const chapterIds = form.getAll("chapterIds").map(String).filter(Boolean);
-    const volumeIds = form.getAll("volumeIds").map(String).filter(Boolean);
     const chapterScope = {
       type: "chapter",
       ...(chapterIds[0] ? { chapterId: chapterIds[0] } : {}),
       ...(chapterIds.length ? { chapterIds } : {})
     };
-    const volumeScope = {
-      type: "volume",
-      ...(volumeIds[0] ? { volumeId: volumeIds[0] } : {}),
-      ...(volumeIds.length ? { volumeIds } : {})
-    };
     const scope = settingsOnly
       ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : { ...(scopeType === "volume" ? volumeScope : chapterScope), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+      : { ...chapterScope, ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     return scope;
   };
   const relationshipPreviewKey = (scope, modelId) => JSON.stringify({
     type: scope.type,
     chapterId: scope.chapterId ?? null,
     chapterIds: scope.chapterIds ?? [],
-    volumeId: scope.volumeId ?? null,
-    volumeIds: scope.volumeIds ?? [],
     includeAllSettings: scope.includeAllSettings === true,
     characterIds: scope.characterIds ?? [],
     preFilterRelationshipSources: scope.preFilterRelationshipSources !== false,
     modelId
   });
-  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["volume", "指定分卷"], ["book", "全书"]]) + chapterField + volumeField + relationshipFields, async (form) => {
+  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
     const workId = state.work.id;
     const taskType = String(form.get("taskType"));
     const modelId = String(form.get("modelId"));
     const scope = buildRelationshipScope(form);
     if (scope.type === "chapter" && !scope.chapterIds?.length) return toast("请先选择至少一个章节", "error");
-    if (scope.type === "volume" && !scope.volumeIds?.length) return toast("请先选择至少一个分卷", "error");
     if (taskType === "relationship-analysis" && relationshipSourcePreview
       && relationshipSourcePreviewConfigKey === relationshipPreviewKey(scope, modelId)) {
       scope.relationshipSourceRefs = [...$("#dialog-fields").querySelectorAll("[data-relationship-source-selected]:checked")]
@@ -13250,6 +13320,7 @@ async function openTaskDialog() {
     toast("分析任务已创建，已进入任务队列");
     void refreshAnalysisTaskViewsAfterCreate(workId);
   }, "AI 分析", {
+    large: true,
     submitLabel: "创建任务",
     pendingLabel: "创建中…",
     pendingMessage: "正在创建分析任务，请稍候",
@@ -13259,40 +13330,43 @@ async function openTaskDialog() {
   const taskModelSelect = $("#dialog-fields").querySelector('select[name="modelId"]');
   const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');
   const scopeFields = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-field="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-field="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-field="chapter"]')
   };
   const scopeTriggers = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-trigger="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-trigger="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-trigger="chapter"]')
   };
   const scopeBubbles = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-bubble="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-bubble="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-bubble="chapter"]')
   };
   const scopeSearches = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-search="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-search="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-search="chapter"]')
   };
   const scopeInputs = {
-    chapter: [...$("#dialog-fields").querySelectorAll('[data-task-scope-input="chapter"]')],
-    volume: [...$("#dialog-fields").querySelectorAll('[data-task-scope-input="volume"]')]
+    chapter: [...$("#dialog-fields").querySelectorAll('[data-task-scope-input="chapter"]')]
   };
+  const scopeVolumeInputs = [
+    ...$("#dialog-fields").querySelectorAll("[data-task-scope-volume-input]")
+  ];
   const scopeSummaries = {
-    chapter: $("#dialog-fields").querySelector("#task-chapter-summary"),
-    volume: $("#dialog-fields").querySelector("#task-volume-summary")
+    chapter: $("#dialog-fields").querySelector("#task-chapter-summary")
   };
   const scopeCounts = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-count="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-count="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-count="chapter"]')
   };
   const scopeClearButtons = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-clear="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-clear="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-clear="chapter"]')
   };
   const scopeEmptyMessages = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-empty="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-empty="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-empty="chapter"]')
+  };
+  const scopeSelectedLists = {
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-selected-list="chapter"]')
+  };
+  const scopeSummaryCounts = {
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-summary-count="chapter"]')
+  };
+  const scopeAvailableCounts = {
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-available-count="chapter"]')
   };
   const description = $("#analysis-type-description");
   const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
@@ -13325,18 +13399,38 @@ async function openTaskDialog() {
   const setTaskScopeBubbleOpen = (kind, open) => {
     scopeBubbles[kind].classList.toggle("hidden", !open);
     scopeTriggers[kind].setAttribute("aria-expanded", String(open));
-    if (open) scopeSearches[kind].focus();
+    scopeBubbles[kind].setAttribute("aria-hidden", String(!open));
+    if (open) {
+      scopeBubbles[kind].scrollIntoView({ block: "start" });
+      scopeSearches[kind].focus({ preventScroll: true });
+    }
+  };
+  const syncTaskScopeVolumeInputs = () => {
+    for (const volumeInput of scopeVolumeInputs) {
+      const group = volumeInput.closest("[data-task-scope-group]");
+      const chapters = [...group.querySelectorAll('[data-task-scope-input="chapter"]')];
+      const selectedCount = chapters.filter((input) => input.checked).length;
+      volumeInput.checked = chapters.length > 0 && selectedCount === chapters.length;
+      volumeInput.indeterminate = selectedCount > 0 && selectedCount < chapters.length;
+    }
   };
   const syncTaskScopePicker = (kind) => {
     const selected = scopeInputs[kind].filter((input) => input.checked);
-    const selectedNames = selected.map((input) => input.closest(".task-scope-option")?.querySelector("strong")?.textContent ?? "");
-    const label = kind === "chapter" ? "选择需要分析的章节" : "选择需要分析的分卷";
+    syncTaskScopeVolumeInputs();
+    const selectedNames = selected.map((input) => input.dataset.taskScopeTitle ?? "");
     scopeSummaries[kind].textContent = selectedNames.length
-      ? `${selectedNames.slice(0, 2).join("、")}${selectedNames.length > 2 ? ` 等 ${selectedNames.length} 个` : ""}`
-      : label;
+      ? selectedNames.length === 1 ? selectedNames[0] : `已选择 ${selectedNames.length} 个章节`
+      : "选择需要分析的章节";
     scopeCounts[kind].textContent = selected.length ? `已选 ${selected.length}` : "未选择";
+    scopeSummaryCounts[kind].textContent = `${selected.length} 章`;
     scopeClearButtons[kind].disabled = selected.length === 0;
-    scopeTriggers[kind].setAttribute("aria-label", `筛选${kind === "chapter" ? "章节" : "分卷"}，已选择 ${selected.length} 个`);
+    scopeTriggers[kind].setAttribute("aria-label", `筛选章节，已选择 ${selected.length} 个`);
+    scopeSelectedLists[kind].innerHTML = selected.length
+      ? selected.map((input) => `<div class="task-scope-selected-item" role="listitem">
+          <span class="task-scope-selected-copy"><strong>${esc(input.dataset.taskScopeTitle ?? "")}</strong>${input.dataset.taskScopeSubtitle ? `<small>${esc(input.dataset.taskScopeSubtitle)}</small>` : ""}</span>
+          <button type="button" data-task-scope-remove="${kind}" data-task-scope-remove-id="${esc(input.value)}" aria-label="移除${esc(input.dataset.taskScopeTitle ?? "")}">×</button>
+        </div>`).join("")
+      : `<p class="task-scope-selected-empty">暂未选择章节</p>`;
   };
   const filterTaskScopeOptions = (kind) => {
     const query = scopeSearches[kind].value.trim().toLocaleLowerCase();
@@ -13347,21 +13441,26 @@ async function openTaskDialog() {
       option.classList.toggle("hidden", !visible);
       if (visible) visibleCount += 1;
     }
+    scopeFields[kind].querySelectorAll("[data-task-scope-group]").forEach((group) => {
+      group.classList.toggle("hidden", !group.querySelector(".task-scope-option:not(.hidden)"));
+    });
+    scopeAvailableCounts[kind].textContent = query
+      ? `${visibleCount} / ${scopeInputs[kind].length} 章`
+      : `${scopeInputs[kind].length} 章`;
     scopeEmptyMessages[kind].classList.toggle("hidden", visibleCount > 0);
   };
   const syncChapterField = () => {
-    const activeKind = ["chapter", "volume"].includes(scopeTypeSelect.value) ? scopeTypeSelect.value : null;
-    for (const kind of ["chapter", "volume"]) {
-      const enabled = kind === activeKind;
-      scopeFields[kind].classList.toggle("is-disabled", !enabled);
-      scopeFields[kind].classList.toggle("hidden", !enabled);
-      scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
-      scopeTriggers[kind].disabled = !enabled;
-      for (const input of scopeInputs[kind]) input.disabled = !enabled;
-      if (!enabled) setTaskScopeBubbleOpen(kind, false);
-      syncTaskScopePicker(kind);
-      filterTaskScopeOptions(kind);
-    }
+    const kind = "chapter";
+    const enabled = scopeTypeSelect.value === "chapter";
+    scopeFields[kind].classList.toggle("is-disabled", !enabled);
+    scopeFields[kind].classList.toggle("hidden", !enabled);
+    scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
+    scopeTriggers[kind].disabled = !enabled;
+    for (const input of scopeInputs[kind]) input.disabled = !enabled;
+    for (const input of scopeVolumeInputs) input.disabled = !enabled;
+    if (!enabled) setTaskScopeBubbleOpen(kind, false);
+    syncTaskScopePicker(kind);
+    filterTaskScopeOptions(kind);
   };
   const setRelationshipCharacterBubbleOpen = (open) => {
     relationshipCharacterBubble.classList.toggle("hidden", !open);
@@ -13511,7 +13610,7 @@ async function openTaskDialog() {
       syncRelationshipOptions();
     }
   });
-  for (const kind of ["chapter", "volume"]) {
+  for (const kind of ["chapter"]) {
     scopeTriggers[kind].addEventListener("click", () => {
       setTaskScopeBubbleOpen(kind, scopeTriggers[kind].getAttribute("aria-expanded") !== "true");
     });
@@ -13527,16 +13626,33 @@ async function openTaskDialog() {
       clearContextWarning();
       invalidateRelationshipSourcePreview();
     });
+    scopeSelectedLists[kind].addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-task-scope-remove]");
+      if (!removeButton) return;
+      const input = scopeInputs[kind].find((candidate) => candidate.value === removeButton.dataset.taskScopeRemoveId);
+      if (!input) return;
+      input.checked = false;
+      syncTaskScopePicker(kind);
+      clearContextWarning();
+      invalidateRelationshipSourcePreview();
+    });
   }
+  for (const volumeInput of scopeVolumeInputs) volumeInput.addEventListener("change", () => {
+    const group = volumeInput.closest("[data-task-scope-group]");
+    for (const chapterInput of group.querySelectorAll('[data-task-scope-input="chapter"]')) chapterInput.checked = volumeInput.checked;
+    syncTaskScopePicker("chapter");
+    clearContextWarning();
+    invalidateRelationshipSourcePreview();
+  });
   $("#dynamic-form").onclick = (event) => {
     if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
-    for (const kind of ["chapter", "volume"]) {
+    for (const kind of ["chapter"]) {
       if (!scopeFields[kind].contains(event.target)) setTaskScopeBubbleOpen(kind, false);
     }
   };
   $("#dynamic-form").onkeydown = (event) => {
     if (event.key !== "Escape") return;
-    const openScope = ["chapter", "volume"].find((kind) => !scopeBubbles[kind].classList.contains("hidden"));
+    const openScope = ["chapter"].find((kind) => !scopeBubbles[kind].classList.contains("hidden"));
     if (openScope) {
       event.preventDefault();
       setTaskScopeBubbleOpen(openScope, false);
@@ -13930,6 +14046,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const streamSpeedController = createStreamTypewriterSpeedController();
   let messageMounted = false;
   const mountAssistantMessage = () => {
     if (messageMounted) return true;
@@ -13941,6 +14058,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     return true;
   };
   const typewriter = createStreamTypewriter({
+    speedController: streamSpeedController,
     onRender: (text, progress) => {
       if (!aiRequestTargetsCurrentState(requestHolder.snapshot) || !mountAssistantMessage()) return;
       content.innerHTML = renderMarkdown(text);
@@ -13976,6 +14094,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     if (existing) return existing;
     processStepVisibleContents.set(step, "");
     const typewriter = createStreamTypewriter({
+      speedController: streamSpeedController,
       onRender: (text) => {
         if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
@@ -15629,6 +15748,10 @@ $("#work-recycle-bin-close").addEventListener("click", () => $("#work-recycle-bi
 $("#chapter-recycle-bin-close").addEventListener("click", () => $("#chapter-recycle-bin-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
+document.querySelectorAll("[data-ai-tool-call-copy]").forEach((button) => {
+  setAiToolCallCopyButtonState(button, false);
+  button.addEventListener("click", () => void copyAiToolCallCode(button));
+});
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
 $("#character-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
 $("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });
@@ -16345,6 +16468,9 @@ document.addEventListener("click", (event) => {
 window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
+  if (aiRequestManager.hasActive()) {
+    toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
+  }
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });

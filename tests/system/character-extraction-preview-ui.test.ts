@@ -11,8 +11,8 @@ describe("角色抽取结果入库预览界面", () => {
       readFile(join(publicPath, "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('/styles.css?v=20260815-ai-history-favorite-v1');
-    expect(page).toContain('/app.js?v=20260815-analysis-task-create-v1');
+    expect(page).toContain('/styles.css?v=20260815-ai-history-favorite-v3');
+    expect(page).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
     expect(application).toContain("function renderCharacterExtractionPreview(task, result)");
     expect(application).toContain("function renderCharacterExtractionEditor(preview)");
     expect(application).toContain("function bindCharacterExtractionEditor(container, taskId)");
@@ -24,12 +24,16 @@ describe("角色抽取结果入库预览界面", () => {
     expect(application).toContain('data-character-extraction-selected');
     expect(application).toContain('data-character-extraction-action');
     expect(application).toContain('data-character-extraction-target');
+    expect(application).toContain('class="primary-button character-extraction-apply-button"');
+    expect(application).toContain('data-character-extraction-selected-count>已选择 0 项</span><button');
     expect(application).toContain('role="alert"');
     expect(application).toContain("重复点击或网络重试不会重复创建");
     expect(styles).toContain(".character-extraction-preview.is-pending");
     expect(styles).toContain(".character-extraction-candidate > header");
     expect(styles).toContain(".character-extraction-fields");
     expect(styles).toContain(".character-extraction-apply-error");
+    expect(styles).toContain(".dialog-fields .character-extraction-candidate-toggle input[type=\"checkbox\"]");
+    expect(styles).toContain(".character-extraction-apply-note");
     expect(styles).toContain(".character-extraction-fields .character-extraction-wide-field { grid-column: 1;");
   });
 });
