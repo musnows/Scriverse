@@ -8037,6 +8037,55 @@ export class Store {
     return this.mapAiConversationMessage(persistInterruption(message));
   }
 
+  upsertAiConversationAssistantMessage(
+    conversationId: string,
+    requestId: string,
+    content: string,
+    metadata: AiConversationMessageInput["metadata"] = {},
+    syncSearchIndex = false
+  ): Record<string, unknown> {
+    const normalizedRequestId = requestId.trim();
+    if (!normalizedRequestId) throw new AppError(400, "AI_MESSAGE_REQUEST_ID_REQUIRED", "AI 助手消息缺少请求标识");
+    const existing = this.db.get(
+      "SELECT * FROM ai_conversation_messages WHERE conversation_id = ? AND request_id = ?",
+      conversationId,
+      normalizedRequestId
+    );
+    if (!existing) {
+      return this.addAiConversationMessage(conversationId, {
+        role: "assistant",
+        content,
+        requestId: normalizedRequestId,
+        metadata
+      });
+    }
+    if (requiredString(existing, "role") !== "assistant") {
+      throw new AppError(409, "AI_MESSAGE_ROLE_MISMATCH", "请求标识已用于用户消息");
+    }
+    const currentMetadata = json<Record<string, unknown>>(requiredString(existing, "metadata_json"), {});
+    const nextMetadata = { ...currentMetadata, ...metadata };
+    const contentChanged = requiredString(existing, "content") !== content;
+    const metadataChanged = JSON.stringify(currentMetadata) !== JSON.stringify(nextMetadata);
+    if (!contentChanged && !metadataChanged) {
+      if (syncSearchIndex) this.syncAiHistorySearchShortTermsForSource("message", requiredString(existing, "id"));
+      return this.mapAiConversationMessage(existing);
+    }
+    const timestamp = now();
+    this.db.transaction(() => {
+      this.db.run(
+        "UPDATE ai_conversation_messages SET content = ?, metadata_json = ? WHERE id = ?",
+        content,
+        JSON.stringify(nextMetadata),
+        requiredString(existing, "id")
+      );
+      this.db.run("UPDATE ai_conversations SET updated_at = ? WHERE id = ?", timestamp, conversationId);
+      if (syncSearchIndex) this.syncAiHistorySearchShortTermsForSource("message", requiredString(existing, "id"));
+    });
+    const updated = this.db.get("SELECT * FROM ai_conversation_messages WHERE id = ?", requiredString(existing, "id"));
+    if (!updated) throw notFound("AI 对话消息");
+    return this.mapAiConversationMessage(updated);
+  }
+
   beginAiConversationStreamRequest(
     input: BeginAiConversationStreamRequestInput,
     referenceTime = new Date()
@@ -8220,6 +8269,17 @@ export class Store {
         );
         if (!assistant) throw new AppError(400, "AI_STREAM_ASSISTANT_MISMATCH", "AI 回复消息不属于当前对话请求");
       }
+      const resolvedAssistantMessageId = assistantMessageId ?? (() => {
+        const userMessageId = optionalString(request, "user_message_id");
+        if (!userMessageId) return null;
+        const assistant = this.db.get(
+          `SELECT id FROM ai_conversation_messages
+           WHERE conversation_id = ? AND role = 'assistant' AND request_id = ?`,
+          requiredString(request, "conversation_id"),
+          `assistant:${userMessageId}`
+        );
+        return assistant ? requiredString(assistant, "id") : null;
+      })();
       this.db.run(
         `UPDATE ai_conversation_stream_requests
          SET status = ?, terminal_reason = ?, assistant_message_id = COALESCE(assistant_message_id, ?),
@@ -8227,7 +8287,7 @@ export class Store {
          WHERE id = ? AND status = 'in_progress'`,
         status,
         terminalReason.slice(0, 500),
-        assistantMessageId ?? null,
+        resolvedAssistantMessageId,
         timestamp,
         timestamp,
         requestId
