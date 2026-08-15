@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-<link rel="stylesheet" href="/styles.css?v=20260804-agent-history-search-v1">
+<link rel="stylesheet" href="/styles.css?v=20260815-ai-write-approval-center-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -283,6 +283,7 @@
           <div class="ai-heading-title"><span id="ai-status-dot" class="status-dot" role="status" aria-label="创作助手状态：正常" title="创作助手状态：正常"></span><strong>创作助手</strong></div>
           <div class="ai-heading-actions">
             <span id="ai-conversation-title" title="当前对话">新对话</span>
+            <button id="ai-write-approval-toggle" type="button" aria-label="AI 操作审批中心" aria-controls="ai-write-approval-dialog" aria-expanded="false" aria-haspopup="dialog" title="AI 操作审批中心"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 12h6m-6 4h4M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"></path></svg></button>
             <button id="ai-history-toggle" type="button" aria-label="历史记录" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog" title="历史记录"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3.5 2"></path></svg></button>
             <button id="ai-new-conversation" type="button" aria-label="新建对话" title="新建对话">＋</button>
           </div>
@@ -908,6 +909,31 @@
       </div>
     </dialog>
 
+    <dialog id="ai-write-approval-dialog" class="dialog wide-dialog ai-write-approval-dialog" aria-labelledby="ai-write-approval-title">
+      <div class="dialog-header">
+        <div><span id="ai-write-approval-eyebrow" class="eyebrow">AI 操作审批中心</span><h2 id="ai-write-approval-title">AI 操作审批</h2></div>
+        <button id="ai-write-approval-close" class="dialog-close" aria-label="关闭 AI 操作审批中心" type="button">×</button>
+      </div>
+      <div id="ai-write-approval-list" class="ai-write-approval-list" aria-live="polite"></div>
+    </dialog>
+
+    <dialog id="ai-write-question-dialog" class="dialog ai-write-question-dialog" aria-labelledby="ai-write-question-title">
+      <div class="dialog-header">
+        <div><span class="eyebrow">AI 提问</span><h2 id="ai-write-question-title">AI 向你确认一个问题</h2></div>
+        <button id="ai-write-question-close" class="dialog-close" aria-label="关闭 AI 提问" type="button">×</button>
+      </div>
+      <div class="ai-write-question-body">
+        <p id="ai-write-question-text"></p>
+        <div id="ai-write-question-options" class="ai-write-question-options" role="radiogroup"></div>
+        <label id="ai-write-question-custom-label" class="ai-write-question-custom hidden">自定义回答<input id="ai-write-question-custom" type="text" maxlength="2000" aria-label="自定义回答"></label>
+        <div class="card-actions">
+          <button id="ai-write-question-refuse" class="ghost-button" type="button">拒绝回答</button>
+          <button id="ai-write-question-submit" class="primary-button" type="button">提交回答</button>
+        </div>
+      </div>
+    </dialog>
+
+
     <dialog id="ai-history-dialog" class="dialog wide-dialog ai-history-dialog" aria-labelledby="ai-history-dialog-title">
       <div class="dialog-header">
         <div><span class="eyebrow">对话管理</span><h2 id="ai-history-dialog-title">历史记录</h2></div>
@@ -954,6 +980,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260804-agent-history-score-sort-v1"></script>
+    <script type="module" src="/app.js?v=20260815-ai-write-approval-center-v1"></script>
   </body>
 </html>

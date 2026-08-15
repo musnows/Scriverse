@@ -3388,3 +3388,37 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+/* AI 可写审批中心与提问交互 */
+.ai-write-tools label { align-items: flex-start; }
+.ai-write-approval-list { display: grid; gap: 12px; padding: 4px 0; max-height: min(70vh, 900px); overflow: auto; }
+.ai-write-approval-card { border: 1px solid var(--line, var(--border, rgba(128,128,128,.25))); border-radius: 10px; padding: 14px; background: var(--panel, var(--card, transparent)); }
+.ai-write-approval-card > header { display: grid; gap: 6px; }
+.ai-write-approval-status { width: fit-content; border-radius: 999px; padding: 2px 9px; font-size: 11px; background: var(--muted, rgba(128,128,128,.15)); }
+.ai-write-approval-card.is-pending .ai-write-approval-status { background: var(--yellow, #f6c85f33); color: var(--text, inherit); }
+.ai-write-approval-card.is-succeeded .ai-write-approval-status { background: var(--green, #42b88333); }
+.ai-write-approval-card.is-failed .ai-write-approval-status,
+.ai-write-approval-card.is-invalid .ai-write-approval-status { background: var(--accent, #e5484d33); }
+.ai-write-approval-card h3 { margin: 0; font-size: 14px; }
+.ai-write-approval-meta { margin: 0; color: var(--muted, #8b8b8b); font-size: 11px; }
+.ai-write-approval-operations { display: grid; gap: 10px; margin-top: 10px; }
+.ai-write-approval-operations section { border-left: 3px solid var(--line, rgba(128,128,128,.3)); padding-left: 10px; }
+.ai-write-approval-operations h4 { margin: 0 0 6px; font-size: 13px; }
+.ai-write-approval-operations p { margin: 4px 0; font-size: 11px; }
+.ai-write-diff-fields { display: grid; gap: 8px; }
+.ai-write-diff-field { display: grid; gap: 4px; }
+.ai-write-diff-field strong { font-size: 11px; }
+.ai-write-diff-values { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 6px; align-items: center; }
+.ai-write-value { margin: 0; max-height: 160px; overflow: auto; font-size: 10px; white-space: pre-wrap; }
+.ai-write-approval-reason, .ai-write-operation-result { color: var(--accent, #c34a4a); font-size: 11px; }
+.ai-write-approval-actions { margin-top: 12px; }
+.ai-write-approval-back { margin-bottom: 10px; }
+.toast-ai-write-approval { display: grid; gap: 6px; }
+.toast-ai-write-approval strong { font-size: 13px; }
+.toast-ai-write-approval p { margin: 0; font-size: 11px; }
+.ai-write-question-body { display: grid; gap: 12px; min-width: min(480px, 80vw); }
+.ai-write-question-options { display: grid; gap: 8px; }
+.ai-write-question-option { display: flex; gap: 8px; align-items: flex-start; padding: 8px; border: 1px solid var(--line, rgba(128,128,128,.25)); border-radius: 8px; font-size: 12px; }
+.ai-write-question-option:has(input:checked) { border-color: var(--accent, #8ab4f8); }
+.ai-write-question-custom { display: grid; gap: 6px; font-size: 11px; }
+.ai-write-question-custom input { width: 100%; }
