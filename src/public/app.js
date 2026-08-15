@@ -553,7 +553,12 @@ function cancelActiveAiRequest(reason) {
 
 function beginAiConversationNavigation(reason, action = "切换会话") {
   if (aiRequestManager.hasActive()) {
-    toast(`当前 turn 尚未结束，${action}会中断生成；\n已收到的内容会保留在历史记录中`, "warning");
+    const isNewConversation = action === "新建会话";
+    toast(
+      `当前 turn 尚未结束，${action}会中断生成；${isNewConversation ? "\n" : ""}已收到的内容会保留在历史记录中`,
+      "warning",
+      isNewConversation ? "ai-new-conversation-toast" : ""
+    );
   }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = aiConversationNavigationGeneration;
@@ -579,7 +584,7 @@ function finishAiConversationNavigation(navigation) {
 
 function invalidateAiConversationNavigation(reason, action = "切换作品") {
   if (aiRequestManager.hasActive()) {
-    toast(`当前 turn 尚未结束，${action}会中断生成；\n已收到的内容会保留在历史记录中`, "warning");
+    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
   }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = null;
@@ -3904,11 +3909,11 @@ function dismissChapterInsightToast() {
   }
 }
 
-function toast(message, type = "info") {
+function toast(message, type = "info", extraClass = "") {
   if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
-  element.className = `toast ${type}`;
+  element.className = `toast ${type}${extraClass ? ` ${extraClass}` : ""}`;
   element.setAttribute("role", type === "error" ? "alert" : "status");
   element.setAttribute("aria-atomic", "true");
   element.textContent = message;
@@ -16355,7 +16360,7 @@ window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
   if (aiRequestManager.hasActive()) {
-    toast("当前 turn 尚未结束，刷新会中断生成；\n已收到的内容会保留在历史记录中", "warning");
+    toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
   }
 });
 window.addEventListener("online", () => {
