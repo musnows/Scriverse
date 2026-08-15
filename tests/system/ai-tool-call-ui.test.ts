@@ -49,6 +49,8 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain('`${resultDetails.characterCount.toLocaleString("zh-CN")} 字符`');
     expect(application).toContain("async function copyAiToolCallCode(button)");
     expect(application).toContain("await copyAiRawMarkdown(target.textContent)");
+    expect(application).toContain("const AI_TOOL_CALL_COPIED_ICON");
+    expect(application).toContain("button.innerHTML = copied ? AI_TOOL_CALL_COPIED_ICON : AI_TOOL_CALL_COPY_ICON");
     expect(application).toContain('data-ai-tool-call-copy');
     expect(styles).toContain(".ai-tool-call-summary::after { content: \"查看详情\";");
     expect(styles).toContain(".ai-process-details > summary");
@@ -57,6 +59,8 @@ describe("AI 工具调用记录界面", () => {
     expect(styles).toContain(".ai-tool-call-info { display: grid;");
     expect(styles).toContain(".ai-tool-call-copy-button { position: absolute;");
     expect(styles).toContain(".ai-tool-call-code-block { position: relative;");
+    expect(styles).toContain("padding: 12px 44px 12px 12px;");
+    expect(styles).not.toContain("padding: 30px 12px 12px;");
     expect(styles).not.toContain("ai-stream-cursor");
     expect(styles).not.toContain(".is-streaming .message-body:empty::after");
   });

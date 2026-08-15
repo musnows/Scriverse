@@ -2012,9 +2012,14 @@ function formatAiToolCallTime(value) {
   }).format(date);
 }
 
+const AI_TOOL_CALL_COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>';
+const AI_TOOL_CALL_COPIED_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"></path></svg>';
+
 function setAiToolCallCopyButtonState(button, copied) {
   const label = button.dataset.copyLabel ?? "代码块";
-  button.dataset.copyState = copied ? "copied" : "idle";
+  const nextState = copied ? "copied" : "idle";
+  if (button.dataset.copyState !== nextState) button.innerHTML = copied ? AI_TOOL_CALL_COPIED_ICON : AI_TOOL_CALL_COPY_ICON;
+  button.dataset.copyState = nextState;
   button.classList.toggle("is-copied", copied);
   button.setAttribute("aria-label", copied ? `${label}已复制` : `复制${label}`);
   button.title = copied ? "已复制" : `复制${label}`;
