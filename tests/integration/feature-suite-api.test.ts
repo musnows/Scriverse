@@ -1,6 +1,7 @@
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runtime } from "../../src/app.js";
+import { chapterOutlineBoardForeshadowSortSql } from "../../src/store.js";
 import { createTestRuntime } from "../helpers.js";
 
 const validPng = Buffer.from(
@@ -851,6 +852,189 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     await request(runtime.app).get("/api/works/not-a-work/outline-board").expect(404);
   });
 
+  it("按去重伏笔关联统计排序并保留作品、回收站、分页和章节树语义", async () => {
+    const { workId, volumeId, chapters } = await seedWork(runtime, "伏笔排序语义 fixture");
+    const fourthChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId,
+      title: "第四章 并列",
+      content: ""
+    }).expect(201);
+
+    const shared = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "同章多重关联",
+      status: "planned",
+      plannedPayoffChapterId: chapters[0].id,
+      occurrences: [
+        { chapterId: chapters[0].id, role: "setup" },
+        { chapterId: chapters[0].id, role: "reminder" }
+      ]
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "第一章已回收",
+      status: "resolved",
+      occurrences: [{ chapterId: chapters[0].id, role: "payoff" }]
+    }).expect(201);
+    for (const [index, association] of [
+      { chapterId: chapters[1].id, status: "planned", plannedPayoff: false },
+      { chapterId: chapters[1].id, status: "planted", plannedPayoff: true },
+      { chapterId: chapters[2].id, status: "planned", plannedPayoff: false },
+      { chapterId: chapters[2].id, status: "resolved", plannedPayoff: false },
+      { chapterId: chapters[2].id, status: "abandoned", plannedPayoff: true },
+      { chapterId: fourthChapter.body.data.id, status: "planted", plannedPayoff: false },
+      { chapterId: fourthChapter.body.data.id, status: "resolved", plannedPayoff: true },
+      { chapterId: fourthChapter.body.data.id, status: "abandoned", plannedPayoff: false }
+    ].entries()) {
+      await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+        title: `排序伏笔 ${index + 1}`,
+        status: association.status,
+        ...(association.plannedPayoff
+          ? { plannedPayoffChapterId: association.chapterId }
+          : { occurrences: [{ chapterId: association.chapterId, role: "setup" }] })
+      }).expect(201);
+    }
+
+    const recycledVolume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "回收卷" }).expect(201);
+    const recycledChapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: recycledVolume.body.data.id,
+      title: "回收卷章节",
+      content: ""
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "回收卷高计数伏笔",
+      status: "planned",
+      plannedPayoffChapterId: recycledChapter.body.data.id
+    }).expect(201);
+    await request(runtime.app).delete(`/api/volumes/${recycledVolume.body.data.id}`).send({ expectedVersionNo: 1 }).expect(204);
+
+    const otherWork = await seedWork(runtime, "其他作品排序 fixture");
+    const timestamp = "2026-08-15T00:00:00.000Z";
+    runtime.database.run(
+      `INSERT INTO foreshadows
+         (id, work_id, title, status, importance, planned_payoff_chapter_id, created_at, updated_at)
+       VALUES (?, ?, ?, 'planned', 'high', ?, ?, ?)`,
+      "cross-work-sort-foreshadow",
+      otherWork.workId,
+      "跨作品关联不得计数",
+      chapters[0].id,
+      timestamp,
+      timestamp
+    );
+
+    const sorted = await request(runtime.app).get(`/api/works/${workId}/outline-board?sort=foreshadows`).expect(200);
+    expect(sorted.body.data.volumes.flatMap((volume: { chapters: Array<{ id: string }> }) => volume.chapters)
+      .map((chapter: { id: string }) => chapter.id)).toEqual([
+      chapters[1].id,
+      chapters[2].id,
+      fourthChapter.body.data.id,
+      chapters[0].id
+    ]);
+    expect(sorted.body.data.volumes[0].chapters[3].foreshadows.filter(
+      (foreshadow: { id: string }) => foreshadow.id === shared.body.data.id
+    )).toHaveLength(1);
+    expect(JSON.stringify(sorted.body.data)).not.toContain("回收卷章节");
+    expect(JSON.stringify(sorted.body.data)).not.toContain("跨作品关联不得计数");
+
+    const secondPage = await request(runtime.app)
+      .get(`/api/works/${workId}/outline-board?sort=foreshadows&page=2&limit=2`)
+      .expect(200);
+    expect(secondPage.body.data).toMatchObject({ page: 2, limit: 2, itemCount: 2, total: 4 });
+    expect(secondPage.body.data.volumes.flatMap((volume: { chapters: Array<{ id: string }> }) => volume.chapters)
+      .map((chapter: { id: string }) => chapter.id)).toEqual([
+      fourthChapter.body.data.id,
+      chapters[0].id
+    ]);
+  });
+
+  it("对两千章和两万伏笔预聚合一次关联并保持排序查询有界", async () => {
+    const work = await request(runtime.app).post("/api/works").send({ title: "伏笔排序性能 fixture" }).expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const volumeId = String(volume.body.data.id);
+    const timestamp = "2026-08-15T00:00:00.000Z";
+    const insertChapter = runtime.database.raw.prepare(
+      `INSERT INTO chapters (id, work_id, volume_id, title, content, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '', ?, ?, ?)`
+    );
+    const insertForeshadow = runtime.database.raw.prepare(
+      `INSERT INTO foreshadows
+         (id, work_id, title, status, importance, planned_payoff_chapter_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'medium', ?, ?, ?)`
+    );
+    const insertOccurrence = runtime.database.raw.prepare(
+      `INSERT INTO foreshadow_occurrences
+         (id, foreshadow_id, chapter_id, role, created_at, updated_at)
+       VALUES (?, ?, ?, 'setup', ?, ?)`
+    );
+    runtime.database.transaction(() => {
+      for (let index = 0; index < 2_000; index += 1) {
+        insertChapter.run(
+          `sort-perf-chapter-${index}`,
+          workId,
+          volumeId,
+          `第 ${index + 1} 章`,
+          index,
+          timestamp,
+          timestamp
+        );
+      }
+      const statuses = ["planned", "planted", "resolved", "abandoned"] as const;
+      for (let index = 0; index < 20_000; index += 1) {
+        const foreshadowId = `sort-perf-foreshadow-${index}`;
+        const payoffChapterId = `sort-perf-chapter-${index % 2_000}`;
+        const occurrenceChapterId = index % 2 === 0
+          ? payoffChapterId
+          : `sort-perf-chapter-${(index * 17 + 1) % 2_000}`;
+        insertForeshadow.run(
+          foreshadowId,
+          workId,
+          `性能伏笔 ${index + 1}`,
+          statuses[index % statuses.length]!,
+          payoffChapterId,
+          timestamp,
+          timestamp
+        );
+        insertOccurrence.run(
+          `sort-perf-occurrence-${index}`,
+          foreshadowId,
+          occurrenceChapterId,
+          timestamp,
+          timestamp
+        );
+      }
+    });
+
+    const plan = runtime.database.all(
+      `EXPLAIN QUERY PLAN ${chapterOutlineBoardForeshadowSortSql.cte}
+       SELECT chapter.id
+       FROM chapters chapter
+       JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
+       LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       ${chapterOutlineBoardForeshadowSortSql.join}
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+       ORDER BY volume.sort_order, volume.created_at, volume.id,
+         ${chapterOutlineBoardForeshadowSortSql.order}, chapter.sort_order, chapter.created_at, chapter.id
+       LIMIT ? OFFSET ?`,
+      workId,
+      workId,
+      workId,
+      31,
+      0
+    );
+    const planDetails = plan.map((step) => String(step.detail));
+    expect(planDetails.some((detail) => detail.includes("MATERIALIZE foreshadow_association_counts"))).toBe(true);
+    expect(planDetails.some((detail) => detail.includes("CORRELATED"))).toBe(false);
+    expect(planDetails.some((detail) => (
+      detail.includes("SEARCH foreshadow USING INDEX idx_foreshadows_work_payoff_status (work_id=?)")
+    ))).toBe(true);
+
+    const startedAt = performance.now();
+    const sorted = await request(runtime.app).get(`/api/works/${workId}/outline-board?sort=foreshadows`).expect(200);
+    const elapsedMs = performance.now() - startedAt;
+    expect(sorted.body.data).toMatchObject({ total: 2_000, itemCount: 30, hasMore: true });
+    expect(sorted.body.data.stats).toMatchObject({ foreshadowCount: 20_000, unresolvedForeshadowCount: 10_000 });
+    expect(elapsedMs).toBeLessThan(3_000);
+  });
+
   it("对五千章大作品保持看板响应、查询耗时和当前页关联有界", async () => {
     const work = await request(runtime.app).post("/api/works").send({ title: "五千章看板 fixture" }).expect(201);
     const workId = String(work.body.data.id);
@@ -1111,6 +1295,55 @@ describe("AI 分析目标导航 API", () => {
       label: "第一卷 · 第一章 埋线"
     });
     expect(taskPage.body.data.items.find((item: { id: string }) => item.id === multipleCharacterTask.body.data.id)?.scopeTarget).toBeNull();
+  });
+
+  it("创建定向关系任务时只读取来源版本元数据", async () => {
+    const { workId, chapters } = await seedWork(runtime);
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "林舟",
+      profile: { identity: "调查员", background: "长期人物档案".repeat(2_000) }
+    }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const setting = await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "北港旧约",
+      category: "人物关系",
+      content: "林舟与沈星共同遵守北港旧约。".repeat(2_000)
+    }).expect(201);
+    const fullReadSpies = [
+      vi.spyOn(runtime.store, "getWorkTree"),
+      vi.spyOn(runtime.store, "getCharacter"),
+      vi.spyOn(runtime.store, "listCharacters"),
+      vi.spyOn(runtime.store, "listSettings"),
+      vi.spyOn(runtime.store, "listRaces"),
+      vi.spyOn(runtime.store, "listOrganizations"),
+      vi.spyOn(runtime.store, "listRelationships")
+    ];
+
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "book",
+        includeAllSettings: true,
+        characterIds: [character.body.data.id],
+        preFilterRelationshipSources: true,
+        previewRelationshipChanges: true,
+        relationshipSourceRefs: [
+          { sourceType: "chapter", sourceId: chapters[0].id, sourceVersion: String(chapters[0].versionNo) },
+          { sourceType: "setting", sourceId: setting.body.data.id, sourceVersion: String(setting.body.data.versionNo) }
+        ]
+      }
+    }).expect(201);
+
+    expect(task.body.data).toMatchObject({
+      status: "pending",
+      scope: { targetCharacters: [{ id: character.body.data.id, name: "林舟" }] }
+    });
+    expect(task.body.data.sourceVersions).toMatchObject({
+      [chapters[0].id]: chapters[0].versionNo,
+      [`character:${character.body.data.id}`]: character.body.data.versionNo,
+      [`setting:${setting.body.data.id}`]: setting.body.data.versionNo
+    });
+    for (const spy of fullReadSpies) expect(spy).not.toHaveBeenCalled();
   });
 });
 

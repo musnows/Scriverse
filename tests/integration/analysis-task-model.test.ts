@@ -81,6 +81,16 @@ describe("AI 分析任务模型", () => {
     }).expect(201);
     expect(overriddenTask.body.data.model.id).toBe(modelA.body.data.id);
 
+    const scopedIdentityTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "character-identity-audit",
+      scope: { type: "volume", volumeId: volume.body.data.id, volumeIds: [volume.body.data.id] },
+      modelId: modelA.body.data.id
+    }).expect(201);
+    expect(scopedIdentityTask.body.data.scope).toMatchObject({
+      type: "volume",
+      volumeIds: [volume.body.data.id]
+    });
+
     const completed = await request(runtime.app).post(`/api/tasks/${defaultTask.body.data.id}/run`).send({}).expect(200);
     expect(completed.body.data).toMatchObject({
       taskType: "book-analysis",
@@ -100,5 +110,111 @@ describe("AI 分析任务模型", () => {
     const defaults = await request(runtime.app).get(`/api/works/${workId}/task-defaults`).expect(200);
     expect(defaults.body.data.find((item: { taskType: string }) => item.taskType === "book-analysis")?.model.id)
       .toBe(modelB.body.data.id);
+  });
+
+  it("创建任务前拒绝超过模型安全上下文阈值的注入范围", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "short-context-model" }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as { choices?: unknown };
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: body.choices ? "" : "[]" } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+
+    const work = await request(runtime.app).post("/api/works").send({ title: "上下文预检测试" }).expect(201);
+    const workId = String(work.body.data.id);
+    const volume = await request(runtime.app).post(`/api/works/${workId}/volumes`).send({ title: "第一卷" }).expect(201);
+    const chapter = await request(runtime.app).post(`/api/works/${workId}/chapters`).send({
+      volumeId: volume.body.data.id,
+      title: "超长章节",
+      content: "星".repeat(30_000)
+    }).expect(201);
+    const provider = await request(runtime.app).post(`/api/works/${workId}/providers`).send({
+      name: "短上下文服务",
+      baseUrl: "https://short-context.test/v1",
+      apiKey: "sk-short-context-test",
+      status: "enabled"
+    }).expect(201);
+    await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
+    const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
+      displayName: "短上下文模型",
+      modelId: "short-context-model"
+    }).expect(201);
+    runtime.database.run("UPDATE models SET context_window = ? WHERE id = ?", 32_768, model.body.data.id);
+
+    const preview = await request(runtime.app).post(`/api/works/${workId}/tasks/context-preview`).send({
+      taskType: "book-analysis",
+      scope: { type: "chapter", chapterId: chapter.body.data.id },
+      modelId: model.body.data.id
+    }).expect(200);
+    expect(preview.body.data).toMatchObject({ allowed: false, overThreshold: true });
+    expect(preview.body.data.message).toContain("上下文更长的模型");
+
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "book-analysis",
+      scope: { type: "book" },
+      modelId: model.body.data.id
+    }).expect(413);
+    expect(rejected.body.error).toMatchObject({ code: "AI_CONTEXT_TOO_LARGE" });
+    expect(rejected.body.error.message).toContain("上下文更长的模型");
+  });
+
+  it("定向关系任务上下文预检只读取轻量范围元数据", () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "定向关系上下文预检" });
+    const workId = String(work.id);
+    const volume = runtime.store.createVolume(workId, { title: "第一卷" });
+    runtime.store.createChapter(workId, {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "林舟与沈星共同调查北港旧约。".repeat(2_000)
+    });
+    const character = runtime.store.createCharacter(workId, {
+      name: "林舟",
+      profile: { background: "长期人物档案".repeat(2_000) }
+    });
+    const secondCharacter = runtime.store.createCharacter(workId, { name: "沈星" });
+    const provider = runtime.ai.createProvider({
+      name: "上下文预检模型",
+      baseUrl: "https://context-preview.test/v1",
+      apiKey: "sk-context-preview-test",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const model = runtime.ai.createModel(String(provider.id), {
+      displayName: "上下文预检模型",
+      modelId: "context-preview-model",
+      contextWindow: 200_000
+    });
+    const compactModel = runtime.ai.createModel(String(provider.id), {
+      displayName: "短上下文预检模型",
+      modelId: "compact-context-preview-model",
+      contextWindow: 20_000
+    });
+    const getWorkTree = vi.spyOn(runtime.store, "getWorkTree");
+    const listCharacters = vi.spyOn(runtime.store, "listCharacters");
+
+    const preview = runtime.ai.previewAnalysisTaskContext(workId, {
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [String(character.id)] },
+      modelId: String(model.id)
+    });
+
+    expect(preview).toMatchObject({ allowed: true, overThreshold: false });
+    expect(getWorkTree).not.toHaveBeenCalled();
+    expect(listCharacters).not.toHaveBeenCalled();
+
+    const compactPreview = runtime.ai.previewAnalysisTaskContext(workId, {
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [String(secondCharacter.id)] },
+      modelId: String(compactModel.id)
+    });
+    expect(compactPreview).toMatchObject({ allowed: true, overThreshold: false });
   });
 });

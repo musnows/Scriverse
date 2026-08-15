@@ -19,7 +19,7 @@ describe("想法模块界面", () => {
 
     expect(page.text).toContain('data-module="drafts"');
     expect(page.text).toContain(">想法</button>");
-    expect(page.text).toContain('/app.js?v=20260815-ai-history-favorite-v1');
+    expect(page.text).toContain('/app.js?v=20260815-analysis-task-create-v1');
     expect(application.text).toContain('drafts: ["临时想法", "创作想法"');
     expect(application.text).toContain('[["prose", "正文想法"], ["setting", "设定想法"]]');
     expect(application.text).toContain('field("volumeId", "绑定分卷"');
@@ -43,6 +43,8 @@ describe("想法模块界面", () => {
     expect(application.text).toContain('没有符合筛选条件的想法');
     expect(application.text).toContain('formDialogVditors = bindVditorEditors($("#dialog-fields"))');
     expect(application.text).toContain('formDialogVditors.forEach(destroyVditorEditor)');
+    expect(application.text).toContain('editor.__plainTextPasteCleanup = bindPlainTextPaste(host);');
+    expect(application.text).toContain('editor.__plainTextPasteCleanup?.();');
     expect(application.text).toContain('markdown-editor-field${options.readOnly ? " is-read-only" : ""}');
     expect(application.text).toContain('aria-readonly="true"');
     expect(application.text).not.toContain('data-dialog-draft-delete');

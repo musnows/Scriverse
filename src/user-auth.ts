@@ -1037,7 +1037,7 @@ function workModuleRequirements(request: Request, write: boolean): WorkAuthoriza
   if (/^\/api\/(?:works\/[^/]+\/reviews|reviews\/[^/]+)(?:\/|$)/u.test(pathname)) {
     return direct("reviews");
   }
-  if (write && /^\/api\/works\/[^/]+\/tasks(?:\/relationship-source-preview)?\/?$/u.test(pathname)) {
+  if (write && /^\/api\/works\/[^/]+\/tasks(?:\/(?:relationship-source-preview|context-preview))?\/?$/u.test(pathname)) {
     const body = requestBodyRecord(request);
     const sourceModules = pathname.includes("/relationship-source-preview")
       ? relationshipAnalysisReadModules(body.scope)
