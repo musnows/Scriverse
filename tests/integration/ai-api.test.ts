@@ -2163,7 +2163,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
-  it("浏览器中断流式连接会取消上游且只保留原对话用户消息", async () => {
+  it("浏览器中断流式连接会取消上游且保留已收到的助手正文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -2216,28 +2216,35 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(received).toContain("event: user_message");
     expect(received).toContain("不应落库的部分回复");
 
+    const inProgressReloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(inProgressReloaded.body.data.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: "不应落库的部分回复"
+    });
+
     controller.abort();
     await reader.read().catch(() => ({ done: true, value: undefined }));
     for (let index = 0; index < 50 && !upstreamAborted; index += 1) await new Promise((resolve) => setTimeout(resolve, 2));
     expect(upstreamAborted).toBe(true);
 
     let streamRequest = runtime.database.get<Record<string, unknown>>(
-      "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+      "SELECT status, terminal_reason, assistant_message_id FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
       "disconnect-request-0001"
     );
     for (let index = 0; index < 50 && streamRequest?.status === "in_progress"; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2));
       streamRequest = runtime.database.get(
-        "SELECT status, terminal_reason FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
+        "SELECT status, terminal_reason, assistant_message_id FROM ai_conversation_stream_requests WHERE idempotency_key = ?",
         "disconnect-request-0001"
       );
     }
-    expect(streamRequest).toMatchObject({ status: "cancelled" });
+    expect(streamRequest).toMatchObject({ status: "cancelled", assistant_message_id: expect.any(String) });
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(reloaded.body.data.title).toBe("切换对话时取消旧流");
     expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
-      { role: "user", content: "切换对话时取消旧流" }
+      { role: "user", content: "切换对话时取消旧流" },
+      { role: "assistant", content: "不应落库的部分回复" }
     ]);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions WHERE work_id = ?", workId)).toEqual({ count: 0 });
 
@@ -2447,11 +2454,11 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).not.toContain("event: complete");
     expect(streamed.text).not.toContain("sk-sensitive-test-value");
     expect(streamed.text).not.toContain("sk-sensitive-");
-    expect(assistantMessages).toEqual([]);
+    expect(assistantMessages).toEqual([{ content: "安全前缀 sk-s*****" }]);
     expect(failedCall).toEqual({ status: "failed", output_chars: "安全前缀 sk-s*****".length });
   });
 
-  it("用户取消流式请求时安全刷新尾部但不保存临时助手正文", async () => {
+  it("用户取消流式请求时安全刷新尾部并保存临时助手正文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -2499,7 +2506,7 @@ describe("AI 供应商、模型与建议 API", () => {
     );
 
     expect(deltas.join("")).toBe("取消正文末尾s");
-    expect(assistantMessages).toEqual([]);
+    expect(assistantMessages).toEqual([{ content: "取消正文末尾s" }]);
     expect(failedCall).toEqual({ status: "failed", output_chars: "取消正文末尾s".length });
   });
 

@@ -2707,6 +2707,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   line-height: 1.55;
   animation: toast-appear-top .18s ease;
 }
+.toast.ai-new-conversation-toast { white-space: pre-line; }
 .toast-region[data-position="bottom-right"] .toast { animation-name: toast-appear-bottom; }
 .toast.error {
   border-color: color-mix(in srgb, var(--toast-error-fg) 16%, transparent);

@@ -9,7 +9,7 @@ describe("界面文本选中行为", () => {
       readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('/styles.css?v=20260815-task-control-alignment-v1');
+    expect(page).toContain('/styles.css?v=20260815-ai-history-favorite-v3');
     expect(styles).toContain("body { user-select: none; }");
     expect(styles).toContain('body :is(input, textarea, select, [contenteditable="true"], .reader-content, .message-body, .record-markdown-preview, .knowledge-markdown-block, .vditor-reset, pre, code) { user-select: text; }');
   });

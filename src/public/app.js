@@ -19,7 +19,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelCo
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter } from "/stream-typewriter.js?v=20260730-ai-stream-typewriter-v3";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260815-ai-stream-typewriter-v4";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
@@ -551,7 +551,15 @@ function cancelActiveAiRequest(reason) {
   return cancelled;
 }
 
-function beginAiConversationNavigation(reason) {
+function beginAiConversationNavigation(reason, action = "切换会话") {
+  if (aiRequestManager.hasActive()) {
+    const isNewConversation = action === "新建会话";
+    toast(
+      `当前 turn 尚未结束，${action}会中断生成；${isNewConversation ? "\n" : ""}已收到的内容会保留在历史记录中`,
+      "warning",
+      isNewConversation ? "ai-new-conversation-toast" : ""
+    );
+  }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = aiConversationNavigationGeneration;
   const navigation = Object.freeze({
@@ -574,7 +582,10 @@ function finishAiConversationNavigation(navigation) {
   return true;
 }
 
-function invalidateAiConversationNavigation(reason) {
+function invalidateAiConversationNavigation(reason, action = "切换作品") {
+  if (aiRequestManager.hasActive()) {
+    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+  }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = null;
   cancelActiveAiRequest(reason);
@@ -2442,7 +2453,7 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   if (!state.work) return null;
-  const navigation = beginAiConversationNavigation("已切换 AI 对话");
+  const navigation = beginAiConversationNavigation("已切换 AI 对话", "切换会话");
   try {
     const parameters = new URLSearchParams({ page: "1", limit: "100" });
     if (focusMessageId) parameters.set("messageId", String(focusMessageId));
@@ -2512,7 +2523,7 @@ function applyNewAiConversation(conversation) {
 
 async function createNewAiConversation(taskType = "chat") {
   if (!state.work) return null;
-  const navigation = beginAiConversationNavigation("已新建 AI 对话");
+  const navigation = beginAiConversationNavigation("已新建 AI 对话", "新建会话");
   try {
     const conversation = await api(`/api/works/${navigation.workId}/ai-conversations`, { method: "POST", body: { taskType } });
     if (!isAiConversationNavigationCurrent(navigation)) return null;
@@ -3922,11 +3933,11 @@ function dismissChapterInsightToast() {
   }
 }
 
-function toast(message, type = "info") {
+function toast(message, type = "info", extraClass = "") {
   if (systemRestartDetected || (!state.user && document.documentElement.classList.contains("login-route"))) return;
   const region = $("#toast-region");
   const element = document.createElement("div");
-  element.className = `toast ${type}`;
+  element.className = `toast ${type}${extraClass ? ` ${extraClass}` : ""}`;
   element.setAttribute("role", type === "error" ? "alert" : "status");
   element.setAttribute("aria-atomic", "true");
   element.textContent = message;
@@ -14035,6 +14046,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   message.innerHTML = '<div class="message-body" data-testid="ai-stream-content" aria-live="polite" aria-busy="true"></div><div class="message-meta">正在连接模型流……</div>';
   const content = message.querySelector(".message-body");
   const meta = message.querySelector(".message-meta");
+  const streamSpeedController = createStreamTypewriterSpeedController();
   let messageMounted = false;
   const mountAssistantMessage = () => {
     if (messageMounted) return true;
@@ -14046,6 +14058,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     return true;
   };
   const typewriter = createStreamTypewriter({
+    speedController: streamSpeedController,
     onRender: (text, progress) => {
       if (!aiRequestTargetsCurrentState(requestHolder.snapshot) || !mountAssistantMessage()) return;
       content.innerHTML = renderMarkdown(text);
@@ -14081,6 +14094,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     if (existing) return existing;
     processStepVisibleContents.set(step, "");
     const typewriter = createStreamTypewriter({
+      speedController: streamSpeedController,
       onRender: (text) => {
         if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
@@ -16454,6 +16468,9 @@ document.addEventListener("click", (event) => {
 window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
+  if (aiRequestManager.hasActive()) {
+    toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
+  }
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });

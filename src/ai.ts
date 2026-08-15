@@ -4213,7 +4213,35 @@ export class AiManager {
       && (conversationBefore?.title === "新对话" || conversationBefore?.title === defaultTitle)
     );
     const processStartedAt = process.hrtime.bigint();
-    const generated = await this.generate({ ...input, taskType: "chat" }, onDelta);
+    let persistedConversationMessage: Record<string, unknown> | null = null;
+    let streamedConversationContent = "";
+    const persistStreamDelta = (delta: string): void => {
+      if (input.conversationId && input.assistantMessageRequestId && delta.length > 0) {
+        streamedConversationContent += delta;
+        persistedConversationMessage = this.store.upsertAiConversationAssistantMessage(
+          input.conversationId,
+          input.assistantMessageRequestId,
+          streamedConversationContent
+        );
+      }
+      onDelta(delta);
+    };
+    let generated: GenerateResult;
+    try {
+      generated = await this.generate({ ...input, taskType: "chat" }, persistStreamDelta);
+    } catch (error) {
+      if (persistedConversationMessage && input.conversationId && input.assistantMessageRequestId) {
+        const interruptionCode = error instanceof AppError ? error.code : "AI_STREAM_FAILED";
+        persistedConversationMessage = this.store.upsertAiConversationAssistantMessage(
+          input.conversationId,
+          input.assistantMessageRequestId,
+          streamedConversationContent,
+          { interrupted: true, interruptionCode },
+          true
+        );
+      }
+      throw error;
+    }
     const processDurationMs = Math.min(86_400_000, Math.max(0, Math.round(Number(process.hrtime.bigint() - processStartedAt) / 1_000_000)));
     const chapter = input.scope.chapterId ? this.store.getChapter(input.scope.chapterId) : null;
     const suggestionId = id("suggestion");
@@ -4233,11 +4261,11 @@ export class AiManager {
     );
     const modelDisplayName = typeof generated.model.displayName === "string" ? generated.model.displayName : undefined;
     const conversationMessage = input.conversationId && input.assistantMessageRequestId
-      ? this.store.addAiConversationMessage(input.conversationId, {
-        role: "assistant",
-        content: generated.content,
-        requestId: input.assistantMessageRequestId,
-        metadata: {
+      ? this.store.upsertAiConversationAssistantMessage(
+        input.conversationId,
+        input.assistantMessageRequestId,
+        generated.content,
+        {
           ...(modelDisplayName ? { modelDisplayName } : {}),
           outputTokens: generated.outputTokens,
           processDurationMs,
@@ -4246,9 +4274,10 @@ export class AiManager {
           toolCalls: generated.toolCalls,
           processSteps: generated.processSteps,
           ...(generated.anthropicContent?.length ? { anthropicContent: generated.anthropicContent } : {})
-        }
-      })
-      : null;
+        },
+        true
+      )
+      : persistedConversationMessage;
     if (shouldGenerateTitle && conversationMessage && input.conversationId) {
       void this.generateConversationTitle(
         input.workId,

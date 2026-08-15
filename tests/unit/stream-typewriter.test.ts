@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStreamTypewriter, streamTypewriterBatchSize } from "../../src/public/stream-typewriter.js";
+import { createStreamTypewriter, createStreamTypewriterSpeedController, streamTypewriterBatchSize } from "../../src/public/stream-typewriter.js";
 // @ts-expect-error 浏览器端 Markdown 模块没有单独的类型声明，测试仅调用纯函数导出。
 import { renderMarkdown } from "../../src/public/markdown.js";
 
@@ -90,6 +90,61 @@ describe("流式打字机", () => {
     expect(streamTypewriterBatchSize(180, true)).toBe(13);
     expect(streamTypewriterBatchSize(5_000)).toBe(12);
     expect(streamTypewriterBatchSize(5_000, true)).toBe(24);
+  });
+
+  it("根据共享流速让后续轮次继承较快的显示速度", () => {
+    let currentTime = 0;
+    const speedController = createStreamTypewriterSpeedController({ now: () => currentTime });
+    speedController.observe(180);
+
+    expect(speedController.charactersPerSecond()).toBe(360);
+    expect(streamTypewriterBatchSize(12, false, speedController.charactersPerSecond())).toBe(6);
+
+    currentTime = 100;
+    speedController.observe(60);
+    expect(speedController.charactersPerSecond()).toBeGreaterThan(60);
+    expect(streamTypewriterBatchSize(12, false, speedController.charactersPerSecond())).toBeGreaterThan(1);
+  });
+
+  it("跨轮次空档保留已观测到的追赶速度", () => {
+    let currentTime = 0;
+    const speedController = createStreamTypewriterSpeedController({ now: () => currentTime });
+    speedController.observe(180);
+    currentTime = 5_000;
+    speedController.observe(3);
+
+    expect(speedController.charactersPerSecond()).toBe(360);
+    expect(streamTypewriterBatchSize(12, false, speedController.charactersPerSecond())).toBe(6);
+  });
+
+  it("两个独立轮次的打字机共享追赶速度", () => {
+    const firstFrames = manualFrames();
+    const secondFrames = manualFrames();
+    const speedController = createStreamTypewriterSpeedController({ now: () => 0 });
+    const firstRenders: string[] = [];
+    const secondRenders: string[] = [];
+    const firstTypewriter = createStreamTypewriter({
+      onRender: (text) => firstRenders.push(text),
+      scheduleFrame: firstFrames.schedule,
+      cancelFrame: firstFrames.cancel,
+      reducedMotion: false,
+      speedController
+    });
+    const secondTypewriter = createStreamTypewriter({
+      onRender: (text) => secondRenders.push(text),
+      scheduleFrame: secondFrames.schedule,
+      cancelFrame: secondFrames.cancel,
+      reducedMotion: false,
+      speedController
+    });
+
+    firstTypewriter.append("字".repeat(180));
+    firstFrames.runNext();
+    secondTypewriter.append("第二轮思考内容");
+    secondFrames.runNext();
+
+    expect(firstRenders[0]).toHaveLength(6);
+    expect(secondRenders[0]).toHaveLength(6);
   });
 
   it("大量文本积压时按积压量平滑加速", async () => {

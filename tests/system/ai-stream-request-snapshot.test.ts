@@ -15,17 +15,23 @@ describe("AI 流式请求快照", () => {
     expect(application).toContain("signal: request.signal");
     expect(application).toContain("request.conversationId,\n          \"assistant\"");
     expect(application).toContain("requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id })");
-    expect(page).toContain('/app.js?v=20260815-task-control-alignment-v1');
+    expect(page).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
   });
 
   it("对话和作品切换会取消旧流并拒绝过期回调", async () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
 
-    expect(application).toContain('beginAiConversationNavigation("已切换 AI 对话")');
-    expect(application).toContain('beginAiConversationNavigation("已新建 AI 对话")');
+    expect(application).toContain('beginAiConversationNavigation("已切换 AI 对话", "切换会话")');
+    expect(application).toContain('beginAiConversationNavigation("已新建 AI 对话", "新建会话")');
     expect(application).toContain('invalidateAiConversationNavigation(state.work?.id === workId ? "已重新载入作品" : "已切换作品")');
     expect(application).toContain("selectionGeneration !== workSelectionRequestGeneration");
     expect(application).toContain("assertAiRequestCurrent(requestHolder.snapshot)");
     expect(application).toContain("persistAiRequestInterruption(request, error?.streamInterruption)");
+    expect(application).toContain('const isNewConversation = action === "新建会话";');
+    expect(application).toContain('isNewConversation ? "\\n" : ""');
+    expect(application).toContain('isNewConversation ? "ai-new-conversation-toast" : ""');
+    expect(application).toContain('`当前 turn 尚未结束，${action}会中断生成；${isNewConversation ? "\\n" : ""}已收到的内容会保留在历史记录中`');
+    expect(application).toContain('当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中');
+    expect(application).not.toContain('event.returnValue = "";');
   });
 });
