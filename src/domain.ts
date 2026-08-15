@@ -88,9 +88,12 @@ export type AiMessage = {
 export type ContextScope = {
   type: "none" | "selection" | "chapter" | "volume" | "book" | "settings" | "settings-catalog" | "entities";
   chapterId?: string;
-  volumeId?: string;
-  selection?: string;
+  /** 分析任务可以一次选择多个章节；旧任务继续使用 chapterId。 */
   chapterIds?: string[];
+  volumeId?: string;
+  /** 分析任务可以一次选择多个分卷；旧任务继续使用 volumeId。 */
+  volumeIds?: string[];
+  selection?: string;
   characterIds?: string[];
   /** 指令关键词命中的角色（轻量卡，不含档案 Markdown 全文）。 */
   mentionCharacterIds?: string[];

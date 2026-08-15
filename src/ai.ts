@@ -1732,22 +1732,33 @@ export class ContextBuilder {
       contentSections.push(wrapAiContextRegion("selection", `当前选中文本：\n${scope.selection}`, { escape: false }));
       if (scope.chapterId) this.appendChapter(contentSections, workId, scope.chapterId, false);
     } else if (scope.type === "chapter") {
-      if (!scope.chapterId) throw new AppError(400, "CHAPTER_REQUIRED", "章节上下文缺少章节标识");
-      this.appendPreviousChapterTail(contentSections, workId, scope.chapterId);
-      this.appendChapter(contentSections, workId, scope.chapterId, true);
+      const chapterIds = [...new Set([
+        ...(scope.chapterId ? [scope.chapterId] : []),
+        ...(scope.chapterIds ?? [])
+      ])];
+      if (chapterIds.length === 0) throw new AppError(400, "CHAPTER_REQUIRED", "章节上下文缺少章节标识");
+      if (chapterIds.length === 1 && scope.chapterId) this.appendPreviousChapterTail(contentSections, workId, scope.chapterId);
+      for (const chapterId of chapterIds) this.appendChapter(contentSections, workId, chapterId, true);
       if (scope.selection) contentSections.push(wrapAiContextRegion("selection", `当前选中文本（本次修改目标）：\n${scope.selection}`, { escape: false }));
     } else if (scope.type === "volume") {
-      if (!scope.volumeId) throw new AppError(400, "VOLUME_REQUIRED", "卷上下文缺少卷标识");
+      const volumeIds = [...new Set([
+        ...(scope.volumeId ? [scope.volumeId] : []),
+        ...(scope.volumeIds ?? [])
+      ])];
+      if (volumeIds.length === 0) throw new AppError(400, "VOLUME_REQUIRED", "卷上下文缺少卷标识");
       const tree = this.store.getWorkTree(workId);
-      const volume = (tree.volumes as Record<string, unknown>[]).find((item) => item.id === scope.volumeId);
-      if (!volume) throw notFound("卷");
-      const chapters = volume.chapters as Record<string, unknown>[];
-      contentSections.push(wrapAiContextRegion("volume", `当前卷：${String(volume.title)}`));
-      for (const chapter of chapters) {
-        contentSections.push(wrapAiContextRegion(
-          "chapter",
-          `[${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`
-        ));
+      const volumes = tree.volumes as Record<string, unknown>[];
+      for (const volumeId of volumeIds) {
+        const volume = volumes.find((item) => item.id === volumeId);
+        if (!volume) throw notFound("卷");
+        const chapters = volume.chapters as Record<string, unknown>[];
+        contentSections.push(wrapAiContextRegion("volume", `当前卷：${String(volume.title)}`));
+        for (const chapter of chapters) {
+          contentSections.push(wrapAiContextRegion(
+            "chapter",
+            `[${String(volume.title)} / ${String(chapter.title)} | 版本 ${String(chapter.versionNo)}]\n${String(chapter.content)}`
+          ));
+        }
       }
     } else if (scope.type === "book") {
       const tree = this.store.getWorkTree(workId);
@@ -1779,7 +1790,7 @@ export class ContextBuilder {
         workId,
         bookSummaryMaximumTokens ?? Math.max(160, Math.floor(maximumTokens * 0.35)),
         query,
-        scope.type === "volume" ? scope.volumeId : undefined
+        scope.type === "volume" && !scope.volumeIds?.length ? scope.volumeId : undefined
       );
     }
 
@@ -3385,6 +3396,138 @@ export class AiManager {
     })), pagination);
   }
 
+  private analysisTaskContextPreviewInput(workId: string, taskType: string, scope: ContextScope): Pick<GenerateInput, "taskType" | "instruction" | "scope" | "agentToolIds"> {
+    const previewTaskType = this.analysisTaskModelPurpose(taskType);
+    let previewScope = scope;
+    let instruction = "请基于所选分析范围完成结构化小说分析，只引用注入资料中的事实并给出可追溯证据。";
+    let agentToolIds: AgentToolId[] | undefined;
+
+    if (taskType === "chapter-analysis") {
+      const chapters = this.getScopeChapters(workId, scope);
+      if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "章节分析范围内没有章节");
+      const chapter = [...chapters].sort((left, right) => String(right.content).length - String(left.content).length)[0];
+      if (!chapter) throw new AppError(409, "CHAPTERS_REQUIRED", "章节分析范围内没有章节");
+      previewScope = {
+        ...scope,
+        type: "chapter",
+        chapterId: String(chapter.id),
+        chapterIds: undefined,
+        volumeId: undefined,
+        volumeIds: undefined
+      };
+      instruction = "分析当前章节并输出结构化结果，字段包括摘要、事件、人物、设定、证据和不确定项。";
+    } else if (taskType === "character-extraction" || taskType === "character-summary" || taskType === "setting-extraction") {
+      const chapters = this.getScopeChapters(workId, scope);
+      if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "分析范围内没有章节");
+      const chunks = this.buildChapterChunks(chapters, 10_000);
+      const selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? "";
+      previewScope = { type: "selection", selection };
+      instruction = taskType === "setting-extraction"
+        ? "从本批正文抽取可复用的世界设定候选，并为每条候选提供原文证据。"
+        : "从本批正文抽取人物候选，并为每位候选提供原文首次出现证据。";
+    } else if (taskType === "relationship-analysis") {
+      const characters = this.store.listCharacters(workId);
+      const roster = characters.map((character) => `${String(character.id)} | ${String(character.name)}${Array.isArray(character.aliases) && character.aliases.length ? ` | 别名：${(character.aliases as string[]).join("、")}` : ""}`).join("\n");
+      let selection = "本次范围没有可注入的正文或设定数据。";
+      if (scope.type === "settings") {
+        const chunks = this.buildSettingChunks(this.relationshipSettingSources(workId, characters), 12_000);
+        selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
+        previewScope = { type: "settings", selection };
+      } else {
+        const chunks = this.buildChapterChunks(this.getScopeChapters(workId, scope), 12_000);
+        selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
+        previewScope = {
+          type: "selection",
+          selection,
+          ...(scope.characterIds?.length ? { suppressAutomaticContext: true } : {})
+        };
+      }
+      instruction = `抽取本批正文或设定中的人物长期关系候选，只使用原文证据。角色规范表：\n${roster}`;
+    } else if (taskType === "character-identity-audit") {
+      const characters = this.store.listCharacters(workId);
+      const roster = characters.map((character) => `${String(character.id)} | ${String(character.name)} | 别名=${JSON.stringify(character.aliases)} | 身份=${String((character.attributes as Record<string, unknown>).identity ?? "未知")}`).join("\n");
+      instruction = `审核角色规范表，找出疑似重复角色并给出原文证据。角色规范表：\n${roster}`;
+      agentToolIds = ["search_story_entities", "grep", "read_chapters"];
+    } else if (taskType === "timeline-analysis") {
+      instruction = "抽取所选范围内的大事件候选，区分发生时间与叙述时间，并为每项提供原文证据。";
+    } else if (taskType === "worldview-analysis") {
+      instruction = "分析所选范围内已经出现的世界观，区分事实、传闻和未知项，并为结论提供原文证据。";
+    } else if (taskType === "consistency-check") {
+      instruction = "检查所选范围内的设定、人物状态、关系和时间冲突，并为每项问题提供原文证据。";
+    }
+
+    return { taskType: previewTaskType, instruction, scope: previewScope, ...(agentToolIds ? { agentToolIds } : {}) };
+  }
+
+  previewAnalysisTaskContext(workId: string, input: {
+    taskType: string;
+    scope?: Record<string, unknown>;
+    modelId?: string;
+  }): Record<string, unknown> {
+    this.store.getWork(workId);
+    const scope = (input.scope ?? { type: "book" }) as ContextScope;
+    const { model } = this.resolveModel(workId, this.analysisTaskModelPurpose(input.taskType), input.modelId);
+    const previewInput = this.analysisTaskContextPreviewInput(workId, input.taskType, scope);
+    const modelId = stringValue(model, "id");
+    const modelName = stringValue(model, "display_name") || stringValue(model, "model_id");
+    const contextWindow = numberValue(model, "context_window") || DEFAULT_CONTEXT_WINDOW;
+    const compactThreshold = Math.min(90, Math.max(50, Number(this.store.getWorkAiSettings(workId).contextCompactThreshold) || 85));
+    const thresholdTokens = Math.max(256, Math.floor(contextWindow * compactThreshold / 100));
+    const budget = this.contextBudget({ workId, ...previewInput }, model);
+    const base = {
+      allowed: false,
+      taskType: input.taskType,
+      modelId,
+      modelName,
+      contextWindow,
+      thresholdPercent: compactThreshold,
+      thresholdTokens,
+      availableInputTokens: Number(budget.availableInputTokens),
+      contextBudgetTokens: Number(budget.workContextBudgetTokens),
+      requiredContextWindow: null,
+      estimatedInputTokens: null,
+      estimatedContextTokens: null,
+      omittedContextBlocks: 0,
+      degradedContextBlocks: 0
+    };
+    let usage: Record<string, unknown>;
+    try {
+      usage = this.getContextUsage({
+        workId,
+        taskType: previewInput.taskType,
+        modelId,
+        scope: previewInput.scope,
+        instruction: previewInput.instruction,
+        agentToolIds: previewInput.agentToolIds
+      });
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== "CONSTRAINT_CONTEXT_TOO_LARGE") throw error;
+      return {
+        ...base,
+        overThreshold: true,
+        message: `当前分析范围注入的锁定设定和人物资料已超过模型“${modelName}”的安全上下文容量，请切换到上下文更长的模型，或缩小分析范围后重试。`
+      };
+    }
+    const estimatedInputTokens = Number(usage.inputTokens) || 0;
+    const estimatedContextTokens = Number(usage.contextTokens) || 0;
+    const omittedContextBlocks = Number(usage.omittedContextBlocks) || 0;
+    const degradedContextBlocks = Number(usage.degradedContextBlocks) || 0;
+    const overThreshold = estimatedInputTokens >= thresholdTokens || omittedContextBlocks > 0 || degradedContextBlocks > 0;
+    return {
+      ...base,
+      allowed: !overThreshold,
+      overThreshold,
+      estimatedInputTokens,
+      estimatedContextTokens,
+      omittedContextBlocks,
+      degradedContextBlocks,
+      requiredContextWindow: overThreshold ? Math.ceil(estimatedInputTokens * 100 / compactThreshold) : null,
+      message: overThreshold
+        ? `当前分析范围预计注入约 ${estimatedInputTokens.toLocaleString("zh-CN")} Token，已达到模型“${modelName}”安全阈值（${contextWindow.toLocaleString("zh-CN")} Token 的 ${compactThreshold}%），部分资料将被压缩或省略。请切换到上下文更长的模型，或缩小分析范围后重试。`
+        : "当前分析范围在所选模型的安全上下文阈值内。"
+    };
+  }
+
   createTask(workId: string, input: {
     taskType: string;
     scope?: Record<string, unknown>;
@@ -3409,6 +3552,16 @@ export class AiManager {
         this.store.listCharacters(workId),
         relationshipScope.relationshipSourceRefs
       );
+    }
+    if (modelId) {
+      const contextPreview = this.previewAnalysisTaskContext(workId, {
+        taskType: input.taskType,
+        scope: input.scope,
+        modelId
+      });
+      if (contextPreview.allowed !== true) {
+        throw new AppError(413, "AI_CONTEXT_TOO_LARGE", String(contextPreview.message), contextPreview);
+      }
     }
     return this.store.createTask(workId, {
       taskType: input.taskType,
@@ -5282,7 +5435,8 @@ export class AiManager {
     roleplayCharacterId: string | null = null,
     allowedToolIds?: ReadonlySet<AgentToolId>,
     signal?: AbortSignal,
-    onUsage?: (usage: ResolvedAiTokenUsage) => void
+    onUsage?: (usage: ResolvedAiTokenUsage) => void,
+    scope?: ContextScope
   ): Promise<AgentToolCallResult> {
     const name = toolCall.function.name;
     const calledAt = now();
@@ -5349,6 +5503,9 @@ export class AiManager {
       };
     }
     const args = parsed.data;
+    const scopedChapterIds = scope && (scope.type === "chapter" || scope.type === "volume")
+      ? new Set(this.getScopeChapters(workId, scope).map((chapter) => String(chapter.id)))
+      : null;
     if (name === "recall_relationship") {
       if (!roleplayCharacterId) throw new Error("Roleplay character is required for recall_relationship");
       const { characters: requestedCharacters, cursor } = args as z.infer<typeof recallRelationshipArguments>;
@@ -5624,6 +5781,9 @@ export class AiManager {
       const { chapterIds, include, cursor } = args as z.infer<typeof readChaptersArguments>;
       const summaries = new Map(this.store.listCurrentChapterInsights(workId).map((item) => [String(item.chapterId), String(item.summary)]));
       const chapters = chapterIds.map((chapterId) => {
+        if (scopedChapterIds && !scopedChapterIds.has(chapterId)) {
+          return { chapterId, error: { code: "CHAPTER_OUTSIDE_ANALYSIS_SCOPE", message: "The requested chapter is outside the current analysis scope." } };
+        }
         try {
           const chapter = this.store.getChapter(chapterId);
           if (chapter.workId !== workId) return { chapterId, error: { code: "CHAPTER_WORK_MISMATCH", message: "The requested chapter belongs to a different work." } };
@@ -5643,7 +5803,8 @@ export class AiManager {
     }
     if (name === "grep") {
       const { keyword, limit, cursor } = args as z.infer<typeof grepArguments>;
-      const matches = this.store.searchChapterParagraphs(workId, keyword, limit);
+      const matches = this.store.searchChapterParagraphs(workId, keyword, limit)
+        .filter((match) => !scopedChapterIds || scopedChapterIds.has(String(match.chapterId)));
       const records = structuralToolResultRecords(matches, maximumRecordChars);
       const result = paginateToolResultRecords(records, cursor, (page, pagination) => ({
         ok: true,
@@ -6398,7 +6559,8 @@ export class AiManager {
             generationRoleplayCharacterId,
             allowedToolIds,
             input.signal,
-            trackUsage
+            trackUsage,
+            input.scope
           );
           logger.info("ai.tool_call.completed", {
             callId,
@@ -6852,44 +7014,69 @@ export class AiManager {
   }
 
   private async runChapterAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
-    if (!scope.chapterId) throw new AppError(400, "CHAPTER_REQUIRED", "章节分析必须指定章节");
-    const chapter = this.store.getChapter(scope.chapterId);
-    const generated = await this.generateTaggedJson({
-      workId,
-      taskId,
-      taskType: "chapter-analysis",
-      signal: this.taskSignal(taskId),
-      instruction: "分析本章并输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。",
-      scope,
-      ...(modelId ? { modelId } : {}),
-      extraSystemPrompt: "本任务要求严格输出可解析的 JSON。"
-    });
-    const data = extractJson<{
-      summary?: string;
-      events?: unknown[];
-      characters?: unknown[];
-      settings?: unknown[];
-      evidence?: unknown[];
-      uncertainties?: unknown[];
-    }>(generated.content);
-    if (!this.taskCanCommit(taskId)) return { interrupted: true, callId: generated.callId };
-    const insightId = id("insight");
-    this.store.db.run(
-      `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
-       settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'review', ?)`,
-      insightId,
-      String(chapter.id),
-      Number(chapter.versionNo),
-      data.summary ?? "",
-      JSON.stringify(data.events ?? []),
-      JSON.stringify(data.characters ?? []),
-      JSON.stringify(data.settings ?? []),
-      JSON.stringify(data.evidence ?? []),
-      JSON.stringify(data.uncertainties ?? []),
-      now()
-    );
-    this.store.db.run("UPDATE chapters SET analysis_status = 'review' WHERE id = ?", String(chapter.id));
-    return { insightId, chapterId: chapter.id, chapterVersion: chapter.versionNo, callId: generated.callId, ...data };
+    const chapters = this.getScopeChapters(workId, scope);
+    if (chapters.length === 0) throw new AppError(409, "CHAPTERS_REQUIRED", "章节分析范围内没有章节");
+    const analyses: Array<Record<string, unknown>> = [];
+    const insightIds: string[] = [];
+    const callIds: string[] = [];
+    for (const [index, chapter] of chapters.entries()) {
+      const chapterScope: ContextScope = {
+        ...scope,
+        type: "chapter",
+        chapterId: String(chapter.id),
+        chapterIds: undefined,
+        volumeId: undefined,
+        volumeIds: undefined
+      };
+      const generated = await this.generateTaggedJson({
+        workId,
+        taskId,
+        taskType: "chapter-analysis",
+        signal: this.taskSignal(taskId),
+        instruction: "分析本章并输出 JSON 对象，字段为 summary（1至3句）、events（数组）、characters（数组）、settings（数组）、evidence（数组，每项含 conclusion 和 quote）、uncertainties（数组）。",
+        scope: chapterScope,
+        ...(modelId ? { modelId } : {}),
+        extraSystemPrompt: "本任务要求严格输出可解析的 JSON。"
+      });
+      const data = extractJson<{
+        summary?: string;
+        events?: unknown[];
+        characters?: unknown[];
+        settings?: unknown[];
+        evidence?: unknown[];
+        uncertainties?: unknown[];
+      }>(generated.content);
+      if (!this.taskCanCommit(taskId)) return { interrupted: true, callIds };
+      const insightId = id("insight");
+      this.store.db.run(
+        `INSERT INTO chapter_insights (id, chapter_id, chapter_version, summary, events_json, characters_json,
+         settings_json, evidence_json, uncertainties_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'review', ?)`,
+        insightId,
+        String(chapter.id),
+        Number(chapter.versionNo),
+        data.summary ?? "",
+        JSON.stringify(data.events ?? []),
+        JSON.stringify(data.characters ?? []),
+        JSON.stringify(data.settings ?? []),
+        JSON.stringify(data.evidence ?? []),
+        JSON.stringify(data.uncertainties ?? []),
+        now()
+      );
+      this.store.db.run("UPDATE chapters SET analysis_status = 'review' WHERE id = ?", String(chapter.id));
+      analyses.push({ insightId, chapterId: chapter.id, chapterVersion: chapter.versionNo, callId: generated.callId, ...data });
+      insightIds.push(insightId);
+      callIds.push(generated.callId);
+      if (taskId && this.store.getTask(taskId).status === "running") {
+        this.store.updateTask(taskId, { status: "running", progress: Math.min(95, Math.round((index + 1) / chapters.length * 95)) });
+      }
+    }
+    return {
+      ...(chapters.length === 1 ? analyses[0] : {}),
+      insightIds,
+      chapterIds: chapters.map((chapter) => String(chapter.id)),
+      chapterCount: chapters.length,
+      callIds
+    };
   }
 
   private async runTimelineAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
@@ -7224,18 +7411,24 @@ export class AiManager {
         `首次章节=${String(character.firstChapterId ?? "未知")}`
       ].join(" | ");
     }).join("\n");
+    const selectedScopeDescription = scope.type === "chapter"
+      ? `指定章节：${[...(scope.chapterIds ?? []), ...(scope.chapterId ? [scope.chapterId] : [])].join("、")}`
+      : scope.type === "volume"
+        ? `指定分卷：${[...(scope.volumeIds ?? []), ...(scope.volumeId ? [scope.volumeId] : [])].join("、")}`
+        : scope.type === "book" ? "全书" : "当前分析范围";
     const generated = await this.generateTaggedJson({
       workId,
       taskId,
       taskType: "book-analysis",
       signal: this.taskSignal(taskId),
-      scope: scope.type === "none" ? scope : { type: "none" },
+      scope,
       ...(modelId ? { modelId } : {}),
       parameters: { temperature: 0.1 },
       agentToolIds: requiredTools,
       agentToolCallLimit: 48,
       instruction: [
         "审核角色规范表，找出可能把同一个角色误建成两个档案的组合，最多输出 12 组。",
+        `本次只审核${selectedScopeDescription}内的正文证据。search_story_entities 可以查询角色档案，但 grep 和 read_chapters 只能用于当前分析范围，不能扩大到范围外章节。`,
         "角色规范表：",
         roster,
         "你必须主动使用 search_story_entities 按角色主名或别名查找角色档案和关系，并使用 grep 分别搜索疑似组合两侧的主名或别名；需要上下文时再用 read_chapters。工具调用总数不得超过 48 次。",
@@ -8012,21 +8205,35 @@ export class AiManager {
   private relationshipScopeChapterIds(workId: string, scope: ContextScope): Set<string> {
     if (scope.type === "settings") return new Set();
     if (scope.type === "chapter") {
-      if (!scope.chapterId) throw new AppError(400, "CHAPTER_REQUIRED", "分析范围缺少章节标识");
-      const chapter = this.store.getChapter(scope.chapterId);
-      if (String(chapter.workId) !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-      return new Set([scope.chapterId]);
+      const chapterIds = [...new Set([
+        ...(scope.chapterId ? [scope.chapterId] : []),
+        ...(scope.chapterIds ?? [])
+      ])];
+      if (chapterIds.length === 0) throw new AppError(400, "CHAPTER_REQUIRED", "分析范围缺少章节标识");
+      for (const chapterId of chapterIds) {
+        const chapter = this.store.getChapter(chapterId);
+        if (String(chapter.workId) !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+      }
+      return new Set(chapterIds);
     }
     if (scope.type === "volume") {
-      if (!scope.volumeId) throw new AppError(400, "VOLUME_REQUIRED", "分析范围缺少分卷标识");
-      const volume = this.store.getVolume(scope.volumeId);
-      if (String(volume.workId) !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "分卷不属于当前作品");
-      return new Set(this.store.db.all(
-        `SELECT id FROM chapters WHERE work_id = ? AND volume_id = ? AND deleted_at IS NULL
-         AND excluded_from_analysis = 0 AND chapter_type <> '作者的话'`,
-        workId,
-        scope.volumeId
-      ).map((row) => String(row.id)));
+      const volumeIds = [...new Set([
+        ...(scope.volumeId ? [scope.volumeId] : []),
+        ...(scope.volumeIds ?? [])
+      ])];
+      if (volumeIds.length === 0) throw new AppError(400, "VOLUME_REQUIRED", "分析范围缺少分卷标识");
+      const chapterIds = new Set<string>();
+      for (const volumeId of volumeIds) {
+        const volume = this.store.getVolume(volumeId);
+        if (String(volume.workId) !== workId) throw new AppError(400, "VOLUME_WORK_MISMATCH", "分卷不属于当前作品");
+        for (const row of this.store.db.all(
+          `SELECT id FROM chapters WHERE work_id = ? AND volume_id = ? AND deleted_at IS NULL
+           AND excluded_from_analysis = 0 AND chapter_type <> '作者的话'`,
+          workId,
+          volumeId
+        )) chapterIds.add(String(row.id));
+      }
+      return chapterIds;
     }
     return new Set(this.store.db.all(
       `SELECT id FROM chapters WHERE work_id = ? AND deleted_at IS NULL AND excluded_from_analysis = 0 AND chapter_type <> '作者的话'`,
@@ -9821,16 +10028,33 @@ export class AiManager {
     const tree = this.store.getWorkTree(workId);
     const volumes = tree.volumes as Record<string, unknown>[];
     if (scope.type === "chapter") {
-      if (!scope.chapterId) throw new AppError(400, "CHAPTER_REQUIRED", "分析范围缺少章节标识");
-      const chapter = this.store.getChapter(scope.chapterId);
-      if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-      return [chapter];
+      const chapterIds = [...new Set([
+        ...(scope.chapterId ? [scope.chapterId] : []),
+        ...(scope.chapterIds ?? [])
+      ])];
+      if (chapterIds.length === 0) throw new AppError(400, "CHAPTER_REQUIRED", "分析范围缺少章节标识");
+      const selected = new Set(chapterIds);
+      const chapters = volumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])
+        .filter((chapter) => selected.has(String(chapter.id)) && this.isAutomaticAnalysisChapter(chapter));
+      if (chapters.length !== selected.size) {
+        for (const chapterId of chapterIds) {
+          const chapter = this.store.getChapter(chapterId);
+          if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+        }
+      }
+      return chapters;
     }
     if (scope.type === "volume") {
-      if (!scope.volumeId) throw new AppError(400, "VOLUME_REQUIRED", "分析范围缺少卷标识");
-      const volume = volumes.find((item) => item.id === scope.volumeId);
-      if (!volume) throw notFound("卷");
-      return (volume.chapters as Record<string, unknown>[]).filter((chapter) => this.isAutomaticAnalysisChapter(chapter));
+      const volumeIds = [...new Set([
+        ...(scope.volumeId ? [scope.volumeId] : []),
+        ...(scope.volumeIds ?? [])
+      ])];
+      if (volumeIds.length === 0) throw new AppError(400, "VOLUME_REQUIRED", "分析范围缺少分卷标识");
+      const selected = new Set(volumeIds);
+      const selectedVolumes = volumes.filter((volume) => selected.has(String(volume.id)));
+      if (selectedVolumes.length !== selected.size) throw notFound("卷");
+      return selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])
+        .filter((chapter) => this.isAutomaticAnalysisChapter(chapter));
     }
     return volumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])
       .filter((chapter) => this.isAutomaticAnalysisChapter(chapter));

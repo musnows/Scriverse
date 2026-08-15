@@ -40,4 +40,43 @@ describe("分析任务创建 API 类型白名单", () => {
     }).expect(201);
     expect(task.body.data).toMatchObject({ taskType: "chapter-analysis", status: "pending" });
   });
+
+  it("接受多章节和多分卷范围并记录全部正文版本", async () => {
+    const workId = await setupWork();
+    const firstVolume = runtime!.store.createVolume(workId, { title: "第一卷" });
+    const secondVolume = runtime!.store.createVolume(workId, { title: "第二卷" });
+    const firstChapter = runtime!.store.createChapter(workId, { volumeId: String(firstVolume.id), title: "第一章", content: "第一章正文" });
+    const secondChapter = runtime!.store.createChapter(workId, { volumeId: String(firstVolume.id), title: "第二章", content: "第二章正文" });
+    const thirdChapter = runtime!.store.createChapter(workId, { volumeId: String(secondVolume.id), title: "第三章", content: "第三章正文" });
+
+    const chapterTask = await request(runtime!.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "chapter-analysis",
+      scope: {
+        type: "chapter",
+        chapterId: firstChapter.id,
+        chapterIds: [firstChapter.id, secondChapter.id]
+      }
+    }).expect(201);
+    expect(chapterTask.body.data.scopeSummary).toContain("指定章节（2）");
+    expect(chapterTask.body.data.sourceVersions).toEqual({
+      [String(firstChapter.id)]: 1,
+      [String(secondChapter.id)]: 1
+    });
+
+    const volumeTask = await request(runtime!.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "book-analysis",
+      scope: {
+        type: "volume",
+        volumeId: firstVolume.id,
+        volumeIds: [firstVolume.id, secondVolume.id]
+      }
+    }).expect(201);
+    expect(volumeTask.body.data.scopeSummary).toContain("指定分卷（2）");
+    expect(volumeTask.body.data.sourceVersions).toEqual({
+      [String(firstChapter.id)]: 1,
+      [String(secondChapter.id)]: 1,
+      [String(thirdChapter.id)]: 1
+    });
+    expect(volumeTask.body.data.scopeDetails).toHaveLength(2);
+  });
 });
