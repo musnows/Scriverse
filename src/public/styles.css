@@ -2837,6 +2837,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .dialog-fields .form-field-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
 .dialog-fields label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
 .dialog-fields input, .dialog-fields textarea, .dialog-fields select { width: 100%; padding: 9px 10px; font-size: 13px; }
+.dialog-fields select { padding-inline-end: 28px; }
 .dialog-fields .character-extraction-candidate-toggle { display: inline-flex; width: auto; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 9px; white-space: nowrap; }
 .dialog-fields .character-extraction-candidate-toggle input[type="checkbox"] { flex: 0 0 18px; width: 18px; min-width: 18px; height: 18px; padding: 0; }
 .dialog-fields .character-extraction-candidate-toggle input[type="checkbox"]:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -2889,12 +2890,12 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-scope-field-heading > span { min-width: 0; }
 .task-scope-field-heading small { color: var(--muted); font-size: 9px; }
 .task-scope-picker { display: grid; gap: 8px; min-width: 0; }
-.dialog-fields .task-scope-trigger { display: flex; width: 100%; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; text-align: left; }
+.dialog-fields .task-scope-trigger { display: flex; width: 100%; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; line-height: 1.2; text-align: left; }
 .task-scope-trigger:hover, .task-scope-trigger:focus-visible, .task-scope-trigger[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
 .task-scope-trigger:disabled { cursor: not-allowed; opacity: .48; }
 .task-scope-trigger > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-scope-trigger-meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 10px; }
-.task-scope-chevron { font-size: 15px; line-height: 1; transition: transform .15s ease; }
+.task-scope-trigger-meta { display: inline-flex; flex: 0 0 auto; height: 18px; align-items: center; gap: 8px; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 10px; line-height: 1; }
+.task-scope-chevron { display: inline-grid; width: 16px; height: 18px; place-items: center; font-size: 15px; line-height: 1; transition: transform .15s ease; }
 .task-scope-trigger[aria-expanded="true"] .task-scope-chevron { transform: rotate(180deg); }
 .task-scope-panel { display: grid; gap: 14px; min-width: 0; padding: 14px; border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line)); border-radius: 8px; background: var(--surface-soft); box-shadow: 0 12px 30px rgba(48,39,31,.12); }
 .task-scope-panel.hidden { display: none; }
