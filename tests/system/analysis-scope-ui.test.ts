@@ -27,6 +27,11 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('const chapterIds = form.getAll("chapterIds").map(String).filter(Boolean)');
     expect(application).toContain('const volumeIds = form.getAll("volumeIds").map(String).filter(Boolean)');
     expect(application).toContain('kind === "chapter" ? "chapterIds" : "volumeIds"');
+    expect(application).toContain('body: { taskType, scope, modelId }');
+    expect(application).toContain('/tasks/context-preview');
+    expect(application).toContain('data-analysis-context-warning');
+    expect(application).toContain('上下文更长的模型');
+    expect(application).not.toContain('taskType === "character-identity-audit" || scopeType === "book"');
     expect(application).toContain('const activeKind = ["chapter", "volume"].includes(scopeTypeSelect.value) ? scopeTypeSelect.value : null');
     expect(application).toContain('scopeFields[kind].setAttribute("aria-disabled", String(!enabled))');
     expect(application).toContain('scopeTriggers[kind].disabled = !enabled');
@@ -82,6 +87,7 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".relationship-overwrite-card {");
     expect(styles).toContain(".relationship-source-preview-card {");
     expect(styles).toContain(".relationship-source-preview-row {");
+    expect(styles).toContain(".analysis-context-warning {");
     expect(styles).toContain(".dialog-submit-status {");
     expect(styles).toContain("@keyframes dialog-submit-progress");
   });

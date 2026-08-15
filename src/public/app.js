@@ -13148,7 +13148,7 @@ async function openTaskDialog() {
   const modelField = `<label>任务模型<select name="modelId" required aria-describedby="analysis-task-model-help">
     <option value="" ${availableTaskModels.some((model) => model.id === defaultModelId) ? "" : "selected"} disabled>${availableTaskModels.length ? "请选择模型" : "没有可用模型"}</option>
     ${availableTaskModels.map((model) => `<option value="${esc(model.id)}" ${model.id === defaultModelId ? "selected" : ""}>${esc(modelOptionLabel(model))}</option>`).join("")}
-  </select><small id="analysis-task-model-help">默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。</small></label>`;
+  </select><small id="analysis-task-model-help">默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。</small><p class="analysis-context-warning hidden" data-analysis-context-warning role="alert"></p></label>`;
   const chapterField = taskScopePicker("chapter", "章节", chapterOptions, "选择需要分析的章节");
   const volumeField = taskScopePicker("volume", "分卷", volumeOptions, "选择需要分析的分卷");
   const relationshipFields = `<div class="relationship-analysis-options hidden">
@@ -13201,7 +13201,7 @@ async function openTaskDialog() {
     };
     const scope = settingsOnly
       ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : taskType === "character-identity-audit" || scopeType === "book" || includeAllSettings
+      : scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { ...(scopeType === "volume" ? volumeScope : chapterScope), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     return scope;
@@ -13232,6 +13232,17 @@ async function openTaskDialog() {
           sourceVersion: input.dataset.sourceVersion
         }));
     }
+    const contextPreview = await api(`/api/works/${state.work.id}/tasks/context-preview`, {
+      method: "POST",
+      body: { taskType, scope, modelId }
+    });
+    if (contextPreview.allowed !== true) {
+      contextWarning.textContent = String(contextPreview.message || "当前分析范围超过模型上下文阈值，请切换到上下文更长的模型后重试。");
+      contextWarning.classList.remove("hidden");
+      throw new Error(contextWarning.textContent);
+    }
+    contextWarning.textContent = "";
+    contextWarning.classList.add("hidden");
     await api(`/api/works/${state.work.id}/tasks`, { method: "POST", body: { taskType, scope, modelId } });
     await refreshBackgroundTaskCenter({ announce: false });
     taskListPage = 1;
@@ -13303,6 +13314,11 @@ async function openTaskDialog() {
   const relationshipSourcePreviewContent = relationshipOptions.querySelector("[data-relationship-source-preview-content]");
   const replaceRelationships = relationshipOptions.querySelector('input[name="replaceExistingRelationships"]');
   const relationshipOverwriteCard = relationshipOptions.querySelector(".relationship-existing-overwrite-card");
+  const contextWarning = $("#dialog-fields").querySelector("[data-analysis-context-warning]");
+  const clearContextWarning = () => {
+    contextWarning.textContent = "";
+    contextWarning.classList.add("hidden");
+  };
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 设定集";
@@ -13339,7 +13355,7 @@ async function openTaskDialog() {
   const syncChapterField = () => {
     const activeKind = ["chapter", "volume"].includes(scopeTypeSelect.value) ? scopeTypeSelect.value : null;
     for (const kind of ["chapter", "volume"]) {
-      const enabled = kind === activeKind && taskTypeSelect.value !== "character-identity-audit";
+      const enabled = kind === activeKind;
       scopeFields[kind].classList.toggle("is-disabled", !enabled);
       scopeFields[kind].classList.toggle("hidden", !enabled);
       scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
@@ -13446,10 +13462,12 @@ async function openTaskDialog() {
   taskTypeSelect.addEventListener("change", () => {
     description.textContent = analysisTypeDescription(taskTypeSelect.value);
     syncTaskModelDefault();
+    clearContextWarning();
     invalidateRelationshipSourcePreview();
     syncRelationshipOptions();
   });
   taskModelSelect.addEventListener("change", () => {
+    clearContextWarning();
     invalidateRelationshipSourcePreview();
     syncRelationshipOptions();
   });
@@ -13503,11 +13521,13 @@ async function openTaskDialog() {
     scopeSearches[kind].addEventListener("input", () => filterTaskScopeOptions(kind));
     for (const input of scopeInputs[kind]) input.addEventListener("change", () => {
       syncTaskScopePicker(kind);
+      clearContextWarning();
       invalidateRelationshipSourcePreview();
     });
     scopeClearButtons[kind].addEventListener("click", () => {
       for (const input of scopeInputs[kind]) input.checked = false;
       syncTaskScopePicker(kind);
+      clearContextWarning();
       invalidateRelationshipSourcePreview();
     });
   }

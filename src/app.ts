@@ -2341,6 +2341,17 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       parsePagination(request.query) ?? { page: 1, limit: 30, offset: 0 }
     ), (task) => redactTaskCharacterNames(task, permissions)));
   });
+  app.post("/api/works/:workId/tasks/context-preview", (request, response) => {
+    const input = parse(analysisTaskSchema, request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    const deniedModules = analysisTaskReadModules(input.taskType, input.scope).filter((module) => permissions[module] === "none");
+    if (deniedModules.length > 0) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取 AI 分析上下文预检所需资料模块的权限", {
+        modules: deniedModules
+      });
+    }
+    data(response, ai.previewAnalysisTaskContext(request.params.workId, input));
+  });
   app.post("/api/works/:workId/tasks/relationship-source-preview", async (request, response) => {
     const input = parse(z.object({
       scope: relationshipAnalysisScopeSchema,
