@@ -2695,6 +2695,24 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .pagination-settings-fieldset > small { color: var(--muted); }
 .pagination-settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .pagination-settings-grid label { display: grid; gap: 6px; min-width: 0; }
+.backup-schedule-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+.backup-schedule-grid label { display: grid; gap: 6px; min-width: 0; }
+.platform-backup-body { display: grid; gap: 16px; padding: 18px 22px; max-height: 70vh; overflow-y: auto; }
+.platform-backup-settings-form, .platform-backup-target-form { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+.platform-backup-settings-form .dialog-fields, .platform-backup-target-form .dialog-fields { padding: 0; max-height: none; overflow: visible; }
+.platform-backup-targets-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.platform-backup-targets-actions { display: flex; gap: 8px; }
+.platform-backup-target-list { display: grid; gap: 8px; }
+.platform-backup-target-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.platform-backup-target-copy { display: grid; gap: 4px; min-width: 0; }
+.platform-backup-target-copy strong { font-size: 13px; }
+.platform-backup-target-copy small { color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.platform-backup-target-error { color: var(--danger, #c0392b); }
+.platform-backup-target-actions { display: flex; gap: 6px; }
+.platform-backup-target-actions button { padding: 5px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 11px; }
+.checkbox-label { display: flex !important; align-items: center; gap: 8px; color: var(--text); font-size: 12px; }
+.checkbox-label input { width: auto; }
+
 .entity-editor-view { position: fixed; z-index: 700; inset: 0; overflow: hidden; background: var(--panel); color: var(--ink); }
 .entity-editor-view.hidden, .entity-editor-page.hidden { display: none; }
 .entity-editor-page { width: 100%; height: 100%; min-height: 0; }

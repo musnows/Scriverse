@@ -11,6 +11,7 @@ import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { AttachmentStorage } from "./attachment-storage.js";
+import { BackupService } from "./backup-service.js";
 import { AiManager } from "./ai.js";
 import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
@@ -435,6 +436,30 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const backupSettingsSchema = z.object({
+  scheduleHour: z.number().int().min(0).max(23).optional(),
+  scheduleMinute: z.number().int().min(0).max(59).optional(),
+  backupRetention: z.number().int().min(1).max(100).optional()
+}).strict().refine((input) => input.scheduleHour !== undefined || input.scheduleMinute !== undefined || input.backupRetention !== undefined, {
+  message: "至少需要提供一项备份设置"
+});
+
+const backupTargetSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  endpoint: z.string().trim().min(1).max(500),
+  region: z.string().trim().min(1).max(100).optional(),
+  bucket: z.string().trim().min(1).max(200),
+  prefix: z.string().trim().max(500).optional(),
+  accessKeyId: z.string().trim().min(1).max(300),
+  secretAccessKey: z.string().min(1).max(1000).optional(),
+  backupImages: z.boolean().optional(),
+  enabled: z.boolean().optional()
+}).strict();
+
+const backupTargetUpdateSchema = backupTargetSchema.partial().refine((input) => Object.keys(input).length > 0, {
+  message: "至少需要提供一项备份目标设置"
+});
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -597,6 +622,7 @@ export type Runtime = {
   database: Database;
   store: Store;
   ai: AiManager;
+  backup: BackupService;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
   cleanupAttachments: () => Promise<void>;
@@ -609,6 +635,12 @@ function data(response: Response, value: unknown, status = 200): void {
 
 function noContent(response: Response): void {
   response.status(204).end();
+}
+
+function requireAdmin(request: Request): void {
+  if (!request.authUser || request.authUser.role !== "admin") {
+    throw new AppError(403, "ADMIN_REQUIRED", "该操作仅限系统管理员");
+  }
 }
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -938,6 +970,14 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     ? auth.listUsers().find((user) => user.status === "active") ?? null
     : null;
   const store = new Store(database);
+  const vault = new CredentialVault(options.masterSecret);
+  const backup = new BackupService(store, vault, {
+    databasePath: options.databasePath,
+    attachmentDirectory: attachmentStorage.rootDirectory,
+    fetchImpl: options.fetchImpl,
+    developmentServer: options.developmentServer
+  });
+  backup.start();
   let attachmentCleanupChain = Promise.resolve();
   const cleanupAttachments = (): Promise<void> => {
     const cleanup = attachmentCleanupChain.then(async () => {
@@ -972,7 +1012,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   const captcha = new ImageCaptchaService({ revealAnswer: options.revealCaptchaAnswer === true });
   const ai = new AiManager(
     store,
-    new CredentialVault(options.masterSecret),
+    vault,
     options.fetchImpl ?? fetch,
     options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined,
     (task, actor) => {
@@ -2065,6 +2105,41 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const query = parse(aiUsageQuerySchema, request.query);
     data(response, ai.getWorkTokenUsage(request.params.workId, query.timezoneOffset));
   });
+
+  app.get("/api/platform/backup/settings", (request, response) => {
+    requireAdmin(request);
+    data(response, backup.getSettings());
+  });
+  app.patch("/api/platform/backup/settings", (request, response) => {
+    requireAdmin(request);
+    data(response, backup.updateSettings(parse(backupSettingsSchema, request.body)));
+  });
+  app.get("/api/platform/backup/targets", (request, response) => {
+    requireAdmin(request);
+    data(response, backup.listTargets());
+  });
+  app.post("/api/platform/backup/targets", (request, response) => {
+    requireAdmin(request);
+    data(response, backup.createTarget(parse(backupTargetSchema, request.body)), 201);
+  });
+  app.get("/api/platform/backup/targets/:targetId", (request, response) => {
+    requireAdmin(request);
+    data(response, backup.getTarget(request.params.targetId));
+  });
+  app.patch("/api/platform/backup/targets/:targetId", (request, response) => {
+    requireAdmin(request);
+    data(response, backup.updateTarget(request.params.targetId, parse(backupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/targets/:targetId", (request, response) => {
+    requireAdmin(request);
+    backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/run", async (request, response) => {
+    requireAdmin(request);
+    data(response, await backup.runNow());
+  });
+
   app.get("/api/works/:workId/ai-settings/relationship-search-index", (request, response) => {
     data(response, ai.getRelationshipSearchIndexStatus(request.params.workId));
   });
@@ -2574,8 +2649,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, backup, auth, attachmentStorage, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.stop();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });

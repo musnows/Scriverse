@@ -3373,6 +3373,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#platform-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3749,6 +3750,190 @@ async function openPlatformUiSettingsDialog() {
     toast(error.message, "error");
   }
 }
+
+async function openPlatformBackupDialog() {
+  if (state.user?.role !== "admin") {
+    toast("需要系统管理员权限", "error");
+    return;
+  }
+  try {
+    const [settings, targets] = await Promise.all([
+      api("/api/platform/backup/settings"),
+      api("/api/platform/backup/targets")
+    ]);
+    renderPlatformBackupSettings(settings);
+    renderPlatformBackupTargets(targets);
+    hidePlatformBackupTargetEditor();
+    $("#platform-backup-dialog").showModal();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+function renderPlatformBackupSettings(settings) {
+  $("#backup-schedule-hour").value = String(settings.scheduleHour ?? 3);
+  $("#backup-schedule-minute").value = String(settings.scheduleMinute ?? 0);
+  $("#backup-retention").value = String(settings.backupRetention ?? 10);
+}
+
+function renderPlatformBackupTargets(targets) {
+  const list = $("#platform-backup-target-list");
+  if (!Array.isArray(targets) || targets.length === 0) {
+    list.innerHTML = '<p class="empty-state">尚未配置 S3 备份目标。</p>';
+    return;
+  }
+  list.innerHTML = targets.map((target) => `
+    <article class="platform-backup-target-row" data-backup-target-id="${esc(target.id)}">
+      <div class="platform-backup-target-copy">
+        <strong>${esc(target.name)}</strong>
+        <small>${esc(target.endpoint)} · ${esc(target.bucket)}${target.prefix ? `/${esc(target.prefix)}` : ""} · ${target.backupImages ? "含图片" : "仅数据库"} · ${target.enabled ? "已启用" : "已停用"}</small>
+        ${target.lastError ? `<small class="backup-target-error">上次失败：${esc(target.lastError)}</small>` : `<small>上次状态：${esc(target.lastStatus)}${target.lastSuccessAt ? ` · ${esc(target.lastSuccessAt)}` : ""}</small>`}
+      </div>
+      <div class="platform-backup-target-actions">
+        <button type="button" data-backup-target-edit="${esc(target.id)}">编辑</button>
+        <button type="button" data-backup-target-delete="${esc(target.id)}">删除</button>
+      </div>
+    </article>
+  `).join("");
+  list.querySelectorAll("[data-backup-target-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = targets.find((item) => item.id === button.dataset.backupTargetEdit);
+      if (target) showPlatformBackupTargetEditor(target);
+    });
+  });
+  list.querySelectorAll("[data-backup-target-delete]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetId = button.dataset.backupTargetDelete;
+      if (targetId) deletePlatformBackupTarget(targetId);
+    });
+  });
+}
+
+function showPlatformBackupTargetEditor(target = null) {
+  const form = $("#platform-backup-target-form");
+  form.classList.remove("hidden");
+  form.dataset.targetId = target?.id ?? "";
+  form.reset();
+  $("#backup-target-region").value = "us-east-1";
+  $("#backup-target-images").checked = true;
+  $("#backup-target-enabled").checked = true;
+  $("#backup-target-secret-key").required = !target;
+  $("#backup-target-secret-key").placeholder = target ? "留空则不修改" : "";
+  $("#platform-backup-target-save").textContent = target ? "保存修改" : "保存目标";
+  if (target) {
+    $("#backup-target-name").value = target.name ?? "";
+    $("#backup-target-endpoint").value = target.endpoint ?? "";
+    $("#backup-target-region").value = target.region ?? "us-east-1";
+    $("#backup-target-bucket").value = target.bucket ?? "";
+    $("#backup-target-prefix").value = target.prefix ?? "";
+    $("#backup-target-access-key-id").value = target.accessKeyId ?? "";
+    $("#backup-target-images").checked = target.backupImages !== false;
+    $("#backup-target-enabled").checked = target.enabled !== false;
+  }
+}
+
+function hidePlatformBackupTargetEditor() {
+  const form = $("#platform-backup-target-form");
+  form.classList.add("hidden");
+  form.dataset.targetId = "";
+}
+
+async function savePlatformBackupSettings(event) {
+  event.preventDefault();
+  const button = $("#platform-backup-settings-save");
+  button.disabled = true;
+  try {
+    const updated = await api("/api/platform/backup/settings", {
+      method: "PATCH",
+      body: {
+        scheduleHour: Number($("#backup-schedule-hour").value),
+        scheduleMinute: Number($("#backup-schedule-minute").value),
+        backupRetention: Number($("#backup-retention").value)
+      }
+    });
+    renderPlatformBackupSettings(updated);
+    toast("备份定时设置已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function savePlatformBackupTarget(event) {
+  event.preventDefault();
+  const form = $("#platform-backup-target-form");
+  const targetId = form.dataset.targetId;
+  const body = {
+    name: $("#backup-target-name").value.trim(),
+    endpoint: $("#backup-target-endpoint").value.trim(),
+    region: $("#backup-target-region").value.trim() || "us-east-1",
+    bucket: $("#backup-target-bucket").value.trim(),
+    prefix: $("#backup-target-prefix").value.trim(),
+    accessKeyId: $("#backup-target-access-key-id").value.trim(),
+    backupImages: $("#backup-target-images").checked,
+    enabled: $("#backup-target-enabled").checked
+  };
+  const secret = $("#backup-target-secret-key").value;
+  if (secret) body.secretAccessKey = secret;
+  const button = $("#platform-backup-target-save");
+  button.disabled = true;
+  try {
+    if (targetId) {
+      await api(`/api/platform/backup/targets/${encodeURIComponent(targetId)}`, { method: "PATCH", body });
+      toast("备份目标已更新");
+    } else {
+      await api("/api/platform/backup/targets", { method: "POST", body });
+      toast("备份目标已创建");
+    }
+    hidePlatformBackupTargetEditor();
+    renderPlatformBackupTargets(await api("/api/platform/backup/targets"));
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deletePlatformBackupTarget(targetId) {
+  const confirmed = await confirmToast("确认删除该 S3 备份目标？删除后不会影响已上传的备份文件。", {
+    title: "删除备份目标",
+    confirmLabel: "确认删除"
+  });
+  if (!confirmed) return;
+  try {
+    await api(`/api/platform/backup/targets/${encodeURIComponent(targetId)}`, { method: "DELETE" });
+    toast("备份目标已删除");
+    renderPlatformBackupTargets(await api("/api/platform/backup/targets"));
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function runPlatformBackupNow() {
+  const button = $("#platform-backup-run-now");
+  button.disabled = true;
+  try {
+    const results = await api("/api/platform/backup/run", { method: "POST", body: {} });
+    renderPlatformBackupTargets(await api("/api/platform/backup/targets"));
+    const items = results || [];
+    if (items.length === 0) {
+      toast("没有启用的备份目标", "error");
+      return;
+    }
+    const failed = items.filter((item) => item && item.ok === false);
+    if (failed.length > 0) {
+      toast(`备份完成，但有 ${failed.length} 个目标失败：${failed.map((item) => item.name).join("、")}`, "error");
+    } else {
+      toast("备份已完成");
+    }
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 
 function renderMemberPermissionGrid(value) {
   const permissions = normalizeModulePermissions(value, "custom");
@@ -11343,6 +11528,16 @@ $("#work-audit-load-more").addEventListener("click", () => {
   if (workAuditNextPage !== null) loadWorkAuditPage(workAuditNextPage, true).catch((error) => toast(error.message, "error"));
 });
 $("#platform-ui-settings-button").addEventListener("click", openPlatformUiSettingsDialog);
+  $("#platform-backup-button").addEventListener("click", openPlatformBackupDialog);
+  $("#platform-backup-close").addEventListener("click", () => $("#platform-backup-dialog").close());
+  $("#platform-backup-return").addEventListener("click", () => returnToSettingsHub("#platform-backup-button", "#platform-backup-dialog").catch((error) => toast(error.message, "error")));
+  $("#platform-backup-settings-cancel").addEventListener("click", () => $("#platform-backup-dialog").close());
+  $("#platform-backup-settings-form").addEventListener("submit", savePlatformBackupSettings);
+  $("#platform-backup-add-target").addEventListener("click", () => showPlatformBackupTargetEditor());
+  $("#platform-backup-target-cancel").addEventListener("click", hidePlatformBackupTargetEditor);
+  $("#platform-backup-target-form").addEventListener("submit", savePlatformBackupTarget);
+  $("#platform-backup-run-now").addEventListener("click", runPlatformBackupNow);
+
 $("#collaboration-button").addEventListener("click", () => openMembersDialog());
 $("#presence-button").addEventListener("click", () => {
   const panel = $("#presence-panel");
