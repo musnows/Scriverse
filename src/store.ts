@@ -53,7 +53,20 @@ type WorkListBatch = {
 };
 
 const WORK_LIST_BATCH_SIZE = 500;
+const ENTITY_LIST_BATCH_SIZE = 400;
 export const RECYCLE_BIN_RETENTION_DAYS = 30;
+
+type OrganizationMemberSummary = {
+  characterId: string;
+  name: string;
+  role: string;
+  note: string;
+};
+
+type OrganizationListBatch = {
+  members: Map<string, OrganizationMemberSummary[]>;
+  versions: Map<string, number>;
+};
 
 function recycleBinExpiresAt(deletedAt: string): string {
   return new Date(new Date(deletedAt).getTime() + RECYCLE_BIN_RETENTION_DAYS * 24 * 60 * 60_000).toISOString();
@@ -763,6 +776,22 @@ export class Store {
       entityId
     );
     return numberValue(row ?? {}, "version_no");
+  }
+
+  private currentEntityVersionNos(type: VersionedEntityType, entityIds: string[]): Map<string, number> {
+    const versions = new Map<string, number>();
+    for (let offset = 0; offset < entityIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+      const batchIds = entityIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      const rows = this.db.all(
+        `SELECT entity_id, MAX(version_no) AS version_no FROM entity_versions
+         WHERE entity_type = ? AND entity_id IN (${placeholders}) GROUP BY entity_id`,
+        type,
+        ...batchIds
+      );
+      for (const row of rows) versions.set(requiredString(row, "entity_id"), numberValue(row, "version_no"));
+    }
+    return versions;
   }
 
   private currentChapterVersionNo(chapterId: string): number {
@@ -5279,14 +5308,17 @@ export class Store {
 
   listOrganizations(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapOrganization(row, includeMarkdown));
+    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId);
+    const batch = this.organizationListBatch(rows);
+    return rows.map((row) => this.mapOrganization(row, includeMarkdown, batch));
   }
 
   listOrganizationsPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown)), pagination);
+    const batch = this.organizationListBatch(rows);
+    return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown, batch)), pagination);
   }
 
   getOrganization(organizationId: string): Record<string, unknown> {
@@ -5412,23 +5444,57 @@ export class Store {
     return { mergeId, target: this.getOrganization(targetOrganizationId), source };
   }
 
-  private mapOrganization(row: Row, includeMarkdown = true): Record<string, unknown> {
+  private organizationListBatch(rows: Row[]): OrganizationListBatch {
+    const organizationIds = rows.map((row) => requiredString(row, "id"));
+    const batch: OrganizationListBatch = {
+      members: new Map(),
+      versions: this.currentEntityVersionNos("organization", organizationIds)
+    };
+    for (let offset = 0; offset < organizationIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+      const batchIds = organizationIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      const members = this.db.all(
+        `SELECT m.organization_id, c.id, c.name, m.role, m.note
+         FROM character_organization_memberships m
+         JOIN characters c ON c.id = m.character_id
+         WHERE m.organization_id IN (${placeholders}) ORDER BY m.organization_id, c.name`,
+        ...batchIds
+      );
+      for (const member of members) {
+        const organizationId = requiredString(member, "organization_id");
+        const grouped = batch.members.get(organizationId) ?? [];
+        grouped.push({
+          characterId: requiredString(member, "id"),
+          name: requiredString(member, "name"),
+          role: requiredString(member, "role"),
+          note: requiredString(member, "note")
+        });
+        batch.members.set(organizationId, grouped);
+      }
+    }
+    return batch;
+  }
+
+  private mapOrganization(row: Row, includeMarkdown = true, batch?: OrganizationListBatch): Record<string, unknown> {
+    const organizationId = requiredString(row, "id");
     const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
     const settings = settingsFromKnowledgeSections(settingsSections);
-    const members = this.db.all(
-      `SELECT c.id, c.name, m.role, m.note
-       FROM character_organization_memberships m
-       JOIN characters c ON c.id = m.character_id
-       WHERE m.organization_id = ? ORDER BY c.name`,
-      requiredString(row, "id")
-    ).map((member) => ({
-      characterId: requiredString(member, "id"),
-      name: requiredString(member, "name"),
-      role: requiredString(member, "role"),
-      note: requiredString(member, "note")
-    }));
+    const members = batch
+      ? batch.members.get(organizationId) ?? []
+      : this.db.all(
+        `SELECT c.id, c.name, m.role, m.note
+         FROM character_organization_memberships m
+         JOIN characters c ON c.id = m.character_id
+         WHERE m.organization_id = ? ORDER BY c.name`,
+        organizationId
+      ).map((member) => ({
+        characterId: requiredString(member, "id"),
+        name: requiredString(member, "name"),
+        role: requiredString(member, "role"),
+        note: requiredString(member, "note")
+      }));
     return {
-      id: requiredString(row, "id"),
+      id: organizationId,
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
@@ -5438,7 +5504,7 @@ export class Store {
         : { settings: [], settingsCount: settingsSections.length }),
       memberIds: members.map((member) => member.characterId),
       members,
-      versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),
+      versionNo: batch ? batch.versions.get(organizationId) ?? 0 : this.currentEntityVersionNo("organization", organizationId),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
