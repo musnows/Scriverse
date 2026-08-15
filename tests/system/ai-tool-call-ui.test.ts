@@ -40,9 +40,9 @@ describe("AI 工具调用记录界面", () => {
     expect(application).toContain("details.open = !completed");
     expect(application).toContain("if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime())");
     expect(application).toContain('title.textContent = completed ? "思考与执行过程" : "正在思考与执行"');
-    expect(application).toContain("function scrollAiFeedToBottom()");
+    expect(application).toContain('function scrollAiFeedToBottom(feed = $("#ai-feed"))');
     expect(application).toContain("window.requestAnimationFrame(() =>");
-    expect(application.match(/scrollAiFeedToBottom\(\);/gu)?.length).toBeGreaterThanOrEqual(7);
+    expect(application.match(/scrollAiFeedToBottom\(feed\);/gu)?.length).toBeGreaterThanOrEqual(7);
     expect(application).toContain('return "历史记录未保存"');
     expect(application).toContain('new Intl.DateTimeFormat("zh-CN"');
     expect(application).toContain('formatAiToolCallResult(toolCall?.result)');

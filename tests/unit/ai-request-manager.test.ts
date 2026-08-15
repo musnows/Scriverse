@@ -67,4 +67,33 @@ describe("AI 请求生命周期", () => {
     expect(request.signal.aborted).toBe(true);
     expect(manager.cancel("重复取消")).toBe(false);
   });
+
+  it("允许不同页签的请求并发且互不取消", () => {
+    const manager = createAiRequestManager();
+    const first = manager.begin({ tabId: "tab-a", workId: "work-a", conversationId: "conversation-a" });
+    const second = manager.begin({ tabId: "tab-b", workId: "work-a", conversationId: "conversation-b" });
+
+    expect(manager.isCurrent(first)).toBe(true);
+    expect(manager.isCurrent(second)).toBe(true);
+    expect(manager.hasActive("tab-a")).toBe(true);
+    expect(manager.hasActive("tab-b")).toBe(true);
+    expect(first.signal.aborted).toBe(false);
+    expect(second.signal.aborted).toBe(false);
+
+    expect(manager.cancel("关闭页签", "tab-a")).toBe(true);
+    expect(first.signal.aborted).toBe(true);
+    expect(second.signal.aborted).toBe(false);
+    expect(manager.isCurrent(second)).toBe(true);
+  });
+
+  it("可以一次取消作品下的全部页签请求", () => {
+    const manager = createAiRequestManager();
+    const first = manager.begin({ tabId: "tab-a", workId: "work-a" });
+    const second = manager.begin({ tabId: "tab-b", workId: "work-a" });
+
+    expect(manager.cancelAll("切换作品")).toBe(2);
+    expect(first.signal.aborted).toBe(true);
+    expect(second.signal.aborted).toBe(true);
+    expect(manager.hasActive()).toBe(false);
+  });
 });
