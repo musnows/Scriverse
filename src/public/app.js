@@ -551,7 +551,10 @@ function cancelActiveAiRequest(reason) {
   return cancelled;
 }
 
-function beginAiConversationNavigation(reason) {
+function beginAiConversationNavigation(reason, action = "切换会话") {
+  if (aiRequestManager.hasActive()) {
+    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+  }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = aiConversationNavigationGeneration;
   const navigation = Object.freeze({
@@ -574,7 +577,10 @@ function finishAiConversationNavigation(navigation) {
   return true;
 }
 
-function invalidateAiConversationNavigation(reason) {
+function invalidateAiConversationNavigation(reason, action = "切换作品") {
+  if (aiRequestManager.hasActive()) {
+    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+  }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = null;
   cancelActiveAiRequest(reason);
@@ -2418,7 +2424,7 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   if (!state.work) return null;
-  const navigation = beginAiConversationNavigation("已切换 AI 对话");
+  const navigation = beginAiConversationNavigation("已切换 AI 对话", "切换会话");
   try {
     const parameters = new URLSearchParams({ page: "1", limit: "100" });
     if (focusMessageId) parameters.set("messageId", String(focusMessageId));
@@ -2488,7 +2494,7 @@ function applyNewAiConversation(conversation) {
 
 async function createNewAiConversation(taskType = "chat") {
   if (!state.work) return null;
-  const navigation = beginAiConversationNavigation("已新建 AI 对话");
+  const navigation = beginAiConversationNavigation("已新建 AI 对话", "新建会话");
   try {
     const conversation = await api(`/api/works/${navigation.workId}/ai-conversations`, { method: "POST", body: { taskType } });
     if (!isAiConversationNavigationCurrent(navigation)) return null;
@@ -16348,6 +16354,11 @@ document.addEventListener("click", (event) => {
 window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
+  if (aiRequestManager.hasActive()) {
+    toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
+    event.preventDefault();
+    event.returnValue = "";
+  }
 });
 window.addEventListener("online", () => {
   updateSystemHealth({ status: "checking" });
