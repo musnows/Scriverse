@@ -4282,20 +4282,31 @@ export class Store {
     ).map((item) => this.mapForeshadowOccurrence(item));
     const status = requiredString(row, "status");
     const plannedPayoffChapterId = optionalString(row, "planned_payoff_chapter_id");
+    const overdue = Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
+      && this.chapterSequence(workId, plannedPayoffChapterId) < this.chapterSequence(workId, currentChapterId));
+    return this.mapForeshadow(row, occurrences, this.currentEntityVersionNo("foreshadow", foreshadowId), overdue);
+  }
+
+  private mapForeshadow(
+    row: Row,
+    occurrences: Record<string, unknown>[],
+    versionNo: number,
+    overdue: boolean
+  ): Record<string, unknown> {
+    const status = requiredString(row, "status");
     return {
       id: requiredString(row, "id"),
-      workId,
+      workId: requiredString(row, "work_id"),
       title: requiredString(row, "title"),
       description: requiredString(row, "description"),
       status,
       importance: requiredString(row, "importance"),
-      plannedPayoffChapterId,
+      plannedPayoffChapterId: optionalString(row, "planned_payoff_chapter_id"),
       resolutionNote: requiredString(row, "resolution_note"),
       unresolved: status === "planned" || status === "planted",
-      overdue: Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
-        && this.chapterSequence(workId, plannedPayoffChapterId) < this.chapterSequence(workId, currentChapterId)),
+      overdue,
       occurrences,
-      versionNo: this.currentEntityVersionNo("foreshadow", foreshadowId),
+      versionNo,
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -4307,11 +4318,12 @@ export class Store {
     const where = status === "unresolved"
       ? "AND status IN ('planned', 'planted')"
       : status === "resolved" ? "AND status IN ('resolved', 'abandoned')" : "";
-    return this.db.all(
-      `SELECT id FROM foreshadows WHERE work_id = ? ${where}
+    const rows = this.db.all(
+      `SELECT * FROM foreshadows WHERE work_id = ? ${where}
        ORDER BY CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at`,
       workId
-    ).map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId));
+    );
+    return this.mapForeshadowList(rows, currentChapterId);
   }
 
   listForeshadowsPage(workId: string, pagination: Pagination, status: "all" | "unresolved" | "resolved" = "all", currentChapterId?: string): PaginatedResult<Record<string, unknown>> {
@@ -4322,12 +4334,78 @@ export class Store {
       : status === "resolved" ? "AND status IN ('resolved', 'abandoned')" : "";
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT id FROM foreshadows WHERE work_id = ? ${where}
+      `SELECT * FROM foreshadows WHERE work_id = ? ${where}
        ORDER BY CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at${page.sql}`,
       workId,
       ...page.params
     );
-    return paginated(rows.map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId)), pagination);
+    return paginated(this.mapForeshadowList(rows, currentChapterId), pagination);
+  }
+
+  private mapForeshadowList(rows: Row[], currentChapterId?: string): Record<string, unknown>[] {
+    if (rows.length === 0) return [];
+    const foreshadowIds = rows.map((row) => requiredString(row, "id"));
+    const batch = {
+      occurrences: new Map<string, Record<string, unknown>[]>(),
+      versions: this.currentEntityVersionNos("foreshadow", foreshadowIds),
+      chapterSequences: new Map<string, number>()
+    };
+    for (let offset = 0; offset < foreshadowIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+      const batchIds = foreshadowIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      const occurrences = this.db.all(
+        `SELECT fo.*, c.title AS chapter_title, c.volume_id, c.sort_order AS chapter_order,
+         v.title AS volume_title, v.sort_order AS volume_order
+         FROM foreshadow_occurrences fo
+         JOIN chapters c ON c.id = fo.chapter_id
+         JOIN volumes v ON v.id = c.volume_id
+         WHERE fo.foreshadow_id IN (${placeholders})
+         ORDER BY fo.foreshadow_id, v.sort_order, c.sort_order, fo.created_at`,
+        ...batchIds
+      );
+      for (const occurrence of occurrences) {
+        const foreshadowId = requiredString(occurrence, "foreshadow_id");
+        const grouped = batch.occurrences.get(foreshadowId) ?? [];
+        grouped.push(this.mapForeshadowOccurrence(occurrence));
+        batch.occurrences.set(foreshadowId, grouped);
+      }
+    }
+    if (currentChapterId) {
+      const chapterIds = [...new Set([
+        currentChapterId,
+        ...rows.map((row) => optionalString(row, "planned_payoff_chapter_id")).filter((chapterId): chapterId is string => Boolean(chapterId))
+      ])];
+      for (let offset = 0; offset < chapterIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+        const batchIds = chapterIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+        const placeholders = batchIds.map(() => "?").join(", ");
+        const sequences = this.db.all(
+          `SELECT c.id, v.sort_order * 1000000 + c.sort_order AS sequence
+           FROM chapters c JOIN volumes v ON v.id = c.volume_id
+           WHERE c.id IN (${placeholders}) AND c.work_id = ?`,
+          ...batchIds,
+          requiredString(rows[0] ?? {}, "work_id")
+        );
+        for (const sequence of sequences) {
+          batch.chapterSequences.set(requiredString(sequence, "id"), numberValue(sequence, "sequence"));
+        }
+      }
+    }
+    const currentChapterSequence = currentChapterId
+      ? batch.chapterSequences.get(currentChapterId) ?? Number.MAX_SAFE_INTEGER
+      : Number.MAX_SAFE_INTEGER;
+    return rows.map((row) => {
+      const foreshadowId = requiredString(row, "id");
+      const status = requiredString(row, "status");
+      const plannedPayoffChapterId = optionalString(row, "planned_payoff_chapter_id");
+      const overdue = Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
+        && (batch.chapterSequences.get(plannedPayoffChapterId) ?? Number.MAX_SAFE_INTEGER) < currentChapterSequence);
+      return this.mapForeshadow(
+        row,
+        batch.occurrences.get(foreshadowId) ?? [],
+        batch.versions.get(foreshadowId) ?? 0,
+        overdue
+      );
+    });
   }
 
   listChapterForeshadowReminders(workId: string, chapterId: string): Record<string, unknown>[] {
