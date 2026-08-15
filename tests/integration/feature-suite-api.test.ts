@@ -823,6 +823,27 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
       versions: runtime.database.get("SELECT COUNT(*) AS count FROM entity_versions")?.count
     }).toEqual(beforeRead);
 
+    const sortedPayoffA = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "潮门密钥",
+      status: "planned",
+      plannedPayoffChapterId: chapters[2].id
+    }).expect(201);
+    const sortedPayoffB = await request(runtime.app).post(`/api/works/${workId}/foreshadows`).send({
+      title: "港口暗号",
+      status: "planted",
+      plannedPayoffChapterId: chapters[2].id
+    }).expect(201);
+    const sorted = await request(runtime.app).get(`/api/works/${workId}/outline-board?sort=foreshadows`).expect(200);
+    expect(sorted.body.data.volumes[0].chapters.map((chapter: { id: string }) => chapter.id)).toEqual([
+      chapters[2].id,
+      chapters[0].id,
+      chapters[1].id
+    ]);
+    expect(sorted.body.data.volumes[0].chapters[0].foreshadows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: sortedPayoffA.body.data.id, roles: [], plannedPayoff: true }),
+      expect.objectContaining({ id: sortedPayoffB.body.data.id, roles: [], plannedPayoff: true })
+    ]));
+
     const otherWork = await seedWork(runtime, "隔离作品大纲");
     await request(runtime.app).put(`/api/chapters/${otherWork.chapters[0].id}/outline`).send({ goal: "CROSS_WORK_OUTLINE_SECRET" }).expect(200);
     const isolated = await request(runtime.app).get(`/api/works/${workId}/outline-board`).expect(200);

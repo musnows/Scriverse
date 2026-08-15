@@ -313,6 +313,10 @@
 .is-scrollbar-visible { scrollbar-color: var(--muted) transparent; }
 .is-scrollbar-visible::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--muted); }
 
+/* 普通界面不产生文本选区；正文、预览和编辑控件保留必要的文本操作。 */
+body { user-select: none; }
+body :is(input, textarea, select, [contenteditable="true"], .reader-content, .message-body, .record-markdown-preview, .knowledge-markdown-block, .vditor-reset, pre, code) { user-select: text; }
+
 html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -2412,8 +2416,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-history-item { display: grid; gap: 5px; width: 100%; min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); text-align: left; }
 .ai-history-item:hover { border-color: var(--accent); background: var(--paper-deep); }
 .ai-history-item.is-active { border-color: color-mix(in srgb, var(--accent) 58%, var(--line)); background: var(--row-active); box-shadow: inset 3px 0 var(--accent); }
+.ai-history-title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .ai-history-item strong, .ai-history-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-history-title-row strong { min-width: 0; }
 .ai-history-item strong { font-size: 14px; font-weight: 600; }.ai-history-item small { color: var(--muted); font-size: 10px; }
+.ai-history-favorite { flex: 0 0 auto; padding: 2px 5px; border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--line)); border-radius: 3px; color: var(--accent-dark) !important; font: 9px/1.2 var(--font-cjk), sans-serif; }
 .ai-history-more { align-self: stretch; width: 38px; min-width: 38px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--muted); font: 17px/1 var(--font-latin), monospace; letter-spacing: 1px; }
 .ai-history-more:hover, .ai-history-more:focus-visible, .ai-history-more[aria-expanded="true"] { border-color: var(--accent); background: var(--paper-deep); color: var(--accent-dark); }
 .ai-history-empty { margin: 0; padding: 48px 12px; color: var(--muted); font-size: 12px; text-align: center; }
