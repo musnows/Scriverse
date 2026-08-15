@@ -1871,7 +1871,7 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId) {
+  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
