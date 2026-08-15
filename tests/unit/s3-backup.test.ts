@@ -5,6 +5,7 @@ import {
   nextBackupScheduleDelay,
   normalizeS3BackupPrefix,
   s3BackupTargetLogFields,
+  s3UsesVirtualHostedStyle,
   selectS3BackupRetentionDeletes,
   splitS3BackupLogText
 } from "../../src/s3-backup.js";
@@ -92,5 +93,13 @@ describe("S3 备份纯函数", () => {
     expect(chunks.bodyPart2).toHaveLength(3_000);
     expect(chunks.bodyPart3).toHaveLength(1_500);
     expect(`${chunks.bodyPart1}${chunks.bodyPart2}${chunks.bodyPart3}`).toBe(body);
+  });
+
+  it("AWS 终端使用虚拟主机风格，自定义 S3 兼容服务保持路径风格", () => {
+    expect(s3UsesVirtualHostedStyle("https://s3.amazonaws.com", "my-bucket")).toBe(true);
+    expect(s3UsesVirtualHostedStyle("https://s3.us-east-1.amazonaws.com", "my-bucket")).toBe(true);
+    expect(s3UsesVirtualHostedStyle("https://s3.amazonaws.com", "my.bucket")).toBe(false);
+    expect(s3UsesVirtualHostedStyle("https://s3.example.com", "my-bucket")).toBe(false);
+    expect(s3UsesVirtualHostedStyle("http://127.0.0.1:9000", "my-bucket")).toBe(false);
   });
 });

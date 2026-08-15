@@ -91,6 +91,12 @@ function awsUriEncode(value: string): string {
   ));
 }
 
+export function s3UsesVirtualHostedStyle(endpoint: string, bucket: string): boolean {
+  if (bucket.includes(".")) return false;
+  const hostname = new URL(endpoint).hostname.toLocaleLowerCase();
+  return hostname === "s3.amazonaws.com" || /^s3[.-][a-z0-9-]+\.amazonaws\.com$/u.test(hostname);
+}
+
 function sha256(value: Buffer | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -181,9 +187,16 @@ class S3Client {
     const endpointPath = this.endpoint.pathname.replace(/\/+$/u, "");
     const encodedBucket = awsUriEncode(this.target.bucket);
     const encodedKey = key ? key.split("/").map((segment) => awsUriEncode(segment)).join("/") : "";
-    const pathname = `${endpointPath}/${encodedBucket}/${encodedKey}`;
+    const virtualHostedStyle = s3UsesVirtualHostedStyle(this.target.endpoint, this.target.bucket);
     const url = new URL(this.endpoint.href);
-    url.pathname = pathname || "/";
+    if (virtualHostedStyle) {
+      url.hostname = `${this.target.bucket}.${this.endpoint.hostname}`;
+      url.port = this.endpoint.port;
+      url.pathname = `${endpointPath}/${encodedKey}` || "/";
+    } else {
+      const pathname = `${endpointPath}/${encodedBucket}/${encodedKey}`;
+      url.pathname = pathname || "/";
+    }
     const queryPairs = Object.entries(options.query ?? {})
       .map(([name, value]) => [awsUriEncode(name), awsUriEncode(value)] as const)
       .sort(([leftName, leftValue], [rightName, rightValue]) => (
