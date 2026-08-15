@@ -15,7 +15,7 @@ describe("AI 流式请求快照", () => {
     expect(application).toContain("signal: request.signal");
     expect(application).toContain("request.conversationId,\n          \"assistant\"");
     expect(application).toContain("requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id })");
-    expect(page).toContain('/app.js?v=20260816-provider-max-token-parameter-v1');
+    expect(page).toContain('/app.js?v=20260816-provider-max-token-parameter-v2');
   });
 
   it("页签切换保留旧流，作品切换会取消全部流并拒绝过期回调", async () => {

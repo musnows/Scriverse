@@ -12,7 +12,7 @@ describe("角色抽取结果入库预览界面", () => {
     ]);
 
     expect(page).toContain('/styles.css?v=20260816-novel-tree-indent-v1');
-    expect(page).toContain('/app.js?v=20260816-provider-max-token-parameter-v1');
+    expect(page).toContain('/app.js?v=20260816-provider-max-token-parameter-v2');
     expect(application).toContain("function renderCharacterExtractionPreview(task, result)");
     expect(application).toContain("function renderCharacterExtractionEditor(preview)");
     expect(application).toContain("function bindCharacterExtractionEditor(container, taskId)");

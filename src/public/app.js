@@ -14156,15 +14156,14 @@ function openProviderDialog(item) {
   const protocolSelect = $("#dialog-fields select[name='protocol']");
   const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
   const credentialHost = $("#dialog-fields [data-provider-credential-field]");
+  const maxTokensParameterFieldElement = $("#dialog-fields [data-provider-max-tokens-parameter-field]");
   const maxTokensParameterInput = $("#dialog-fields input[name='useMaxCompletionTokens']");
-  const maxTokensParameterHint = $("#dialog-fields [data-provider-max-tokens-parameter-hint]");
   const syncMaxTokensParameter = () => {
     const anthropic = protocolSelect.value === "anthropic-messages";
+    maxTokensParameterFieldElement.hidden = anthropic;
+    maxTokensParameterFieldElement.classList.toggle("hidden", anthropic);
     maxTokensParameterInput.disabled = anthropic;
     if (anthropic) maxTokensParameterInput.checked = false;
-    maxTokensParameterHint.textContent = anthropic
-      ? "Anthropic Messages 官方接口使用 max_tokens，不能切换。"
-      : "默认使用 max_tokens；OpenAI 新版模型可按需切换。";
   };
   const syncProviderCredentialField = () => {
     const nextProtocol = protocolSelect.value;
