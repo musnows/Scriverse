@@ -13087,10 +13087,10 @@ function openReviewDialog() {
 }
 
 async function openTaskDialog() {
-  const volumeOptions = state.work.volumes.map((volume) => ({ id: String(volume.id), title: String(volume.title) }));
   const chapterOptions = state.work.volumes.flatMap((volume) => volume.chapters.map((chapter) => ({
     id: String(chapter.id),
     title: String(chapter.title),
+    volumeId: String(volume.id),
     volumeTitle: String(volume.title),
     chapterType: String(chapter.chapterType || "正文")
   })));
@@ -13109,26 +13109,34 @@ async function openTaskDialog() {
     toast(`分析任务配置加载失败：${error.message}`, "error");
     return;
   }
-  const taskScopePicker = (kind, label, options, emptyLabel) => {
-    const inputName = kind === "chapter" ? "chapterIds" : "volumeIds";
-    const countLabel = kind === "chapter" ? "章" : "卷";
+  const taskScopePicker = (options, emptyLabel) => {
+    const kind = "chapter";
+    const label = "章节";
+    const inputName = "chapterIds";
     const renderOption = (item) => `<label class="task-scope-option" data-task-scope-search-name="${esc(`${item.title} ${item.volumeTitle ?? ""}`.toLocaleLowerCase())}">
       <input type="checkbox" name="${inputName}" value="${esc(item.id)}" data-task-scope-input="${kind}" data-task-scope-title="${esc(item.title)}" data-task-scope-subtitle="${esc(item.volumeTitle ?? "")}">
       <span class="task-scope-checkbox" aria-hidden="true"></span>
       <span class="task-scope-option-copy"><strong>${esc(item.title)}</strong>${item.volumeTitle ? `<small>${esc(item.volumeTitle)}${item.chapterType && item.chapterType !== "正文" ? ` · ${esc(item.chapterType)}` : ""}</small>` : ""}</span>
     </label>`;
-    const optionMarkup = kind === "chapter"
-      ? [...options.reduce((groups, item) => {
+    const optionMarkup = [...options.reduce((groups, item) => {
+        const groupId = String(item.volumeId || "");
         const groupTitle = String(item.volumeTitle || "未分卷章节");
-        const group = groups.get(groupTitle) ?? [];
+        const groupKey = `${groupId}:${groupTitle}`;
+        const group = groups.get(groupKey)?.options ?? [];
         group.push(item);
-        groups.set(groupTitle, group);
+        groups.set(groupKey, { id: groupId, title: groupTitle, options: group });
         return groups;
-      }, new Map())].map(([groupTitle, groupOptions]) => `<section class="task-scope-volume-group" data-task-scope-group>
-        <header><strong>${esc(groupTitle)}</strong><span>${groupOptions.length} 章</span></header>
-        ${groupOptions.map(renderOption).join("")}
-      </section>`).join("")
-      : options.map(renderOption).join("");
+      }, new Map())].map(([, group]) => `<section class="task-scope-volume-group" data-task-scope-group data-task-scope-volume-id="${esc(group.id)}">
+        <header>
+          ${group.id ? `<label class="task-scope-volume-option">
+            <input type="checkbox" data-task-scope-volume-input="${esc(group.id)}" data-task-scope-volume-title="${esc(group.title)}" aria-label="全选${esc(group.title)}章节">
+            <span class="task-scope-checkbox" aria-hidden="true"></span>
+            <span class="task-scope-volume-copy"><strong>${esc(group.title)}</strong><small>勾选以全选本卷章节</small></span>
+          </label>` : `<strong>${esc(group.title)}</strong>`}
+          <span>${group.options.length} 章</span>
+        </header>
+        ${group.options.map(renderOption).join("")}
+      </section>`).join("");
     return `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
       <div class="task-scope-field-heading"><span id="task-${kind}-label">${esc(label)}（可多选）</span><small>从左侧选择，右侧确认已选内容</small></div>
       <div class="task-scope-picker">
@@ -13147,15 +13155,15 @@ async function openTaskDialog() {
           </div>
           <div class="task-scope-panel-grid">
             <section class="task-scope-available" aria-label="待选${esc(label)}">
-              <header class="task-scope-panel-section-header"><strong>待选${esc(label)}</strong><span data-task-scope-available-count="${kind}">${options.length} ${countLabel}</span></header>
+              <header class="task-scope-panel-section-header"><strong>待选章节</strong><span data-task-scope-available-count="${kind}">${options.length} 章</span></header>
               <label class="task-scope-search"><span>筛选${esc(label)}</span><input type="search" data-task-scope-search="${kind}" placeholder="输入名称" autocomplete="off"></label>
               <div class="task-scope-options" role="group" aria-labelledby="task-${kind}-label">${optionMarkup}</div>
               <p class="task-scope-empty hidden" data-task-scope-empty="${kind}">没有匹配的${esc(label)}</p>
             </section>
-            <aside class="task-scope-selected" aria-label="已选${esc(label)}汇总">
-              <header class="task-scope-panel-section-header"><strong>已选汇总</strong><span data-task-scope-summary-count="${kind}">0 ${countLabel}</span></header>
-              <p class="task-scope-selected-note">创建任务时会分析这里列出的${esc(label)}；标记为“作者的话”的章节除外。</p>
-              <div class="task-scope-selected-list" data-task-scope-selected-list="${kind}" role="list" aria-live="polite"><p class="task-scope-selected-empty">暂未选择${esc(label)}</p></div>
+            <aside class="task-scope-selected" aria-label="已选章节汇总">
+              <header class="task-scope-panel-section-header"><strong>已选汇总</strong><span data-task-scope-summary-count="${kind}">0 章</span></header>
+              <p class="task-scope-selected-note">创建任务时会分析这里列出的章节；标记为“作者的话”的章节除外。</p>
+              <div class="task-scope-selected-list" data-task-scope-selected-list="${kind}" role="list" aria-live="polite"><p class="task-scope-selected-empty">暂未选择章节</p></div>
             </aside>
           </div>
         </section>
@@ -13189,8 +13197,7 @@ async function openTaskDialog() {
     <option value="" ${availableTaskModels.some((model) => model.id === defaultModelId) ? "" : "selected"} disabled>${availableTaskModels.length ? "请选择模型" : "没有可用模型"}</option>
     ${availableTaskModels.map((model) => `<option value="${esc(model.id)}" ${model.id === defaultModelId ? "selected" : ""}>${esc(modelOptionLabel(model))}</option>`).join("")}
   </select><small id="analysis-task-model-help">默认值来自“本书 AI 设置”，只修改当前任务，不会改变全书默认模型。</small><p class="analysis-context-warning hidden" data-analysis-context-warning role="alert"></p></label>`;
-  const chapterField = taskScopePicker("chapter", "章节", chapterOptions, "选择需要分析的章节");
-  const volumeField = taskScopePicker("volume", "分卷", volumeOptions, "选择需要分析的分卷");
+  const chapterField = taskScopePicker(chapterOptions, "选择需要分析的章节");
   const relationshipFields = `<div class="relationship-analysis-options hidden">
     ${relationshipCharacterPicker}
     <p class="relationship-analysis-helper"><span aria-hidden="true">i</span><span>留空时使用基础关系抽取；选中角色后，将汇总其跨章节证据再进行全局关系归纳。默认仅追加不存在的关系，不修改或删除已有关系。</span></p>
@@ -13228,42 +13235,33 @@ async function openTaskDialog() {
     const previewRelationshipChanges = taskType === "relationship-analysis" && form.get("previewRelationshipChanges") === "on";
     const replaceExistingRelationships = characterIds.length > 0 && form.get("replaceExistingRelationships") === "on";
     const chapterIds = form.getAll("chapterIds").map(String).filter(Boolean);
-    const volumeIds = form.getAll("volumeIds").map(String).filter(Boolean);
     const chapterScope = {
       type: "chapter",
       ...(chapterIds[0] ? { chapterId: chapterIds[0] } : {}),
       ...(chapterIds.length ? { chapterIds } : {})
     };
-    const volumeScope = {
-      type: "volume",
-      ...(volumeIds[0] ? { volumeId: volumeIds[0] } : {}),
-      ...(volumeIds.length ? { volumeIds } : {})
-    };
     const scope = settingsOnly
       ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : scopeType === "book" || includeAllSettings
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : { ...(scopeType === "volume" ? volumeScope : chapterScope), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
+      : { ...chapterScope, ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     return scope;
   };
   const relationshipPreviewKey = (scope, modelId) => JSON.stringify({
     type: scope.type,
     chapterId: scope.chapterId ?? null,
     chapterIds: scope.chapterIds ?? [],
-    volumeId: scope.volumeId ?? null,
-    volumeIds: scope.volumeIds ?? [],
     includeAllSettings: scope.includeAllSettings === true,
     characterIds: scope.characterIds ?? [],
     preFilterRelationshipSources: scope.preFilterRelationshipSources !== false,
     modelId
   });
-  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["volume", "指定分卷"], ["book", "全书"]]) + chapterField + volumeField + relationshipFields, async (form) => {
+  openDialog("开始 AI 分析", taskTypeField + modelField + field("scopeType", "分析范围", "select", "chapter", [["chapter", "指定章节"], ["book", "全书"]]) + chapterField + relationshipFields, async (form) => {
     const workId = state.work.id;
     const taskType = String(form.get("taskType"));
     const modelId = String(form.get("modelId"));
     const scope = buildRelationshipScope(form);
     if (scope.type === "chapter" && !scope.chapterIds?.length) return toast("请先选择至少一个章节", "error");
-    if (scope.type === "volume" && !scope.volumeIds?.length) return toast("请先选择至少一个分卷", "error");
     if (taskType === "relationship-analysis" && relationshipSourcePreview
       && relationshipSourcePreviewConfigKey === relationshipPreviewKey(scope, modelId)) {
       scope.relationshipSourceRefs = [...$("#dialog-fields").querySelectorAll("[data-relationship-source-selected]:checked")]
@@ -13297,52 +13295,43 @@ async function openTaskDialog() {
   const taskModelSelect = $("#dialog-fields").querySelector('select[name="modelId"]');
   const scopeTypeSelect = $("#dialog-fields").querySelector('select[name="scopeType"]');
   const scopeFields = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-field="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-field="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-field="chapter"]')
   };
   const scopeTriggers = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-trigger="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-trigger="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-trigger="chapter"]')
   };
   const scopeBubbles = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-bubble="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-bubble="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-bubble="chapter"]')
   };
   const scopeSearches = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-search="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-search="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-search="chapter"]')
   };
   const scopeInputs = {
-    chapter: [...$("#dialog-fields").querySelectorAll('[data-task-scope-input="chapter"]')],
-    volume: [...$("#dialog-fields").querySelectorAll('[data-task-scope-input="volume"]')]
+    chapter: [...$("#dialog-fields").querySelectorAll('[data-task-scope-input="chapter"]')]
   };
+  const scopeVolumeInputs = [
+    ...$("#dialog-fields").querySelectorAll("[data-task-scope-volume-input]")
+  ];
   const scopeSummaries = {
-    chapter: $("#dialog-fields").querySelector("#task-chapter-summary"),
-    volume: $("#dialog-fields").querySelector("#task-volume-summary")
+    chapter: $("#dialog-fields").querySelector("#task-chapter-summary")
   };
   const scopeCounts = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-count="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-count="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-count="chapter"]')
   };
   const scopeClearButtons = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-clear="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-clear="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-clear="chapter"]')
   };
   const scopeEmptyMessages = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-empty="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-empty="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-empty="chapter"]')
   };
   const scopeSelectedLists = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-selected-list="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-selected-list="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-selected-list="chapter"]')
   };
   const scopeSummaryCounts = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-summary-count="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-summary-count="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-summary-count="chapter"]')
   };
   const scopeAvailableCounts = {
-    chapter: $("#dialog-fields").querySelector('[data-task-scope-available-count="chapter"]'),
-    volume: $("#dialog-fields").querySelector('[data-task-scope-available-count="volume"]')
+    chapter: $("#dialog-fields").querySelector('[data-task-scope-available-count="chapter"]')
   };
   const description = $("#analysis-type-description");
   const relationshipOptions = $("#dialog-fields").querySelector(".relationship-analysis-options");
@@ -13381,24 +13370,32 @@ async function openTaskDialog() {
       scopeSearches[kind].focus({ preventScroll: true });
     }
   };
+  const syncTaskScopeVolumeInputs = () => {
+    for (const volumeInput of scopeVolumeInputs) {
+      const group = volumeInput.closest("[data-task-scope-group]");
+      const chapters = [...group.querySelectorAll('[data-task-scope-input="chapter"]')];
+      const selectedCount = chapters.filter((input) => input.checked).length;
+      volumeInput.checked = chapters.length > 0 && selectedCount === chapters.length;
+      volumeInput.indeterminate = selectedCount > 0 && selectedCount < chapters.length;
+    }
+  };
   const syncTaskScopePicker = (kind) => {
     const selected = scopeInputs[kind].filter((input) => input.checked);
-    const countLabel = kind === "chapter" ? "章" : "卷";
+    syncTaskScopeVolumeInputs();
     const selectedNames = selected.map((input) => input.dataset.taskScopeTitle ?? "");
-    const label = kind === "chapter" ? "选择需要分析的章节" : "选择需要分析的分卷";
     scopeSummaries[kind].textContent = selectedNames.length
-      ? selectedNames.length === 1 ? selectedNames[0] : `已选择 ${selectedNames.length} 个${countLabel}`
-      : label;
+      ? selectedNames.length === 1 ? selectedNames[0] : `已选择 ${selectedNames.length} 个章节`
+      : "选择需要分析的章节";
     scopeCounts[kind].textContent = selected.length ? `已选 ${selected.length}` : "未选择";
-    scopeSummaryCounts[kind].textContent = `${selected.length} ${countLabel}`;
+    scopeSummaryCounts[kind].textContent = `${selected.length} 章`;
     scopeClearButtons[kind].disabled = selected.length === 0;
-    scopeTriggers[kind].setAttribute("aria-label", `筛选${kind === "chapter" ? "章节" : "分卷"}，已选择 ${selected.length} 个`);
+    scopeTriggers[kind].setAttribute("aria-label", `筛选章节，已选择 ${selected.length} 个`);
     scopeSelectedLists[kind].innerHTML = selected.length
       ? selected.map((input) => `<div class="task-scope-selected-item" role="listitem">
           <span class="task-scope-selected-copy"><strong>${esc(input.dataset.taskScopeTitle ?? "")}</strong>${input.dataset.taskScopeSubtitle ? `<small>${esc(input.dataset.taskScopeSubtitle)}</small>` : ""}</span>
           <button type="button" data-task-scope-remove="${kind}" data-task-scope-remove-id="${esc(input.value)}" aria-label="移除${esc(input.dataset.taskScopeTitle ?? "")}">×</button>
         </div>`).join("")
-      : `<p class="task-scope-selected-empty">暂未选择${kind === "chapter" ? "章节" : "分卷"}</p>`;
+      : `<p class="task-scope-selected-empty">暂未选择章节</p>`;
   };
   const filterTaskScopeOptions = (kind) => {
     const query = scopeSearches[kind].value.trim().toLocaleLowerCase();
@@ -13413,23 +13410,22 @@ async function openTaskDialog() {
       group.classList.toggle("hidden", !group.querySelector(".task-scope-option:not(.hidden)"));
     });
     scopeAvailableCounts[kind].textContent = query
-      ? `${visibleCount} / ${scopeInputs[kind].length} ${kind === "chapter" ? "章" : "卷"}`
-      : `${scopeInputs[kind].length} ${kind === "chapter" ? "章" : "卷"}`;
+      ? `${visibleCount} / ${scopeInputs[kind].length} 章`
+      : `${scopeInputs[kind].length} 章`;
     scopeEmptyMessages[kind].classList.toggle("hidden", visibleCount > 0);
   };
   const syncChapterField = () => {
-    const activeKind = ["chapter", "volume"].includes(scopeTypeSelect.value) ? scopeTypeSelect.value : null;
-    for (const kind of ["chapter", "volume"]) {
-      const enabled = kind === activeKind;
-      scopeFields[kind].classList.toggle("is-disabled", !enabled);
-      scopeFields[kind].classList.toggle("hidden", !enabled);
-      scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
-      scopeTriggers[kind].disabled = !enabled;
-      for (const input of scopeInputs[kind]) input.disabled = !enabled;
-      if (!enabled) setTaskScopeBubbleOpen(kind, false);
-      syncTaskScopePicker(kind);
-      filterTaskScopeOptions(kind);
-    }
+    const kind = "chapter";
+    const enabled = scopeTypeSelect.value === "chapter";
+    scopeFields[kind].classList.toggle("is-disabled", !enabled);
+    scopeFields[kind].classList.toggle("hidden", !enabled);
+    scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
+    scopeTriggers[kind].disabled = !enabled;
+    for (const input of scopeInputs[kind]) input.disabled = !enabled;
+    for (const input of scopeVolumeInputs) input.disabled = !enabled;
+    if (!enabled) setTaskScopeBubbleOpen(kind, false);
+    syncTaskScopePicker(kind);
+    filterTaskScopeOptions(kind);
   };
   const setRelationshipCharacterBubbleOpen = (open) => {
     relationshipCharacterBubble.classList.toggle("hidden", !open);
@@ -13579,7 +13575,7 @@ async function openTaskDialog() {
       syncRelationshipOptions();
     }
   });
-  for (const kind of ["chapter", "volume"]) {
+  for (const kind of ["chapter"]) {
     scopeTriggers[kind].addEventListener("click", () => {
       setTaskScopeBubbleOpen(kind, scopeTriggers[kind].getAttribute("aria-expanded") !== "true");
     });
@@ -13606,15 +13602,22 @@ async function openTaskDialog() {
       invalidateRelationshipSourcePreview();
     });
   }
+  for (const volumeInput of scopeVolumeInputs) volumeInput.addEventListener("change", () => {
+    const group = volumeInput.closest("[data-task-scope-group]");
+    for (const chapterInput of group.querySelectorAll('[data-task-scope-input="chapter"]')) chapterInput.checked = volumeInput.checked;
+    syncTaskScopePicker("chapter");
+    clearContextWarning();
+    invalidateRelationshipSourcePreview();
+  });
   $("#dynamic-form").onclick = (event) => {
     if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
-    for (const kind of ["chapter", "volume"]) {
+    for (const kind of ["chapter"]) {
       if (!scopeFields[kind].contains(event.target)) setTaskScopeBubbleOpen(kind, false);
     }
   };
   $("#dynamic-form").onkeydown = (event) => {
     if (event.key !== "Escape") return;
-    const openScope = ["chapter", "volume"].find((kind) => !scopeBubbles[kind].classList.contains("hidden"));
+    const openScope = ["chapter"].find((kind) => !scopeBubbles[kind].classList.contains("hidden"));
     if (openScope) {
       event.preventDefault();
       setTaskScopeBubbleOpen(openScope, false);
