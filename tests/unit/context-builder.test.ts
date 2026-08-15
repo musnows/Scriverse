@@ -129,6 +129,37 @@ describe("AI 上下文组装", () => {
     expect(context).not.toContain("不应出现的种族");
   });
 
+  it("支持在章节和分卷范围中一次注入多个正文目标", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const { work, chapter: firstChapter } = await seedChapter(runtime, "第一章正文范围标记。");
+    const secondVolume = runtime.store.createVolume(String(work.id), { title: "第二卷" });
+    const secondChapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(secondVolume.id),
+      title: "第二章",
+      content: "第二章正文范围标记。"
+    });
+    const builder = new ContextBuilder(runtime.store);
+
+    const chapterContext = builder.build(String(work.id), {
+      type: "chapter",
+      chapterId: String(firstChapter.id),
+      chapterIds: [String(firstChapter.id), String(secondChapter.id)],
+      includeSettingInfo: false
+    });
+    expect(chapterContext).toContain("第一章正文范围标记");
+    expect(chapterContext).toContain("第二章正文范围标记");
+
+    const volumeContext = builder.build(String(work.id), {
+      type: "volume",
+      volumeId: String(firstChapter.volumeId),
+      volumeIds: [String(firstChapter.volumeId), String(secondVolume.id)],
+      includeSettingInfo: false
+    });
+    expect(volumeContext).toContain("第一章正文范围标记");
+    expect(volumeContext).toContain("第二章正文范围标记");
+  });
+
   it("无正文上下文时可通过显式能力注入锁定设定", async () => {
     const runtime = createTestRuntime();
     runtimes.push(runtime);

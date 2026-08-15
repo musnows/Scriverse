@@ -2275,9 +2275,16 @@ export class Store {
         `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
          WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
            AND (json_extract(scope_json, '$.type') = 'book'
-             OR (json_extract(scope_json, '$.type') = 'volume' AND json_extract(scope_json, '$.volumeId') = ?))`,
+             OR (json_extract(scope_json, '$.type') = 'volume' AND json_extract(scope_json, '$.volumeId') = ?)
+             OR EXISTS (SELECT 1 FROM json_each(scope_json, '$.volumeIds') WHERE json_each.value = ?)
+             OR EXISTS (
+               SELECT 1 FROM json_each(scope_json, '$.chapterIds') selected_chapter
+               WHERE selected_chapter.value IN (SELECT id FROM chapters WHERE volume_id = ?)
+             ))`,
         timestamp,
         workId,
+        volumeId,
+        volumeId,
         volumeId
       );
       this.db.run("UPDATE works SET updated_at = ? WHERE id = ?", timestamp, workId);
@@ -3526,11 +3533,18 @@ export class Store {
        AND NOT (status = 'pending' AND task_type = 'chapter-analysis'
          AND json_extract(scope_json, '$.chapterId') = ?)
        AND (json_extract(scope_json, '$.chapterId') = ?
+         OR EXISTS (SELECT 1 FROM json_each(scope_json, '$.chapterIds') WHERE json_each.value = ?)
          OR json_extract(scope_json, '$.type') = 'book'
          OR (json_extract(scope_json, '$.type') = 'volume'
-           AND json_extract(scope_json, '$.volumeId') = (SELECT volume_id FROM chapters WHERE id = ?)))`,
+           AND (json_extract(scope_json, '$.volumeId') = (SELECT volume_id FROM chapters WHERE id = ?)
+             OR EXISTS (
+               SELECT 1 FROM json_each(scope_json, '$.volumeIds')
+               WHERE json_each.value = (SELECT volume_id FROM chapters WHERE id = ?)
+             ))))`,
       now(),
       workId,
+      chapterId,
+      chapterId,
       chapterId,
       chapterId,
       chapterId
@@ -8506,17 +8520,28 @@ export class Store {
 
   private analysisTaskSourceVersions(workId: string, scope: Record<string, unknown>): Record<string, number | string> {
     const sourceVersions: Record<string, number | string> = {};
-    if (typeof scope.chapterId === "string") {
-      const chapter = this.getChapter(scope.chapterId);
+    const selectedChapterIds = [
+      ...(typeof scope.chapterId === "string" ? [scope.chapterId] : []),
+      ...(Array.isArray(scope.chapterIds) ? scope.chapterIds.filter((value): value is string => typeof value === "string") : [])
+    ];
+    for (const chapterId of [...new Set(selectedChapterIds)]) {
+      const chapter = this.getChapter(chapterId);
       if (chapter.workId !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
-      sourceVersions[scope.chapterId] = Number(chapter.versionNo);
-    } else if (scope.type === "book" || scope.type === "volume") {
+      sourceVersions[chapterId] = Number(chapter.versionNo);
+    }
+    if (scope.type === "book" || scope.type === "volume") {
       const tree = this.getWorkTree(workId);
       const volumes = tree.volumes as Record<string, unknown>[];
+      const selectedVolumeIds = [
+        ...(typeof scope.volumeId === "string" ? [scope.volumeId] : []),
+        ...(Array.isArray(scope.volumeIds) ? scope.volumeIds.filter((value): value is string => typeof value === "string") : [])
+      ];
+      const selectedVolumeIdSet = new Set(selectedVolumeIds);
       const selectedVolumes = scope.type === "volume"
-        ? volumes.filter((volume) => volume.id === scope.volumeId)
+        ? volumes.filter((volume) => selectedVolumeIdSet.has(String(volume.id)))
         : volumes;
       if (scope.type === "volume" && selectedVolumes.length === 0) throw notFound("卷");
+      if (scope.type === "volume" && selectedVolumes.length !== selectedVolumeIdSet.size) throw notFound("卷");
       for (const chapter of selectedVolumes.flatMap((volume) => volume.chapters as Record<string, unknown>[])) {
         sourceVersions[String(chapter.id)] = Number(chapter.versionNo);
       }
@@ -9750,7 +9775,21 @@ export class Store {
     includeCharacterNames = true
   ): string {
     const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
+    if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
+      const labels = scope.chapterIds
+        .filter((chapterId): chapterId is string => typeof chapterId === "string")
+        .map((chapterId) => chapterSummaries.get(chapterId) ?? "章节已删除");
+      const preview = labels.slice(0, 3).join("、");
+      return `指定章节（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+    }
     if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${targetedSuffix}`;
+    if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
+      const labels = scope.volumeIds
+        .filter((volumeId): volumeId is string => typeof volumeId === "string")
+        .map((volumeId) => volumeTitles.get(volumeId) ? `分卷 · ${volumeTitles.get(volumeId)}` : "分卷已删除");
+      const preview = labels.slice(0, 3).join("、");
+      return `指定分卷（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+    }
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const title = volumeTitles.get(scope.volumeId);
       return `${title ? `分卷 · ${title}` : "分卷已删除"}${targetedSuffix}`;
@@ -9772,6 +9811,21 @@ export class Store {
     includeCharacterNames = true
   ): string {
     const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
+    if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
+      const labels = scope.chapterIds.map((chapterId) => {
+        const chapter = this.db.get(
+          `SELECT chapter.title AS title, volume.title AS volume_title
+           FROM chapters chapter
+           JOIN volumes volume ON volume.id = chapter.volume_id
+           WHERE chapter.id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
+          chapterId,
+          workId
+        );
+        return chapter ? `${requiredString(chapter, "volume_title")} · ${requiredString(chapter, "title")}` : "章节已删除";
+      });
+      const preview = labels.slice(0, 3).join("、");
+      return `指定章节（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+    }
     if (typeof scope.chapterId === "string") {
       const chapter = this.db.get(
         `SELECT chapter.title AS title, volume.title AS volume_title
@@ -9785,6 +9839,14 @@ export class Store {
       const title = requiredString(chapter, "title");
       const volumeTitle = requiredString(chapter, "volume_title");
       return `${volumeTitle} · ${title}${targetedSuffix}`;
+    }
+    if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
+      const labels = scope.volumeIds.map((volumeId) => {
+        const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", volumeId, workId);
+        return volume ? `分卷 · ${requiredString(volume, "title")}` : "分卷已删除";
+      });
+      const preview = labels.slice(0, 3).join("、");
+      return `指定分卷（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
     }
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const volume = this.db.get("SELECT title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);
@@ -9909,6 +9971,28 @@ export class Store {
   }
 
   private taskScopeDetails(workId: string, scope: Record<string, unknown>): Record<string, unknown>[] {
+    if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
+      return scope.chapterIds.map((chapterId) => {
+        const chapter = this.db.get(
+          `SELECT chapter.id AS id, chapter.title AS title, chapter.version_no AS version_no,
+                  volume.id AS volume_id, volume.title AS volume_title
+           FROM chapters chapter
+           JOIN volumes volume ON volume.id = chapter.volume_id
+           WHERE chapter.id = ? AND chapter.work_id = ? AND chapter.deleted_at IS NULL`,
+          chapterId,
+          workId
+        );
+        if (!chapter) return { type: "chapter", chapterId, missing: true };
+        return {
+          type: "chapter",
+          chapterId: requiredString(chapter, "id"),
+          title: requiredString(chapter, "title"),
+          versionNo: numberValue(chapter, "version_no"),
+          volumeId: requiredString(chapter, "volume_id"),
+          volumeTitle: requiredString(chapter, "volume_title")
+        };
+      });
+    }
     if (typeof scope.chapterId === "string") {
       const chapter = this.db.get(
         `SELECT chapter.id AS id, chapter.title AS title, chapter.version_no AS version_no,
@@ -9928,6 +10012,26 @@ export class Store {
         volumeId: requiredString(chapter, "volume_id"),
         volumeTitle: requiredString(chapter, "volume_title")
       }];
+    }
+    if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
+      return scope.volumeIds.map((volumeId) => {
+        const volume = this.db.get("SELECT id, title FROM volumes WHERE id = ? AND work_id = ?", volumeId, workId);
+        if (!volume) return { type: "volume", volumeId, missing: true };
+        const chapters = this.db.all(
+          "SELECT id, title, version_no FROM chapters WHERE volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+          volumeId
+        );
+        return {
+          type: "volume",
+          volumeId: requiredString(volume, "id"),
+          title: requiredString(volume, "title"),
+          chapters: chapters.map((item) => ({
+            chapterId: requiredString(item, "id"),
+            title: requiredString(item, "title"),
+            versionNo: numberValue(item, "version_no")
+          }))
+        };
+      });
     }
     if (scope.type === "volume" && typeof scope.volumeId === "string") {
       const volume = this.db.get("SELECT id, title FROM volumes WHERE id = ? AND work_id = ?", scope.volumeId, workId);

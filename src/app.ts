@@ -624,6 +624,7 @@ const contextSchema = z.object({
   volumeId: identifier.optional(),
   selection: z.string().max(200_000).optional(),
   chapterIds: z.array(identifier).max(20).optional(),
+  volumeIds: z.array(identifier).max(20).optional(),
   characterIds: optionalStrings,
   mentionCharacterIds: optionalStrings,
   settingIds: optionalStrings,
@@ -641,8 +642,11 @@ const relationshipSourceRefSchema = z.object({
   sourceVersion: z.string().trim().min(1).max(200)
 }).strict();
 const relationshipAnalysisScopeSchema = z.object({
-  type: z.enum(["chapter", "book", "settings"]),
+  type: z.enum(["chapter", "volume", "book", "settings"]),
   chapterId: identifier.optional(),
+  chapterIds: z.array(identifier).min(1).max(100).optional(),
+  volumeId: identifier.optional(),
+  volumeIds: z.array(identifier).min(1).max(50).optional(),
   includeAllSettings: z.boolean().optional(),
   additionalPrompt: z.string().trim().max(10_000).optional(),
   characterIds: z.array(identifier).max(20).optional(),
@@ -651,8 +655,29 @@ const relationshipAnalysisScopeSchema = z.object({
   relationshipSourceRefs: z.array(relationshipSourceRefSchema).max(5_000).optional(),
   replaceExistingRelationships: z.boolean().optional()
 }).strict().superRefine((scope, context) => {
-  if (scope.type === "chapter" && !scope.chapterId) {
+  if (scope.type === "chapter" && !scope.chapterId && !scope.chapterIds?.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["chapterId"], message: "指定章节分析必须提供章节标识" });
+  }
+  if (scope.type === "chapter" && (scope.volumeId !== undefined || scope.volumeIds !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["volumeId"], message: "指定章节分析不能同时提供分卷标识" });
+  }
+  if (scope.type === "volume" && !scope.volumeId && !scope.volumeIds?.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["volumeId"], message: "指定分卷分析必须提供分卷标识" });
+  }
+  if (scope.type === "volume" && (scope.chapterId !== undefined || scope.chapterIds !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["chapterId"], message: "指定分卷分析不能同时提供章节标识" });
+  }
+  if (scope.type === "book" && (scope.chapterId !== undefined || scope.chapterIds !== undefined || scope.volumeId !== undefined || scope.volumeIds !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["type"], message: "全书分析不能同时提供章节或分卷标识" });
+  }
+  if (scope.type === "settings" && (scope.chapterId !== undefined || scope.chapterIds !== undefined || scope.volumeId !== undefined || scope.volumeIds !== undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["type"], message: "设定集分析不能同时提供章节或分卷标识" });
+  }
+  if (scope.chapterIds && new Set(scope.chapterIds).size !== scope.chapterIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["chapterIds"], message: "章节不能重复选择" });
+  }
+  if (scope.volumeIds && new Set(scope.volumeIds).size !== scope.volumeIds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["volumeIds"], message: "分卷不能重复选择" });
   }
   if (scope.includeAllSettings && scope.type !== "book") {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书人物关系分析" });
@@ -679,6 +704,35 @@ const relationshipAnalysisScopeSchema = z.object({
 const analysisTaskSchema = z.union([
   z.object({ taskType: z.literal("relationship-analysis"), scope: relationshipAnalysisScopeSchema.optional(), modelId: identifier.optional() }).strict(),
   z.object({ taskType: creatableAnalysisTaskTypeSchema, scope: jsonObject.optional(), modelId: identifier.optional() }).strict().superRefine((input, context) => {
+    const scope = input.scope;
+    const chapterIds = scope?.chapterIds;
+    const volumeIds = scope?.volumeIds;
+    const validChapterIds = Array.isArray(chapterIds) && chapterIds.every((value) => typeof value === "string" && value.trim().length > 0 && value.length <= 200);
+    const validVolumeIds = Array.isArray(volumeIds) && volumeIds.every((value) => typeof value === "string" && value.trim().length > 0 && value.length <= 200);
+    if (chapterIds !== undefined && (!validChapterIds || chapterIds.length < 1 || chapterIds.length > 100)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "chapterIds"], message: "章节选择必须是 1 至 100 个有效标识" });
+    }
+    if (volumeIds !== undefined && (!validVolumeIds || volumeIds.length < 1 || volumeIds.length > 50)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "volumeIds"], message: "分卷选择必须是 1 至 50 个有效标识" });
+    }
+    if (validChapterIds && new Set(chapterIds as string[]).size !== (chapterIds as string[]).length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "chapterIds"], message: "章节不能重复选择" });
+    }
+    if (validVolumeIds && new Set(volumeIds as string[]).size !== (volumeIds as string[]).length) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "volumeIds"], message: "分卷不能重复选择" });
+    }
+    if (validChapterIds && scope?.type !== "chapter") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "type"], message: "章节选择只能用于章节分析范围" });
+    }
+    if (validVolumeIds && scope?.type !== "volume") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "type"], message: "分卷选择只能用于分卷分析范围" });
+    }
+    if (scope?.type === "chapter" && typeof scope.chapterId !== "string" && !validChapterIds) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "chapterId"], message: "指定章节分析必须提供章节标识" });
+    }
+    if (scope?.type === "volume" && typeof scope.volumeId !== "string" && !validVolumeIds) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "volumeId"], message: "指定分卷分析必须提供分卷标识" });
+    }
     if (input.scope?.includeAllSettings !== undefined) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["scope", "includeAllSettings"], message: "包含所有设定仅支持人物关系分析" });
     }
