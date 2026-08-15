@@ -13571,17 +13571,23 @@ async function openTaskDialog() {
         group.push(item);
         groups.set(groupKey, { id: groupId, title: groupTitle, options: group });
         return groups;
-      }, new Map())].map(([, group]) => `<section class="task-scope-volume-group" data-task-scope-group data-task-scope-volume-id="${esc(group.id)}">
+      }, new Map())].map(([, group]) => {
+      const groupOptionsId = group.id ? `task-scope-volume-options-${group.id}` : "task-scope-volume-options-unassigned";
+      return `<section class="task-scope-volume-group" data-task-scope-group data-task-scope-volume-id="${esc(group.id)}">
         <header>
           ${group.id ? `<label class="task-scope-volume-option">
             <input type="checkbox" data-task-scope-volume-input="${esc(group.id)}" data-task-scope-volume-title="${esc(group.title)}" aria-label="全选${esc(group.title)}章节">
             <span class="task-scope-checkbox" aria-hidden="true"></span>
             <span class="task-scope-volume-copy"><strong>${esc(group.title)}</strong><small>勾选以全选本卷章节</small></span>
           </label>` : `<strong>${esc(group.title)}</strong>`}
-          <span>${group.options.length} 章</span>
+          <span class="task-scope-volume-count">${group.options.length} 章</span>
+          ${group.id ? `<button type="button" class="task-scope-volume-collapse" data-task-scope-volume-toggle="${esc(group.id)}" data-task-scope-volume-title="${esc(group.title)}" aria-expanded="true" aria-controls="${esc(groupOptionsId)}" aria-label="折叠${esc(group.title)}章节"><span aria-hidden="true">⌃</span></button>` : ""}
         </header>
-        ${group.options.map(renderOption).join("")}
-      </section>`).join("");
+        <div id="${esc(groupOptionsId)}" class="task-scope-volume-options">
+          ${group.options.map(renderOption).join("")}
+        </div>
+      </section>`;
+    }).join("");
     return `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
       <div class="task-scope-field-heading"><span id="task-${kind}-label">${esc(label)}（可多选）</span><small>从左侧选择，右侧确认已选内容</small></div>
       <div class="task-scope-picker">
@@ -13757,6 +13763,9 @@ async function openTaskDialog() {
   const scopeVolumeInputs = [
     ...$("#dialog-fields").querySelectorAll("[data-task-scope-volume-input]")
   ];
+  const scopeVolumeCollapseButtons = [
+    ...$("#dialog-fields").querySelectorAll("[data-task-scope-volume-toggle]")
+  ];
   const scopeSummaries = {
     chapter: $("#dialog-fields").querySelector("#task-chapter-summary")
   };
@@ -13815,6 +13824,13 @@ async function openTaskDialog() {
       scopeSearches[kind].focus({ preventScroll: true });
     }
   };
+  const setTaskScopeVolumeCollapsed = (button, collapsed) => {
+    const group = button.closest("[data-task-scope-group]");
+    if (!group) return;
+    group.classList.toggle("is-collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", `${collapsed ? "展开" : "折叠"}${button.dataset.taskScopeVolumeTitle ?? ""}章节`);
+  };
   const syncTaskScopeVolumeInputs = () => {
     for (const volumeInput of scopeVolumeInputs) {
       const group = volumeInput.closest("[data-task-scope-group]");
@@ -13852,7 +13868,12 @@ async function openTaskDialog() {
       if (visible) visibleCount += 1;
     }
     scopeFields[kind].querySelectorAll("[data-task-scope-group]").forEach((group) => {
-      group.classList.toggle("hidden", !group.querySelector(".task-scope-option:not(.hidden)"));
+      const hasVisibleOptions = Boolean(group.querySelector(".task-scope-option:not(.hidden)"));
+      group.classList.toggle("hidden", !hasVisibleOptions);
+      if (query && hasVisibleOptions) {
+        const collapseButton = group.querySelector("[data-task-scope-volume-toggle]");
+        if (collapseButton) setTaskScopeVolumeCollapsed(collapseButton, false);
+      }
     });
     scopeAvailableCounts[kind].textContent = query
       ? `${visibleCount} / ${scopeInputs[kind].length} 章`
@@ -14053,6 +14074,11 @@ async function openTaskDialog() {
     syncTaskScopePicker("chapter");
     clearContextWarning();
     invalidateRelationshipSourcePreview();
+  });
+  for (const collapseButton of scopeVolumeCollapseButtons) collapseButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setTaskScopeVolumeCollapsed(collapseButton, collapseButton.getAttribute("aria-expanded") === "true");
   });
   $("#dynamic-form").onclick = (event) => {
     if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);

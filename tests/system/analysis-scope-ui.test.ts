@@ -24,6 +24,9 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('const enabled = taskTypeSelect.value === "relationship-analysis"');
     expect(application).toContain('[["chapter", "指定章节"], ["book", "全书"]]');
     expect(application).toContain('data-task-scope-volume-input');
+    expect(application).toContain('data-task-scope-volume-toggle');
+    expect(application).toContain('setTaskScopeVolumeCollapsed');
+    expect(application).toContain('for (const collapseButton of scopeVolumeCollapseButtons)');
     expect(application).toContain('勾选以全选本卷章节');
     expect(application).not.toContain('data-task-scope-field="volume"');
     expect(application).toContain('const chapterIds = form.getAll("chapterIds").map(String).filter(Boolean)');
@@ -94,6 +97,9 @@ describe("AI 分析范围交互", () => {
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
     expect(styles).toContain(".task-scope-picker { display: grid; gap: 8px; min-width: 0; }");
     expect(styles).toContain(".task-scope-options { display: grid; align-content: start; gap: 6px;");
+    expect(styles).toContain(".task-scope-volume-options { display: grid; gap: 5px;");
+    expect(styles).toContain(".task-scope-volume-group.is-collapsed > .task-scope-volume-options { display: none; }");
+    expect(styles).toContain(".task-scope-volume-collapse { display: inline-grid;");
     expect(styles).toContain(".task-scope-panel-grid { display: grid;");
     expect(styles).toContain(".task-scope-selected-list { display: grid;");
     expect(styles).toContain(".task-scope-checkbox { display: inline-grid; width: 18px; height: 18px; place-items: center; border: 1px solid var(--line);");
