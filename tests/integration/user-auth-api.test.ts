@@ -1828,6 +1828,70 @@ describe("用户、作品权限与操作者追踪 API", () => {
     )).toEqual({ action: "platform.ui-settings.updated", user_id: admin.user.userId });
   });
 
+  it("S3 备份平台接口仅管理员可访问并拒绝危险目标与越权输入", async () => {
+    const admin = await register(runtime, "s3_admin");
+    const writer = await register(runtime, "s3_writer");
+
+    await writer.agent.get("/api/platform/s3-backup").expect(403);
+    await writer.agent.post("/api/platform/s3-backup/targets")
+      .set("X-CSRF-Token", writer.csrfToken)
+      .send({
+        name: "越权目标",
+        endpoint: "https://s3.amazonaws.com",
+        bucket: "bucket",
+        accessKey: "AKIA1234567890ABCDEF",
+        secretKey: "secret-key-for-s3-backup-auth-test"
+      })
+      .expect(403);
+
+    await admin.agent.post("/api/platform/s3-backup/targets")
+      .send({
+        name: "缺少 CSRF",
+        endpoint: "https://s3.amazonaws.com",
+        bucket: "bucket",
+        accessKey: "AKIA1234567890ABCDEF",
+        secretKey: "secret-key-for-s3-backup-auth-test"
+      })
+      .expect(403);
+
+    const unsafeEndpoint = await admin.agent.post("/api/platform/s3-backup/targets")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({
+        name: "危险目标",
+        endpoint: "ftp://example.com",
+        bucket: "bucket",
+        accessKey: "AKIA1234567890ABCDEF",
+        secretKey: "secret-key-for-s3-backup-auth-test"
+      })
+      .expect(400);
+    expect(unsafeEndpoint.body.error.code).toBe("VALIDATION_ERROR");
+
+    const invalidBucket = await admin.agent.post("/api/platform/s3-backup/targets")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({
+        name: "非法桶",
+        endpoint: "https://s3.amazonaws.com",
+        bucket: "bad/bucket",
+        accessKey: "AKIA1234567890ABCDEF",
+        secretKey: "secret-key-for-s3-backup-auth-test"
+      })
+      .expect(400);
+    expect(invalidBucket.body.error.code).toBe("VALIDATION_ERROR");
+
+    const invalidRetention = await admin.agent.patch("/api/platform/s3-backup/settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ retentionCount: 0 })
+      .expect(400);
+    expect(invalidRetention.body.error.code).toBe("VALIDATION_ERROR");
+
+    const unknownField = await admin.agent.patch("/api/platform/s3-backup/settings")
+      .set("X-CSRF-Token", admin.csrfToken)
+      .send({ retentionCount: 10, unknown: true })
+      .expect(400);
+    expect(unknownField.body.error.code).toBe("VALIDATION_ERROR");
+    expect(runtime.database.get("SELECT COUNT(*) AS count FROM s3_backup_targets")).toEqual({ count: 0 });
+  });
+
   it("用户可修改自己的显示名称和密码", async () => {
     const user = await register(runtime, "profile_user");
     const profile = await user.agent.patch("/api/auth/profile").set("X-CSRF-Token", user.csrfToken).send({ displayName: "新名称" }).expect(200);
