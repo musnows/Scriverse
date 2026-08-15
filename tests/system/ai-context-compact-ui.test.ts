@@ -37,7 +37,7 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('eventName === "context"');
     expect(application).toContain('eventName === "context_compacted"');
     expect(application).toContain('eventName === "user_message"');
-    expect(application).toContain('if (!state.aiPromptSent) setAiContextMeter(payload.usage);');
+    expect(application).toContain('if (!tab.promptSent) setAiChatTabContextUsage(tab, payload.usage);');
     expect(application).toContain("/compact`");
     expect(application).not.toContain("prepareAiConversationContext");
     expect(application).toContain('contextAction === "warn"');
@@ -48,15 +48,15 @@ describe("AI 对话上下文 compact 界面", () => {
     expect(application).toContain('...(ignoreContextWarning ? { ignoreContextWarning: true } : {})');
     expect(application).toContain("function setAiContextWarningActionsDisabled(disabled)");
     expect(application).toContain('if ($("#ai-context-warning").classList.contains("hidden")) $("#ai-prompt").focus();');
-    expect(application).toContain("renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount)");
+    expect(application).toContain("renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount, tab.feed, conversation)");
     expect(application).toContain('step?.type === "context_compaction"');
     expect(application).toContain('function createAiContextCompactionDivider({ kind = "conversation"');
     expect(application).toContain('kind: "tool"');
     expect(application).toContain('divider.className = "ai-context-compaction-divider"');
     expect(application).not.toContain("ai-process-context-compaction");
     expect(application).toContain('setAiContextMeter(suggestion.contextUsage, false);');
-    expect(application).toContain('setAiContextMeter(payload.contextUsage);');
-    expect(application).toContain('setAiContextMeter(payload.contextUsage, announcedCompaction);');
+    expect(application).toContain('setAiChatTabContextUsage(tab, payload.contextUsage);');
+    expect(application).toContain('setAiChatTabContextUsage(tab, payload.contextUsage, announcedCompaction);');
     expect(application).toContain('const announcedCompaction = contextAction === "compacted" || streamContextCompacted;');
     expect(application).toContain("function setAiContextMeter(usage, allowShrink = true)");
     expect(application).toContain("mergeAiContextUsage(latestAiContextUsage, usage, false)");

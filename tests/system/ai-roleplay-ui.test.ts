@@ -30,7 +30,7 @@ describe("AI 角色扮演界面", () => {
     expect(application).toContain("/context-scope`");
     expect(application).toContain("if (state.aiPromptSent) {");
     expect(application).toContain("state.aiContextScope ?? { type: \"none\" }");
-    expect(application).toContain('await prepareAiRequestConversation(requestHolder, $("#ai-task").value, requestScope.conversationScope);');
+    expect(application).toContain('await prepareAiRequestConversation(requestHolder, selectedTaskType, requestScope.conversationScope);');
     expect(application).toContain("mergeAiReferenceScope(conversationScope, state.aiReferences)");
     expect(application).toContain("Agent 只能查询与该角色自身有关的记忆");
     expect(application).toContain("recall_self: \"回忆自身\"");

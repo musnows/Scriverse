@@ -330,9 +330,9 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.css?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/js/icons/ant.js?v=3.11.2');
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
-    expect(page.text).toContain('/styles.css?v=20260816-novel-tree-indent-v1');
+    expect(page.text).toContain('/styles.css?v=20260816-ai-chat-switcher-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
-    expect(page.text).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
+    expect(page.text).toContain('/app.js?v=20260816-ai-chat-switcher-v2');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -948,7 +948,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('href="https://scriverse.top/docs/global-tool-call-limit.html"');
     expect(application.text).toContain('了解原理与推荐设置');
     expect(application.text).not.toContain("ai-context-usage");
-    expect(application.text).toContain("setAiContextMeter(payload.contextUsage)");
+    expect(application.text).toContain("setAiChatTabContextUsage(tab, payload.contextUsage)");
     expect(application.text).toContain('addEventListener("contextmenu"');
     expect(application.text).toContain("collapsedVolumeIds");
     expect(application.text).toContain('data-testid="continuation-guard"');

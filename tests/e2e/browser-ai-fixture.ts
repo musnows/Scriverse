@@ -237,7 +237,8 @@ const runtime = createRuntime({
   databasePath: join(isolatedDirectory, "novel.db"),
   masterSecret: "browser-e2e-master-secret-at-least-32-characters",
   security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false, apiRateLimit: 10_000 },
-  aiStreamIdleTimeoutMs
+  aiStreamIdleTimeoutMs,
+  aiChatTabLimit: Number(process.env.E2E_AI_CHAT_TAB_LIMIT ?? 5)
 });
 const registered = runtime.auth.register({ username: "browser-e2e", password: "BrowserE2E123!" });
 const fixture = runWithRequestActor(registered.session.user, () => {

@@ -12,6 +12,7 @@ import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
 import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
+import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
@@ -811,6 +812,8 @@ export type RuntimeOptions = {
   uploadLimits?: ImageUploadLimits;
   /** 交互式 AI 流的事件空闲超时；生产启动值由环境变量解析，测试可注入更短时长。 */
   aiStreamIdleTimeoutMs?: number;
+  /** 同一浏览器工作区允许同时打开的 Agent 对话数量。 */
+  aiChatTabLimit?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
   backupOptions?: S3BackupManagerOptions;
 };
@@ -1157,6 +1160,7 @@ function redactVersionSnapshots(
 
 export function createRuntime(options: RuntimeOptions): Runtime {
   const uploadLimits = options.uploadLimits ?? DEFAULT_IMAGE_UPLOAD_LIMITS;
+  const aiChatTabLimit = options.aiChatTabLimit ?? DEFAULT_AI_CHAT_TAB_LIMIT;
   logger.info("runtime.initializing", {
     databasePath: options.databasePath,
     serveUi: options.serveUi ?? true,
@@ -1337,6 +1341,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       protocol: "openai-chat-completions",
       protocols: [...AI_PROVIDER_PROTOCOLS],
       development: options.developmentServer === true,
+      aiChatTabLimit,
       uploadLimits
     });
   });

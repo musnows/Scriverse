@@ -88,10 +88,10 @@ describe("AI 错误详情界面", () => {
     expect(page).toContain('id="ai-status-dot" class="status-dot" role="status" aria-label="创作助手状态：正常"');
     expect(application).toContain("function setAiAssistantStatus(status)");
     expect(application).toContain('dot.classList.toggle("is-error", failed);');
-    expect(application).toContain('setAiAssistantStatus("ready");');
-    expect(application).toContain('if (toolCall.status === "failed") setAiAssistantStatus("error");');
+    expect(application).toContain('setAiChatTabStatus(tab, "streaming");');
+    expect(application).toContain('if (toolCall.status === "failed") setAiChatTabStatus(tab, "error");');
     expect(application).toContain('const suggestionFailed = suggestion.guard?.status === "failed"');
-    expect(application).toContain('if (suggestionFailed) setAiAssistantStatus("error");');
+    expect(application).toContain('if (suggestionFailed) setAiChatTabStatus(tab, "error");');
     expect(application).toContain('streamError = createClientError(payload, "AI 流式调用失败", response.status);');
     expect(styles).toContain('.status-dot.is-error { background: var(--accent);');
   });
