@@ -3,6 +3,15 @@ function normalizedId(value) {
   return normalized || null;
 }
 
+export function normalizeAiChatTabLimit(value, fallback = 5) {
+  const normalizedFallback = Number.isSafeInteger(Number(fallback)) && Number(fallback) > 0
+    ? Math.min(20, Number(fallback))
+    : 5;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return normalizedFallback;
+  return Math.min(20, parsed);
+}
+
 export function createAiChatTabManager(createId = null) {
   const tabs = [];
   let activeId = null;

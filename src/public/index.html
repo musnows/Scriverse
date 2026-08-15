@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-ai-chat-tabs-v1&feature=ai-tool-call-copy-feedback-v2">
+    <link rel="stylesheet" href="/styles.css?v=20260816-ai-chat-switcher-v2&feature=ai-tool-call-copy-feedback-v2">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -311,12 +311,18 @@
           <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
           <div class="ai-heading-title"><span id="ai-status-dot" class="status-dot" role="status" aria-label="创作助手状态：正常" title="创作助手状态：正常"></span><strong>创作助手</strong></div>
           <div class="ai-heading-actions">
-            <span id="ai-conversation-title" title="当前对话">新对话</span>
+            <button id="ai-conversation-switcher" class="ai-conversation-switcher" type="button" aria-label="切换打开的对话" aria-controls="ai-conversation-switcher-menu" aria-expanded="false" aria-haspopup="dialog" title="切换打开的对话"><span id="ai-conversation-title">新对话</span><small id="ai-open-conversation-count">1</small><svg viewBox="0 0 12 8" aria-hidden="true" focusable="false"><path d="M1 1.5 6 6.5l5-5"></path></svg></button>
+            <button id="ai-workspace-close" class="hidden" type="button" aria-label="退出多会话工作台">退出</button>
             <button id="ai-history-toggle" type="button" aria-label="历史记录" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog" title="历史记录"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3.5 2"></path></svg></button>
             <button id="ai-new-conversation" type="button" aria-label="新建对话" title="新建对话">＋</button>
           </div>
         </div>
-        <div id="ai-chat-tabs" class="ai-chat-tabs" role="tablist" aria-label="Agent 对话页签"></div>
+        <section id="ai-conversation-switcher-menu" class="ai-conversation-switcher-menu hidden" role="dialog" aria-labelledby="ai-conversation-switcher-title">
+          <header><div><strong id="ai-conversation-switcher-title">打开的对话</strong><small id="ai-conversation-switcher-limit">1 / 5</small></div><button id="ai-conversation-switcher-close" type="button" aria-label="关闭对话切换器">×</button></header>
+          <div id="ai-open-conversation-list" class="ai-open-conversation-list" role="list"></div>
+          <footer><button id="ai-switcher-history" type="button">打开历史记录</button><button id="ai-workspace-open" type="button">进入多会话工作台</button></footer>
+        </section>
+        <div id="ai-chat-tabs" class="ai-chat-tabs hidden" role="tablist" aria-label="Agent 对话页签" aria-hidden="true"></div>
         <div class="quick-actions" aria-label="快捷指令">
           <button type="button" data-task="chat" data-prompt="总结当前章节，并列出尚未解决的冲突。">总结本章</button>
           <button type="button" data-task="continue" data-prompt="续写当前章节，保持现有叙事风格和人物状态。">续写</button>
@@ -1167,6 +1173,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-ai-chat-tabs-v1&feature=ai-tool-call-copy-feedback-v2"></script>
+    <script type="module" src="/app.js?v=20260816-ai-chat-switcher-v2&feature=ai-tool-call-copy-feedback-v2"></script>
   </body>
 </html>
