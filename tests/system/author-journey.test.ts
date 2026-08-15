@@ -332,7 +332,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/styles.css?v=20260816-ai-chat-switcher-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
-    expect(page.text).toContain('/app.js?v=20260816-model-thinking-effort-v1');
+    expect(page.text).toContain('/app.js?v=20260816-provider-max-token-parameter-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -903,6 +903,10 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-map-toolbar { padding-right: 72px; }");
     expect(styles.text).toContain(".relationship-map-expanded-host .relationship-mindmap { flex: 1 1 auto; height: auto; min-height: 0; }");
     expect(application.text).toContain('field("protocol", "接口协议", "select", protocol');
+    expect(application.text).toContain('name="useMaxCompletionTokens"');
+    expect(application.text).toContain('maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens"');
+    expect(application.text).toContain('Anthropic Messages 官方接口使用 max_tokens，不能切换。');
+    expect(application.text).toContain('最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}');
     expect(application.text).not.toContain('field("maxTokens", "最大输出令牌数", "number", item?.maxTokens ?? 32000)');
     expect(application.text).toContain('item && item.providerStatus === "enabled"');
     expect(application.text).toContain('class="model-connection-test"');

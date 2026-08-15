@@ -128,7 +128,8 @@ describe("Anthropic Messages 供应商", () => {
     providerId = provider.body.data.id;
     expect(provider.body.data).toMatchObject({
       protocol: "anthropic-messages",
-      baseUrl: "https://api.longcat.chat/anthropic"
+      baseUrl: "https://api.longcat.chat/anthropic",
+      maxTokensParameter: "max_tokens"
     });
     const model = await request(runtime.app).post(`/api/providers/${providerId}/models`).send({
       displayName: "LongCat 2.0",
@@ -186,6 +187,15 @@ describe("Anthropic Messages 供应商", () => {
       thinking: { type: "enabled" },
       output_config: { effort: "medium" }
     });
+  });
+
+  it("Anthropic Messages 拒绝切换 max_completion_tokens", async () => {
+    const response = await request(runtime.app).patch(`/api/providers/${providerId}`).send({
+      maxTokensParameter: "max_completion_tokens"
+    }).expect(400);
+    expect(response.body.error).toMatchObject({ code: "INVALID_MAX_TOKENS_PARAMETER" });
+    const provider = await request(runtime.app).get(`/api/providers/${providerId}`).expect(200);
+    expect(provider.body.data.maxTokensParameter).toBe("max_tokens");
   });
 
   it("Anthropic 工具参数在 content_block_stop 前只拼接，收齐后才执行并继续流式回答", async () => {

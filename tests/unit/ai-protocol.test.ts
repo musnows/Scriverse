@@ -112,6 +112,39 @@ describe("AI 供应商协议适配", () => {
     expect((body.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty("tool_calls");
   });
 
+  it("默认保留 max_tokens，并可为 OpenAI 兼容请求切换为 max_completion_tokens", () => {
+    const defaultBody = buildCompletionRequestBody({
+      protocol: "openai-chat-completions",
+      model: "mock-model",
+      messages: [{ role: "user", content: "你好" }],
+      parameters: { max_tokens: 2_048, temperature: 0.2 }
+    });
+    expect(defaultBody).toMatchObject({ max_tokens: 2_048, temperature: 0.2 });
+    expect(defaultBody).not.toHaveProperty("max_completion_tokens");
+
+    const completionTokensBody = buildCompletionRequestBody({
+      protocol: "openai-chat-completions",
+      model: "mock-model",
+      messages: [{ role: "user", content: "你好" }],
+      parameters: { max_tokens: 2_048, temperature: 0.2 },
+      maxTokensParameter: "max_completion_tokens"
+    });
+    expect(completionTokensBody).toMatchObject({ max_completion_tokens: 2_048, temperature: 0.2 });
+    expect(completionTokensBody).not.toHaveProperty("max_tokens");
+  });
+
+  it("Anthropic Messages 始终发送官方 max_tokens 参数", () => {
+    const body = buildCompletionRequestBody({
+      protocol: "anthropic-messages",
+      model: "claude-model",
+      messages: [{ role: "user", content: "你好" }],
+      parameters: { max_tokens: 1_024 },
+      maxTokensParameter: "max_completion_tokens"
+    });
+    expect(body).toMatchObject({ max_tokens: 1_024 });
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
   it("保留 OpenAI 多模态消息内容块", () => {
     const body = buildCompletionRequestBody({
       protocol: "openai-chat-completions",

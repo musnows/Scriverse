@@ -208,6 +208,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "context_window")).toBe(true);
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "thinking_enabled" && column.dflt_value === "1")).toBe(true);
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "thinking_effort" && column.dflt_value === "'default'")).toBe(true);
+    expect(first.all("PRAGMA table_info(providers)").some((column) => column.name === "max_tokens_parameter" && column.dflt_value === "'max_tokens'")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "metadata_json")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "request_id")).toBe(true);
     expect(first.all("PRAGMA index_list(ai_conversation_messages)").some((index) => index.name === "idx_ai_conversation_messages_request")).toBe(true);
@@ -1511,6 +1512,38 @@ describe("数据库版本化迁移", () => {
       display_name: "迁移前模型",
       model_id: "legacy-thinking-model",
       thinking_effort: "default"
+    });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
+  });
+
+  it("迁移 95 为既有供应商补充默认最大输出参数并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-provider-max-token-parameter-"));
+    roots.push(root);
+    const filename = join(root, "provider-max-token-parameter.db");
+    const timestamp = "2026-08-16T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, max_tokens_parameter, created_at, updated_at
+      ) VALUES (
+        'provider-max-token-parameter', '__scriverse_platform_ai__', '输出参数迁移供应商', 'https://max-token-parameter.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', 'max_completion_tokens', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE providers DROP COLUMN max_tokens_parameter");
+    current.run("DELETE FROM schema_migrations WHERE version = 95");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 95")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT name, protocol, max_tokens_parameter FROM providers WHERE id = 'provider-max-token-parameter'")).toEqual({
+      name: "输出参数迁移供应商",
+      protocol: "openai-chat-completions",
+      max_tokens_parameter: "max_tokens"
     });
     expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);

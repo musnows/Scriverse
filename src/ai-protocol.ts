@@ -3,6 +3,8 @@ import { normalizeBaseUrl } from "./utils.js";
 
 export const AI_PROVIDER_PROTOCOLS = ["openai-chat-completions", "anthropic-messages", "google-vertex"] as const;
 export type AiProviderProtocol = (typeof AI_PROVIDER_PROTOCOLS)[number];
+export const MAX_TOKENS_PARAMETERS = ["max_tokens", "max_completion_tokens"] as const;
+export type MaxTokensParameter = (typeof MAX_TOKENS_PARAMETERS)[number];
 
 export function isAiProviderProtocol(value: string): value is AiProviderProtocol {
   return (AI_PROVIDER_PROTOCOLS as readonly string[]).includes(value);
@@ -200,12 +202,19 @@ export function buildCompletionRequestBody(input: {
   model: string;
   messages: CompletionMessage[];
   parameters: Record<string, unknown>;
+  maxTokensParameter?: MaxTokensParameter;
   tools?: Record<string, unknown>[];
   toolChoice?: "auto" | "none";
   stream?: boolean;
 }): Record<string, unknown> {
   const tools = input.toolChoice === "auto" ? input.tools ?? [] : [];
   if (usesOpenAiChatCompletionsShape(input.protocol)) {
+    const parameters = { ...input.parameters };
+    if (input.maxTokensParameter === "max_completion_tokens") {
+      const maxTokens = parameters.max_tokens;
+      delete parameters.max_tokens;
+      if (typeof maxTokens === "number") parameters.max_completion_tokens = maxTokens;
+    }
     return {
       model: input.model,
       messages: input.messages.map((message) => {
@@ -213,7 +222,7 @@ export function buildCompletionRequestBody(input: {
         const { anthropic_content: _anthropicContent, ...openAiMessage } = message;
         return openAiMessage;
       }),
-      ...input.parameters,
+      ...parameters,
       ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       ...(input.stream ? { stream: true, stream_options: { include_usage: true } } : {})
     };

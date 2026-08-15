@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 94;
+export const DATABASE_SCHEMA_VERSION = 95;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -459,6 +459,7 @@ export class Database {
         concurrency_limit INTEGER NOT NULL DEFAULT 10 CHECK(concurrency_limit BETWEEN 1 AND 100),
         rpm_limit INTEGER NOT NULL DEFAULT 10 CHECK(rpm_limit BETWEEN 1 AND 10000),
         max_tokens INTEGER NOT NULL DEFAULT 32000 CHECK(max_tokens BETWEEN 1 AND 32768),
+        max_tokens_parameter TEXT NOT NULL DEFAULT 'max_tokens' CHECK(max_tokens_parameter IN ('max_tokens', 'max_completion_tokens')),
         default_model_id TEXT,
         note TEXT NOT NULL DEFAULT '',
         last_error TEXT,
@@ -3608,6 +3609,21 @@ export class Database {
           this.run("ALTER TABLE models ADD COLUMN thinking_effort TEXT NOT NULL DEFAULT 'default' CHECK(thinking_effort IN ('default', 'low', 'medium', 'high'))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (94, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(95)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(providers)").map((row) => String(row.name)));
+        if (!columns.has("max_tokens_parameter")) {
+          this.run("ALTER TABLE providers ADD COLUMN max_tokens_parameter TEXT NOT NULL DEFAULT 'max_tokens' CHECK(max_tokens_parameter IN ('max_tokens', 'max_completion_tokens'))");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (95, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

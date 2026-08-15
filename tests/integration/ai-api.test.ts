@@ -63,7 +63,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const providerId = provider.body.data.id;
     expect(provider.body.data.apiKey).toBe("sk-se************lue");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10 });
+    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokensParameter: "max_tokens" });
     expect(provider.body.data).not.toHaveProperty("maxTokens");
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
@@ -113,6 +113,46 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(409);
+  });
+
+  it("供应商可切换 max_completion_tokens，连通性测试与生成请求使用相同字段", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+
+    const updated = await request(runtime.app).patch(`/api/providers/${providerId}`).send({
+      maxTokensParameter: "max_completion_tokens"
+    }).expect(200);
+    expect(updated.body.data).toMatchObject({
+      maxTokensParameter: "max_completion_tokens",
+      connectionStatus: "unchecked"
+    });
+
+    const completionBodies: Array<Record<string, unknown>> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      completionBodies.push(body);
+      expect(body).not.toHaveProperty("max_tokens");
+      if (body.max_completion_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      expect(body.max_completion_tokens).toBe(32_000);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "飞船驶离北港。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "概括当前场景",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(completionBodies.some((body) => body.max_completion_tokens === 10)).toBe(true);
+    expect(completionBodies.some((body) => body.max_completion_tokens === 32_000)).toBe(true);
   });
 
   it("达到本书每日 Token 额度后拒绝新的 AI 调用", async () => {

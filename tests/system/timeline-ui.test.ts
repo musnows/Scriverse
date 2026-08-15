@@ -19,7 +19,7 @@ describe("时间轴界面", () => {
       request(runtime.app).get("/styles.css").expect(200)
     ]);
 
-    expect(page.text).toContain('/app.js?v=20260816-model-thinking-effort-v1');
+    expect(page.text).toContain('/app.js?v=20260816-provider-max-token-parameter-v1');
 
     const deletionStart = application.text.indexOf("async function deleteTimelineEvent");
     const renderStart = application.text.indexOf("async function renderTimeline", deletionStart);

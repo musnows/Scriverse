@@ -10160,7 +10160,7 @@ function renderProviderCards(providers, models) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -14121,12 +14121,15 @@ function openProviderDialog(item) {
     return field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password");
   };
   const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
+  const useMaxCompletionTokens = item?.maxTokensParameter === "max_completion_tokens" && protocol !== "anthropic-messages";
+  const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
       + field("protocol", "接口协议", "select", protocol, providerProtocolOptions)
       + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
       + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
+      + maxTokensParameterField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
       + field("note", "用途备注", "textarea", item?.note)
@@ -14136,6 +14139,7 @@ function openProviderDialog(item) {
         name: form.get("name"),
         protocol: form.get("protocol"),
         baseUrl: form.get("baseUrl"),
+        maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
         note: form.get("note"),
@@ -14152,12 +14156,24 @@ function openProviderDialog(item) {
   const protocolSelect = $("#dialog-fields select[name='protocol']");
   const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
   const credentialHost = $("#dialog-fields [data-provider-credential-field]");
+  const maxTokensParameterInput = $("#dialog-fields input[name='useMaxCompletionTokens']");
+  const maxTokensParameterHint = $("#dialog-fields [data-provider-max-tokens-parameter-hint]");
+  const syncMaxTokensParameter = () => {
+    const anthropic = protocolSelect.value === "anthropic-messages";
+    maxTokensParameterInput.disabled = anthropic;
+    if (anthropic) maxTokensParameterInput.checked = false;
+    maxTokensParameterHint.textContent = anthropic
+      ? "Anthropic Messages 官方接口使用 max_tokens，不能切换。"
+      : "默认使用 max_tokens；OpenAI 新版模型可按需切换。";
+  };
   const syncProviderCredentialField = () => {
     const nextProtocol = protocolSelect.value;
     credentialHost.innerHTML = credentialFieldForProtocol(nextProtocol);
     if (!item) baseUrlInput.value = defaultBaseUrlForProtocol(nextProtocol);
+    syncMaxTokensParameter();
   };
   protocolSelect.addEventListener("change", syncProviderCredentialField);
+  syncMaxTokensParameter();
 }
 
 function openModelDialog(providerId, item = null, provider = null) {

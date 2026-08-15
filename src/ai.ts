@@ -20,7 +20,8 @@ import {
   type CompletionMessage,
   type CompletionMessageContent,
   type CompletionPayload,
-  type CompletionToolCall
+  type CompletionToolCall,
+  type MaxTokensParameter
 } from "./ai-protocol.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
@@ -101,6 +102,7 @@ type ProviderInput = {
   baseUrl: string;
   apiKey: string;
   protocol?: AiProviderProtocol;
+  maxTokensParameter?: MaxTokensParameter;
   status?: "enabled" | "disabled";
   note?: string;
   concurrencyLimit?: number;
@@ -515,6 +517,13 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   const value = stringValue(provider, "protocol");
   if (isAiProviderProtocol(value)) return value;
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
+}
+
+function providerMaxTokensParameter(provider: Row): MaxTokensParameter {
+  if (providerProtocol(provider) === "anthropic-messages") return "max_tokens";
+  return stringValue(provider, "max_tokens_parameter") === "max_completion_tokens"
+    ? "max_completion_tokens"
+    : "max_tokens";
 }
 
 function providerCredentialHint(protocol: AiProviderProtocol, secret: string): string {
@@ -1276,6 +1285,7 @@ const providerConnectivityConfigurationFields = [
   "concurrency_limit",
   "rpm_limit",
   "max_tokens",
+  "max_tokens_parameter",
   "default_model_id",
   "note"
 ] as const;
@@ -2881,7 +2891,8 @@ export class AiManager {
         protocol,
         model: modelId,
         messages: [{ role: "user", content }],
-        parameters: { max_tokens: 10, ...modelParameters }
+        parameters: { max_tokens: 10, ...modelParameters },
+        maxTokensParameter: providerMaxTokensParameter(row)
       })),
       signal
     });
@@ -2904,12 +2915,16 @@ export class AiManager {
     const encrypted = this.vault.encrypt(input.apiKey);
     const timestamp = now();
     const protocol = input.protocol ?? "openai-chat-completions";
+    const maxTokensParameter = input.maxTokensParameter ?? "max_tokens";
+    if (protocol === "anthropic-messages" && maxTokensParameter !== "max_tokens") {
+      throw new AppError(400, "INVALID_MAX_TOKENS_PARAMETER", "Anthropic Messages 协议仅支持 max_tokens");
+    }
     const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, max_tokens_parameter, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -2922,11 +2937,12 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
+      maxTokensParameter,
       input.note ?? "",
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter });
     return this.getProvider(providerId);
   }
 
@@ -2947,6 +2963,13 @@ export class AiManager {
   updateProvider(providerId: string, input: Partial<ProviderInput>): Record<string, unknown> {
     const row = this.getProviderRow(providerId);
     const nextProtocol = input.protocol ?? providerProtocol(row);
+    const currentMaxTokensParameter = providerMaxTokensParameter(row);
+    if (nextProtocol === "anthropic-messages" && input.maxTokensParameter === "max_completion_tokens") {
+      throw new AppError(400, "INVALID_MAX_TOKENS_PARAMETER", "Anthropic Messages 协议仅支持 max_tokens");
+    }
+    const nextMaxTokensParameter = nextProtocol === "anthropic-messages"
+      ? "max_tokens"
+      : input.maxTokensParameter ?? currentMaxTokensParameter;
     const nextBaseUrl = input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url");
     if (nextProtocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(nextBaseUrl);
     let encryptedKey = stringValue(row, "encrypted_key");
@@ -2968,9 +2991,10 @@ export class AiManager {
       connectionStatus = "unchecked";
       this.vertexTokenCache.clear(providerId);
     }
+    if (nextMaxTokensParameter !== currentMaxTokensParameter) connectionStatus = "unchecked";
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens_parameter = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
       nextProtocol,
@@ -2982,6 +3006,7 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
+      nextMaxTokensParameter,
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -5465,7 +5490,8 @@ export class AiManager {
             protocol: "openai-chat-completions",
             model: stringValue(model, "model_id"),
             messages,
-            parameters
+            parameters,
+            maxTokensParameter: providerMaxTokensParameter(provider)
           })),
           signal: controller.signal
         });
@@ -6309,6 +6335,7 @@ export class AiManager {
                     model: stringValue(model, "model_id"),
                     messages: requestMessages,
                     parameters: roundParameters,
+                    maxTokensParameter: providerMaxTokensParameter(provider),
                     tools: requestTools,
                     toolChoice,
                     ...(streamResponse ? { stream: true } : {})
@@ -10974,6 +11001,7 @@ export class AiManager {
       name: stringValue(row, "name"),
       baseUrl: stringValue(row, "base_url"),
       protocol: providerProtocol(row),
+      maxTokensParameter: providerMaxTokensParameter(row),
       apiKey: apiKeyHint,
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),
