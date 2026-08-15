@@ -1488,7 +1488,14 @@ export class AiWriteService {
           const finalResult = {
             ...(operation.entityType === "analysis-task"
               ? { taskId: String(result.id ?? "") }
-              : { ...createdEntity, ...this.operationResult(operation.entityType, operation.targetId, operation.operationType) }),
+              : operation.entityType === "chapter-annotation"
+                ? {
+                    entityId: typeof result.id === "string" ? result.id : null,
+                    versionNo: typeof result.versionNo === "number" ? result.versionNo : null,
+                    kind: typeof result.kind === "string" ? result.kind : null,
+                    chapterId: typeof result.chapterId === "string" ? result.chapterId : operation.targetId
+                  }
+                : { ...createdEntity, ...this.operationResult(operation.entityType, operation.targetId, operation.operationType) }),
             ...(operation.entityType === "analysis-task" && typeof result.taskType === "string" ? { taskType: result.taskType } : {}),
             actorUserId: requester?.userId ?? null,
             executedAt: timestamp
