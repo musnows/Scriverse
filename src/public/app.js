@@ -1871,7 +1871,7 @@ function renderMessageCardActions(message) {
     });
     actions.append(copy);
   }
-  if (message.dataset.messageId) {
+  if (message.dataset.messageId && message.classList.contains("assistant-message")) {
     const fork = document.createElement("button");
     fork.type = "button";
     fork.className = "message-fork-button";
@@ -2001,6 +2001,29 @@ function formatAiToolCallTime(value) {
   }).format(date);
 }
 
+function setAiToolCallCopyButtonState(button, copied) {
+  const label = button.dataset.copyLabel ?? "代码块";
+  button.dataset.copyState = copied ? "copied" : "idle";
+  button.classList.toggle("is-copied", copied);
+  button.setAttribute("aria-label", copied ? `${label}已复制` : `复制${label}`);
+  button.title = copied ? "已复制" : `复制${label}`;
+}
+
+async function copyAiToolCallCode(button) {
+  const targetId = button.dataset.copyTarget;
+  const target = targetId ? document.getElementById(targetId) : null;
+  if (!target) return;
+  try {
+    await copyAiRawMarkdown(target.textContent);
+    setAiToolCallCopyButtonState(button, true);
+    window.setTimeout(() => {
+      if (button.isConnected && button.dataset.copyState === "copied") setAiToolCallCopyButtonState(button, false);
+    }, 1200);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 function openAiToolCallDetail(toolCall) {
   const name = String(toolCall?.name ?? "unknown");
   const status = toolCall?.status === "failed" ? "调用失败" : "调用成功";
@@ -2017,6 +2040,7 @@ function openAiToolCallDetail(toolCall) {
   $("#ai-tool-call-arguments").textContent = JSON.stringify(toolCall?.arguments ?? {}, null, 2);
   $("#ai-tool-call-result-length").textContent = `${resultDetails.characterCount.toLocaleString("zh-CN")} 字符`;
   $("#ai-tool-call-result").textContent = resultDetails.text;
+  document.querySelectorAll("[data-ai-tool-call-copy]").forEach((button) => setAiToolCallCopyButtonState(button, false));
   $("#ai-tool-call-dialog").showModal();
 }
 
@@ -15710,6 +15734,10 @@ $("#work-recycle-bin-close").addEventListener("click", () => $("#work-recycle-bi
 $("#chapter-recycle-bin-close").addEventListener("click", () => $("#chapter-recycle-bin-dialog").close());
 $("#entity-history-close").addEventListener("click", () => $("#entity-history-dialog").close());
 $("#ai-tool-call-close").addEventListener("click", () => $("#ai-tool-call-dialog").close());
+document.querySelectorAll("[data-ai-tool-call-copy]").forEach((button) => {
+  setAiToolCallCopyButtonState(button, false);
+  button.addEventListener("click", () => void copyAiToolCallCode(button));
+});
 $("#setting-editor-back").addEventListener("click", () => { void closeEntityEditor(); });
 $("#character-editor-close").addEventListener("click", () => { void closeEntityEditor(); });
 $("#character-editor-cancel").addEventListener("click", () => { void closeEntityEditor(); });

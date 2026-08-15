@@ -53,7 +53,20 @@ type WorkListBatch = {
 };
 
 const WORK_LIST_BATCH_SIZE = 500;
+const ENTITY_LIST_BATCH_SIZE = 400;
 export const RECYCLE_BIN_RETENTION_DAYS = 30;
+
+type OrganizationMemberSummary = {
+  characterId: string;
+  name: string;
+  role: string;
+  note: string;
+};
+
+type OrganizationListBatch = {
+  members: Map<string, OrganizationMemberSummary[]>;
+  versions: Map<string, number>;
+};
 
 function recycleBinExpiresAt(deletedAt: string): string {
   return new Date(new Date(deletedAt).getTime() + RECYCLE_BIN_RETENTION_DAYS * 24 * 60 * 60_000).toISOString();
@@ -787,6 +800,22 @@ export class Store {
       entityId
     );
     return numberValue(row ?? {}, "version_no");
+  }
+
+  private currentEntityVersionNos(type: VersionedEntityType, entityIds: string[]): Map<string, number> {
+    const versions = new Map<string, number>();
+    for (let offset = 0; offset < entityIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+      const batchIds = entityIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      const rows = this.db.all(
+        `SELECT entity_id, MAX(version_no) AS version_no FROM entity_versions
+         WHERE entity_type = ? AND entity_id IN (${placeholders}) GROUP BY entity_id`,
+        type,
+        ...batchIds
+      );
+      for (const row of rows) versions.set(requiredString(row, "entity_id"), numberValue(row, "version_no"));
+    }
+    return versions;
   }
 
   private currentChapterVersionNo(chapterId: string): number {
@@ -4273,20 +4302,31 @@ export class Store {
     ).map((item) => this.mapForeshadowOccurrence(item));
     const status = requiredString(row, "status");
     const plannedPayoffChapterId = optionalString(row, "planned_payoff_chapter_id");
+    const overdue = Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
+      && this.chapterSequence(workId, plannedPayoffChapterId) < this.chapterSequence(workId, currentChapterId));
+    return this.mapForeshadow(row, occurrences, this.currentEntityVersionNo("foreshadow", foreshadowId), overdue);
+  }
+
+  private mapForeshadow(
+    row: Row,
+    occurrences: Record<string, unknown>[],
+    versionNo: number,
+    overdue: boolean
+  ): Record<string, unknown> {
+    const status = requiredString(row, "status");
     return {
       id: requiredString(row, "id"),
-      workId,
+      workId: requiredString(row, "work_id"),
       title: requiredString(row, "title"),
       description: requiredString(row, "description"),
       status,
       importance: requiredString(row, "importance"),
-      plannedPayoffChapterId,
+      plannedPayoffChapterId: optionalString(row, "planned_payoff_chapter_id"),
       resolutionNote: requiredString(row, "resolution_note"),
       unresolved: status === "planned" || status === "planted",
-      overdue: Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
-        && this.chapterSequence(workId, plannedPayoffChapterId) < this.chapterSequence(workId, currentChapterId)),
+      overdue,
       occurrences,
-      versionNo: this.currentEntityVersionNo("foreshadow", foreshadowId),
+      versionNo,
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };
@@ -4298,11 +4338,12 @@ export class Store {
     const where = status === "unresolved"
       ? "AND status IN ('planned', 'planted')"
       : status === "resolved" ? "AND status IN ('resolved', 'abandoned')" : "";
-    return this.db.all(
-      `SELECT id FROM foreshadows WHERE work_id = ? ${where}
+    const rows = this.db.all(
+      `SELECT * FROM foreshadows WHERE work_id = ? ${where}
        ORDER BY CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at`,
       workId
-    ).map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId));
+    );
+    return this.mapForeshadowList(rows, currentChapterId);
   }
 
   listForeshadowsPage(workId: string, pagination: Pagination, status: "all" | "unresolved" | "resolved" = "all", currentChapterId?: string): PaginatedResult<Record<string, unknown>> {
@@ -4313,12 +4354,78 @@ export class Store {
       : status === "resolved" ? "AND status IN ('resolved', 'abandoned')" : "";
     const page = paginationSql(pagination);
     const rows = this.db.all(
-      `SELECT id FROM foreshadows WHERE work_id = ? ${where}
+      `SELECT * FROM foreshadows WHERE work_id = ? ${where}
        ORDER BY CASE importance WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at${page.sql}`,
       workId,
       ...page.params
     );
-    return paginated(rows.map((row) => this.getForeshadow(requiredString(row, "id"), currentChapterId)), pagination);
+    return paginated(this.mapForeshadowList(rows, currentChapterId), pagination);
+  }
+
+  private mapForeshadowList(rows: Row[], currentChapterId?: string): Record<string, unknown>[] {
+    if (rows.length === 0) return [];
+    const foreshadowIds = rows.map((row) => requiredString(row, "id"));
+    const batch = {
+      occurrences: new Map<string, Record<string, unknown>[]>(),
+      versions: this.currentEntityVersionNos("foreshadow", foreshadowIds),
+      chapterSequences: new Map<string, number>()
+    };
+    for (let offset = 0; offset < foreshadowIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+      const batchIds = foreshadowIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      const occurrences = this.db.all(
+        `SELECT fo.*, c.title AS chapter_title, c.volume_id, c.sort_order AS chapter_order,
+         v.title AS volume_title, v.sort_order AS volume_order
+         FROM foreshadow_occurrences fo
+         JOIN chapters c ON c.id = fo.chapter_id
+         JOIN volumes v ON v.id = c.volume_id
+         WHERE fo.foreshadow_id IN (${placeholders})
+         ORDER BY fo.foreshadow_id, v.sort_order, c.sort_order, fo.created_at`,
+        ...batchIds
+      );
+      for (const occurrence of occurrences) {
+        const foreshadowId = requiredString(occurrence, "foreshadow_id");
+        const grouped = batch.occurrences.get(foreshadowId) ?? [];
+        grouped.push(this.mapForeshadowOccurrence(occurrence));
+        batch.occurrences.set(foreshadowId, grouped);
+      }
+    }
+    if (currentChapterId) {
+      const chapterIds = [...new Set([
+        currentChapterId,
+        ...rows.map((row) => optionalString(row, "planned_payoff_chapter_id")).filter((chapterId): chapterId is string => Boolean(chapterId))
+      ])];
+      for (let offset = 0; offset < chapterIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+        const batchIds = chapterIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+        const placeholders = batchIds.map(() => "?").join(", ");
+        const sequences = this.db.all(
+          `SELECT c.id, v.sort_order * 1000000 + c.sort_order AS sequence
+           FROM chapters c JOIN volumes v ON v.id = c.volume_id
+           WHERE c.id IN (${placeholders}) AND c.work_id = ?`,
+          ...batchIds,
+          requiredString(rows[0] ?? {}, "work_id")
+        );
+        for (const sequence of sequences) {
+          batch.chapterSequences.set(requiredString(sequence, "id"), numberValue(sequence, "sequence"));
+        }
+      }
+    }
+    const currentChapterSequence = currentChapterId
+      ? batch.chapterSequences.get(currentChapterId) ?? Number.MAX_SAFE_INTEGER
+      : Number.MAX_SAFE_INTEGER;
+    return rows.map((row) => {
+      const foreshadowId = requiredString(row, "id");
+      const status = requiredString(row, "status");
+      const plannedPayoffChapterId = optionalString(row, "planned_payoff_chapter_id");
+      const overdue = Boolean(currentChapterId && plannedPayoffChapterId && ["planned", "planted"].includes(status)
+        && (batch.chapterSequences.get(plannedPayoffChapterId) ?? Number.MAX_SAFE_INTEGER) < currentChapterSequence);
+      return this.mapForeshadow(
+        row,
+        batch.occurrences.get(foreshadowId) ?? [],
+        batch.versions.get(foreshadowId) ?? 0,
+        overdue
+      );
+    });
   }
 
   listChapterForeshadowReminders(workId: string, chapterId: string): Record<string, unknown>[] {
@@ -5299,14 +5406,17 @@ export class Store {
 
   listOrganizations(workId: string, includeMarkdown = true): Record<string, unknown>[] {
     this.getWork(workId);
-    return this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId).map((row) => this.mapOrganization(row, includeMarkdown));
+    const rows = this.db.all("SELECT * FROM organizations WHERE work_id = ? ORDER BY name", workId);
+    const batch = this.organizationListBatch(rows);
+    return rows.map((row) => this.mapOrganization(row, includeMarkdown, batch));
   }
 
   listOrganizationsPage(workId: string, pagination: Pagination, includeMarkdown = true): PaginatedResult<Record<string, unknown>> {
     this.getWork(workId);
     const page = paginationSql(pagination);
     const rows = this.db.all(`SELECT * FROM organizations WHERE work_id = ? ORDER BY name${page.sql}`, workId, ...page.params);
-    return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown)), pagination);
+    const batch = this.organizationListBatch(rows);
+    return paginated(rows.map((row) => this.mapOrganization(row, includeMarkdown, batch)), pagination);
   }
 
   getOrganization(organizationId: string): Record<string, unknown> {
@@ -5432,23 +5542,57 @@ export class Store {
     return { mergeId, target: this.getOrganization(targetOrganizationId), source };
   }
 
-  private mapOrganization(row: Row, includeMarkdown = true): Record<string, unknown> {
+  private organizationListBatch(rows: Row[]): OrganizationListBatch {
+    const organizationIds = rows.map((row) => requiredString(row, "id"));
+    const batch: OrganizationListBatch = {
+      members: new Map(),
+      versions: this.currentEntityVersionNos("organization", organizationIds)
+    };
+    for (let offset = 0; offset < organizationIds.length; offset += ENTITY_LIST_BATCH_SIZE) {
+      const batchIds = organizationIds.slice(offset, offset + ENTITY_LIST_BATCH_SIZE);
+      const placeholders = batchIds.map(() => "?").join(", ");
+      const members = this.db.all(
+        `SELECT m.organization_id, c.id, c.name, m.role, m.note
+         FROM character_organization_memberships m
+         JOIN characters c ON c.id = m.character_id
+         WHERE m.organization_id IN (${placeholders}) ORDER BY m.organization_id, c.name`,
+        ...batchIds
+      );
+      for (const member of members) {
+        const organizationId = requiredString(member, "organization_id");
+        const grouped = batch.members.get(organizationId) ?? [];
+        grouped.push({
+          characterId: requiredString(member, "id"),
+          name: requiredString(member, "name"),
+          role: requiredString(member, "role"),
+          note: requiredString(member, "note")
+        });
+        batch.members.set(organizationId, grouped);
+      }
+    }
+    return batch;
+  }
+
+  private mapOrganization(row: Row, includeMarkdown = true, batch?: OrganizationListBatch): Record<string, unknown> {
+    const organizationId = requiredString(row, "id");
     const settingsSections = knowledgeSectionsFromStored(row.settings_sections_json, json<string[]>(requiredString(row, "settings_json"), []));
     const settings = settingsFromKnowledgeSections(settingsSections);
-    const members = this.db.all(
-      `SELECT c.id, c.name, m.role, m.note
-       FROM character_organization_memberships m
-       JOIN characters c ON c.id = m.character_id
-       WHERE m.organization_id = ? ORDER BY c.name`,
-      requiredString(row, "id")
-    ).map((member) => ({
-      characterId: requiredString(member, "id"),
-      name: requiredString(member, "name"),
-      role: requiredString(member, "role"),
-      note: requiredString(member, "note")
-    }));
+    const members = batch
+      ? batch.members.get(organizationId) ?? []
+      : this.db.all(
+        `SELECT c.id, c.name, m.role, m.note
+         FROM character_organization_memberships m
+         JOIN characters c ON c.id = m.character_id
+         WHERE m.organization_id = ? ORDER BY c.name`,
+        organizationId
+      ).map((member) => ({
+        characterId: requiredString(member, "id"),
+        name: requiredString(member, "name"),
+        role: requiredString(member, "role"),
+        note: requiredString(member, "note")
+      }));
     return {
-      id: requiredString(row, "id"),
+      id: organizationId,
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       description: requiredString(row, "description"),
@@ -5458,7 +5602,7 @@ export class Store {
         : { settings: [], settingsCount: settingsSections.length }),
       memberIds: members.map((member) => member.characterId),
       members,
-      versionNo: this.currentEntityVersionNo("organization", requiredString(row, "id")),
+      versionNo: batch ? batch.versions.get(organizationId) ?? 0 : this.currentEntityVersionNo("organization", organizationId),
       createdAt: requiredString(row, "created_at"),
       updatedAt: requiredString(row, "updated_at")
     };

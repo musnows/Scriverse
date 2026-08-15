@@ -59,7 +59,7 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('fork.setAttribute("aria-label", "从此消息续写为新对话")');
     expect(application.text).toContain("const forkRequestId = createAiIdempotencyKey()");
     expect(application.text).toContain("body: { messageId: message.dataset.messageId, requestId: forkRequestId }");
-    expect(application.text).not.toContain('message.classList.contains("assistant-message")');
+    expect(application.text).toContain('message.dataset.messageId && message.classList.contains("assistant-message")');
     expect(styles.text).toContain(".ai-history-dialog-body");
     expect(styles.text).toContain(".ai-heading-action-icon");
     expect(styles.text).toContain(".ai-history-row { display: grid;");

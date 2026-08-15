@@ -2584,7 +2584,11 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-tool-call-info code, .ai-tool-call-info time { font-family: var(--font-latin), monospace; }
 .ai-tool-call-detail section { min-width: 0; }
 .ai-tool-call-detail h3 { margin: 0 0 7px; color: var(--muted); font-size: 10px; font-weight: 600; }
-.ai-tool-call-detail pre { min-height: 120px; max-height: 32vh; overflow: auto; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper-deep); color: var(--ink); font: 10px/1.55 var(--font-latin), monospace; white-space: pre-wrap; word-break: break-word; }
+.ai-tool-call-code-block { position: relative; min-width: 0; }
+.ai-tool-call-detail pre { min-height: 120px; max-height: 32vh; overflow: auto; margin: 0; padding: 30px 12px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--paper-deep); color: var(--ink); font: 10px/1.55 var(--font-latin), monospace; white-space: pre-wrap; word-break: break-word; }
+.ai-tool-call-copy-button { position: absolute; z-index: 1; top: 6px; right: 6px; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; min-height: 0; padding: 0; border: 1px solid transparent; border-radius: 4px; background: color-mix(in srgb, var(--paper-deep) 86%, var(--ink)); color: var(--muted); }
+.ai-tool-call-copy-button svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.ai-tool-call-copy-button:hover, .ai-tool-call-copy-button:focus-visible, .ai-tool-call-copy-button.is-copied { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 12%, var(--paper-deep)); color: var(--accent-dark); outline: none; }
 #ai-tool-call-arguments { min-height: 0; max-height: 26vh; }
 .ai-tool-call-detail section:last-child pre { min-height: 180px; }
 @media (max-width: 680px) { .ai-tool-call-info { grid-template-columns: minmax(0, 1fr); }.ai-tool-call-detail pre { min-height: 100px; max-height: 26vh; }#ai-tool-call-arguments { min-height: 0; max-height: 20vh; }.ai-tool-call-detail section:last-child pre { min-height: 140px; } }
