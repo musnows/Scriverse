@@ -9320,7 +9320,8 @@ function renderCharacterExtractionEditor(preview) {
   if (!items.length) return '<p class="character-extraction-empty">没有可应用的角色候选。</p>';
   return `<div class="character-extraction-editor" data-character-extraction-editor data-preview-token="${esc(preview.previewToken)}">
     <div class="character-extraction-policy" role="note"><strong>合并规则</strong><span>优先使用任务保存的稳定角色引用，其次使用当前标准名和别名匹配。合并只追加无冲突别名、空缺身份、种族和首次登场；已有非空字段保持不变。</span></div>
-    <div class="character-extraction-editor-toolbar"><span data-character-extraction-selected-count>已选择 0 项</span><button class="ghost-button" type="button" data-character-extraction-select-all>全选可处理项</button><button class="ghost-button" type="button" data-character-extraction-clear>全部跳过</button></div>
+    <div class="character-extraction-editor-toolbar"><button class="primary-button character-extraction-apply-button" type="button" data-apply-character-extraction>确认并应用所选候选</button><span data-character-extraction-selected-count>已选择 0 项</span><button class="ghost-button" type="button" data-character-extraction-select-all>全选可处理项</button><button class="ghost-button" type="button" data-character-extraction-clear>全部跳过</button></div>
+    <p class="character-extraction-apply-note">确认采用整批事务；任一新建项名称冲突时全部回滚。重复点击或网络重试不会重复创建。</p>
     <div class="character-extraction-candidate-list">${items.map((item, index) => {
       const matches = Array.isArray(item.matchCandidates) ? item.matchCandidates : [];
       const suggestedAction = item.suggestedAction === "merge" && matches.length ? "merge" : item.suggestedAction === "skip" ? "skip" : "create";
@@ -9351,7 +9352,6 @@ function renderCharacterExtractionEditor(preview) {
       </article>`;
     }).join("")}</div>
     <p class="character-extraction-apply-error hidden" data-character-extraction-error role="alert"></p>
-    <div class="character-extraction-apply-actions"><button class="primary-button" type="button" data-apply-character-extraction>确认并应用所选候选</button><small>确认采用整批事务；任一新建项名称冲突时全部回滚。重复点击或网络重试不会重复创建。</small></div>
   </div>`;
 }
 
