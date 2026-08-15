@@ -164,4 +164,45 @@ describe("AI 分析任务模型", () => {
     expect(rejected.body.error).toMatchObject({ code: "AI_CONTEXT_TOO_LARGE" });
     expect(rejected.body.error.message).toContain("上下文更长的模型");
   });
+
+  it("定向关系任务上下文预检只读取轻量范围元数据", () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "定向关系上下文预检" });
+    const workId = String(work.id);
+    const volume = runtime.store.createVolume(workId, { title: "第一卷" });
+    runtime.store.createChapter(workId, {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "林舟与沈星共同调查北港旧约。".repeat(2_000)
+    });
+    const character = runtime.store.createCharacter(workId, {
+      name: "林舟",
+      profile: { background: "长期人物档案".repeat(2_000) }
+    });
+    runtime.store.createCharacter(workId, { name: "沈星" });
+    const provider = runtime.ai.createProvider({
+      name: "上下文预检模型",
+      baseUrl: "https://context-preview.test/v1",
+      apiKey: "sk-context-preview-test",
+      status: "enabled"
+    });
+    runtime.database.run("UPDATE providers SET connection_status = 'success' WHERE id = ?", String(provider.id));
+    const model = runtime.ai.createModel(String(provider.id), {
+      displayName: "上下文预检模型",
+      modelId: "context-preview-model",
+      contextWindow: 200_000
+    });
+    const getWorkTree = vi.spyOn(runtime.store, "getWorkTree");
+    const listCharacters = vi.spyOn(runtime.store, "listCharacters");
+
+    const preview = runtime.ai.previewAnalysisTaskContext(workId, {
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [String(character.id)] },
+      modelId: String(model.id)
+    });
+
+    expect(preview).toMatchObject({ allowed: true, overThreshold: false });
+    expect(getWorkTree).not.toHaveBeenCalled();
+    expect(listCharacters).not.toHaveBeenCalled();
+  });
 });

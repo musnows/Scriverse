@@ -1656,11 +1656,11 @@ export class ContextBuilder {
       ? [wrapAiContextRegion("work", `作品：${String(work.title)}\n作者：${String(work.author) || "未填写"}`)]
       : [];
     const contentSections: string[] = [];
-    const availableSettings = this.store.listSettings(workId);
+    const availableSettings = includeSettingInfo ? this.store.listSettings(workId) : [];
     const contextualSettings = !includeSettingInfo
       ? []
       : scope.includeAllSettings ? availableSettings : availableSettings.filter((item) => item.locked);
-    const allCharacters = this.store.listCharacters(workId);
+    const allCharacters = includeSettingInfo ? this.store.listCharacters(workId) : [];
     const lockedCharacters = includeSettingInfo
       ? allCharacters.filter((item) => Array.isArray(item.lockedFields) && item.lockedFields.length > 0)
       : [];
@@ -3426,7 +3426,18 @@ export class AiManager {
         ? "从本批正文抽取可复用的世界设定候选，并为每条候选提供原文证据。"
         : "从本批正文抽取人物候选，并为每位候选提供原文首次出现证据。";
     } else if (taskType === "relationship-analysis") {
-      const characters = this.store.listCharacters(workId);
+      const targeted = Boolean(scope.characterIds?.length);
+      const characters = targeted
+        ? this.store.db.all(
+          `SELECT id, name, aliases_json FROM characters
+           WHERE work_id = ? AND merged_into_character_id IS NULL ORDER BY name`,
+          workId
+        ).map((row) => ({
+          id: String(row.id),
+          name: String(row.name),
+          aliases: json<string[]>(String(row.aliases_json), [])
+        }))
+        : this.store.listCharacters(workId);
       const roster = characters.map((character) => `${String(character.id)} | ${String(character.name)}${Array.isArray(character.aliases) && character.aliases.length ? ` | 别名：${(character.aliases as string[]).join("、")}` : ""}`).join("\n");
       let selection = "本次范围没有可注入的正文或设定数据。";
       if (scope.type === "settings") {
@@ -3434,12 +3445,35 @@ export class AiManager {
         selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
         previewScope = { type: "settings", selection };
       } else {
-        const chunks = this.buildChapterChunks(this.getScopeChapters(workId, scope), 12_000);
-        selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
+        if (targeted && scope.type === "book") {
+          const stats = this.store.db.get(
+            `SELECT COUNT(*) AS chapter_count,
+               COALESCE(SUM(LENGTH(chapter.content)), 0) AS total_characters,
+               COALESCE(MAX(LENGTH(chapter.content)), 0) AS maximum_chapter_characters
+             FROM chapters chapter
+             JOIN volumes volume ON volume.id = chapter.volume_id
+             WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+               AND chapter.excluded_from_analysis = 0 AND chapter.chapter_type <> '作者的话'`,
+            workId
+          ) ?? {};
+          const chapterCount = Number(stats.chapter_count ?? 0);
+          const totalCharacters = Number(stats.total_characters ?? 0);
+          const maximumChapterCharacters = Number(stats.maximum_chapter_characters ?? 0);
+          if (chapterCount > 0 && totalCharacters > 0) {
+            const previewCharacters = Math.max(
+              maximumChapterCharacters + 80,
+              Math.min(totalCharacters + chapterCount * 80, 12_000)
+            );
+            selection = `<CHAPTER id="context-preview" title="上下文预检">\n${"字".repeat(previewCharacters)}\n</CHAPTER>`;
+          }
+        } else {
+          const chunks = this.buildChapterChunks(this.getScopeChapters(workId, scope), 12_000);
+          selection = [...chunks].sort((left, right) => right.text.length - left.text.length)[0]?.text ?? selection;
+        }
         previewScope = {
           type: "selection",
           selection,
-          ...(scope.characterIds?.length ? { suppressAutomaticContext: true } : {})
+          ...(targeted ? { suppressAutomaticContext: true } : {})
         };
       }
       instruction = `抽取本批正文或设定中的人物长期关系候选，只使用原文证据。角色规范表：\n${roster}`;
