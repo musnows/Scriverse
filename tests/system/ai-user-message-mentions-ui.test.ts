@@ -10,7 +10,7 @@ describe("AI 用户消息角色引用横幅", () => {
       readFile(join(process.cwd(), "src", "public", "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('/styles.css?v=20260816-task-scope-checkbox-v1');
+    expect(page).toContain('/styles.css?v=20260816-novel-tree-indent-v1');
     expect(page).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");

@@ -1303,7 +1303,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .chapter-add-button { flex: none; }
 .volume-chapters { display: block; }
 .volume-node.is-collapsed .volume-chapters { display: none; }
-.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: calc(100% + 6px); padding: 9px 8px 9px 20px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }
+.chapter-node { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; width: calc(100% + 6px); padding: 9px 8px 9px 24px; border: 0; background: transparent; border-radius: 4px; text-align: left; font-size: 12px; }
 .chapter-node:hover, .chapter-node.active { background: var(--row-active); }
 .chapter-node[draggable="true"] { cursor: grab; }
 .chapter-node.is-dragging { opacity: .42; cursor: grabbing; }

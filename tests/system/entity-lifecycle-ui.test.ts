@@ -28,7 +28,7 @@ describe("实体存续状态界面", () => {
     expect(application.text).toContain('entityLifecycleBadge(item.isExtinct, "已灭绝")');
     expect(application.text).toContain('entityLifecycleBadge(item.isDissolved, "已解散")');
     expect(styles.text).toContain(".entity-lifecycle-badge");
-    expect(page.text).toContain('/styles.css?v=20260816-task-scope-checkbox-v1');
+    expect(page.text).toContain('/styles.css?v=20260816-novel-tree-indent-v1');
     expect(page.text).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
   });
 });
