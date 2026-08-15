@@ -1989,21 +1989,22 @@ export class Store {
     return { ...work, volumes, directoryPage: pageResult };
   }
 
-  getStoryIndexChapterPage(workId: string, offset: number, limit: number): StoryIndexChapterPage {
+  getStoryIndexChapterPage(workId: string, offset: number, limit: number, options: { excludeAuthorNotes?: boolean } = {}): StoryIndexChapterPage {
     const work = this.getWork(workId);
     const permissions = work.modulePermissions as WorkModulePermissions;
     if (permissions.prose === "none") return { totalChapters: 0, chapters: [] };
+    const authorNoteFilter = options.excludeAuthorNotes ? " AND chapter.chapter_type <> '作者的话'" : "";
     const countRow = this.db.get(
       `SELECT COUNT(*) AS count FROM chapters chapter
        JOIN volumes volume ON volume.id = chapter.volume_id
-       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL`,
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL${authorNoteFilter}`,
       workId
     );
     const chapterRows = this.db.all(
       `SELECT chapter.id, chapter.title, chapter.version_no, volume.title AS volume_title
        FROM chapters chapter
        JOIN volumes volume ON volume.id = chapter.volume_id
-       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+       WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL${authorNoteFilter}
        ORDER BY volume.sort_order, volume.created_at, chapter.sort_order, chapter.created_at
        LIMIT ? OFFSET ?`,
       workId,
@@ -3538,7 +3539,7 @@ export class Store {
     );
   }
 
-  searchChapterParagraphs(workId: string, keyword: string, limit = 20): Array<{
+  searchChapterParagraphs(workId: string, keyword: string, limit = 20, options: { excludeAuthorNotes?: boolean } = {}): Array<{
     chapterId: string;
     chapterTitle: string;
     paragraph: string;
@@ -3547,6 +3548,7 @@ export class Store {
     const normalizedKeyword = normalizeDocumentSearchText(keyword.trim());
     if (!normalizedKeyword) return [];
     const safeLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
+    const authorNoteFilter = options.excludeAuthorNotes ? " AND chapter.chapter_type <> '作者的话'" : "";
     const columns = `SELECT paragraph.chapter_id, chapter.title AS chapter_title, paragraph.content
       FROM chapter_paragraph_search paragraph
       JOIN chapters chapter ON chapter.id = paragraph.chapter_id
@@ -3555,7 +3557,7 @@ export class Store {
       ? this.db.all(
           `${columns}
            JOIN chapter_paragraph_short_terms term ON term.paragraph_id = paragraph.id
-           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND term.term = ?
+           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL${authorNoteFilter} AND term.term = ?
            ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
            LIMIT ?`,
           workId,
@@ -3565,7 +3567,7 @@ export class Store {
       : this.db.all(
           `${columns}
            JOIN chapter_paragraph_search_fts fts ON fts.rowid = paragraph.id
-           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL AND chapter_paragraph_search_fts MATCH ?
+           WHERE paragraph.work_id = ? AND chapter.deleted_at IS NULL${authorNoteFilter} AND chapter_paragraph_search_fts MATCH ?
            ORDER BY volume.sort_order, chapter.sort_order, paragraph.paragraph_order
            LIMIT ?`,
           workId,
@@ -8723,11 +8725,12 @@ export class Store {
     ];
     for (const chapterId of [...new Set(selectedChapterIds)]) {
       const chapter = this.db.get(
-        "SELECT work_id, version_no FROM chapters WHERE id = ? AND deleted_at IS NULL",
+        "SELECT work_id, version_no, chapter_type FROM chapters WHERE id = ? AND deleted_at IS NULL",
         chapterId
       );
       if (!chapter) throw notFound("章节");
       if (requiredString(chapter, "work_id") !== workId) throw new AppError(400, "CHAPTER_WORK_MISMATCH", "章节不属于当前作品");
+      if (requiredString(chapter, "chapter_type") === "作者的话") continue;
       sourceVersions[chapterId] = numberValue(chapter, "version_no");
     }
     if (scope.type === "book" || scope.type === "volume") {
@@ -8754,6 +8757,7 @@ export class Store {
          FROM chapters chapter
          JOIN volumes volume ON volume.id = chapter.volume_id
          WHERE chapter.work_id = ? AND chapter.deleted_at IS NULL AND volume.deleted_at IS NULL
+           AND chapter.chapter_type <> '作者的话'
            ${volumeFilter}`,
         workId,
         ...(scope.type === "volume" ? [...selectedVolumeIdSet] : [])

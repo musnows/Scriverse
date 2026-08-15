@@ -59,4 +59,29 @@ describe("story_index 目录读取", () => {
     expect(insightCall?.slice(1)).not.toContain(chapters[0]?.id);
     expect(insightCall?.slice(1)).not.toContain(chapters[3]?.id);
   });
+
+  it("供 AI 查询时排除作者的话章节并保持分页总数一致", () => {
+    runtime = createTestRuntime();
+    const work = runtime.store.createWork({ title: "作者的话目录", author: "测试作者" });
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "作者的话",
+      chapterType: "作者的话",
+      content: "作者注释不应提供给 AI。"
+    });
+    const chapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "正文目录项。"
+    });
+
+    const page = runtime.store.getStoryIndexChapterPage(String(work.id), 0, 20, { excludeAuthorNotes: true });
+
+    expect(page.totalChapters).toBe(1);
+    expect(page.chapters).toEqual([
+      expect.objectContaining({ id: chapter.id, title: "第一章" })
+    ]);
+    expect(JSON.stringify(page)).not.toContain("作者的话");
+  });
 });
