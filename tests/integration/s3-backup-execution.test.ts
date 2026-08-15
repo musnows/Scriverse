@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntime, type Runtime } from "../../src/app.js";
 import { decryptObject, isEncryptedEnvelope } from "../../src/backup-encryption.js";
 import { createLogger, type LogRecord } from "../../src/logger.js";
@@ -23,15 +23,18 @@ class FakeS3Client implements S3ObjectClient {
   readonly deletedKeys: string[] = [];
   closed = false;
   failure: Error | null = null;
+  failureKeyIncludes: string | null = null;
+  onObjectExists: ((key: string) => void) | null = null;
 
   async objectExists(_bucket: string, key: string): Promise<boolean> {
     this.events.push(`head:${key}`);
+    this.onObjectExists?.(key);
     return this.objects.has(key);
   }
 
   async putObject(input: { bucket: string; key: string; body: Buffer; contentType: string; metadata?: Record<string, string> }): Promise<void> {
     this.events.push(`put:${input.key}`);
-    if (this.failure) throw this.failure;
+    if (this.failure && (!this.failureKeyIncludes || input.key.includes(this.failureKeyIncludes))) throw this.failure;
     this.objects.set(input.key, {
       body: Buffer.from(input.body),
       contentType: input.contentType,
@@ -101,6 +104,9 @@ describe("S3 数据库与图片备份执行", () => {
     const work = runtime.store.createWork({ title: "备份测试作品" });
     const cover = Buffer.from("cover-image-content");
     runtime.store.setWorkCover(String(work.id), "image/png", cover);
+    const avatarUser = runtime.auth.register({ username: "backup_avatar", password: "backup-avatar-password" }).session.user;
+    const avatar = Buffer.from("avatar-image-content");
+    runtime.auth.setAvatar(avatarUser.userId, { mimeType: "image/png", content: avatar, width: 1, height: 1 });
 
     const attachment = Buffer.from("attachment-image-content");
     const attachmentHash = createHash("sha256").update(attachment).digest("hex");
@@ -130,6 +136,13 @@ describe("S3 数据库与图片备份执行", () => {
       contentType: "image/png",
       lastModified: new Date("2026-08-01T00:00:00.000Z")
     });
+    const avatarHash = createHash("sha256").update(avatar).digest("hex");
+    const avatarObjectKey = `${rootPrefix}/img/${avatarHash.slice(0, 2)}/${avatarHash}.png`;
+    client.objects.set(avatarObjectKey, {
+      body: avatar,
+      contentType: "image/png",
+      lastModified: new Date("2026-08-01T00:00:00.000Z")
+    });
     client.objects.set(`${rootPrefix}/db/scriverse-20260801T000000000Z-a0d00001.db`, {
       body: Buffer.from("old-1"), contentType: "application/vnd.sqlite3", lastModified: new Date("2026-08-01T00:00:00.000Z")
     });
@@ -154,12 +167,14 @@ describe("S3 数据库与图片备份执行", () => {
       backupImages: true,
       retentionCount: 2
     });
+    const allSpy = vi.spyOn(runtime.database, "all");
+    const getSpy = vi.spyOn(runtime.database, "get");
     const run = await runtime.backups.runTarget(target.id, "manual");
 
     expect(run).toMatchObject({
       status: "succeeded",
       imagesUploaded: 1,
-      imagesSkipped: 1,
+      imagesSkipped: 2,
       databasesDeleted: 1,
       errorMessage: null
     });
@@ -171,12 +186,137 @@ describe("S3 数据库与图片备份执行", () => {
     expect(client.objects.get(`${rootPrefix}/master.key`)?.body.toString()).toBe("s3-execution-test-master-secret-with-enough-length");
     const coverHash = createHash("sha256").update(cover).digest("hex");
     expect(client.objects.get(`${rootPrefix}/img/${coverHash.slice(0, 2)}/${coverHash}.png`)?.body).toEqual(cover);
+    const databaseImageMetadataQueries = allSpy.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => sql.includes("work_covers") || sql.includes("user_avatars"));
+    expect(databaseImageMetadataQueries).toHaveLength(2);
+    expect(databaseImageMetadataQueries.every((sql) => !/\bcontent\b/iu.test(sql))).toBe(true);
+    const databaseImageContentQueries = getSpy.mock.calls
+      .map(([sql]) => String(sql))
+      .filter((sql) => /\bcontent\b/iu.test(sql) && (sql.includes("work_covers") || sql.includes("user_avatars")));
+    expect(databaseImageContentQueries).toHaveLength(1);
+    expect(databaseImageContentQueries[0]).toContain("work_covers");
     expect(client.deletedKeys).toEqual([`${rootPrefix}/db/scriverse-20260801T000000000Z-a0d00001.db`]);
     expect(client.objects.has(`${rootPrefix}/db/manual.db`)).toBe(true);
     expect(client.objects.has(`${rootPrefix}/db/archive/scriverse-20260801T000000000Z-a0d00003.db`)).toBe(true);
     expect(client.deletedKeys.every((key) => !key.includes("/img/"))).toBe(true);
     expect(client.closed).toBe(true);
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("图片远端未命中后按主键读取，并在源记录被删除时明确失败", async () => {
+    const client = new FakeS3Client();
+    const runtime = testRuntime({ clientFactory: () => client });
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "备份删除竞态" });
+    const cover = Buffer.from("cover-before-delete");
+    runtime.store.setWorkCover(String(work.id), "image/png", cover);
+    const coverHash = createHash("sha256").update(cover).digest("hex");
+    const objectKey = `scriverse/img/${coverHash.slice(0, 2)}/${coverHash}.png`;
+    client.onObjectExists = (key) => {
+      if (key !== objectKey) return;
+      client.onObjectExists = null;
+      runtime.database.run("DELETE FROM work_covers WHERE work_id = ?", String(work.id));
+    };
+    const target = runtime.backups.createTarget({
+      name: "删除竞态目标",
+      endpoint: "https://delete-race.example.com",
+      bucket: "backup-bucket",
+      accessKeyId: "access-delete-race",
+      secretAccessKey: "secret-delete-race",
+      enabled: true,
+      backupImages: true
+    });
+
+    const run = await runtime.backups.runTarget(target.id, "manual");
+
+    expect(run).toMatchObject({
+      status: "failed",
+      imagesUploaded: 0,
+      imagesSkipped: 0,
+      errorMessage: "待备份作品封面在上传前已被删除，请重新执行备份"
+    });
+    expect(client.events).not.toContain(`put:${objectKey}`);
+  });
+
+  it("图片远端未命中后拒绝上传已替换或校验不一致的内容", async () => {
+    for (const scenario of ["replaced", "corrupted"] as const) {
+      const client = new FakeS3Client();
+      const runtime = testRuntime({ clientFactory: () => client });
+      runtimes.push(runtime);
+      const work = runtime.store.createWork({ title: `备份内容校验-${scenario}` });
+      const cover = Buffer.from("cover-original");
+      runtime.store.setWorkCover(String(work.id), "image/png", cover);
+      const coverHash = createHash("sha256").update(cover).digest("hex");
+      const objectKey = `scriverse/img/${coverHash.slice(0, 2)}/${coverHash}.png`;
+      client.onObjectExists = (key) => {
+        if (key !== objectKey) return;
+        client.onObjectExists = null;
+        const nextContent = Buffer.from(scenario === "replaced" ? "cover-replaced" : "cover-tampered");
+        if (scenario === "replaced") {
+          runtime.database.run(
+            "UPDATE work_covers SET content = ?, byte_length = ?, sha256 = ? WHERE work_id = ?",
+            nextContent,
+            nextContent.byteLength,
+            createHash("sha256").update(nextContent).digest("hex"),
+            String(work.id)
+          );
+          return;
+        }
+        runtime.database.run("UPDATE work_covers SET content = ? WHERE work_id = ?", nextContent, String(work.id));
+      };
+      const target = runtime.backups.createTarget({
+        name: `校验目标-${scenario}`,
+        endpoint: `https://${scenario}.example.com`,
+        bucket: "backup-bucket",
+        accessKeyId: `access-${scenario}`,
+        secretAccessKey: `secret-${scenario}`,
+        enabled: true,
+        backupImages: true
+      });
+
+      const run = await runtime.backups.runTarget(target.id, "manual");
+
+      expect(run).toMatchObject({
+        status: "failed",
+        imagesUploaded: 0,
+        imagesSkipped: 0,
+        errorMessage: scenario === "replaced"
+          ? "待备份作品封面在上传前已被替换，请重新执行备份"
+          : "待备份作品封面内容校验失败，请检查数据库完整性"
+      });
+      expect(client.events).not.toContain(`put:${objectKey}`);
+    }
+  });
+
+  it("图片上传在客户端重试后仍失败时不增加上传计数", async () => {
+    const client = new FakeS3Client();
+    client.failure = new Error("image upload failed after retries");
+    client.failureKeyIncludes = "/img/";
+    const runtime = testRuntime({ clientFactory: () => client });
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "图片上传失败" });
+    const cover = Buffer.from("failed-image-content");
+    runtime.store.setWorkCover(String(work.id), "image/png", cover);
+    const target = runtime.backups.createTarget({
+      name: "图片失败目标",
+      endpoint: "https://image-failure.example.com",
+      bucket: "backup-bucket",
+      accessKeyId: "access-image-failure",
+      secretAccessKey: "secret-image-failure",
+      enabled: true,
+      backupImages: true
+    });
+
+    const run = await runtime.backups.runTarget(target.id, "manual");
+
+    expect(run).toMatchObject({
+      status: "failed",
+      imagesUploaded: 0,
+      imagesSkipped: 0,
+      errorMessage: "image upload failed after retries"
+    });
+    expect(client.events.filter((event) => event.includes("put:scriverse/img/"))).toHaveLength(1);
   });
 
   it("图片开关关闭时只上传数据库", async () => {

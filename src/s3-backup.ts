@@ -145,6 +145,17 @@ type BackupImageSource = {
   read: () => Promise<Buffer>;
 };
 
+type DatabaseImageLocation =
+  | { table: "work_covers"; idColumn: "work_id"; label: "作品封面" }
+  | { table: "user_avatars"; idColumn: "user_id"; label: "用户头像" };
+
+type DatabaseImageMetadata = {
+  sourceId: string;
+  contentType: string;
+  byteLength: number;
+  sha256: string;
+};
+
 const sensitiveResponseKey = /(?:authorization|credential|accesskey|secret|securitytoken|set-cookie)/iu;
 
 function redactedString(value: string, secrets: readonly string[]): string {
@@ -992,17 +1003,25 @@ export class S3BackupManager {
 
   private backupImageSources(rootPrefix: string): BackupImageSource[] {
     const sources = new Map<string, BackupImageSource>();
-    const addDatabaseImages = (table: "work_covers" | "user_avatars"): void => {
-      for (const row of this.database.all(`SELECT mime_type, content, sha256 FROM ${table} ORDER BY sha256`)) {
-        const contentType = requiredString(row, "mime_type");
-        const sha256 = requiredString(row, "sha256");
-        const content = Buffer.from(row.content as Uint8Array);
-        const objectKey = `${rootPrefix}/img/${sha256.slice(0, 2)}/${sha256}.${this.imageExtension(contentType)}`;
-        sources.set(objectKey, { objectKey, contentType, sha256, read: async () => content });
+    const databaseLocations: readonly DatabaseImageLocation[] = [
+      { table: "work_covers", idColumn: "work_id", label: "作品封面" },
+      { table: "user_avatars", idColumn: "user_id", label: "用户头像" }
+    ];
+    for (const location of databaseLocations) {
+      for (const row of this.database.all(
+        `SELECT ${location.idColumn} AS source_id, mime_type, byte_length, sha256
+         FROM ${location.table} ORDER BY sha256`
+      )) {
+        const metadata = this.databaseImageMetadata(row, location.label);
+        const objectKey = `${rootPrefix}/img/${metadata.sha256.slice(0, 2)}/${metadata.sha256}.${this.imageExtension(metadata.contentType)}`;
+        sources.set(objectKey, {
+          objectKey,
+          contentType: metadata.contentType,
+          sha256: metadata.sha256,
+          read: async () => this.readDatabaseImage(location, metadata)
+        });
       }
-    };
-    addDatabaseImages("work_covers");
-    addDatabaseImages("user_avatars");
+    }
     for (const row of this.database.all(
       "SELECT DISTINCT storage_key, stored_mime_type, stored_sha256 FROM attachments ORDER BY storage_key"
     )) {
@@ -1020,6 +1039,42 @@ export class S3BackupManager {
       }
     }
     return [...sources.values()];
+  }
+
+  private databaseImageMetadata(row: Row, label: DatabaseImageLocation["label"]): DatabaseImageMetadata {
+    const sourceId = row.source_id;
+    const contentType = row.mime_type;
+    const sha256 = row.sha256;
+    const byteLength = Number(row.byte_length);
+    if (typeof sourceId !== "string" || typeof contentType !== "string" || typeof sha256 !== "string"
+      || !Number.isSafeInteger(byteLength) || byteLength < 0) {
+      throw new AppError(500, "BACKUP_IMAGE_METADATA_INVALID", `待备份${label}元数据无效`);
+    }
+    return { sourceId, contentType, byteLength, sha256 };
+  }
+
+  private readDatabaseImage(location: DatabaseImageLocation, expected: DatabaseImageMetadata): Buffer {
+    const row = this.database.get(
+      `SELECT ${location.idColumn} AS source_id, mime_type, content, byte_length, sha256
+       FROM ${location.table} WHERE ${location.idColumn} = ?`,
+      expected.sourceId
+    );
+    if (!row) {
+      throw new AppError(409, "BACKUP_IMAGE_SOURCE_MISSING", `待备份${location.label}在上传前已被删除，请重新执行备份`);
+    }
+    const current = this.databaseImageMetadata(row, location.label);
+    if (current.contentType !== expected.contentType || current.byteLength !== expected.byteLength || current.sha256 !== expected.sha256) {
+      throw new AppError(409, "BACKUP_IMAGE_SOURCE_CHANGED", `待备份${location.label}在上传前已被替换，请重新执行备份`);
+    }
+    if (!(row.content instanceof Uint8Array)) {
+      throw new AppError(500, "BACKUP_IMAGE_CONTENT_INVALID", `待备份${location.label}内容校验失败，请检查数据库完整性`);
+    }
+    const content = Buffer.from(row.content);
+    const actualSha256 = createHash("sha256").update(content).digest("hex");
+    if (content.byteLength !== expected.byteLength || actualSha256 !== expected.sha256) {
+      throw new AppError(500, "BACKUP_IMAGE_CONTENT_INVALID", `待备份${location.label}内容校验失败，请检查数据库完整性`);
+    }
+    return content;
   }
 
   private async enforceDatabaseRetention(client: S3ObjectClient, target: RuntimeTarget): Promise<number> {
