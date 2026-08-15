@@ -6,7 +6,7 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-export const DATABASE_SCHEMA_VERSION = 72;
+export const DATABASE_SCHEMA_VERSION = 73;
 
 export function readDatabaseSchemaVersion(filename: string): number | null {
   if (!existsSync(filename)) return null;
@@ -660,6 +660,50 @@ export class Database {
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS s3_backup_targets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        endpoint_url TEXT NOT NULL,
+        region TEXT NOT NULL DEFAULT '',
+        bucket TEXT NOT NULL,
+        prefix TEXT NOT NULL DEFAULT '',
+        access_key_id TEXT NOT NULL,
+        secret_encrypted TEXT NOT NULL,
+        secret_iv TEXT NOT NULL,
+        secret_tag TEXT NOT NULL,
+        secret_hint TEXT NOT NULL,
+        path_style INTEGER NOT NULL DEFAULT 1 CHECK(path_style IN (0, 1)),
+        status TEXT NOT NULL DEFAULT 'enabled' CHECK(status IN ('enabled', 'disabled')),
+        note TEXT NOT NULL DEFAULT '',
+        last_result TEXT CHECK(last_result IS NULL OR last_result IN ('success', 'failed')),
+        last_error TEXT,
+        last_success_at TEXT,
+        last_finished_at TEXT,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_settings (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        include_images INTEGER NOT NULL DEFAULT 1 CHECK(include_images IN (0, 1)),
+        retention_count INTEGER NOT NULL DEFAULT 10 CHECK(retention_count BETWEEN 1 AND 1000),
+        schedule_enabled INTEGER NOT NULL DEFAULT 0 CHECK(schedule_enabled IN (0, 1)),
+        schedule_time TEXT NOT NULL DEFAULT '03:00',
+        last_run_at TEXT,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS s3_backup_runs (
+        id TEXT PRIMARY KEY,
+        run_trigger TEXT NOT NULL CHECK(run_trigger IN ('manual', 'scheduled')),
+        status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'completed_with_failures', 'failed', 'skipped')),
+        include_images INTEGER NOT NULL CHECK(include_images IN (0, 1)),
+        results_json TEXT NOT NULL DEFAULT '[]',
+        started_at TEXT NOT NULL,
+        finished_at TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS idx_volumes_work ON volumes(work_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_chapters_work ON chapters(work_id, volume_id, sort_order);
       CREATE INDEX IF NOT EXISTS idx_versions_chapter ON chapter_versions(chapter_id, version_no DESC);
@@ -686,6 +730,8 @@ export class Database {
       CREATE INDEX IF NOT EXISTS idx_foreshadows_work ON foreshadows(work_id, status, importance);
       CREATE INDEX IF NOT EXISTS idx_foreshadow_occurrences_chapter ON foreshadow_occurrences(chapter_id, role);
       CREATE INDEX IF NOT EXISTS idx_continuation_guards_suggestion ON continuation_guard_runs(suggestion_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_s3_backup_targets_order ON s3_backup_targets(status, sort_order, created_at);
+      CREATE INDEX IF NOT EXISTS idx_s3_backup_runs_started ON s3_backup_runs(started_at DESC);
     `);
     this.applyDataMigrations();
   }
@@ -2766,6 +2812,23 @@ export class Database {
           this.run("ALTER TABLE organizations ADD COLUMN is_dissolved INTEGER NOT NULL DEFAULT 0 CHECK(is_dissolved IN (0, 1))");
         }
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (72, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(73)) {
+      this.transaction(() => {
+        this.run(
+          `INSERT INTO s3_backup_settings (id, include_images, retention_count, schedule_enabled, schedule_time, updated_at)
+           VALUES (1, 1, 10, 0, '03:00', ?)
+           ON CONFLICT(id) DO NOTHING`,
+          new Date().toISOString()
+        );
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (73, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

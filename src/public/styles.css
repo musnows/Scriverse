@@ -3346,3 +3346,31 @@ body { font-size: var(--ui-font-size); }
 .ai-tool-call-info dt, .ai-tool-call-detail h3 { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-tool-call-info dd { font-size: calc(11px * var(--ai-font-scale)); }
 .ai-tool-call-detail pre { font-size: calc(10px * var(--ai-font-scale)); }
+
+.s3-backup-dialog .s3-backup-body { display: grid; gap: 14px; padding: 0 28px 22px; max-height: min(72dvh, 760px); overflow-y: auto; }
+.s3-backup-settings-form { display: grid; gap: 10px; margin-top: 12px; font-size: 11px; color: var(--muted); }
+.s3-backup-settings-form label { display: grid; gap: 4px; max-width: 320px; }
+.s3-check-field { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); }
+.s3-target-form { display: grid; gap: 10px; margin-top: 12px; }
+.s3-target-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.s3-target-grid label { display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
+.s3-target-grid input, .s3-target-grid select { width: 100%; }
+.s3-target-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.s3-target-list { margin-top: 12px; }
+.s3-target-list .access-row { grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; }
+.s3-target-state { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px; font-size: 10px; }
+.s3-target-state-enabled { background: color-mix(in srgb, var(--toast-error-fg) 0%, transparent); border: 1px solid var(--line); color: var(--muted); }
+.s3-target-state-disabled { background: var(--surface-soft); border: 1px solid var(--line); color: var(--muted); }
+.s3-run-bar { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.s3-run-status { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.s3-run-list { display: grid; gap: 8px; margin-top: 10px; }
+.s3-run-row { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.s3-run-row strong { font-size: 12px; }
+.s3-run-row ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+.s3-run-row .s3-run-target-failed { color: var(--toast-error-bg); }
+.s3-run-row pre { margin: 2px 0 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 5px; white-space: pre-wrap; word-break: break-all; font-size: 10px; max-height: 120px; overflow: auto; }
+@media (max-width: 720px) {
+  .s3-backup-dialog .s3-backup-body { padding: 0 16px 16px; }
+  .s3-target-grid { grid-template-columns: 1fr; }
+  .s3-target-list .access-row { grid-template-columns: 1fr; }
+}

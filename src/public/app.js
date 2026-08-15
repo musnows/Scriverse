@@ -3373,6 +3373,7 @@ function renderSettingsHub() {
   $("#platform-usage-button").classList.toggle("hidden", !isAdmin);
   $("#user-management-button").classList.toggle("hidden", !isAdmin);
   $("#platform-ui-settings-button").classList.toggle("hidden", !isAdmin);
+  $("#s3-backup-button").classList.toggle("hidden", !isAdmin);
   $("#collaboration-button").disabled = !canManageWork;
   $("#writing-progress-button").disabled = !hasWork || !canReadModule("editor");
   $("#work-audit-button").disabled = !canManageWork;
@@ -3746,6 +3747,252 @@ async function openPlatformUiSettingsDialog() {
     $("#page-size-file-versions").value = String(pageSizes.fileVersions);
     $("#platform-ui-settings-dialog").showModal();
   } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+let s3BackupEditingTargetId = null;
+let s3BackupTargetsCache = [];
+let s3BackupRunPollTimer = null;
+
+const s3RunStatusLabel = { running: "进行中", completed: "完成", completed_with_failures: "部分失败", failed: "失败", skipped: "未执行" };
+
+function s3TargetRootLabel(target) {
+  return target.prefix ? `/${target.prefix}/scriverse` : "/scriverse";
+}
+
+function renderS3BackupSettings(settings) {
+  $("#s3-include-images").checked = Boolean(settings.includeImages);
+  $("#s3-retention-count").value = String(settings.retentionCount ?? 10);
+  $("#s3-schedule-enabled").checked = Boolean(settings.scheduleEnabled);
+  $("#s3-schedule-time").value = settings.scheduleTime || "03:00";
+  $("#s3-run-include-images").checked = Boolean(settings.includeImages);
+}
+
+function renderS3Targets(targets) {
+  s3BackupTargetsCache = targets;
+  const list = $("#s3-target-list");
+  list.innerHTML = targets.length ? targets.map((target) => {
+    const state = target.status === "disabled"
+      ? '<span class="s3-target-state s3-target-state-disabled">已停用</span>'
+      : '<span class="s3-target-state s3-target-state-enabled">启用中</span>';
+    const lastResult = target.lastResult === "failed" && target.lastError
+      ? esc(String(target.lastError).slice(0, 160))
+      : target.lastResult === "success" ? "上次同步成功" : "尚未执行备份";
+    return `<article class="access-row">
+      <div class="access-person"><div class="access-person-copy"><strong>${esc(target.name)} · ${esc(target.bucket)}${state}</strong><small>${esc(target.endpointUrl)} · ${esc(s3TargetRootLabel(target))}${target.pathStyle ? "" : " · Virtual Host"} · 密钥 ${esc(target.secretHint)}</small><small>${lastResult}</small></div></div>
+      <button type="button" data-s3-target-test="${esc(target.id)}">测试</button>
+      <button type="button" data-s3-target-edit="${esc(target.id)}">编辑</button>
+      <button type="button" data-s3-target-delete="${esc(target.id)}">删除</button>
+    </article>`;
+  }).join("") : '<p class="empty-state">还没有备份目标，先在上方新增一个 S3 兼容服务。</p>';
+  list.querySelectorAll("[data-s3-target-test]").forEach((button) => button.addEventListener("click", () => testS3Target(button.dataset.s3TargetTest).catch((error) => toast(error.message, "error"))));
+  list.querySelectorAll("[data-s3-target-edit]").forEach((button) => button.addEventListener("click", () => {
+    const target = s3BackupTargetsCache.find((item) => item.id === button.dataset.s3TargetEdit);
+    if (target) fillS3TargetForm(target);
+  }));
+  list.querySelectorAll("[data-s3-target-delete]").forEach((button) => button.addEventListener("click", async () => {
+    const target = s3BackupTargetsCache.find((item) => item.id === button.dataset.s3TargetDelete);
+    if (!target) return;
+    try {
+      await api(`/api/platform/backup/s3/targets/${encodeURIComponent(target.id)}`, { method: "DELETE" });
+      toast(`备份目标「${target.name}」已删除`);
+      await loadS3BackupState();
+    } catch (error) { toast(error.message, "error"); }
+  }));
+}
+
+function fillS3TargetForm(target) {
+  s3BackupEditingTargetId = target?.id ?? null;
+  $("#s3-target-id").value = target?.id ?? "";
+  $("#s3-target-name").value = target?.name ?? "";
+  $("#s3-target-endpoint").value = target?.endpointUrl ?? "";
+  $("#s3-target-region").value = target?.region ?? "";
+  $("#s3-target-bucket").value = target?.bucket ?? "";
+  $("#s3-target-prefix").value = target?.prefix ?? "";
+  $("#s3-target-access-key").value = target?.accessKeyId ?? "";
+  $("#s3-target-secret-key").value = "";
+  $("#s3-target-secret-key").placeholder = target ? "更换密钥时填写，留空保持不变" : "";
+  $("#s3-target-secret-key").required = !target;
+  $("#s3-target-path-style").value = target && target.pathStyle === false ? "virtual" : "path";
+  $("#s3-target-status").value = target?.status ?? "enabled";
+  $("#s3-target-save").textContent = target ? "更新备份目标" : "新增备份目标";
+}
+
+function renderS3Runs(runs) {
+  $("#s3-run-list").innerHTML = runs.length ? runs.map((run) => {
+    const results = Array.isArray(run.results) ? run.results : [];
+    const items = results.map((result) => {
+      if (result.status === "failed") {
+        const failure = result.failure ?? {};
+        const status = failure.httpStatus ? `（HTTP ${esc(String(failure.httpStatus))}）` : "";
+        const body = failure.responseBody ? `<pre>${esc(String(failure.responseBody).slice(0, 400))}</pre>` : "";
+        return `<li class="s3-run-target-failed">${esc(result.targetName ?? "未知目标")}：失败${status} ${esc(String(failure.message ?? "").slice(0, 200))}${body}</li>`;
+      }
+      const images = run.includeImages ? `，图片新增 ${Number(result.uploadedImages ?? 0)}、跳过 ${Number(result.skippedImages ?? 0)}` : "";
+      const deleted = Array.isArray(result.deletedDbKeys) && result.deletedDbKeys.length ? `，清理旧备份 ${result.deletedDbKeys.length} 个` : "";
+      return `<li>${esc(result.targetName ?? "未知目标")}：数据库 ${esc(result.dbKey ?? "")}${images}${deleted}</li>`;
+    }).join("");
+    return `<article class="s3-run-row">
+      <strong>${run.trigger === "scheduled" ? "定时备份" : "手动备份"} · ${esc(s3RunStatusLabel[run.status] ?? String(run.status))} · ${esc(String(run.startedAt ?? "").replace("T", " ").slice(0, 19))}</strong>
+      <ul>${items || "<li>没有目标结果</li>"}</ul>
+    </article>`;
+  }).join("") : '<p class="empty-state">还没有备份记录。</p>';
+}
+
+async function loadS3BackupState() {
+  const state = await api("/api/platform/backup/s3");
+  renderS3BackupSettings(state.settings);
+  renderS3Targets(Array.isArray(state.targets) ? state.targets : []);
+  renderS3Runs(state.lastRun ? [state.lastRun] : []);
+  return state;
+}
+
+async function openS3BackupDialog() {
+  fillS3TargetForm(null);
+  $("#s3-run-status").textContent = "";
+  $("#s3-target-list").innerHTML = '<p class="empty-state">正在读取备份配置……</p>';
+  $("#s3-backup-dialog").showModal();
+  try {
+    await loadS3BackupState();
+  } catch (error) {
+    $("#s3-backup-dialog").close();
+    toast(error.message, "error");
+  }
+}
+
+async function saveS3BackupSettings() {
+  const button = $("#s3-settings-save");
+  button.disabled = true;
+  try {
+    const settings = await api("/api/platform/backup/s3/settings", {
+      method: "PATCH",
+      body: {
+        includeImages: $("#s3-include-images").checked,
+        retentionCount: Number($("#s3-retention-count").value),
+        scheduleEnabled: $("#s3-schedule-enabled").checked,
+        scheduleTime: $("#s3-schedule-time").value || "03:00"
+      }
+    });
+    renderS3BackupSettings(settings);
+    $("#s3-run-include-images").checked = Boolean(settings.includeImages);
+    toast(settings.scheduleEnabled ? "备份策略已保存，定时备份已开启" : "备份策略已保存");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveS3Target() {
+  const button = $("#s3-target-save");
+  button.disabled = true;
+  try {
+    const secret = $("#s3-target-secret-key").value;
+    const body = {
+      name: $("#s3-target-name").value.trim(),
+      endpointUrl: $("#s3-target-endpoint").value.trim(),
+      region: $("#s3-target-region").value.trim(),
+      bucket: $("#s3-target-bucket").value.trim(),
+      prefix: $("#s3-target-prefix").value.trim(),
+      accessKeyId: $("#s3-target-access-key").value.trim(),
+      pathStyle: $("#s3-target-path-style").value === "path",
+      status: $("#s3-target-status").value
+    };
+    if (secret) body.secretAccessKey = secret;
+    const targetId = s3BackupEditingTargetId || $("#s3-target-id").value;
+    const saved = targetId
+      ? await api(`/api/platform/backup/s3/targets/${encodeURIComponent(targetId)}`, { method: "PATCH", body })
+      : await api("/api/platform/backup/s3/targets", { method: "POST", body });
+    toast(`备份目标「${saved.name}」已保存`);
+    fillS3TargetForm(null);
+    await loadS3BackupState();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function testS3Target(targetId) {
+  const target = s3BackupTargetsCache.find((item) => item.id === targetId);
+  const button = document.querySelector(`[data-s3-target-test="${CSS.escape(targetId)}"]`);
+  if (button) { button.disabled = true; button.textContent = "测试中"; }
+  try {
+    const result = await api(`/api/platform/backup/s3/targets/${encodeURIComponent(targetId)}/test`, { method: "POST", body: {} });
+    if (result.ok) {
+      toast(`备份目标「${target?.name ?? targetId}」连接成功`);
+    } else {
+      const detail = result.responseBody ? `：${String(result.responseBody).slice(0, 200)}` : "";
+      toast(`备份目标「${target?.name ?? targetId}」连接失败（HTTP ${result.httpStatus ?? 0}）${detail}`, "error");
+    }
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "测试"; }
+  }
+}
+
+function stopS3BackupRunPoll(message) {
+  if (s3BackupRunPollTimer) clearInterval(s3BackupRunPollTimer);
+  s3BackupRunPollTimer = null;
+  $("#s3-run-button").disabled = false;
+  if (message) {
+    $("#s3-run-status").textContent = message;
+    toast(message, "error");
+  }
+}
+
+function reportS3BackupRun(run) {
+  $("#s3-run-status").textContent = "";
+  const results = Array.isArray(run.results) ? run.results : [];
+  for (const result of results.filter((item) => item.status === "failed")) {
+    const failure = result.failure ?? {};
+    const detail = failure.responseBody ? `：${String(failure.responseBody).slice(0, 200)}` : "";
+    toast(`S3 备份目标「${result.targetName ?? "未知目标"}」同步失败（HTTP ${failure.httpStatus ?? 0}）${detail}`, "error");
+  }
+  if (run.status === "skipped") {
+    toast("没有启用中的备份目标，本次未执行同步", "error");
+    return;
+  }
+  if (run.status === "failed") return;
+  if (run.status === "completed_with_failures") toast("S3 备份部分完成，失败目标的详细信息见提示与运行记录", "error");
+  else toast("S3 备份完成");
+}
+
+function pollS3BackupRun(runId) {
+  if (s3BackupRunPollTimer) clearInterval(s3BackupRunPollTimer);
+  let attempts = 0;
+  s3BackupRunPollTimer = setInterval(async () => {
+    attempts += 1;
+    try {
+      const runs = await api("/api/platform/backup/s3/runs?limit=5");
+      renderS3Runs(Array.isArray(runs) ? runs : []);
+      const run = runs.find((item) => item.id === runId);
+      if (!run || run.status === "running") {
+        if (attempts > 600) stopS3BackupRunPoll("备份仍在执行，请稍后重新打开对话框查看结果。");
+        return;
+      }
+      stopS3BackupRunPoll(null);
+      reportS3BackupRun(run);
+      loadS3BackupState().catch(() => {});
+    } catch (error) {
+      stopS3BackupRunPoll(error.message);
+    }
+  }, 1500);
+}
+
+async function startS3BackupRun() {
+  const button = $("#s3-run-button");
+  button.disabled = true;
+  $("#s3-run-status").textContent = "备份已启动，正在同步到启用中的目标……";
+  try {
+    const run = await api("/api/platform/backup/s3/run", {
+      method: "POST",
+      body: { includeImages: $("#s3-run-include-images").checked }
+    });
+    pollS3BackupRun(run.id);
+  } catch (error) {
+    stopS3BackupRunPoll(null);
+    $("#s3-run-status").textContent = "";
     toast(error.message, "error");
   }
 }
@@ -11390,6 +11637,24 @@ $("#platform-ui-settings-form").addEventListener("submit", async (event) => {
     button.disabled = false;
   }
 });
+$("#s3-backup-button").addEventListener("click", () => openS3BackupDialog());
+$("#s3-backup-close").addEventListener("click", () => $("#s3-backup-dialog").close());
+$("#s3-backup-return").addEventListener("click", () => returnToSettingsHub("#s3-backup-button", "#s3-backup-dialog").catch((error) => toast(error.message, "error")));
+$("#s3-backup-dialog").addEventListener("close", () => {
+  if (s3BackupRunPollTimer) clearInterval(s3BackupRunPollTimer);
+  s3BackupRunPollTimer = null;
+  $("#s3-run-button").disabled = false;
+});
+$("#s3-backup-settings-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveS3BackupSettings().catch((error) => toast(error.message, "error"));
+});
+$("#s3-target-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveS3Target().catch((error) => toast(error.message, "error"));
+});
+$("#s3-target-reset").addEventListener("click", () => fillS3TargetForm(null));
+$("#s3-run-button").addEventListener("click", () => startS3BackupRun());
 $("#members-dialog-close").addEventListener("click", () => $("#members-dialog").close());
 $("#members-settings-return").addEventListener("click", () => returnToSettingsHub("#collaboration-button", "#members-dialog").catch((error) => toast(error.message, "error")));
 $("#members-dialog").addEventListener("close", () => {

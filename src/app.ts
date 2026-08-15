@@ -20,6 +20,7 @@ import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
+import { BackupManager, normalizeS3Prefix } from "./s3-backup.js";
 import { aiConversationTaskTypes, attachmentPermissionModules, Store, versionedEntityTypes } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
@@ -435,6 +436,50 @@ const platformUiSettingsSchema = z.object({
   message: "至少需要提供一项界面设置"
 });
 
+const s3BucketSchema = z.string().trim().min(1).max(200).regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/iu, "桶名只能包含小写字母、数字、点和短横线");
+const s3BackupTargetBaseSchema = z.object({
+  name: nonEmpty.max(200),
+  endpointUrl: z.string().trim().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "S3 接口地址必须使用 HTTP 或 HTTPS"),
+  region: z.string().trim().max(100).optional(),
+  bucket: s3BucketSchema,
+  prefix: z.string().trim().max(500).optional(),
+  accessKeyId: z.string().trim().min(1).max(200).optional(),
+  secretAccessKey: z.string().min(1).max(200).optional(),
+  pathStyle: z.boolean().optional(),
+  status: z.enum(["enabled", "disabled"]).optional(),
+  note: z.string().max(2_000).optional(),
+  sortOrder: z.number().int().min(0).max(1_000).optional()
+}).strict();
+function refineS3TargetPrefix(value: { prefix?: string }, context: z.RefinementCtx): void {
+  if (value.prefix === undefined) return;
+  try {
+    normalizeS3Prefix(value.prefix);
+  } catch (error) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["prefix"],
+      message: error instanceof AppError ? error.message : "备份子目录无效"
+    });
+  }
+}
+const s3BackupTargetSchema = s3BackupTargetBaseSchema
+  .superRefine(refineS3TargetPrefix)
+  .refine(
+    (value) => Boolean(value.accessKeyId) === Boolean(value.secretAccessKey),
+    { message: "新建备份目标必须同时提供 AccessKeyId 和 SecretAccessKey" }
+  );
+const s3BackupTargetUpdateSchema = s3BackupTargetBaseSchema.partial()
+  .superRefine(refineS3TargetPrefix)
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "至少需要提供一项要更新的字段"
+  });
+const s3BackupSettingsApiSchema = z.object({
+  includeImages: z.boolean().optional(),
+  retentionCount: z.number().int().min(1).max(1_000).optional(),
+  scheduleEnabled: z.boolean().optional(),
+  scheduleTime: z.string().trim().regex(/^([01]\d|2[0-3]):([0-5]\d)$/u, "定时备份时间必须使用 HH:MM 二十四小时制").optional()
+}).strict();
+
 const aiToolCallResultSchema = z.object({
   id: z.string().min(1).max(300),
   name: z.string().min(1).max(200),
@@ -599,6 +644,7 @@ export type Runtime = {
   ai: AiManager;
   auth: UserAuthService;
   attachmentStorage: AttachmentStorage;
+  backup: BackupManager;
   cleanupAttachments: () => Promise<void>;
   close: () => void;
 };
@@ -989,6 +1035,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         read: requiredModules,
         write: ["ai-analysis"]
       }, false, actor?.allowAdminAccess ?? false);
+    }
+  );
+  const backup = new BackupManager(
+    store,
+    new CredentialVault(options.masterSecret),
+    options.fetchImpl ?? fetch,
+    {
+      databasePath: options.databasePath,
+      attachmentRoot: attachmentStorage.rootDirectory,
+      validateEndpoint: options.security ? (url) => assertSafeAiEndpoint(url, options.security?.allowPrivateAiEndpoints) : undefined
     }
   );
   const app = express();
@@ -2060,6 +2116,38 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     data(response, store.updatePlatformUiSettings(parse(platformUiSettingsSchema, request.body)));
   });
 
+  app.get("/api/platform/backup/s3", (_request, response) => data(response, {
+    settings: backup.getSettings(),
+    targets: backup.listTargets(),
+    lastRun: backup.listRuns(1)[0] ?? null
+  }));
+  app.patch("/api/platform/backup/s3/settings", (request, response) => {
+    data(response, backup.updateSettings(parse(s3BackupSettingsApiSchema, request.body)));
+  });
+  app.post("/api/platform/backup/s3/targets", (request, response) => {
+    data(response, backup.createTarget(parse(s3BackupTargetSchema, request.body)), 201);
+  });
+  app.patch("/api/platform/backup/s3/targets/:targetId", (request, response) => {
+    data(response, backup.updateTarget(request.params.targetId, parse(s3BackupTargetUpdateSchema, request.body)));
+  });
+  app.delete("/api/platform/backup/s3/targets/:targetId", (request, response) => {
+    backup.deleteTarget(request.params.targetId);
+    noContent(response);
+  });
+  app.post("/api/platform/backup/s3/targets/:targetId/test", async (request, response) => {
+    data(response, await backup.testTarget(request.params.targetId));
+  });
+  app.post("/api/platform/backup/s3/run", (request, response) => {
+    const input = parse(z.object({ includeImages: z.boolean().optional() }).strict(), request.body ?? {});
+    data(response, backup.startRun("manual", input.includeImages), 202);
+  });
+  app.get("/api/platform/backup/s3/runs", (request, response) => {
+    const limit = parse(z.object({ limit: z.coerce.number().int().min(1).max(100).default(20) }).strict(), {
+      limit: request.query.limit ?? "20"
+    });
+    data(response, backup.listRuns(limit.limit));
+  });
+
   app.get("/api/works/:workId/ai-settings", (request, response) => data(response, store.getWorkAiSettings(request.params.workId)));
   app.get("/api/works/:workId/ai-settings/usage", (request, response) => {
     const query = parse(aiUsageQuerySchema, request.query);
@@ -2574,8 +2662,9 @@ export function createRuntime(options: RuntimeOptions): Runtime {
   });
 
   logger.info("runtime.ready", { serveUi: options.serveUi ?? true });
-  return { app, database, store, ai, auth, attachmentStorage, cleanupAttachments, close: () => {
+  return { app, database, store, ai, auth, attachmentStorage, backup, cleanupAttachments, close: () => {
     logger.info("runtime.closing");
+    backup.dispose();
     ai.dispose();
     database.close();
     if (temporaryAttachmentRoot) rmSync(temporaryAttachmentRoot, { recursive: true, force: true });
