@@ -172,6 +172,22 @@ describe("Anthropic Messages 供应商", () => {
     });
   });
 
+  it("模型连通性测试通过 Anthropic output_config 携带思考强度", async () => {
+    const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "medium" }).expect(200);
+    expect(updated.body.data.thinkingEffort).toBe("medium");
+
+    const tested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(tested.body.data.ok).toBe(true);
+    const completionCall = fetchMock.mock.calls.findLast(([input]) => String(input) === "https://api.longcat.chat/anthropic/v1/messages");
+    expect(completionCall).toBeDefined();
+    const body = JSON.parse(String(completionCall?.[1]?.body)) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      max_tokens: 10,
+      thinking: { type: "enabled" },
+      output_config: { effort: "medium" }
+    });
+  });
+
   it("Anthropic 工具参数在 content_block_stop 前只拼接，收齐后才执行并继续流式回答", async () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["story_index"] }).expect(200);
     let releaseToolBlock = (): void => undefined;

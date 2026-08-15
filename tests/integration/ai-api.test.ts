@@ -12,16 +12,20 @@ describe("AI 供应商、模型与建议 API", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
   let expectedThinkingType: "enabled" | "disabled";
+  let expectedThinkingEffort: "low" | "medium" | "high" | undefined;
 
   beforeEach(async () => {
     expectedMaxTokens = 32_000;
     expectedThinkingType = "enabled";
+    expectedThinkingEffort = undefined;
     fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string } };
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string }; reasoning_effort?: string };
+      if (expectedThinkingEffort) expect(body.reasoning_effort).toBe(expectedThinkingEffort);
+      else expect(body).not.toHaveProperty("reasoning_effort");
       if (body.max_tokens === 10) {
         expect(body.messages).toHaveLength(1);
         return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -71,6 +75,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     expect(model.body.data.preset).toMatchObject({ temperature: 0.4, max_tokens: 32_000, unsupported: "ignored" });
     expect(model.body.data.thinkingEnabled).toBe(true);
+    expect(model.body.data.thinkingEffort).toBe("default");
     return { providerId, modelId: model.body.data.id };
   }
 
@@ -498,7 +503,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(rejected.body.error.code).toBe("MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED");
   });
 
-  it("模型默认开启 thinking 并可按模型关闭", async () => {
+  it("模型默认开启 thinking，可独立设置思考强度并按模型关闭", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
@@ -508,9 +513,26 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
 
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "extreme" }).expect(400);
+    expectedThinkingEffort = "high";
+    const effortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "high" }).expect(200);
+    expect(effortUpdated.body.data.thinkingEffort).toBe("high");
+    const providerTested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(providerTested.body.data.ok).toBe(true);
+    const modelTested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(modelTested.body.data.ok).toBe(true);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证高思考强度参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expectedThinkingEffort = undefined;
     expectedThinkingType = "disabled";
     const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
     expect(updated.body.data.thinkingEnabled).toBe(false);
+    expect(updated.body.data.thinkingEffort).toBe("high");
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "验证关闭思考参数",

@@ -207,6 +207,7 @@ describe("数据库版本化迁移", () => {
     expect(first.all("PRAGMA table_info(works)").some((column) => column.name === "is_internal")).toBe(true);
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "context_window")).toBe(true);
     expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "thinking_enabled" && column.dflt_value === "1")).toBe(true);
+    expect(first.all("PRAGMA table_info(models)").some((column) => column.name === "thinking_effort" && column.dflt_value === "'default'")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "metadata_json")).toBe(true);
     expect(first.all("PRAGMA table_info(ai_conversation_messages)").some((column) => column.name === "request_id")).toBe(true);
     expect(first.all("PRAGMA index_list(ai_conversation_messages)").some((index) => index.name === "idx_ai_conversation_messages_request")).toBe(true);
@@ -1473,5 +1474,46 @@ describe("数据库版本化迁移", () => {
     expect(restarted.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
     expect(restarted.all("PRAGMA foreign_key_check")).toEqual([]);
     restarted.close();
+  });
+
+  it("迁移 94 为既有模型补充默认思考强度并保留数据", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-model-thinking-effort-"));
+    roots.push(root);
+    const filename = join(root, "model-thinking-effort.db");
+    const timestamp = "2026-08-16T00:00:00.000Z";
+    const current = new Database(filename);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, created_at, updated_at
+      ) VALUES (
+        'provider-thinking-effort', '__scriverse_platform_ai__', '思考强度迁移供应商', 'https://thinking-effort.test/v1',
+        'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO models (
+        id, provider_id, display_name, model_id, thinking_effort, created_at, updated_at
+      ) VALUES (
+        'model-thinking-effort', 'provider-thinking-effort', '迁移前模型', 'legacy-thinking-model', 'high', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.raw.exec("ALTER TABLE models DROP COLUMN thinking_effort");
+    current.run("DELETE FROM schema_migrations WHERE version = 94");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 94")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT display_name, model_id, thinking_effort FROM models WHERE id = 'model-thinking-effort'")).toEqual({
+      display_name: "迁移前模型",
+      model_id: "legacy-thinking-model",
+      thinking_effort: "default"
+    });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.close();
   });
 });

@@ -48,7 +48,7 @@ describe("AI 供应商协议适配", () => {
         { role: "tool", tool_call_id: "toolu_1", content: "{\"ok\":true}" },
         { role: "user", content: "请继续" }
       ],
-      parameters: { max_tokens: 2_048, temperature: 0.2, presence_penalty: 1 },
+      parameters: { max_tokens: 2_048, temperature: 0.2, presence_penalty: 1, output_config: { effort: "medium" } },
       tools: [{
         type: "function",
         function: {
@@ -64,6 +64,7 @@ describe("AI 供应商协议适配", () => {
       system: "系统约束",
       max_tokens: 2_048,
       temperature: 0.2,
+      output_config: { effort: "medium" },
       tool_choice: { type: "auto" },
       tools: [{
         name: "story_index",

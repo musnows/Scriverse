@@ -9,6 +9,15 @@ export const MODEL_PURPOSE_OPTIONS = Object.freeze([
   ["consistency-check", "一致性校对"]
 ]);
 
+export const MODEL_THINKING_EFFORT_OPTIONS = Object.freeze([
+  ["default", "模型默认"],
+  ["low", "低"],
+  ["medium", "中"],
+  ["high", "高"]
+]);
+
+const modelThinkingEfforts = new Set(MODEL_THINKING_EFFORT_OPTIONS.map(([value]) => value));
+
 export const MIN_MODEL_CONTEXT_WINDOW = 32_768;
 export const RECOMMENDED_MODEL_CONTEXT_WINDOW = 128_000;
 
@@ -56,6 +65,7 @@ export function modelFormValues(model = null) {
       : (configuredTemperature ?? 0.7),
     maxTokens: model?.preset?.max_tokens ?? 32000,
     thinkingEnabled: model?.thinkingEnabled ?? true,
+    thinkingEffort: modelThinkingEfforts.has(model?.thinkingEffort) ? model.thinkingEffort : "default",
     multimodalEnabled: model?.multimodalEnabled ?? false,
     imageToolDefault: model?.imageToolDefault ?? false,
     enabled: model?.enabled ?? true
@@ -75,6 +85,7 @@ export function modelPayload(values, existingPreset = {}) {
       max_tokens: Number(values.maxTokens)
     },
     thinkingEnabled: Boolean(values.thinkingEnabled),
+    thinkingEffort: modelThinkingEfforts.has(values.thinkingEffort) ? values.thinkingEffort : "default",
     multimodalEnabled: Boolean(values.multimodalEnabled),
     imageToolDefault: Boolean(values.imageToolDefault),
     enabled: Boolean(values.enabled)

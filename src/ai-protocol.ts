@@ -220,7 +220,7 @@ export function buildCompletionRequestBody(input: {
   }
   const translated = anthropicMessages(input.messages);
   const parameters = Object.fromEntries(Object.entries(input.parameters)
-    .filter(([key]) => ["temperature", "top_p", "max_tokens", "thinking"].includes(key)));
+    .filter(([key]) => ["temperature", "top_p", "max_tokens", "thinking", "output_config"].includes(key)));
   return {
     model: input.model,
     ...translated,

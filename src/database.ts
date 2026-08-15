@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 93;
+export const DATABASE_SCHEMA_VERSION = 94;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -478,6 +478,7 @@ export class Database {
         output_note TEXT NOT NULL DEFAULT '',
         preset_json TEXT NOT NULL DEFAULT '{}',
         thinking_enabled INTEGER NOT NULL DEFAULT 1,
+        thinking_effort TEXT NOT NULL DEFAULT 'default' CHECK(thinking_effort IN ('default', 'low', 'medium', 'high')),
         multimodal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(multimodal_enabled IN (0, 1)),
         enabled INTEGER NOT NULL DEFAULT 1,
         note TEXT NOT NULL DEFAULT '',
@@ -3592,6 +3593,21 @@ export class Database {
       this.transaction(() => {
         this.run("CREATE INDEX IF NOT EXISTS idx_foreshadows_work_payoff_status ON foreshadows(work_id, planned_payoff_chapter_id, status)");
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (93, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(94)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(models)").map((row) => String(row.name)));
+        if (!columns.has("thinking_effort")) {
+          this.run("ALTER TABLE models ADD COLUMN thinking_effort TEXT NOT NULL DEFAULT 'default' CHECK(thinking_effort IN ('default', 'low', 'medium', 'high'))");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (94, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

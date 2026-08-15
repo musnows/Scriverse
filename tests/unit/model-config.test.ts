@@ -12,13 +12,27 @@ describe("AI 模型配置", () => {
   it("新模型默认开启 thinking 并写入配置载荷", () => {
     const values = modelFormValues();
     expect(values.thinkingEnabled).toBe(true);
-    expect(modelPayload({ ...values, displayName: "思考模型", modelId: "thinking-model" }).thinkingEnabled).toBe(true);
+    expect(values.thinkingEffort).toBe("default");
+    expect(modelPayload({ ...values, displayName: "思考模型", modelId: "thinking-model" })).toMatchObject({
+      thinkingEnabled: true,
+      thinkingEffort: "default"
+    });
   });
 
   it("保留模型已有的 thinking 关闭状态", () => {
-    const values = modelFormValues({ thinkingEnabled: false });
+    const values = modelFormValues({ thinkingEnabled: false, thinkingEffort: "high" });
     expect(values.thinkingEnabled).toBe(false);
-    expect(modelPayload({ ...values, displayName: "普通模型", modelId: "plain-model" }).thinkingEnabled).toBe(false);
+    expect(values.thinkingEffort).toBe("high");
+    expect(modelPayload({ ...values, displayName: "普通模型", modelId: "plain-model" })).toMatchObject({
+      thinkingEnabled: false,
+      thinkingEffort: "high"
+    });
+  });
+
+  it("拒绝未知思考强度并回退为模型默认", () => {
+    const values = modelFormValues({ thinkingEffort: "unsupported" });
+    expect(values.thinkingEffort).toBe("default");
+    expect(modelPayload({ ...values, displayName: "兼容模型", modelId: "compatible-model", thinkingEffort: "unsupported" as never }).thinkingEffort).toBe("default");
   });
 
   it("保留多模态能力和默认读图模型选项", () => {

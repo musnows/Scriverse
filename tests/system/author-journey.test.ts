@@ -332,7 +332,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/styles.css?v=20260816-ai-chat-switcher-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
-    expect(page.text).toContain('/app.js?v=20260816-ai-chat-switcher-v2');
+    expect(page.text).toContain('/app.js?v=20260816-model-thinking-effort-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -926,10 +926,14 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens)');
     expect(application.text).toContain('Kimi 模型必须设置温度为 1。');
     expect(application.text).toContain('field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled)');
+    expect(application.text).toContain('field("thinkingEffort", "思考强度（模型默认时不发送强度参数）", "select", values.thinkingEffort, MODEL_THINKING_EFFORT_OPTIONS)');
+    expect(application.text).toContain('thinkingEffort: form.get("thinkingEffort")');
+    expect(application.text).toContain('thinkingEffortSelect.disabled = !thinkingEnabledInput.checked');
     expect(application.text).toContain("所有请求都会携带最大输出令牌数，默认值为 32000。");
     expect(application.text).not.toContain("所有请求都会携带 max_tokens");
     expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
     expect(modelConfig.text).toContain("thinkingEnabled: model?.thinkingEnabled ?? true");
+    expect(modelConfig.text).toContain('thinkingEffort: modelThinkingEfforts.has(model?.thinkingEffort) ? model.thinkingEffort : "default"');
     expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
     expect(application.text).toContain('async function renderPlatformAiConfig()');
     expect(application.text).toContain('async function renderBookAiSettings()');
