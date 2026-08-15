@@ -36,6 +36,8 @@ describe("AI 输入框引用气泡", () => {
     expect(application.text).toContain("function moveAiMentionActiveOption(direction)");
     expect(application.text).toContain('prompt.setAttribute("aria-activedescendant", activeOption.id);');
     expect(application.text).toContain('option.setAttribute("aria-selected", String(active));');
+    expect(application.text).toContain('bindPlainTextPaste($("#ai-prompt"));');
+    expect(application.text).toContain('/plain-text-paste.js?v=20260815-plain-text-paste-v1');
     expect(application.text).toContain('event.key === "ArrowDown" || event.key === "ArrowUp"');
     expect(application.text).toContain('selectAiMention(activeOption);');
     expect(application.text).toContain("conversationScope.includeSettingInfo = false");

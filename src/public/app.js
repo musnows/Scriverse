@@ -26,6 +26,7 @@ import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-ti
 import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContextUsage, normalizeAiContextTokenDistribution, resolveAiContextUsage } from "/ai-context-meter.js?v=20260812-context-usage-remaining-v2";
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
+import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
@@ -11821,6 +11822,7 @@ function createVditorEditor(host, value, { onInput = () => {}, uploadAttachment 
   const attachmentObserver = new MutationObserver(() => normalizeVditorAttachmentImages(editor));
   attachmentObserver.observe(host, { subtree: true, childList: true, attributes: true, attributeFilter: ["src"] });
   editor.__attachmentObserver = attachmentObserver;
+  editor.__plainTextPasteCleanup = bindPlainTextPaste(host);
   host.__vditor = editor;
   return editor;
 }
@@ -12012,6 +12014,7 @@ function ensureVditorIconScript() {
 function destroyVditorEditor(editor) {
   if (!editor) return;
   editor.__attachmentObserver?.disconnect();
+  editor.__plainTextPasteCleanup?.();
   editor.__vditorLineNumberObserver?.disconnect();
   editor.__vditorLineNumberResizeObserver?.disconnect();
   if (editor.__vditorLineNumberSurface && editor.__vditorLineNumberScrollHandler) {
@@ -15605,6 +15608,7 @@ $("#module-nav").addEventListener("click", (event) => {
 });
 $("#module-more-button").addEventListener("click", () => setModuleNavExpanded(!moduleNavExpanded));
 $("#module-create-button").addEventListener("click", () => ({ drafts: openDraftDialog, settings: openSettingEditor, characters: openCharacterEditor, races: openRaceDialog, organizations: openOrganizationDialog, timeline: openTimelineDialog, outlines: openForeshadowDialog, relationships: openRelationshipDialog, reviews: openReviewDialog, tasks: openTaskDialog })[state.module]?.());
+bindPlainTextPaste($("#ai-prompt"));
 $("#ai-prompt").addEventListener("input", async () => {
   updateAiMentionMenu();
   setAiContextMeter(null);
