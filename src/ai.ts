@@ -20,7 +20,8 @@ import {
   type CompletionMessage,
   type CompletionMessageContent,
   type CompletionPayload,
-  type CompletionToolCall
+  type CompletionToolCall,
+  type MaxTokensParameter
 } from "./ai-protocol.js";
 import {
   AGENT_TOOL_RESULT_MAX_CHARS,
@@ -101,6 +102,7 @@ type ProviderInput = {
   baseUrl: string;
   apiKey: string;
   protocol?: AiProviderProtocol;
+  maxTokensParameter?: MaxTokensParameter;
   status?: "enabled" | "disabled";
   note?: string;
   concurrencyLimit?: number;
@@ -116,6 +118,7 @@ type ModelInput = {
   outputNote?: string;
   preset?: Record<string, unknown>;
   thinkingEnabled?: boolean;
+  thinkingEffort?: "default" | "low" | "medium" | "high";
   multimodalEnabled?: boolean;
   imageToolDefault?: boolean;
   enabled?: boolean;
@@ -516,6 +519,13 @@ function providerProtocol(provider: Row): AiProviderProtocol {
   throw new AppError(500, "INVALID_PROVIDER_PROTOCOL", `不支持的供应商协议：${value || "(empty)"}`);
 }
 
+function providerMaxTokensParameter(provider: Row): MaxTokensParameter {
+  if (providerProtocol(provider) === "anthropic-messages") return "max_tokens";
+  return stringValue(provider, "max_tokens_parameter") === "max_completion_tokens"
+    ? "max_completion_tokens"
+    : "max_tokens";
+}
+
 function providerCredentialHint(protocol: AiProviderProtocol, secret: string): string {
   if (protocol === "google-vertex") return maskServiceAccountHint(parseGoogleServiceAccount(secret));
   return maskSecret(secret);
@@ -539,12 +549,19 @@ function isZhipuProvider(provider: Row): boolean {
 }
 
 function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
-  if (isGeminiProviderOrModel(provider, model)) return {};
+  const thinkingEnabled = boolValue(model, "thinking_enabled");
+  const thinkingEffort = stringValue(model, "thinking_effort");
+  const effortParameters = thinkingEnabled && ["low", "medium", "high"].includes(thinkingEffort)
+    ? providerProtocol(provider) === "anthropic-messages"
+      ? { output_config: { effort: thinkingEffort } }
+      : { reasoning_effort: thinkingEffort }
+    : {};
+  if (isGeminiProviderOrModel(provider, model)) return effortParameters;
   if (providerProtocol(provider) === "anthropic-messages" && isZhipuProvider(provider)) {
-    return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
+    return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
   }
-  if (providerProtocol(provider) === "anthropic-messages" && !isLongCatProvider(provider)) return {};
-  return { thinking: { type: boolValue(model, "thinking_enabled") ? "enabled" : "disabled" } };
+  if (providerProtocol(provider) === "anthropic-messages" && !isLongCatProvider(provider)) return effortParameters;
+  return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
 }
 
 const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"] as const;
@@ -1268,6 +1285,7 @@ const providerConnectivityConfigurationFields = [
   "concurrency_limit",
   "rpm_limit",
   "max_tokens",
+  "max_tokens_parameter",
   "default_model_id",
   "note"
 ] as const;
@@ -1281,6 +1299,7 @@ const modelConnectivityConfigurationFields = [
   "output_note",
   "preset_json",
   "thinking_enabled",
+  "thinking_effort",
   "multimodal_enabled",
   "enabled",
   "note"
@@ -2855,8 +2874,10 @@ export class AiManager {
     return { accessToken, credentialSecret };
   }
 
-  private async probeProviderModel(row: ProviderRow, accessToken: string, modelId: string, signal: AbortSignal, options: { multimodal?: boolean } = {}): Promise<void> {
+  private async probeProviderModel(row: ProviderRow, accessToken: string, model: ModelRow | string, signal: AbortSignal, options: { multimodal?: boolean } = {}): Promise<void> {
     const protocol = providerProtocol(row);
+    const modelId = typeof model === "string" ? model : stringValue(model, "model_id");
+    const modelParameters = typeof model === "string" ? {} : thinkingParameters(row, model);
     const content: CompletionMessageContent = options.multimodal
       ? [
         { type: "text", text: "请识别这张测试图片，并回复“图片连接成功”。" },
@@ -2870,7 +2891,8 @@ export class AiManager {
         protocol,
         model: modelId,
         messages: [{ role: "user", content }],
-        parameters: { max_tokens: 10 }
+        parameters: { max_tokens: 10, ...modelParameters },
+        maxTokensParameter: providerMaxTokensParameter(row)
       })),
       signal
     });
@@ -2893,12 +2915,16 @@ export class AiManager {
     const encrypted = this.vault.encrypt(input.apiKey);
     const timestamp = now();
     const protocol = input.protocol ?? "openai-chat-completions";
+    const maxTokensParameter = input.maxTokensParameter ?? "max_tokens";
+    if (protocol === "anthropic-messages" && maxTokensParameter !== "max_tokens") {
+      throw new AppError(400, "INVALID_MAX_TOKENS_PARAMETER", "Anthropic Messages 协议仅支持 max_tokens");
+    }
     const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(baseUrl);
     this.store.db.run(
       `INSERT INTO providers (id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status,
-       connection_status, concurrency_limit, rpm_limit, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?)`,
+       connection_status, concurrency_limit, rpm_limit, max_tokens_parameter, note, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unchecked', ?, ?, ?, ?, ?, ?)`,
       providerId,
       PLATFORM_AI_WORK_ID,
       input.name,
@@ -2911,11 +2937,12 @@ export class AiManager {
       input.status ?? "disabled",
       input.concurrencyLimit ?? 10,
       input.rpmLimit ?? 10,
+      maxTokensParameter,
       input.note ?? "",
       timestamp,
       timestamp
     );
-    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol });
+    this.store.audit(PLATFORM_AI_WORK_ID, "provider.created", "provider", providerId, { name: input.name, baseUrl, protocol, maxTokensParameter });
     return this.getProvider(providerId);
   }
 
@@ -2936,6 +2963,13 @@ export class AiManager {
   updateProvider(providerId: string, input: Partial<ProviderInput>): Record<string, unknown> {
     const row = this.getProviderRow(providerId);
     const nextProtocol = input.protocol ?? providerProtocol(row);
+    const currentMaxTokensParameter = providerMaxTokensParameter(row);
+    if (nextProtocol === "anthropic-messages" && input.maxTokensParameter === "max_completion_tokens") {
+      throw new AppError(400, "INVALID_MAX_TOKENS_PARAMETER", "Anthropic Messages 协议仅支持 max_tokens");
+    }
+    const nextMaxTokensParameter = nextProtocol === "anthropic-messages"
+      ? "max_tokens"
+      : input.maxTokensParameter ?? currentMaxTokensParameter;
     const nextBaseUrl = input.baseUrl ? normalizeProviderBaseUrl(input.baseUrl) : stringValue(row, "base_url");
     if (nextProtocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(nextBaseUrl);
     let encryptedKey = stringValue(row, "encrypted_key");
@@ -2957,9 +2991,10 @@ export class AiManager {
       connectionStatus = "unchecked";
       this.vertexTokenCache.clear(providerId);
     }
+    if (nextMaxTokensParameter !== currentMaxTokensParameter) connectionStatus = "unchecked";
     this.store.db.run(
       `UPDATE providers SET name = ?, base_url = ?, protocol = ?, encrypted_key = ?, key_iv = ?, key_tag = ?, key_hint = ?,
-       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, note = ?, updated_at = ? WHERE id = ?`,
+       status = ?, connection_status = ?, concurrency_limit = ?, rpm_limit = ?, max_tokens_parameter = ?, note = ?, updated_at = ? WHERE id = ?`,
       input.name ?? stringValue(row, "name"),
       nextBaseUrl,
       nextProtocol,
@@ -2971,6 +3006,7 @@ export class AiManager {
       connectionStatus,
       input.concurrencyLimit ?? numberValue(row, "concurrency_limit"),
       input.rpmLimit ?? numberValue(row, "rpm_limit"),
+      nextMaxTokensParameter,
       input.note ?? stringValue(row, "note"),
       now(),
       providerId
@@ -3037,16 +3073,13 @@ export class AiManager {
           .map((item) => typeof item.id === "string" ? item.id.trim() : "")
           .filter((modelId): modelId is string => Boolean(modelId))
         : [];
-      let probeModel = availableModels[0] ?? "";
-      if (!probeModel) {
-        const localModels = this.store.db.all(
-          "SELECT model_id FROM models WHERE provider_id = ? AND enabled = 1 ORDER BY created_at",
-          providerId
-        );
-        probeModel = localModels
-          .map((item) => stringValue(item, "model_id").trim())
-          .find((modelId) => Boolean(modelId)) ?? "";
-      }
+      const localModels = this.store.db.all<ModelRow>(
+        "SELECT * FROM models WHERE provider_id = ? AND enabled = 1 ORDER BY created_at",
+        providerId
+      );
+      const configuredProbeModel = localModels.find((model) => availableModels.includes(stringValue(model, "model_id")))
+        ?? localModels[0];
+      const probeModel = configuredProbeModel ?? availableModels[0] ?? "";
       if (!probeModel) {
         throw new Error(payload
           ? "AI 供应商没有返回可用模型，请先添加模型后再测试连接"
@@ -3126,7 +3159,7 @@ export class AiManager {
     logger.info("ai.model_test.started", { modelId, providerId });
     try {
       ({ accessToken, credentialSecret } = await this.resolveProviderAccessToken(provider));
-      await this.probeProviderModel(provider, accessToken, stringValue(model, "model_id"), controller.signal, { multimodal: multimodalTested });
+      await this.probeProviderModel(provider, accessToken, model, controller.signal, { multimodal: multimodalTested });
       const cooldown = this.connectivityTestGate.complete(claim, "success", {
         isConfigurationCurrent: () => {
           try {
@@ -3214,7 +3247,7 @@ export class AiManager {
     this.store.db.transaction(() => {
       this.store.db.run(
         `INSERT INTO models (id, provider_id, display_name, model_id, purposes_json, context_note, context_window, output_note,
-         preset_json, thinking_enabled, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         preset_json, thinking_enabled, thinking_effort, multimodal_enabled, enabled, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         modelId,
         providerId,
         input.displayName,
@@ -3225,6 +3258,7 @@ export class AiManager {
         input.outputNote ?? "",
         JSON.stringify(normalizeModelPreset(input.preset ?? {}, input.modelId)),
         (input.thinkingEnabled ?? true) ? 1 : 0,
+        input.thinkingEffort ?? "default",
         multimodalEnabled ? 1 : 0,
         enabled ? 1 : 0,
         input.note ?? "",
@@ -3338,7 +3372,7 @@ export class AiManager {
     this.store.db.transaction(() => {
       this.store.db.run(
         `UPDATE models SET display_name = ?, model_id = ?, purposes_json = ?, context_note = ?, context_window = ?, output_note = ?,
-         preset_json = ?, thinking_enabled = ?, multimodal_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
+         preset_json = ?, thinking_enabled = ?, thinking_effort = ?, multimodal_enabled = ?, enabled = ?, note = ?, updated_at = ? WHERE id = ?`,
         input.displayName ?? stringValue(row, "display_name"),
         nextModelId,
         JSON.stringify(input.purposes ?? json(stringValue(row, "purposes_json"), [])),
@@ -3347,6 +3381,7 @@ export class AiManager {
         input.outputNote ?? stringValue(row, "output_note"),
         JSON.stringify(preset),
         (input.thinkingEnabled ?? boolValue(row, "thinking_enabled")) ? 1 : 0,
+        input.thinkingEffort ?? (stringValue(row, "thinking_effort") || "default"),
         multimodalEnabled ? 1 : 0,
         enabled ? 1 : 0,
         input.note ?? stringValue(row, "note"),
@@ -5455,7 +5490,8 @@ export class AiManager {
             protocol: "openai-chat-completions",
             model: stringValue(model, "model_id"),
             messages,
-            parameters
+            parameters,
+            maxTokensParameter: providerMaxTokensParameter(provider)
           })),
           signal: controller.signal
         });
@@ -6299,6 +6335,7 @@ export class AiManager {
                     model: stringValue(model, "model_id"),
                     messages: requestMessages,
                     parameters: roundParameters,
+                    maxTokensParameter: providerMaxTokensParameter(provider),
                     tools: requestTools,
                     toolChoice,
                     ...(streamResponse ? { stream: true } : {})
@@ -10964,6 +11001,7 @@ export class AiManager {
       name: stringValue(row, "name"),
       baseUrl: stringValue(row, "base_url"),
       protocol: providerProtocol(row),
+      maxTokensParameter: providerMaxTokensParameter(row),
       apiKey: apiKeyHint,
       status: stringValue(row, "status"),
       connectionStatus: stringValue(row, "connection_status"),
@@ -10990,6 +11028,7 @@ export class AiManager {
       outputNote: stringValue(row, "output_note"),
       preset: normalizeModelPreset(safeJsonObject(stringValue(row, "preset_json")), stringValue(row, "model_id")),
       thinkingEnabled: boolValue(row, "thinking_enabled"),
+      thinkingEffort: stringValue(row, "thinking_effort") || "default",
       multimodalEnabled: boolValue(row, "multimodal_enabled"),
       imageToolDefault: String(this.store.getPlatformAiSettings().imageToolModelId ?? "") === stringValue(row, "id"),
       enabled: boolValue(row, "enabled"),

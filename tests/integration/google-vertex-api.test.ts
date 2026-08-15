@@ -23,10 +23,12 @@ describe("Google Vertex 供应商 API", () => {
   let workId: string;
   let chapterId: string;
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
+  let expectedThinkingEffort: "low" | undefined;
   const serviceAccountJson = createServiceAccountJson();
   const vertexBaseUrl = "https://aiplatform.googleapis.com/v1/projects/scriverse-demo/locations/global/endpoints/openapi";
 
   beforeEach(async () => {
+    expectedThinkingEffort = undefined;
     fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === GOOGLE_OAUTH_TOKEN_URL) {
@@ -52,9 +54,12 @@ describe("Google Vertex 供应商 API", () => {
         model?: string;
         stream?: boolean;
         thinking?: unknown;
+        reasoning_effort?: string;
         max_tokens?: number;
       };
       expect(body).not.toHaveProperty("thinking");
+      if (expectedThinkingEffort) expect(body.reasoning_effort).toBe(expectedThinkingEffort);
+      else expect(body).not.toHaveProperty("reasoning_effort");
       if (body.max_tokens === 10) {
         return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), {
           status: 200,
@@ -128,8 +133,11 @@ describe("Google Vertex 供应商 API", () => {
     const model = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/models`).send({
       displayName: "Gemini Flash",
       modelId: "google/gemini-2.0-flash-001",
-      thinkingEnabled: true
+      thinkingEnabled: true,
+      thinkingEffort: "low"
     }).expect(201);
+    expect(model.body.data.thinkingEffort).toBe("low");
+    expectedThinkingEffort = "low";
 
     const testResult = await request(runtime.app).post(`/api/providers/${provider.body.data.id}/test`).send({}).expect(200);
     expect(testResult.body.data.ok).toBe(true);

@@ -24,7 +24,7 @@ describe("人物关系图搜索界面", () => {
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260816-ai-chat-switcher-v2');
-    expect(page.text).toContain('/app.js?v=20260816-ai-chat-switcher-v2');
+    expect(page.text).toContain('/app.js?v=20260816-provider-max-token-parameter-v2');
     expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-size-threshold-v1');
     expect(graph.text).toContain('export function searchRelationshipNodes(nodes, query, limit = 8)');
     expect(graph.text).toContain('testId: "relationship-node-search"');

@@ -141,7 +141,7 @@ describe("设定库实体编辑器保存体验", () => {
     expect(application.match(/await runEntityEditorSave\(\{/gu)).toHaveLength(5);
     expect(application).toContain("function isEntityEditorSaving()");
     expect(application.match(/toast\("正在保存，请稍候"\)/gu)).toHaveLength(3);
-    expect(page).toContain('/app.js?v=20260816-ai-chat-switcher-v2');
+    expect(page).toContain('/app.js?v=20260816-provider-max-token-parameter-v2');
 
     const settingSave = sourceBetween(application, '$("#setting-editor-form").onsubmit', 'showEntityEditorPage("setting"');
     expect(settingSave).toContain("settingEditorItem = saved");
