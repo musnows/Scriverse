@@ -428,6 +428,30 @@ type ChapterOutlineBoardFilters = {
   sort: "tree" | "status" | "foreshadows" | "title";
 };
 
+export const chapterOutlineBoardForeshadowSortSql = {
+  cte: `WITH foreshadow_associations AS MATERIALIZED (
+    SELECT foreshadow.work_id, occurrence.chapter_id, foreshadow.id AS foreshadow_id, foreshadow.status
+    FROM foreshadows foreshadow
+    JOIN foreshadow_occurrences occurrence ON occurrence.foreshadow_id = foreshadow.id
+    WHERE foreshadow.work_id = ?
+    UNION
+    SELECT foreshadow.work_id, foreshadow.planned_payoff_chapter_id AS chapter_id,
+      foreshadow.id AS foreshadow_id, foreshadow.status
+    FROM foreshadows foreshadow
+    WHERE foreshadow.work_id = ? AND foreshadow.planned_payoff_chapter_id IS NOT NULL
+  ), foreshadow_association_counts AS MATERIALIZED (
+    SELECT association.work_id, association.chapter_id,
+      SUM(CASE WHEN association.status IN ('planned', 'planted') THEN 1 ELSE 0 END) AS unresolved_count,
+      COUNT(*) AS total_count
+    FROM foreshadow_associations association
+    GROUP BY association.work_id, association.chapter_id
+  )`,
+  join: `LEFT JOIN foreshadow_association_counts sorted_association
+    ON sorted_association.work_id = chapter.work_id AND sorted_association.chapter_id = chapter.id`,
+  order: `COALESCE(sorted_association.unresolved_count, 0) DESC,
+    COALESCE(sorted_association.total_count, 0) DESC`
+} as const;
+
 const CHAPTER_OUTLINE_BOARD_PREVIEW_LENGTH = 600;
 
 function chapterOutlineBoardLikePattern(value: string): string {
@@ -3806,27 +3830,18 @@ export class Store {
     }
     const whereSql = where.join(" AND ");
 
-    const associationCount = (statusSql = ""): string => `(
-      SELECT COUNT(*) FROM foreshadows sorted_foreshadow
-      WHERE sorted_foreshadow.work_id = chapter.work_id${statusSql}
-        AND (
-          sorted_foreshadow.planned_payoff_chapter_id = chapter.id
-          OR EXISTS (
-            SELECT 1 FROM foreshadow_occurrences sorted_occurrence
-            WHERE sorted_occurrence.foreshadow_id = sorted_foreshadow.id
-              AND sorted_occurrence.chapter_id = chapter.id
-          )
-        )
-    )`;
     const chapterTreeOrder = "chapter.sort_order, chapter.created_at, chapter.id";
     const chapterOrder = filters.sort === "status"
       ? `CASE WHEN outline.chapter_id IS NULL THEN 0 WHEN outline.status = 'draft' THEN 1 WHEN outline.status = 'ready' THEN 2 ELSE 3 END, ${chapterTreeOrder}`
       : filters.sort === "foreshadows"
-        ? `${associationCount(" AND sorted_foreshadow.status IN ('planned', 'planted')")} DESC, ${associationCount()} DESC, ${chapterTreeOrder}`
+        ? `${chapterOutlineBoardForeshadowSortSql.order}, ${chapterTreeOrder}`
         : filters.sort === "title"
           ? `chapter.title COLLATE NOCASE, ${chapterTreeOrder}`
           : chapterTreeOrder;
     const orderSql = `volume.sort_order, volume.created_at, volume.id, ${chapterOrder}`;
+    const foreshadowSortCte = filters.sort === "foreshadows" ? chapterOutlineBoardForeshadowSortSql.cte : "";
+    const foreshadowSortJoin = filters.sort === "foreshadows" ? chapterOutlineBoardForeshadowSortSql.join : "";
+    const foreshadowSortParams: SQLInputValue[] = filters.sort === "foreshadows" ? [workId, workId] : [];
 
     const total = numberValue(this.db.get(
       `SELECT COUNT(*) AS count
@@ -3837,7 +3852,8 @@ export class Store {
       ...whereParams
     ) ?? {}, "count");
     const pageRows = this.db.all(
-      `SELECT volume.id AS volume_id, volume.title AS volume_title, volume.sort_order AS volume_order,
+      `${foreshadowSortCte}
+       SELECT volume.id AS volume_id, volume.title AS volume_title, volume.sort_order AS volume_order,
        chapter.id AS chapter_id, chapter.title AS chapter_title, chapter.chapter_type,
        chapter.sort_order AS chapter_order,
        outline.chapter_id AS outline_chapter_id,
@@ -3849,9 +3865,11 @@ export class Store {
        FROM chapters chapter
        JOIN volumes volume ON volume.id = chapter.volume_id AND volume.work_id = chapter.work_id
        LEFT JOIN chapter_outlines outline ON outline.chapter_id = chapter.id
+       ${foreshadowSortJoin}
        WHERE ${whereSql}
        ORDER BY ${orderSql}
        LIMIT ? OFFSET ?`,
+      ...foreshadowSortParams,
       previewLength,
       previewLength,
       previewLength,
