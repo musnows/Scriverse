@@ -21,6 +21,7 @@ describe("AI 上下文组装", () => {
     });
     const character = runtime.store.createCharacter(String(work.id), {
       name: "林舟",
+      gender: "male",
       attributes: { species: "人类", age: 27 },
       currentState: { location: "北港" },
       lockedFields: ["species", "location"]
@@ -71,6 +72,8 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("<world_organizations>");
     expect(context).toContain("<world_races>");
     expect(context).toContain("<selected_characters>");
+    expect(context).toContain("unknown 不得自行推断");
+    expect(context).toContain("gender=male");
     expect(context).toContain("<chapter>");
     expect(context).toContain("跃迁限制");
     expect(context).toContain("每日只能跃迁一次");
@@ -277,6 +280,7 @@ describe("AI 上下文组装", () => {
     const { work } = await seedChapter(runtime);
     const character = runtime.store.createCharacter(String(work.id), {
       name: "哥斯拉",
+      gender: "none",
       aliases: ["王者"],
       profile: { summary: "地球守护者" },
       attributes: { size: "巨大" },
@@ -297,6 +301,7 @@ describe("AI 上下文组装", () => {
     expect(context).toContain("<mentioned_characters>");
     expect(context).toContain("提及角色");
     expect(context).toContain("哥斯拉");
+    expect(context).toContain("gender=none");
     expect(context).toContain("地球守护者");
     expect(context).not.toContain("FULL_PROFILE_MARKDOWN");
     expect(context).not.toContain("Markdown 档案目录");

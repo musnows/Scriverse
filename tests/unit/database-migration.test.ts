@@ -77,7 +77,7 @@ describe("数据库版本化迁移", () => {
       { display_name: "拉顿", kind: "primary" }
     ]);
     expect(first.all("SELECT version FROM schema_migrations ORDER BY version")).toEqual(Array.from({ length: DATABASE_SCHEMA_VERSION }, (_, index) => ({ version: index + 1 })));
-    expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "merged_into_character_id", "merged_at", "is_dead"]));
+    expect(first.all("PRAGMA table_info(characters)").map((column) => column.name)).toEqual(expect.arrayContaining(["code", "gender", "merged_into_character_id", "merged_at", "is_dead"]));
     expect(first.all("PRAGMA table_info(races)").map((column) => column.name)).toContain("is_extinct");
     expect(first.all("PRAGMA table_info(organizations)").map((column) => column.name)).toContain("is_dissolved");
     expect(first.all("PRAGMA table_info(s3_backup_targets)").map((column) => column.name)).toEqual(expect.arrayContaining([
@@ -116,6 +116,8 @@ describe("数据库版本化迁移", () => {
     ]);
     expect(first.get("SELECT COUNT(*) AS count FROM s3_backup_encryption")).toEqual({ count: 0 });
     expect(first.get("SELECT is_dead FROM characters WHERE id = 'character-a'")).toEqual({ is_dead: 0 });
+    expect(first.get("SELECT gender FROM characters WHERE id = 'character-a'")).toEqual({ gender: "unknown" });
+    expect(() => first.run("UPDATE characters SET gender = 'invalid' WHERE id = 'character-a'")).toThrow();
     expect(first.get("SELECT is_extinct FROM races WHERE id = 'race_migration_1'")).toEqual({ is_extinct: 0 });
     expect(first.all("PRAGMA table_info(characters)").some((column) => column.name === "visibility")).toBe(false);
     expect(first.get("SELECT code FROM characters WHERE id = 'character-a'")).toEqual({ code: "" });
@@ -198,7 +200,7 @@ describe("数据库版本化迁移", () => {
       { character_id: "character-b", version_no: 1, source: "migration", change_note: "建立人物版本基线" }
     ]);
     const migratedSnapshot = JSON.parse(String(first.get("SELECT snapshot_json FROM character_versions WHERE character_id = 'character-a'")?.snapshot_json));
-    expect(migratedSnapshot).toMatchObject({ name: "魔斯拉", raceId: "race_migration_1", species: "泰坦族", organizationIds: [] });
+    expect(migratedSnapshot).toMatchObject({ name: "魔斯拉", gender: "unknown", raceId: "race_migration_1", species: "泰坦族", organizationIds: [] });
     expect(first.get("SELECT COUNT(*) AS count FROM organizations")?.count).toBe(0);
     expect(first.get("SELECT COUNT(*) AS count FROM timeline_tracks")?.count).toBe(0);
     expect(first.all("PRAGMA table_info(timeline_events)").some((column) => column.name === "track_id")).toBe(true);

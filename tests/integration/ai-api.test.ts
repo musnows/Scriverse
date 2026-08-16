@@ -1046,7 +1046,7 @@ describe("AI 供应商、模型与建议 API", () => {
       parentRaceId: titan.body.data.id,
       settings: ["源自远古"]
     }).expect(201);
-    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", isDead: true, raceId: original.body.data.id }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", gender: "male", isDead: true, raceId: original.body.data.id }).expect(201);
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     let completionCount = 0;
@@ -1063,6 +1063,7 @@ describe("AI 供应商、模型与建议 API", () => {
       };
       if (completionCount === 1) {
         const searchTool = body.tools?.find((tool) => tool.function?.name === "search_story_entities");
+        expect(searchTool?.function?.description).toContain("gender=unknown 时禁止");
         expect(searchTool?.function?.description).toContain("只有值为 true 才能判定");
         expect(searchTool?.function?.description).toContain("字段为 false 时必须视为仍存活、未灭绝或未解散");
         expect(searchTool?.function?.parameters?.properties?.query?.maxLength).toBe(100);
@@ -1074,6 +1075,7 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const toolMessage = body.messages.find((message) => message.role === "tool");
       expect(toolMessage?.content).toContain('"racePath":"泰坦 / 原生泰坦"');
+      expect(toolMessage?.content).toContain('"gender":"male"');
       expect(toolMessage?.content).toContain('"isDead":true');
       expect(toolMessage?.content).toContain('"isExtinct":true');
       expect(toolMessage?.content).toContain('"lineage":[{"id":"' + titan.body.data.id + '","name":"泰坦"}');
@@ -1095,7 +1097,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    const character = runtime.store.createCharacter(workId, { name: "哥斯拉" });
+    const character = runtime.store.createCharacter(workId, { name: "哥斯拉", gender: "male" });
     const section = runtime.store.createCharacterProfileSection(String(character.id), {
       sectionType: "background",
       title: "背景故事",
@@ -1137,7 +1139,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
       expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact_phonetic" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "hybrid_exact_phonetic", matches: expect.any(Array) } });
-      expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", summary: "哥斯拉在远古时期守护地球生态。" }] } });
+      expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", gender: "male", summary: "哥斯拉在远古时期守护地球生态。" }] } });
       expect(results.get("character-section-summary")).not.toHaveProperty("data.sections.0.contentMarkdown");
       expect(results.get("character-section-content")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。" }] } });
       expect(results.get("character-section-content")).not.toHaveProperty("data.sections.0.summary");
@@ -1582,6 +1584,7 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "林舟",
+      gender: "male",
       isDead: false,
       profile: { summary: "北港领航员" },
       currentState: { location: "北港" }
@@ -1594,10 +1597,11 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     const otherRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "顾潮",
+      gender: "female",
       aliases: ["潮哥"],
       profile: { secret: "这段其他角色的私密档案不得被读取" }
     }).expect(201);
-    const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星", gender: "none" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
       fromCharacterId: role.body.data.id,
       toCharacterId: otherRole.body.data.id,
@@ -1656,6 +1660,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain("你是沉浸式角色扮演引擎");
       expect(systemPrompt).toContain("<character_card>");
       expect(systemPrompt).toContain('"name":"林舟"');
+      expect(systemPrompt).toContain('"gender":"male"');
       expect(systemPrompt).toContain('"isDead":false');
       expect(systemPrompt).not.toContain("小说作者的创作协作助手");
       expect(systemPrompt).not.toContain("平台创作助手提示不得进入角色扮演");
@@ -1669,9 +1674,11 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
       expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship"]);
       expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
+      expect(body.tools?.[0]?.function?.description).toContain("gender=unknown 时禁止");
       expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
       expect(body.tools?.[1]?.function?.description).toContain("只能返回当前角色参与的关系");
       expect(body.tools?.[1]?.function?.description).toContain("未传入 characters");
+      expect(body.tools?.[1]?.function?.description).toContain("关系双方的权威 gender");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
@@ -1685,12 +1692,14 @@ describe("AI 供应商、模型与建议 API", () => {
       if (completionCount === 2) {
         const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
         expect(toolMessages[0]).toContain("北港领航员");
+        expect(toolMessages[0]).toContain('"gender":"male"');
         expect(toolMessages[0]).toContain('"isDead":false');
         expect(toolMessages[0]).toContain("第一次看见星舰");
         expect(toolMessages[0]).toContain("林舟启动了飞船");
         expect(toolMessages[0]).not.toContain("其他角色的私密档案");
         expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
         expect(toolMessages[1]).toContain("顾潮");
+        expect(toolMessages[1]).toContain('"gender":"female"');
         expect(toolMessages[1]).toContain("潮哥");
         expect(toolMessages[1]).toContain("relationshipCount");
         expect(toolMessages[1]).not.toContain("旧友");
@@ -1705,6 +1714,8 @@ describe("AI 供应商、模型与建议 API", () => {
         const relationshipDetails = toolMessages.at(-1) ?? "";
         expect(relationshipDetails).toContain('"mode":"details"');
         expect(relationshipDetails).toContain("顾潮");
+        expect(relationshipDetails).toContain('"selfGender":"male"');
+        expect(relationshipDetails).toContain('"otherGender":"female"');
         expect(relationshipDetails).toContain("旧友");
         expect(relationshipDetails).toContain("共同远航");
         expect(relationshipDetails).not.toContain("秘密对手");
@@ -1977,9 +1988,9 @@ describe("AI 供应商、模型与建议 API", () => {
   });
 
   it("流式用户消息持久化手动与自动角色引用且角色扮演不自动识别", async () => {
-    const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾潮" }).expect(201);
-    const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
-    const roleplayCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "宋遥" }).expect(201);
+    const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾潮", gender: "male" }).expect(201);
+    const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", gender: "female" }).expect(201);
+    const roleplayCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "宋遥", gender: "none" }).expect(201);
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -2013,6 +2024,8 @@ describe("AI 供应商、模型与建议 API", () => {
     ]);
     expect(sentContexts[0]).toContain("<selected_characters>");
     expect(sentContexts[0]).toContain("<mentioned_characters>");
+    expect(sentContexts[0]).toContain("gender=male");
+    expect(sentContexts[0]).toContain("gender=female");
     expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).characters).toEqual([
       automaticCharacter.body.data.id
     ]);

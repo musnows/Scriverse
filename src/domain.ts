@@ -12,6 +12,9 @@ export const DRAFT_SETTING_MODULES = [
 ] as const;
 export type DraftSettingModule = (typeof DRAFT_SETTING_MODULES)[number];
 
+export const CHARACTER_GENDERS = ["male", "female", "none", "unknown"] as const;
+export type CharacterGender = (typeof CHARACTER_GENDERS)[number];
+
 export const TASK_TYPES = [
   "chat",
   "continue",

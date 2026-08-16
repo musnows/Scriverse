@@ -25,7 +25,7 @@ describe("知识模块布局切换", () => {
 
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1"></script>')
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1"></script>')
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -63,7 +63,7 @@ describe("知识模块布局切换", () => {
     expect(application.text).toContain('置信度 ${Math.round(entry.confidence * 100)}%');
     expect(page.text).toContain('id="dialog-meta" class="dialog-header-meta hidden"');
     expect(application.text).toContain('hideCancel: true');
-expect(application.text).toContain('/display-labels.js?v=20260809-global-replace-v1');
+expect(application.text).toContain('/display-labels.js?v=20260816-character-gender-v1');
     expect(application.text).toContain('settingStatusLabel(item.status)');
     expect(application.text).not.toContain('characterVisibilityLabel(item.visibility)');
     expect(application.text).toContain('timelineStatusLabel(item.status)');
