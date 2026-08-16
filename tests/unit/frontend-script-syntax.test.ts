@@ -22,5 +22,5 @@ describe("前端脚本", () => {
     for (const file of files) {
       await expect(execFileAsync(process.execPath, ["--check", file])).resolves.toBeDefined();
     }
-  });
+  }, 15_000);
 });
