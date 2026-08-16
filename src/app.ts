@@ -28,7 +28,7 @@ import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { EPUB_MIME_TYPE, epubContentDisposition } from "./epub-export.js";
-import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { CHARACTER_GENDERS, CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
@@ -234,6 +234,7 @@ const draftSchema = z.object({
 
 const characterSchema = z.object({
   name: nonEmpty.max(200),
+  gender: z.enum(CHARACTER_GENDERS).optional(),
   isDead: z.boolean().optional(),
   code: z.string().trim().max(200).optional(),
   aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),

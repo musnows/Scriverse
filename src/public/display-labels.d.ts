@@ -15,3 +15,4 @@ export function chapterVersionSourceLabel(value: unknown): string;
 export function occurrenceRoleLabel(value: unknown): string;
 export function searchResultTypeLabel(value: unknown): string;
 export function characterStateFieldLabel(value: unknown): string;
+export function characterGenderLabel(value: unknown): string;

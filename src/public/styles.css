@@ -3102,9 +3102,9 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-code { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: var(--muted); font-size: 10px; }
 .character-code b { font-weight: 500; }
 .character-code .pill { display: inline-flex; align-items: center; justify-content: center; margin: 0; min-height: 18px; padding: 2px 8px; line-height: 1; font-family: var(--font-latin), var(--font-cjk), monospace; }
-.character-species { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 10px; }
-.character-species b { font-weight: 500; }
-.character-species .pill { display: inline-flex; align-items: center; justify-content: center; justify-self: start; min-width: 0; max-width: 100%; margin: 0; min-height: 18px; padding: 2px 8px; line-height: 1.25; overflow-wrap: anywhere; }
+.character-species, .character-gender { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 6px; margin-top: 8px; color: var(--muted); font-size: 10px; }
+.character-species b, .character-gender b { font-weight: 500; }
+.character-species .pill, .character-gender .pill { display: inline-flex; align-items: center; justify-content: center; justify-self: start; min-width: 0; max-width: 100%; margin: 0; min-height: 18px; padding: 2px 8px; line-height: 1.25; overflow-wrap: anywhere; }
 .character-detail-list { display: grid; gap: 5px; margin: 12px 0; }
 .character-detail-list div { display: grid; grid-template-columns: minmax(70px, .42fr) minmax(0, 1fr); gap: 8px; font-size: 10px; }
 .character-detail-list dt { color: var(--muted); }

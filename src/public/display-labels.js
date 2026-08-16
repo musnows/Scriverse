@@ -105,3 +105,7 @@ export function characterStateFieldLabel(value) {
     condition: "状况"
   }, normalized, normalized || "未命名字段");
 }
+
+export function characterGenderLabel(value) {
+  return enumLabel({ male: "男 / 雄", female: "女 / 雌", none: "无性别", unknown: "未知" }, value, "未知");
+}
