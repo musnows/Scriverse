@@ -458,7 +458,7 @@ const modelSchema = z.object({
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   thinkingEnabled: z.boolean().optional(),
-  thinkingEffort: z.enum(["default", "low", "medium", "high"]).optional(),
+  thinkingEffort: z.enum(["default", "low", "medium", "high", "xhigh", "max"]).optional(),
   multimodalEnabled: z.boolean().optional(),
   imageToolDefault: z.boolean().optional(),
   enabled: z.boolean().optional(),

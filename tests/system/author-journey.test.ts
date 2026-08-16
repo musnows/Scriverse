@@ -332,7 +332,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('/vendor/vditor/dist/index.min.js?v=3.11.2');
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(styles.text).toContain('.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; color: #fff; border-radius: 3px; font-weight: 700; }');
-    expect(page.text).toContain('/app.js?v=20260816-beta-version-label-v1');
+    expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(application.text).toContain('if (state.chapter?.id === route.chapterId && $("#editor-view").classList.contains("hidden")) await selectChapter(state.chapter.id);');
     expect(application.text).toContain('/api/platform/ai/usage?timezoneOffset=');
     expect(application.text).toContain('/ai-settings/usage?timezoneOffset=');
@@ -939,6 +939,11 @@ describe("作者完整创作流程", () => {
     expect(modelConfig.text).toContain("contextWindow: model?.contextWindow ?? 128000");
     expect(modelConfig.text).toContain("thinkingEnabled: model?.thinkingEnabled ?? true");
     expect(modelConfig.text).toContain('thinkingEffort: modelThinkingEfforts.has(model?.thinkingEffort) ? model.thinkingEffort : "default"');
+    expect(modelConfig.text).toContain('["low", "低（low）"]');
+    expect(modelConfig.text).toContain('["medium", "中（medium）"]');
+    expect(modelConfig.text).toContain('["high", "高（high）"]');
+    expect(modelConfig.text).toContain('["xhigh", "超高（xhigh）"]');
+    expect(modelConfig.text).toContain('["max", "最高（max）"]');
     expect(modelConfig.text).toContain("maxTokens: model?.preset?.max_tokens ?? 32000");
     expect(application.text).toContain('async function renderPlatformAiConfig()');
     expect(application.text).toContain('async function renderBookAiSettings()');

@@ -118,7 +118,7 @@ type ModelInput = {
   outputNote?: string;
   preset?: Record<string, unknown>;
   thinkingEnabled?: boolean;
-  thinkingEffort?: "default" | "low" | "medium" | "high";
+  thinkingEffort?: "default" | "low" | "medium" | "high" | "xhigh" | "max";
   multimodalEnabled?: boolean;
   imageToolDefault?: boolean;
   enabled?: boolean;
@@ -551,7 +551,7 @@ function isZhipuProvider(provider: Row): boolean {
 function thinkingParameters(provider: Row, model: Row): Record<string, unknown> {
   const thinkingEnabled = boolValue(model, "thinking_enabled");
   const thinkingEffort = stringValue(model, "thinking_effort");
-  const effortParameters = thinkingEnabled && ["low", "medium", "high"].includes(thinkingEffort)
+  const effortParameters = thinkingEnabled && ["low", "medium", "high", "xhigh", "max"].includes(thinkingEffort)
     ? providerProtocol(provider) === "anthropic-messages"
       ? { output_config: { effort: thinkingEffort } }
       : { reasoning_effort: thinkingEffort }

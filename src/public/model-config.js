@@ -11,9 +11,11 @@ export const MODEL_PURPOSE_OPTIONS = Object.freeze([
 
 export const MODEL_THINKING_EFFORT_OPTIONS = Object.freeze([
   ["default", "模型默认"],
-  ["low", "低"],
-  ["medium", "中"],
-  ["high", "高"]
+  ["low", "低（low）"],
+  ["medium", "中（medium）"],
+  ["high", "高（high）"],
+  ["xhigh", "超高（xhigh）"],
+  ["max", "最高（max）"]
 ]);
 
 const modelThinkingEfforts = new Set(MODEL_THINKING_EFFORT_OPTIONS.map(([value]) => value));
