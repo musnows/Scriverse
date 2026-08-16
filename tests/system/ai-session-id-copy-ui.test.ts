@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("AI 对话 Session ID 复制界面", () => {
-  it("只复制当前已建立的对话 ID，并在空白对话中禁用入口", async () => {
+  it("从历史记录操作菜单复制所选对话 ID", async () => {
     const publicPath = join(process.cwd(), "src", "public");
     const [page, application, styles] = await Promise.all([
       readFile(join(publicPath, "index.html"), "utf8"),
@@ -11,18 +11,18 @@ describe("AI 对话 Session ID 复制界面", () => {
       readFile(join(publicPath, "styles.css"), "utf8")
     ]);
 
-    expect(page).toContain('id="ai-session-id-copy" type="button"');
-    expect(page).toContain('aria-label="当前对话尚未创建 Session ID" aria-disabled="true"');
-    expect(page).toContain("feature=ai-session-id-copy-v1");
-    expect(page.indexOf('id="ai-session-id-copy"')).toBeLessThan(page.indexOf('id="ai-history-toggle"'));
-    expect(application).toContain("function currentAiConversationSessionId()");
-    expect(application).toContain("function syncAiConversationSessionIdCopyButton()");
-    expect(application).toContain("button.disabled = !sessionId;");
-    expect(application).toContain('button.setAttribute("aria-disabled", String(!sessionId));');
-    expect(application).toContain("syncAiConversationSessionIdCopyButton();");
-    expect(application).toContain('$("#ai-session-id-copy").addEventListener("click", async () => {');
+    expect(page).not.toContain('id="ai-session-id-copy"');
+    expect(page).toContain('data-ai-history-action="copy-session-id"');
+    expect(page).toContain("复制用于后端问题定位的对话标识");
+    expect(page).toContain("feature=ai-session-id-copy-v2");
+    expect(page.indexOf('data-ai-history-action="favorite"')).toBeLessThan(page.indexOf('data-ai-history-action="copy-session-id"'));
+    expect(page.indexOf('data-ai-history-action="copy-session-id"')).toBeLessThan(page.indexOf('data-ai-history-action="export"'));
+    expect(application).toContain("async function copyAiConversationSessionId(conversation)");
+    expect(application).toContain('if (!sessionId) throw new Error("无法确定对话 Session ID");');
     expect(application).toContain("await copyAiRawMarkdown(sessionId);");
-    expect(application).toContain('toast("当前对话 Session ID 已复制");');
-    expect(styles).toContain(".ai-heading-actions button:disabled { cursor: not-allowed; opacity: .42; }");
+    expect(application).toContain('if (action === "copy-session-id") {');
+    expect(application).toContain('toast("对话 Session ID 已复制");');
+    expect(application).not.toContain("function currentAiConversationSessionId()");
+    expect(styles).toContain(".ai-history-action-menu { position: fixed;");
   });
 });

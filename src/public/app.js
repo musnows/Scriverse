@@ -1823,20 +1823,6 @@ function renderAiQuickActions() {
   quickActions.setAttribute("aria-hidden", String(!visible));
 }
 
-function currentAiConversationSessionId() {
-  return typeof state.aiConversationId === "string" ? state.aiConversationId.trim() : "";
-}
-
-function syncAiConversationSessionIdCopyButton() {
-  const button = $("#ai-session-id-copy");
-  const sessionId = currentAiConversationSessionId();
-  const label = sessionId ? "复制当前对话 Session ID" : "当前对话尚未创建 Session ID";
-  button.disabled = !sessionId;
-  button.setAttribute("aria-disabled", String(!sessionId));
-  button.setAttribute("aria-label", label);
-  button.title = label;
-}
-
 function createAiChatFeed() {
   const feed = document.createElement("div");
   feed.className = "ai-feed hidden";
@@ -1913,7 +1899,6 @@ function clearAiChatTabComposer(tab) {
 
 function applyAiChatTabState(tab) {
   state.aiConversationId = tab.conversationId;
-  syncAiConversationSessionIdCopyButton();
   state.aiConversationModelId = tab.modelId;
   state.aiPromptSent = tab.promptSent;
   state.aiCitations = tab.citations.map((citation) => ({ ...citation }));
@@ -2633,6 +2618,12 @@ async function downloadAiConversation(conversation) {
   anchor.click();
   anchor.remove();
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+}
+
+async function copyAiConversationSessionId(conversation) {
+  const sessionId = typeof conversation?.id === "string" ? conversation.id.trim() : "";
+  if (!sessionId) throw new Error("无法确定对话 Session ID");
+  await copyAiRawMarkdown(sessionId);
 }
 
 function resetAiConversationAfterDelete() {
@@ -16777,16 +16768,6 @@ $("#ai-send").addEventListener("click", activateAiSendControl);
 $("#ai-conversation-switcher").addEventListener("click", () => {
   setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
 });
-$("#ai-session-id-copy").addEventListener("click", async () => {
-  const sessionId = currentAiConversationSessionId();
-  if (!sessionId) return;
-  try {
-    await copyAiRawMarkdown(sessionId);
-    toast("当前对话 Session ID 已复制");
-  } catch (error) {
-    toast(`Session ID 复制失败：${error.message}`, "error");
-  }
-});
 $("#ai-conversation-switcher-close").addEventListener("click", () => {
   setAiConversationSwitcherVisible(false);
   $("#ai-conversation-switcher").focus();
@@ -16922,6 +16903,20 @@ $("#ai-history-action-menu").addEventListener("click", async (event) => {
       closeAiHistoryActionMenu(true);
     } catch (error) {
       toast(`对话收藏状态更新失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action === "copy-session-id") {
+    option.disabled = true;
+    try {
+      await copyAiConversationSessionId(conversation);
+      closeAiHistoryActionMenu(true);
+      toast("对话 Session ID 已复制");
+    } catch (error) {
+      toast(`Session ID 复制失败：${error.message}`, "error");
       option.focus();
     } finally {
       option.disabled = false;
