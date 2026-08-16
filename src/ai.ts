@@ -700,6 +700,26 @@ type RelationshipLocalSourceSelection = {
   candidates: RelationshipVariantCandidate[];
 };
 
+type RelationshipSourcePreview = {
+  preFilterRelationshipSources: boolean;
+  chapterCount: number;
+  settingCount: number;
+  sourceCount: number;
+  totalCharacters: number;
+  estimatedBatchCount: number;
+  sources: Array<{
+    sourceType: string;
+    sourceId: string;
+    title: string;
+    version: string;
+    characterCount: number;
+    matchType: "exact" | "fuzzy" | "scope";
+  }>;
+  indexGeneration: number | null;
+  selectionSummary: RelationshipSourceSelection["summary"] | null;
+  verificationCallCount: number;
+};
+
 function traceRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -3608,11 +3628,12 @@ export class AiManager {
     };
   }
 
-  createTask(workId: string, input: {
+  async createTask(workId: string, input: {
     taskType: string;
     scope?: Record<string, unknown>;
     modelId?: string;
-  }): Record<string, unknown> {
+    rerunOfTaskId?: string;
+  }): Promise<Record<string, unknown>> {
     this.store.getWork(workId);
     const modelPurpose = this.analysisTaskModelPurpose(input.taskType);
     const defaultRow = this.store.db.get(
@@ -3622,26 +3643,50 @@ export class AiManager {
     );
     const modelId = input.modelId ?? (defaultRow ? stringValue(defaultRow, "model_id") : undefined);
     if (modelId) this.resolveModel(workId, modelPurpose, modelId);
-    const relationshipScope = input.taskType === "relationship-analysis" && input.scope
-      ? input.scope as ContextScope
+    const scope = { ...(input.scope ?? { type: "book" }) };
+    const relationshipScope = input.taskType === "relationship-analysis"
+      ? scope as ContextScope
       : null;
+    let relationshipSourceSelection: RelationshipSourceSelection | null = null;
     if (relationshipScope && Array.isArray(relationshipScope.relationshipSourceRefs)) {
       this.validateRelationshipSourceRefs(workId, relationshipScope, relationshipScope.relationshipSourceRefs);
     }
     if (modelId) {
       const contextPreview = this.previewAnalysisTaskContext(workId, {
         taskType: input.taskType,
-        scope: input.scope,
+        scope,
         modelId
       });
       if (contextPreview.allowed !== true) {
         throw new AppError(413, "AI_CONTEXT_TOO_LARGE", String(contextPreview.message), contextPreview);
       }
     }
-    return this.store.createTask(workId, {
-      taskType: input.taskType,
-      ...(input.scope ? { scope: input.scope } : {}),
-      ...(modelId ? { modelId } : {})
+    if (relationshipScope
+      && Array.isArray(relationshipScope.characterIds)
+      && relationshipScope.characterIds.length > 0
+      && relationshipScope.preFilterRelationshipSources !== false
+      && relationshipScope.relationshipSourceRefs === undefined) {
+      const prepared = await this.prepareRelationshipSourcePreview(workId, relationshipScope, modelId);
+      const preview = prepared.preview;
+      relationshipSourceSelection = prepared.sourceSelection;
+      relationshipScope.relationshipSourceRefs = preview.sources.map((source) => ({
+        sourceType: source.sourceType,
+        sourceId: source.sourceId,
+        sourceVersion: source.version
+      }));
+      this.validateRelationshipSourceRefs(workId, relationshipScope, relationshipScope.relationshipSourceRefs);
+    }
+    return this.store.db.transaction(() => {
+      if (relationshipScope && relationshipSourceSelection) {
+        relationshipSourceSelection.summary.reviewIds = this.createRelationshipVariantReviews(workId, relationshipSourceSelection);
+        relationshipScope.relationshipSourceSelectionSummary = { ...relationshipSourceSelection.summary };
+      }
+      return this.store.createTask(workId, {
+        taskType: input.taskType,
+        scope,
+        ...(modelId ? { modelId } : {}),
+        ...(input.rerunOfTaskId ? { rerunOfTaskId: input.rerunOfTaskId } : {})
+      });
     });
   }
 
@@ -4146,7 +4191,7 @@ export class AiManager {
     });
   }
 
-  rerunTask(taskId: string, modelOverrideId?: string): Record<string, unknown> {
+  async rerunTask(taskId: string, modelOverrideId?: string): Promise<Record<string, unknown>> {
     const original = this.store.getTask(taskId);
     const originalTaskType = String(original.taskType);
     if (HISTORICAL_ANALYSIS_TASK_TYPES.some((taskType) => taskType === originalTaskType)) {
@@ -4162,6 +4207,7 @@ export class AiManager {
     const {
       targetCharacters: _targetCharacters,
       relationshipSourceRefs: _relationshipSourceRefs,
+      relationshipSourceSelectionSummary: _relationshipSourceSelectionSummary,
       ...scope
     } = originalScope;
     const originalModel = original.model && typeof original.model === "object" && !Array.isArray(original.model)
@@ -4170,7 +4216,7 @@ export class AiManager {
     const originalModelId = typeof originalModel?.id === "string" ? originalModel.id : undefined;
     const modelId = modelOverrideId ?? originalModelId;
     if (modelId) this.resolveModel(String(original.workId), this.analysisTaskModelPurpose(String(original.taskType)), modelId);
-    const rerun = this.store.createTask(String(original.workId), {
+    const rerun = await this.createTask(String(original.workId), {
       taskType: originalTaskType,
       scope,
       ...(modelId ? { modelId } : {}),
@@ -4743,7 +4789,10 @@ export class AiManager {
           throw error;
         }
       }
-      const failedStatus = error instanceof AppError && error.code === "UNSUPPORTED_TASK_TYPE" ? "failed" : "partial";
+      const failedStatus = error instanceof AppError
+        && ["UNSUPPORTED_TASK_TYPE", "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED"].includes(error.code)
+        ? "failed"
+        : "partial";
       this.store.updateTask(taskId, { status: failedStatus, progress: 100, failures: [failure] });
       logger.error("ai.task.failed", { taskId, workId, durationMs: Number(process.hrtime.bigint() - startedAt) / 1_000_000, error: aiErrorForLog(error) });
       throw error;
@@ -8952,6 +9001,51 @@ export class AiManager {
     };
   }
 
+  private createRelationshipVariantReviews(workId: string, sourceSelection: RelationshipSourceSelection): string[] {
+    const acceptedVariants = sourceSelection.variantDecisions.filter((decision) => decision.verdict === "same" && decision.confidence >= 0.8);
+    const reviewIds = new Set<string>();
+    for (const decision of acceptedVariants) {
+      const observedIndex = decision.snippet.indexOf(decision.observed);
+      const quote = observedIndex < 0
+        ? decision.snippet.slice(0, 160)
+        : decision.snippet.slice(Math.max(0, observedIndex - 60), Math.min(decision.snippet.length, observedIndex + decision.observed.length + 60));
+      const dedupeKey = this.store.hashContent([
+        decision.targetCharacterId,
+        normalizeRelationshipSearchText(decision.observed),
+        decision.sourceType,
+        decision.sourceId,
+        decision.sourceVersion
+      ].join("|"));
+      const review = this.store.createReviewItem(workId, {
+        itemType: "character-name-variant",
+        dedupeKey,
+        severity: "medium",
+        title: `疑似人物名错字：${decision.observed} → ${decision.targetName}`,
+        description: `AI 判断来源“${decision.sourceTitle}”中的“${decision.observed}”可能指向人物“${decision.targetName}”。`,
+        entityRefs: [{
+          characterId: decision.targetCharacterId,
+          sourceType: decision.sourceType,
+          sourceId: decision.sourceId,
+          sourceVersion: decision.sourceVersion
+        }],
+        evidence: [{
+          sourceType: decision.sourceType,
+          sourceId: decision.sourceId,
+          sourceTitle: decision.sourceTitle,
+          sourceVersion: decision.sourceVersion,
+          observed: decision.observed,
+          quote,
+          confidence: decision.confidence,
+          reason: decision.reason
+        }],
+        suggestion: `请核对“${decision.observed}”是否为“${decision.targetName}”的错别字；确认后再修改原文或登记别名。`,
+        status: "pending"
+      });
+      reviewIds.add(String(review.id));
+    }
+    return [...reviewIds];
+  }
+
   private relationshipSettingSource(workId: string, sourceType: string, sourceId: string): RelationshipSettingSource | null {
     const cleanStrings = (value: unknown): unknown => {
       if (typeof value === "string") return collapseAiBlankLines(value);
@@ -9373,7 +9467,11 @@ export class AiManager {
     return String(Number(version?.version_no ?? 0));
   }
 
-  async previewRelationshipSources(workId: string, scope: ContextScope, modelId?: string): Promise<Record<string, unknown>> {
+  private async prepareRelationshipSourcePreview(
+    workId: string,
+    scope: ContextScope,
+    modelId?: string
+  ): Promise<{ preview: RelationshipSourcePreview; sourceSelection: RelationshipSourceSelection | null }> {
     const characters = this.store.listCharacters(workId);
     if (characters.length < 2) throw new AppError(409, "CHARACTERS_REQUIRED", "人物关系分析至少需要两个角色档案");
     const selectedCharacterIds = new Set(scope.characterIds ?? []);
@@ -9395,8 +9493,8 @@ export class AiManager {
       ?? (scope.type === "settings" || scope.includeAllSettings === true
         ? this.relationshipSettingSources(workId, characters)
         : []);
-    const sources = [
-      ...chapters.map((chapter) => ({
+    const sources: RelationshipSourcePreview["sources"] = [
+      ...chapters.map((chapter): RelationshipSourcePreview["sources"][number] => ({
         sourceType: "chapter",
         sourceId: String(chapter.id),
         title: String(chapter.title),
@@ -9404,7 +9502,7 @@ export class AiManager {
         characterCount: String(chapter.content ?? "").length,
         matchType: sourceSelection?.matchKinds[this.relationshipIndexedSourceKey("chapter", String(chapter.id))] ?? "scope"
       })),
-      ...settings.map((setting) => ({
+      ...settings.map((setting): RelationshipSourcePreview["sources"][number] => ({
         sourceType: setting.sourceType,
         sourceId: setting.sourceId,
         title: setting.title,
@@ -9417,17 +9515,24 @@ export class AiManager {
       throw new AppError(409, "RELATIONSHIP_SOURCE_PREVIEW_TOO_LARGE", "预检来源超过 5000 条，请缩小分析范围");
     }
     return {
-      preFilterRelationshipSources,
-      chapterCount: chapters.length,
-      settingCount: settings.length,
-      sourceCount: sources.length,
-      totalCharacters: sources.reduce((total, source) => total + source.characterCount, 0),
-      estimatedBatchCount: this.buildChapterChunks(chapters, 12_000).length + this.buildSettingChunks(settings, 12_000).length,
-      sources,
-      indexGeneration: sourceSelection?.generation ?? null,
-      selectionSummary: sourceSelection?.summary ?? null,
-      verificationCallCount: sourceSelection?.verificationCallIds.length ?? 0
+      preview: {
+        preFilterRelationshipSources,
+        chapterCount: chapters.length,
+        settingCount: settings.length,
+        sourceCount: sources.length,
+        totalCharacters: sources.reduce((total, source) => total + source.characterCount, 0),
+        estimatedBatchCount: this.buildChapterChunks(chapters, 12_000).length + this.buildSettingChunks(settings, 12_000).length,
+        sources,
+        indexGeneration: sourceSelection?.generation ?? null,
+        selectionSummary: sourceSelection?.summary ?? null,
+        verificationCallCount: sourceSelection?.verificationCallIds.length ?? 0
+      },
+      sourceSelection
     };
+  }
+
+  async previewRelationshipSources(workId: string, scope: ContextScope, modelId?: string): Promise<RelationshipSourcePreview> {
+    return (await this.prepareRelationshipSourcePreview(workId, scope, modelId)).preview;
   }
 
   private async runRelationshipAnalysis(workId: string, scope: ContextScope, modelId?: string, taskId?: string): Promise<Record<string, unknown>> {
@@ -10124,50 +10229,8 @@ export class AiManager {
       if (taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
     }
     if (sourceSelection) {
-      const acceptedVariants = sourceSelection.variantDecisions.filter((decision) => decision.verdict === "same" && decision.confidence >= 0.8);
-      const reviewIds = new Set<string>();
-      this.store.db.transaction(() => {
-        for (const decision of acceptedVariants) {
-          const observedIndex = decision.snippet.indexOf(decision.observed);
-          const quote = observedIndex < 0
-            ? decision.snippet.slice(0, 160)
-            : decision.snippet.slice(Math.max(0, observedIndex - 60), Math.min(decision.snippet.length, observedIndex + decision.observed.length + 60));
-          const dedupeKey = this.store.hashContent([
-            decision.targetCharacterId,
-            normalizeRelationshipSearchText(decision.observed),
-            decision.sourceType,
-            decision.sourceId,
-            decision.sourceVersion
-          ].join("|"));
-          const review = this.store.createReviewItem(workId, {
-            itemType: "character-name-variant",
-            dedupeKey,
-            severity: "medium",
-            title: `疑似人物名错字：${decision.observed} → ${decision.targetName}`,
-            description: `AI 判断来源“${decision.sourceTitle}”中的“${decision.observed}”可能指向人物“${decision.targetName}”。`,
-            entityRefs: [{
-              characterId: decision.targetCharacterId,
-              sourceType: decision.sourceType,
-              sourceId: decision.sourceId,
-              sourceVersion: decision.sourceVersion
-            }],
-            evidence: [{
-              sourceType: decision.sourceType,
-              sourceId: decision.sourceId,
-              sourceTitle: decision.sourceTitle,
-              sourceVersion: decision.sourceVersion,
-              observed: decision.observed,
-              quote,
-              confidence: decision.confidence,
-              reason: decision.reason
-            }],
-            suggestion: `请核对“${decision.observed}”是否为“${decision.targetName}”的错别字；确认后再修改原文或登记别名。`,
-            status: "pending"
-          });
-          reviewIds.add(String(review.id));
-        }
-      });
-      sourceSelection.summary.reviewIds = [...reviewIds];
+      sourceSelection.summary.reviewIds = this.store.db.transaction(() =>
+        this.createRelationshipVariantReviews(workId, sourceSelection));
     }
     if (previewRelationshipChanges && taskId && includesSettings) this.store.refreshTaskSourceVersions(taskId);
     const relationshipResults = [...relationshipOutcomes.values()].map(({ action, relationship }) =>
@@ -10238,7 +10301,11 @@ export class AiManager {
       replacedRelationshipCount,
       preFilterRelationshipSources,
       sourcePreviewApplied: Boolean(previewedSources),
-      ...(sourceSelection ? { sourceSelection: sourceSelection.summary } : {}),
+      ...(sourceSelection
+        ? { sourceSelection: sourceSelection.summary }
+        : scope.relationshipSourceSelectionSummary
+          ? { sourceSelection: scope.relationshipSourceSelectionSummary }
+          : {}),
       callIds
     };
   }

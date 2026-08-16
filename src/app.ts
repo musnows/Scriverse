@@ -2380,11 +2380,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       input.modelId
     ));
   });
-  app.post("/api/works/:workId/tasks", (request, response) => {
+  app.post("/api/works/:workId/tasks", async (request, response) => {
     const input = parse(analysisTaskSchema, request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    const deniedModules = analysisTaskReadModules(input.taskType, input.scope).filter((module) => permissions[module] === "none");
+    if (deniedModules.length > 0) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取创建分析任务所需资料模块的权限", {
+        modules: deniedModules
+      });
+    }
     data(response, redactTaskCharacterNames(
-      ai.createTask(request.params.workId, input),
-      requestPermissions(request, request.params.workId)
+      await ai.createTask(request.params.workId, input),
+      permissions
     ), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
@@ -2446,7 +2453,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       requestPermissions(request)
     ));
   });
-  app.post("/api/tasks/:taskId/rerun", (request, response) => {
+  app.post("/api/tasks/:taskId/rerun", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }).strict(), request.body ?? {});
     const task = store.getTask(request.params.taskId);
     const permissions = requestPermissions(request, String(task.workId));
@@ -2457,7 +2464,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     }
     data(response, redactTaskCharacterNames(
-      ai.rerunTask(request.params.taskId, input.modelId),
+      await ai.rerunTask(request.params.taskId, input.modelId),
       requestPermissions(request)
     ), 201);
   });

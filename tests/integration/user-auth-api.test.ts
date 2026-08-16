@@ -2142,6 +2142,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ name: "TOP_SECRET_CHARACTER" })
       .expect(201);
+    await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "TOP_SECRET_OTHER" })
+      .expect(201);
     const targetedTask = await owner.agent.post(`/api/works/${workId}/tasks`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({
@@ -2149,7 +2153,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
       })
       .expect(201);
-    expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
+    expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER · 已预检 0 条来源");
     const collaboratorTargetedTask = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({
@@ -2217,13 +2221,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await analysisOnly.agent.get(`/api/works/${workId}/characters`).expect(403);
     const protectedTasks = await analysisOnly.agent.get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
     const protectedTaskSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === targetedTask.body.data.id);
-    expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人 · 已预检 0 条来源");
     expect(JSON.stringify(protectedTaskSummary)).not.toContain("TOP_SECRET_CHARACTER");
     const protectedSelectionSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === secretSelectionTask.body.data.id);
     expect(protectedSelectionSummary.scopeSummary).toBe("选定内容（正文读取权限受限）");
     expect(JSON.stringify(protectedSelectionSummary)).not.toContain("TOP_SECRET_SELECTION_PROSE");
     const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
-    expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人 · 已预检 0 条来源");
     expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
     expect(protectedTaskDetail.body.data.result.relationshipResults[0].fromCharacterName).toBeUndefined();
     expect(protectedTaskDetail.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
@@ -2287,7 +2291,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
       .expect(200);
-    expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人 · 已预检 0 条来源");
     expect(protectedTaskCancellation.body.data.scope.targetCharacters).toBeUndefined();
     expect(JSON.stringify(protectedTaskCancellation.body.data)).not.toContain("TOP_SECRET_CHARACTER");
     const protectedTaskRerun = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/rerun`)
