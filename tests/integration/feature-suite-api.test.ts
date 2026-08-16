@@ -1921,6 +1921,45 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(systemPrompts.every((prompt) => prompt.includes("作者追加的关系分析提示") && prompt.includes("重点检查退位者与继承人的师承变化"))).toBe(true);
   });
 
+  it("指定章节关系分析可同时纳入设定集", async () => {
+    const userPrompts: string[] = [];
+    fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      userPrompts.push(body.messages[1]?.content ?? "");
+      return new Response(JSON.stringify({ choices: [{ message: { content: "[]" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    runtime = createTestRuntime(fetchMock);
+    const { workId, chapters } = await seedWork(runtime);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/settings`).send({
+      title: "北港盟约",
+      category: "人物关系",
+      content: "林舟与沈星共同遵守北港盟约。",
+      locked: false
+    }).expect(201);
+    const modelId = await configureAi(runtime, workId);
+    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: {
+        type: "chapter",
+        chapterId: chapters[0].id,
+        chapterIds: [chapters[0].id],
+        includeAllSettings: true
+      }
+    }).expect(201);
+    expect(task.body.data.scopeSummary).toBe("指定章节 + 设定集（1）：第一卷 · 第一章 埋线");
+
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+    expect(result.body.data.result).toMatchObject({ coveredChapterCount: 1 });
+    expect(result.body.data.result.coveredSettingCount).toBeGreaterThan(0);
+    const sent = userPrompts.join("\n");
+    expect(sent).toContain("林舟在北港见到沈星");
+    expect(sent).toContain("林舟与沈星共同遵守北港盟约");
+    expect(sent).not.toContain("林舟离开北港，旧约仍未兑现");
+    expect(sent).not.toContain("沈星打开旧信");
+  });
+
   it("可仅根据设定集分析人物关系且不要求章节", async () => {
     let linId = "";
     let shenId = "";
@@ -2942,7 +2981,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
 
   it("拒绝不适用于当前任务或缺少角色前提的关系分析选项", async () => {
     runtime = createTestRuntime(vi.fn<typeof fetch>());
-    const { workId, chapters } = await seedWork(runtime);
+    const { workId } = await seedWork(runtime);
     await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "timeline-analysis",
       scope: { type: "book", includeAllSettings: true }
@@ -2950,10 +2989,6 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "timeline-analysis",
       scope: { type: "book", additionalPrompt: "不应被接受" }
-    }).expect(400);
-    await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
-      taskType: "relationship-analysis",
-      scope: { type: "chapter", chapterId: chapters[0].id, includeAllSettings: true }
     }).expect(400);
     await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",

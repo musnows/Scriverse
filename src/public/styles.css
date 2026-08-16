@@ -2979,8 +2979,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-scope-volume-group:last-child { border-bottom: 0; }
 .task-scope-volume-group > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px 2px; }
 .task-scope-volume-group > header strong { overflow: hidden; color: var(--accent-dark); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.task-scope-volume-group > header span { flex: 0 0 auto; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 8px; }
-.dialog-fields .task-scope-volume-option { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; margin: 0; color: var(--ink); cursor: pointer; }
+.task-scope-volume-group > header > .task-scope-volume-count { flex: 0 0 auto; color: var(--muted); font-family: var(--font-latin), monospace; font-size: 8px; }
+.task-scope-volume-options { display: grid; gap: 5px; min-width: 0; }
+.task-scope-volume-group.is-collapsed > .task-scope-volume-options { display: none; }
+.dialog-fields .task-scope-volume-option { position: relative; display: grid; flex: 1 1 auto; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; margin: 0; color: var(--ink); cursor: pointer; }
 .task-scope-volume-option input { position: absolute; width: 1px !important; min-width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; }
 .task-scope-volume-option:hover, .task-scope-volume-option:has(input:focus-visible) { color: var(--accent-dark); }
 .task-scope-volume-option:has(input:checked) .task-scope-checkbox, .task-scope-volume-option:has(input:indeterminate) .task-scope-checkbox { border-color: var(--accent); background: var(--accent); }
@@ -2989,6 +2991,10 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-scope-volume-copy { display: grid; gap: 2px; min-width: 0; }
 .task-scope-volume-copy strong { overflow: hidden; color: inherit !important; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .task-scope-volume-copy small { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.task-scope-volume-collapse { display: inline-grid; flex: 0 0 auto; width: 24px; height: 24px; place-items: center; margin-left: 2px; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); font-size: 14px; line-height: 1; }
+.task-scope-volume-collapse > span { display: block; transition: transform .15s ease; }
+.task-scope-volume-collapse[aria-expanded="false"] > span { transform: rotate(180deg); }
+.task-scope-volume-collapse:hover, .task-scope-volume-collapse:focus-visible { border-color: var(--line); background: var(--surface); color: var(--accent-dark); outline: none; }
 .dialog-fields .task-scope-option { position: relative; display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; padding: 8px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); color: var(--muted); cursor: pointer; transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease; }
 .dialog-fields .task-scope-option.hidden { display: none; }
 .task-scope-option:hover, .task-scope-option:has(input:focus-visible) { border-color: color-mix(in srgb, var(--accent) 54%, var(--line)); }
@@ -3589,6 +3595,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   body { -webkit-text-size-adjust: 100%; }
   button, select, input, textarea, [contenteditable="true"] { touch-action: manipulation; }
   button, .ghost-button, .primary-button, .danger-button, select { min-height: 40px; }
+  .task-scope-volume-collapse { width: 40px; min-width: 40px; height: 40px; min-height: 40px; }
 
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
