@@ -6156,7 +6156,8 @@ export class Store {
   searchCharacterProfileSections(workId: string, query: string, limit = 20): Record<string, unknown>[] {
     this.getWork(workId);
     const normalized = normalizeDocumentSearchText(query);
-    const columns = `SELECT section.*, character.name AS character_name, character.is_dead AS character_is_dead
+    const columns = `SELECT section.*, character.name AS character_name, character.gender AS character_gender,
+                            character.is_dead AS character_is_dead
       FROM character_profile_section_search search
       JOIN character_profile_sections section ON section.id = search.section_id
       JOIN characters character ON character.id = search.character_id`;
@@ -6181,6 +6182,7 @@ export class Store {
     return rows.map((row) => ({
       ...this.mapCharacterProfileSection(row),
       characterName: requiredString(row, "character_name"),
+      gender: requiredString(row, "character_gender"),
       isDead: booleanValue(row, "character_is_dead")
     }));
   }
@@ -10409,7 +10411,7 @@ export class Store {
        ), character_race_paths AS (
          SELECT character_id, path FROM character_race_lineage WHERE parent_race_id IS NULL
        )
-       SELECT character.id, character.name, character.aliases_json, character.species, character.is_dead,
+       SELECT character.id, character.name, character.aliases_json, character.species, character.gender, character.is_dead,
               COALESCE(path.path, character.species) AS race_path
        FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
        WHERE character.work_id = ? AND character.merged_into_character_id IS NULL AND (
@@ -10445,6 +10447,7 @@ export class Store {
         title: requiredString(row, "name"),
         snippet: [requiredString(row, "race_path"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、"),
         racePath: requiredString(row, "race_path"),
+        gender: requiredString(row, "gender"),
         isDead: booleanValue(row, "is_dead")
       })),
       ...characterSections.map((section) => ({
@@ -10454,6 +10457,7 @@ export class Store {
         title: `${String(section.characterName)} / ${String(section.title)}`,
         snippet: snippet(String(section.contentMarkdown)),
         sectionType: String(section.sectionType),
+        gender: String(section.gender),
         isDead: Boolean(section.isDead)
       })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),

@@ -1751,7 +1751,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     });
     runtime = createTestRuntime(fetchMock);
     const { workId, chapters } = await seedWork(runtime);
-    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", aliases: ["阿舟"], currentState: { location: "北港" } }).expect(201);
+    const lin = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", gender: "male", aliases: ["阿舟"], currentState: { location: "北港" } }).expect(201);
     const shen = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
     const relationship = await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
       fromCharacterId: lin.body.data.id,
@@ -1785,6 +1785,10 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     await request(runtime.app).patch(`/api/characters/${character.id}`).send({ currentState: { location: "主星" } }).expect(200);
     const knowledgeStale = await request(runtime.app).post(`/api/suggestions/${suggestion.body.data.id}/accept`).send({ content: "作者改过的候选" }).expect(409);
     expect(knowledgeStale.body.error.code).toBe("GUARD_STALE");
+    await request(runtime.app).post(`/api/suggestions/${suggestion.body.data.id}/guard`).send({ content: "作者改过的候选" }).expect(201);
+    await request(runtime.app).patch(`/api/characters/${character.id}`).send({ gender: "female" }).expect(200);
+    const genderStale = await request(runtime.app).post(`/api/suggestions/${suggestion.body.data.id}/accept`).send({ content: "作者改过的候选" }).expect(409);
+    expect(genderStale.body.error.code).toBe("GUARD_STALE");
     await request(runtime.app).post(`/api/suggestions/${suggestion.body.data.id}/guard`).send({ content: "作者改过的候选" }).expect(201);
     await request(runtime.app).patch(`/api/relationships/${relationship.body.data.id}`).send({ keywords: ["共同守望", "重新建立信任"] }).expect(200);
     const relationshipStale = await request(runtime.app).post(`/api/suggestions/${suggestion.body.data.id}/accept`).send({ content: "作者改过的候选" }).expect(409);

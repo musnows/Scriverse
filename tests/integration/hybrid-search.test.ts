@@ -375,8 +375,8 @@ describe("作品混合检索", () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "马克博士曾经守护北港。马克·罗素接替了他。 ");
     const workId = String(seeded.work.id);
-    const source = runtime.store.createCharacter(workId, { name: "马克博士", isDead: true });
-    const target = runtime.store.createCharacter(workId, { name: "马克·罗素" });
+    const source = runtime.store.createCharacter(workId, { name: "马克博士", gender: "male", isDead: true });
+    const target = runtime.store.createCharacter(workId, { name: "马克·罗素", gender: "female" });
     runtime.store.createCharacterProfileSection(String(source.id), {
       sectionType: "background",
       title: "旧身份",
@@ -395,11 +395,11 @@ describe("作品混合检索", () => {
       expect.objectContaining({ type: "character", id: source.id })
     ]));
     expect(metadataResults).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素", isDead: false })
+      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素", gender: "female", isDead: false })
     ]));
     const sectionResults = runtime.store.searchCharacterProfileSections(workId, "旧身份");
     expect(sectionResults).toEqual(expect.arrayContaining([
-      expect.objectContaining({ characterId: target.id, characterName: "马克·罗素", isDead: false })
+      expect.objectContaining({ characterId: target.id, characterName: "马克·罗素", gender: "female", isDead: false })
     ]));
     expect(sectionResults).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ characterId: source.id })
@@ -441,7 +441,7 @@ describe("作品混合检索", () => {
       expect.objectContaining({ type: "character", id: source.id })
     ]));
     expect(matches).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素" })
+      expect.objectContaining({ type: "character", id: target.id, title: "马克·罗素", gender: "female" })
     ]));
 
     const relationshipExecution = await internalAi.executeAgentTool(workId, {
@@ -462,8 +462,8 @@ describe("作品混合检索", () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime);
     const workId = String(seeded.work.id);
-    const deadCharacter = runtime.store.createCharacter(workId, { name: "岑夜", isDead: true });
-    const livingCharacter = runtime.store.createCharacter(workId, { name: "林昼" });
+    const deadCharacter = runtime.store.createCharacter(workId, { name: "岑夜", gender: "male", isDead: true });
+    const livingCharacter = runtime.store.createCharacter(workId, { name: "林昼", gender: "female" });
     const firstDeadSection = runtime.store.createCharacterProfileSection(String(deadCharacter.id), {
       sectionType: "background",
       title: "星轨密令上篇",
@@ -488,10 +488,11 @@ describe("作品混合检索", () => {
         characterId: deadCharacter.id,
         characterName: "岑夜",
         title: "星轨密令上篇",
+        gender: "male",
         isDead: true
       }),
-      expect.objectContaining({ id: secondDeadSection.id, characterId: deadCharacter.id, isDead: true }),
-      expect.objectContaining({ id: livingSection.id, characterId: livingCharacter.id, isDead: false })
+      expect.objectContaining({ id: secondDeadSection.id, characterId: deadCharacter.id, gender: "male", isDead: true }),
+      expect.objectContaining({ id: livingSection.id, characterId: livingCharacter.id, gender: "female", isDead: false })
     ]));
 
     const fullTextResults = runtime.store.search(workId, "星轨密令")
@@ -501,10 +502,11 @@ describe("作品混合检索", () => {
         sectionId: firstDeadSection.id,
         title: "岑夜 / 星轨密令上篇",
         snippet: expect.stringContaining("星轨密令"),
+        gender: "male",
         isDead: true
       }),
-      expect.objectContaining({ sectionId: secondDeadSection.id, isDead: true }),
-      expect.objectContaining({ sectionId: livingSection.id, isDead: false })
+      expect.objectContaining({ sectionId: secondDeadSection.id, gender: "male", isDead: true }),
+      expect.objectContaining({ sectionId: livingSection.id, gender: "female", isDead: false })
     ]));
 
     const shortTermResults = runtime.store.search(workId, "星轨")

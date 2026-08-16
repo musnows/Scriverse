@@ -67,6 +67,7 @@ describe("AI 关键词实体注入", () => {
     const { work } = await seedChapter(runtime);
     const character = runtime.store.createCharacter(String(work.id), {
       name: "哥斯拉",
+      gender: "none",
       aliases: ["王者"],
       profile: { summary: "地球守护者" }
     });
@@ -93,6 +94,7 @@ describe("AI 关键词实体注入", () => {
     expect(context).toContain("<mentioned_characters>");
     expect(context).toContain("提及角色");
     expect(context).toContain("哥斯拉");
+    expect(context).toContain("gender=none");
     expect(context).toContain("地球守护者");
   });
 
