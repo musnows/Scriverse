@@ -838,7 +838,9 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".left-actions { display: block; margin: 0 0 15px; }");
     expect(styles.text).toContain(".file-button { min-height: 30px; font-size: 11px;");
     expect(styles.text).toContain(".panel-heading { display: flex; align-items: center; gap: 8px; padding: 15px 0 9px 7px;");
-    expect(application.text).toContain('button.textContent = sending ? "发送中" : switching ? "切换中" : "发送";');
+    expect(application.text).toContain('const stateName = sending ? "stop" : switching ? "switching" : "send";');
+    expect(application.text).toContain('button.disabled = switching;');
+    expect(application.text).toContain('button.classList.toggle("is-stop", sending);');
     expect(application.text).toContain('content: normalizeParagraphSpacing($("#chapter-content").value)');
     expect(application.text).toContain("collapseChapterInputBlankLines(event.currentTarget)");
     expect(application.text).toContain("function openVolumeDialog(item)");

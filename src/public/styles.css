@@ -2708,8 +2708,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-context-distribution-row[data-key="skills"] { --distribution-color: var(--muted); }
 .ai-context-distribution-row[data-key="context"] { --distribution-color: var(--green); }
 .ai-context-distribution-row[data-key="left"] { --distribution-color: color-mix(in srgb, var(--muted) 55%, transparent); }
-.ai-send-button { min-width: 54px; height: 32px; padding: 0 11px; border: 0; border-radius: 4px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 600; box-shadow: 0 4px 12px rgba(139,61,44,.2); }
-.ai-send-button:hover { background: var(--accent-dark); }.ai-send-button:disabled { cursor: wait; opacity: .62; }
+.ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(139,61,44,.2); }
+.ai-send-button:hover, .ai-send-button:focus-visible { background: var(--accent-dark); outline: 0; }
+.ai-send-button:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 4px 12px rgba(139,61,44,.2); }
+.ai-send-button.is-stop { background: var(--ink); box-shadow: 0 4px 12px color-mix(in srgb, var(--ink) 22%, transparent); }
+.ai-send-button.is-stop:hover, .ai-send-button.is-stop:focus-visible { background: color-mix(in srgb, var(--ink) 84%, var(--accent)); }
+.ai-send-button:disabled { cursor: wait; opacity: .62; }
+.ai-send-button-icon { width: 17px; height: 17px; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.ai-send-button.is-stop .ai-send-button-icon { width: 15px; height: 15px; fill: currentColor; stroke: none; }
 .ai-citations { display: grid; gap: 6px; max-height: 190px; overflow-y: auto; margin-bottom: 8px; }
 .ai-citation-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1px solid var(--line); border-radius: 5px; background: var(--paper); overflow: hidden; }
 .ai-citation-main { min-width: 0; padding: 8px 9px; border: 0; background: transparent; text-align: left; }
@@ -3944,7 +3950,6 @@ body { font-size: var(--ui-font-size); }
 .ai-context-popover-header strong { font-size: calc(12px * var(--ai-font-scale)); }
 .ai-context-popover-header small, .ai-context-distribution-label { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-context-distribution-label small, .ai-context-distribution-label strong { font-size: calc(9px * var(--ai-font-scale)); }
-.ai-send-button { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-citation-main strong { font-size: calc(10px * var(--ai-font-scale)); }
 .ai-citation-main small, .ai-citation-main span, .message-citations span, .user-message-mentions { font-size: calc(9px * var(--ai-font-scale)); }
 .ai-history-item strong { font-size: calc(14px * var(--ai-font-scale)); }

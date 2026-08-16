@@ -557,12 +557,24 @@ function aiInteractionBusy() {
   return aiRequestManager.hasActive(activeAiChatTab()?.id) || aiConversationNavigationPending !== null;
 }
 
+function aiSendButtonIconMarkup(stateName) {
+  return stateName === "stop"
+    ? '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>'
+    : '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 3 9.5 14.5M21 3l-7 18-4.5-6.5L3 10l18-7Z"></path></svg>';
+}
+
 function syncAiRequestControls() {
   const sending = aiRequestManager.hasActive(activeAiChatTab()?.id);
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
-  button.disabled = sending || switching;
-  button.textContent = sending ? "发送中" : switching ? "切换中" : "发送";
+  const stateName = sending ? "stop" : switching ? "switching" : "send";
+  const label = sending ? "终止当前回复" : switching ? "正在切换对话" : "发送消息";
+  button.disabled = switching;
+  button.dataset.state = stateName;
+  button.classList.toggle("is-stop", sending);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.innerHTML = aiSendButtonIconMarkup(stateName);
   syncAiTaskOptions();
   renderAiRoleplayCharacterSelect();
 }
@@ -571,6 +583,18 @@ function cancelActiveAiRequest(reason) {
   const cancelled = aiRequestManager.cancel(reason, activeAiChatTab()?.id);
   syncAiRequestControls();
   return cancelled;
+}
+
+function activateAiSendControl() {
+  const tab = activeAiChatTab();
+  if (aiRequestManager.hasActive(tab?.id)) {
+    if (cancelActiveAiRequest("用户已终止当前回复")) {
+      toast("已终止当前回复，可以重新发送");
+      $("#ai-prompt").focus();
+    }
+    return;
+  }
+  void sendAi();
 }
 
 function beginAiConversationNavigation(reason, action = "切换会话") {
@@ -3148,13 +3172,29 @@ async function persistAiRequestInterruption(request, interruption = null) {
   const partialContent = typeof interruption?.content === "string" && interruption.content.trim()
     ? interruption.content
     : null;
+  const cancellationMessage = request.signal.reason instanceof Error
+    ? request.signal.reason.message
+    : "AI 请求已取消";
+  const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";
+  const metadata = cancelledByClient
+    ? {
+        ...(partialContent ? interruption.metadata : {}),
+        interrupted: true,
+        interruptionCode: "AI_REQUEST_CANCELLED",
+        interruptionMessage: cancellationMessage.slice(0, 500)
+      }
+    : interruption?.metadata ?? {
+        interrupted: true,
+        interruptionCode: "AI_REQUEST_CANCELLED",
+        interruptionMessage: cancellationMessage.slice(0, 500)
+      };
   try {
     const message = await persistAiConversationMessage(
       request.conversationId,
       "assistant",
-      partialContent ?? "调用失败：生成已取消，尚未收到可保留的回复内容。",
+      partialContent ?? "生成已终止，尚未收到可保留的回复内容。",
       [],
-      partialContent ? interruption.metadata : {},
+      metadata,
       { requestId: aiAssistantRequestId(request) }
     );
     updateAiConversationSummaryFromMessage(message);
@@ -3850,6 +3890,7 @@ function aiStreamInterruptionLabel(code) {
   if (code === "AI_STREAM_NETWORK_ERROR") return "网络中断";
   if (code === "AI_STREAM_UPSTREAM_CLOSED") return "流被关闭";
   if (code === "AI_STREAM_REQUEST_CANCELLED") return "请求已取消";
+  if (code === "AI_REQUEST_CANCELLED") return "已终止";
   return "生成中断";
 }
 
@@ -14304,6 +14345,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   if (!state.work) return toast("请先选择作品", "error");
   const tab = activeAiChatTab();
   if (!tab) return toast("Agent 对话页签尚未就绪", "error");
+  if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
   const instruction = composerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
@@ -14451,7 +14493,20 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   } catch (error) {
     const request = requestHolder.snapshot;
     if (isAiRequestCancellation(error, request) || !aiRequestTargetsCurrentState(request)) {
-      await persistAiRequestInterruption(request, error?.streamInterruption);
+      const persistedInterruption = await persistAiRequestInterruption(request, error?.streamInterruption);
+      const userStoppedCurrentReply = request.signal.reason instanceof Error
+        && request.signal.reason.message === "用户已终止当前回复";
+      if (userStoppedCurrentReply && persistedInterruption && isActiveAiChatTab(tab)) {
+        appendMessage(
+          "assistant",
+          persistedInterruption.content,
+          [],
+          persistedInterruption.createdAt,
+          persistedInterruption.metadata,
+          persistedInterruption.id,
+          { tab }
+        );
+      }
       return;
     }
     if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
@@ -16697,7 +16752,7 @@ $("#ai-context-meter").addEventListener("click", () => {
   setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
 });
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
-$("#ai-send").addEventListener("click", sendAi);
+$("#ai-send").addEventListener("click", activateAiSendControl);
 $("#ai-conversation-switcher").addEventListener("click", () => {
   setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
 });
@@ -16894,7 +16949,7 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
   }
   if (shouldSendAiPrompt(event)) {
     event.preventDefault();
-    if (!$("#ai-send").disabled) void sendAi();
+    if (!$("#ai-send").disabled && !aiRequestManager.hasActive(activeAiChatTab()?.id)) void sendAi();
   }
 });
 $(".quick-actions").addEventListener("click", (event) => {
