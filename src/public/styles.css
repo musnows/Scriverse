@@ -2094,6 +2094,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .relationship-network.is-panning { cursor: grabbing; }
 .relationship-network-stage { contain: layout paint style; will-change: transform; }
 .relationship-network-stage.is-view-animating { transition: transform .34s cubic-bezier(.22,.78,.3,1); }
+.relationship-network-edge-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .relationship-network svg { overflow: visible; }
 .relationship-network .mind-edge-hit {
   stroke-width: 14px;
@@ -2234,6 +2235,13 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   opacity: 1;
   z-index: 3;
   will-change: left, top;
+}
+.relationship-network.is-dense .obsidian-node:not(:hover):not(:focus-visible):not(.is-hovered):not(.is-selected):not(.is-edge-endpoint) {
+  box-shadow: none;
+}
+.relationship-network.is-dense .obsidian-node {
+  transition: opacity .08s linear, transform .08s linear;
+  will-change: auto;
 }
 .relationship-network .mind-node.is-settling { animation: relationship-node-settle .18s ease-out; }
 .relationship-network-focus, .relationship-network-help { position: absolute; z-index: 6; color: var(--relationship-focus); pointer-events: none; }
