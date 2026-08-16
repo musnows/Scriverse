@@ -1549,4 +1549,87 @@ describe("数据库版本化迁移", () => {
     expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
     migrated.close();
   });
+
+  it("迁移 96 扩展思考强度约束并保留模型引用和删除触发器", () => {
+    const root = mkdtempSync(join(tmpdir(), "ai-novel-migration-extended-thinking-effort-"));
+    roots.push(root);
+    const filename = join(root, "extended-thinking-effort.db");
+    const timestamp = "2026-08-16T00:00:00.000Z";
+    const current = new Database(filename);
+    current.raw.exec("PRAGMA foreign_keys = OFF");
+    current.raw.exec(`
+      CREATE TABLE models_v95 (
+        id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        display_name TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        purposes_json TEXT NOT NULL DEFAULT '[]',
+        context_note TEXT NOT NULL DEFAULT '',
+        context_window INTEGER NOT NULL DEFAULT 128000 CHECK(context_window BETWEEN 1024 AND 2000000),
+        output_note TEXT NOT NULL DEFAULT '',
+        preset_json TEXT NOT NULL DEFAULT '{}',
+        thinking_enabled INTEGER NOT NULL DEFAULT 1,
+        thinking_effort TEXT NOT NULL DEFAULT 'default' CHECK(thinking_effort IN ('default', 'low', 'medium', 'high')),
+        multimodal_enabled INTEGER NOT NULL DEFAULT 0 CHECK(multimodal_enabled IN (0, 1)),
+        enabled INTEGER NOT NULL DEFAULT 1,
+        note TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(provider_id, model_id)
+      );
+      DROP TABLE models;
+      ALTER TABLE models_v95 RENAME TO models;
+      CREATE TRIGGER ai_connectivity_test_states_model_delete
+      AFTER DELETE ON models BEGIN
+        DELETE FROM ai_connectivity_test_states WHERE object_type = 'model' AND object_id = OLD.id;
+      END;
+      PRAGMA foreign_keys = ON;
+    `);
+    current.run(
+      `INSERT INTO providers (
+        id, work_id, name, base_url, protocol, encrypted_key, key_iv, key_tag, key_hint, status, created_at, updated_at
+      ) VALUES (
+        'provider-extended-thinking-effort', '__scriverse_platform_ai__', '扩展思考强度迁移供应商',
+        'https://extended-thinking-effort.test/v1', 'openai-chat-completions', 'encrypted', 'iv', 'tag', '***', 'disabled', ?, ?
+      )`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      `INSERT INTO models (id, provider_id, display_name, model_id, thinking_effort, created_at, updated_at)
+       VALUES ('model-extended-thinking-effort', 'provider-extended-thinking-effort', '迁移前模型', 'legacy-effort-model', 'high', ?, ?)`,
+      timestamp,
+      timestamp
+    );
+    current.run(
+      "INSERT INTO task_defaults (work_id, task_type, model_id) VALUES ('__scriverse_platform_ai__', 'chat', 'model-extended-thinking-effort')"
+    );
+    current.run(
+      `INSERT INTO ai_connectivity_test_states (object_type, object_id, config_fingerprint, state, attempt_id, retry_at_ms, updated_at)
+       VALUES ('model', 'model-extended-thinking-effort', ?, 'success', 'attempt-extended-thinking-effort', 0, ?)`,
+      "a".repeat(64),
+      timestamp
+    );
+    current.run("DELETE FROM schema_migrations WHERE version = 96");
+    current.close();
+
+    const migrated = new Database(filename);
+    expect(migrated.get("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 96")).toEqual({ count: 1 });
+    expect(migrated.get("SELECT display_name, thinking_effort FROM models WHERE id = 'model-extended-thinking-effort'")).toEqual({
+      display_name: "迁移前模型",
+      thinking_effort: "high"
+    });
+    expect(migrated.get("SELECT model_id FROM task_defaults WHERE task_type = 'chat'")).toEqual({ model_id: "model-extended-thinking-effort" });
+    expect(migrated.get("SELECT state FROM ai_connectivity_test_states WHERE object_id = 'model-extended-thinking-effort'")).toEqual({ state: "success" });
+    migrated.run("UPDATE models SET thinking_effort = 'xhigh' WHERE id = 'model-extended-thinking-effort'");
+    expect(migrated.get("SELECT thinking_effort FROM models WHERE id = 'model-extended-thinking-effort'")).toEqual({ thinking_effort: "xhigh" });
+    migrated.run("UPDATE models SET thinking_effort = 'max' WHERE id = 'model-extended-thinking-effort'");
+    expect(migrated.get("SELECT thinking_effort FROM models WHERE id = 'model-extended-thinking-effort'")).toEqual({ thinking_effort: "max" });
+    expect(migrated.all("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(migrated.all("PRAGMA foreign_key_check")).toEqual([]);
+    migrated.run("DELETE FROM models WHERE id = 'model-extended-thinking-effort'");
+    expect(migrated.get("SELECT COUNT(*) AS count FROM task_defaults WHERE task_type = 'chat'")).toEqual({ count: 0 });
+    expect(migrated.get("SELECT COUNT(*) AS count FROM ai_connectivity_test_states WHERE object_id = 'model-extended-thinking-effort'")).toEqual({ count: 0 });
+    migrated.close();
+  });
 });

@@ -21,7 +21,7 @@ describe("编辑器伏笔提醒界面", () => {
     ]);
 
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
-    expect(page.text).toContain('/app.js?v=20260816-beta-version-label-v1');
+    expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden"');
     expect(page.text).toContain('aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title"');
     expect(page.text).toContain('id="chapter-foreshadow-reminder-previous"');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
+import { MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
 
 describe("AI 模型配置", () => {
   it("仅允许 OpenAI Chat Completions 供应商使用多模态能力", () => {
@@ -17,6 +17,20 @@ describe("AI 模型配置", () => {
       thinkingEnabled: true,
       thinkingEffort: "default"
     });
+  });
+
+  it("显示全部思考强度的原始英文值并保留扩展档位", () => {
+    expect(MODEL_THINKING_EFFORT_OPTIONS).toEqual([
+      ["default", "模型默认"],
+      ["low", "低（low）"],
+      ["medium", "中（medium）"],
+      ["high", "高（high）"],
+      ["xhigh", "超高（xhigh）"],
+      ["max", "最高（max）"]
+    ]);
+    expect(modelFormValues({ thinkingEffort: "xhigh" }).thinkingEffort).toBe("xhigh");
+    const values = modelFormValues({ thinkingEffort: "max" });
+    expect(modelPayload({ ...values, displayName: "最高强度模型", modelId: "max-effort-model" }).thinkingEffort).toBe("max");
   });
 
   it("保留模型已有的 thinking 关闭状态", () => {

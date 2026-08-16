@@ -12,7 +12,7 @@ describe("AI 供应商、模型与建议 API", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
   let expectedThinkingType: "enabled" | "disabled";
-  let expectedThinkingEffort: "low" | "medium" | "high" | undefined;
+  let expectedThinkingEffort: "low" | "medium" | "high" | "xhigh" | "max" | undefined;
 
   beforeEach(async () => {
     expectedMaxTokens = 32_000;
@@ -554,16 +554,19 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
 
     await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "extreme" }).expect(400);
-    expectedThinkingEffort = "high";
-    const effortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "high" }).expect(200);
-    expect(effortUpdated.body.data.thinkingEffort).toBe("high");
+    expectedThinkingEffort = "xhigh";
+    const effortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "xhigh" }).expect(200);
+    expect(effortUpdated.body.data.thinkingEffort).toBe("xhigh");
     const providerTested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     expect(providerTested.body.data.ok).toBe(true);
+    expectedThinkingEffort = "max";
+    const maxEffortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "max" }).expect(200);
+    expect(maxEffortUpdated.body.data.thinkingEffort).toBe("max");
     const modelTested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
     expect(modelTested.body.data.ok).toBe(true);
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
-      instruction: "验证高思考强度参数",
+      instruction: "验证最高思考强度参数",
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(201);
@@ -572,7 +575,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expectedThinkingType = "disabled";
     const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
     expect(updated.body.data.thinkingEnabled).toBe(false);
-    expect(updated.body.data.thinkingEffort).toBe("high");
+    expect(updated.body.data.thinkingEffort).toBe("max");
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "验证关闭思考参数",
