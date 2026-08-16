@@ -10056,14 +10056,15 @@ export class Store {
     includeCharacterNames = true
   ): string {
     const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
+    const chapterSettingsLabel = scope.includeAllSettings === true ? " + 设定集" : "";
     if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
       const labels = scope.chapterIds
         .filter((chapterId): chapterId is string => typeof chapterId === "string")
         .map((chapterId) => chapterSummaries.get(chapterId) ?? "章节已删除");
       const preview = labels.slice(0, 3).join("、");
-      return `指定章节（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+      return `指定章节${chapterSettingsLabel}（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
     }
-    if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${targetedSuffix}`;
+    if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${chapterSettingsLabel}${targetedSuffix}`;
     if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
       const labels = scope.volumeIds
         .filter((volumeId): volumeId is string => typeof volumeId === "string")
@@ -10092,6 +10093,7 @@ export class Store {
     includeCharacterNames = true
   ): string {
     const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
+    const chapterSettingsLabel = scope.includeAllSettings === true ? " + 设定集" : "";
     if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
       const labels = scope.chapterIds.map((chapterId) => {
         const chapter = this.db.get(
@@ -10105,7 +10107,7 @@ export class Store {
         return chapter ? `${requiredString(chapter, "volume_title")} · ${requiredString(chapter, "title")}` : "章节已删除";
       });
       const preview = labels.slice(0, 3).join("、");
-      return `指定章节（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+      return `指定章节${chapterSettingsLabel}（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
     }
     if (typeof scope.chapterId === "string") {
       const chapter = this.db.get(
@@ -10116,10 +10118,10 @@ export class Store {
         scope.chapterId,
         workId
       );
-      if (!chapter) return `章节已删除${targetedSuffix}`;
+      if (!chapter) return `章节已删除${chapterSettingsLabel}${targetedSuffix}`;
       const title = requiredString(chapter, "title");
       const volumeTitle = requiredString(chapter, "volume_title");
-      return `${volumeTitle} · ${title}${targetedSuffix}`;
+      return `${volumeTitle} · ${title}${chapterSettingsLabel}${targetedSuffix}`;
     }
     if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
       const labels = scope.volumeIds.map((volumeId) => {

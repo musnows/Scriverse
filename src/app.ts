@@ -682,8 +682,8 @@ const relationshipAnalysisScopeSchema = z.object({
   if (scope.volumeIds && new Set(scope.volumeIds).size !== scope.volumeIds.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["volumeIds"], message: "分卷不能重复选择" });
   }
-  if (scope.includeAllSettings && scope.type !== "book") {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书人物关系分析" });
+  if (scope.includeAllSettings && scope.type !== "book" && scope.type !== "chapter") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书或指定章节人物关系分析" });
   }
   if (scope.characterIds && new Set(scope.characterIds).size !== scope.characterIds.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["characterIds"], message: "被分析角色不能重复" });

@@ -13678,7 +13678,8 @@ async function openTaskDialog() {
   const buildRelationshipScope = (form) => {
     const taskType = String(form.get("taskType"));
     const scopeType = String(form.get("scopeType"));
-    const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const includeAllSettings = taskType === "relationship-analysis"
+      && ["chapter-with-settings", "book-with-settings"].includes(scopeType);
     const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
@@ -13689,11 +13690,12 @@ async function openTaskDialog() {
     const chapterScope = {
       type: "chapter",
       ...(chapterIds[0] ? { chapterId: chapterIds[0] } : {}),
-      ...(chapterIds.length ? { chapterIds } : {})
+      ...(chapterIds.length ? { chapterIds } : {}),
+      ...(scopeType === "chapter-with-settings" ? { includeAllSettings: true } : {})
     };
     const scope = settingsOnly
       ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : scopeType === "book" || includeAllSettings
+      : scopeType === "book" || scopeType === "book-with-settings"
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { ...chapterScope, ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     return scope;
@@ -13812,6 +13814,9 @@ async function openTaskDialog() {
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 设定集";
+  const chapterSettingsOption = document.createElement("option");
+  chapterSettingsOption.value = "chapter-with-settings";
+  chapterSettingsOption.textContent = "指定章节 + 设定集";
   const settingsOnlyOption = document.createElement("option");
   settingsOnlyOption.value = "settings";
   settingsOnlyOption.textContent = "仅设定集";
@@ -13882,7 +13887,7 @@ async function openTaskDialog() {
   };
   const syncChapterField = () => {
     const kind = "chapter";
-    const enabled = scopeTypeSelect.value === "chapter";
+    const enabled = ["chapter", "chapter-with-settings"].includes(scopeTypeSelect.value);
     scopeFields[kind].classList.toggle("is-disabled", !enabled);
     scopeFields[kind].classList.toggle("hidden", !enabled);
     scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
@@ -13956,8 +13961,14 @@ async function openTaskDialog() {
   };
   const syncRelationshipOptions = () => {
     const enabled = taskTypeSelect.value === "relationship-analysis";
+    const bookScopeOption = scopeTypeSelect.querySelector('option[value="book"]');
+    if (enabled && !chapterSettingsOption.isConnected) bookScopeOption.before(chapterSettingsOption);
     if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
     if (enabled && !settingsOnlyOption.isConnected) scopeTypeSelect.append(settingsOnlyOption);
+    if (!enabled && chapterSettingsOption.isConnected) {
+      if (scopeTypeSelect.value === chapterSettingsOption.value) scopeTypeSelect.value = "chapter";
+      chapterSettingsOption.remove();
+    }
     if (!enabled && allSettingsOption.isConnected) {
       if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
       allSettingsOption.remove();

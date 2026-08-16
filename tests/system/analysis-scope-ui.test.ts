@@ -12,7 +12,9 @@ describe("AI 分析范围交互", () => {
     ]);
 
     expect(application).toContain('allSettingsOption.textContent = "全书 + 设定集"');
+    expect(application).toContain('chapterSettingsOption.textContent = "指定章节 + 设定集"');
     expect(application).toContain('settingsOnlyOption.textContent = "仅设定集"');
+    expect(application).toContain('["chapter-with-settings", "book-with-settings"].includes(scopeType)');
     expect(application).toContain('const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings"');
     expect(application).toContain('function analysisTaskModelPurpose(taskType)');
     expect(application).toContain('name="modelId" required aria-describedby="analysis-task-model-help"');
@@ -39,7 +41,8 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('上下文更长的模型');
     expect(application).toContain('error.code === "AI_CONTEXT_TOO_LARGE"');
     expect(application).not.toContain('taskType === "character-identity-audit" || scopeType === "book"');
-    expect(application).toContain('const enabled = scopeTypeSelect.value === "chapter"');
+    expect(application).toContain('const enabled = ["chapter", "chapter-with-settings"].includes(scopeTypeSelect.value)');
+    expect(application).toContain('bookScopeOption.before(chapterSettingsOption)');
     expect(application).toContain('scopeFields[kind].setAttribute("aria-disabled", String(!enabled))');
     expect(application).toContain('scopeTriggers[kind].disabled = !enabled');
     expect(application).toContain('data-task-scope-search');
