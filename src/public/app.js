@@ -13778,7 +13778,7 @@ async function openTaskDialog() {
     }
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
-    void refreshAnalysisTaskViewsAfterCreate(workId);
+    await refreshAnalysisTaskViewsAfterCreate(workId);
   }, "AI 分析", {
     large: true,
     submitLabel: "创建任务",
