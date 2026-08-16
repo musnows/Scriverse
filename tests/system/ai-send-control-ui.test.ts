@@ -19,7 +19,9 @@ describe("AI 对话发送与终止按钮", () => {
     expect(application).toContain('button.classList.toggle("is-stop", sending);');
     expect(application).toContain('const label = sending ? "终止当前回复" : switching ? "正在切换对话" : "发送消息";');
     expect(styles).toContain(".ai-send-button-icon { width: 17px; height: 17px;");
-    expect(styles).toContain(".ai-send-button.is-stop");
+    expect(styles).toContain(".ai-send-button.is-stop .ai-send-button-icon");
+    expect(styles).not.toContain(".ai-send-button.is-stop { background");
+    expect(styles).not.toContain(".ai-send-button.is-stop:hover");
   });
 
   it("点击终止只取消当前页签请求并恢复重新发送能力", async () => {
@@ -37,6 +39,6 @@ describe("AI 对话发送与终止按钮", () => {
     expect(application).toContain('request.signal.reason.message === "用户已终止当前回复"');
     expect(application).toContain('const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";');
     expect(application).toContain('if (code === "AI_REQUEST_CANCELLED") return "已终止";');
-    expect(page).toContain("&feature=ai-send-control-v2");
+    expect(page).toContain("&feature=ai-send-control-v3");
   });
 });
