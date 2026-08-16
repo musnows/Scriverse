@@ -2228,12 +2228,20 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
-  it("浏览器中断流式连接会取消上游且保留已收到的助手正文", async () => {
+  it("浏览器中断流式连接会取消上游并保留此前完整 turn 与已收到的助手正文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = String(conversation.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "此前完整问题"
+    }).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "assistant",
+      content: "此前完整回答"
+    }).expect(201);
     let upstreamAborted = false;
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
@@ -2306,15 +2314,19 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamRequest).toMatchObject({ status: "cancelled", assistant_message_id: expect.any(String) });
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(reloaded.body.data.title).toBe("切换对话时取消旧流");
+    expect(reloaded.body.data.title).toBe("此前完整问题");
     expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
+      { role: "user", content: "此前完整问题" },
+      { role: "assistant", content: "此前完整回答" },
       { role: "user", content: "切换对话时取消旧流" },
       { role: "assistant", content: "不应落库的部分回复" }
     ]);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions WHERE work_id = ?", workId)).toEqual({ count: 0 });
 
-    fetchMock.mockImplementation(async (input) => {
+    let resumedMessages: Array<{ role?: string; content?: string }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      resumedMessages = (JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role?: string; content?: string }> }).messages ?? [];
       return new Response('data: {"choices":[{"delta":{"content":"取消后恢复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
         status: 200,
         headers: { "Content-Type": "text/event-stream" }
@@ -2330,6 +2342,19 @@ describe("AI 供应商、模型与建议 API", () => {
       })
       .expect(200);
     expect(resumed.text).toContain("event: complete");
+    expect(resumedMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: "此前完整问题" }),
+      expect.objectContaining({ role: "assistant", content: "此前完整回答" })
+    ]));
+    const resumedHistory = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(resumedHistory.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
+      { role: "user", content: "此前完整问题" },
+      { role: "assistant", content: "此前完整回答" },
+      { role: "user", content: "切换对话时取消旧流" },
+      { role: "assistant", content: "不应落库的部分回复" },
+      { role: "user", content: "取消后继续" },
+      { role: "assistant", content: "取消后恢复" }
+    ]);
   });
 
   it("客户端完成回调重试使用用户消息请求键避免重复 assistant 消息", async () => {
