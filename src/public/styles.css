@@ -2711,8 +2711,6 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(139,61,44,.2); }
 .ai-send-button:hover, .ai-send-button:focus-visible { background: var(--accent-dark); outline: 0; }
 .ai-send-button:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 4px 12px rgba(139,61,44,.2); }
-.ai-send-button.is-stop { background: var(--ink); box-shadow: 0 4px 12px color-mix(in srgb, var(--ink) 22%, transparent); }
-.ai-send-button.is-stop:hover, .ai-send-button.is-stop:focus-visible { background: color-mix(in srgb, var(--ink) 84%, var(--accent)); }
 .ai-send-button:disabled { cursor: wait; opacity: .62; }
 .ai-send-button-icon { width: 17px; height: 17px; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .ai-send-button.is-stop .ai-send-button-icon { width: 15px; height: 15px; fill: currentColor; stroke: none; }
