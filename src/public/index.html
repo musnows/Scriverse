@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -374,7 +374,7 @@
                 <header class="ai-context-popover-header"><div><strong id="ai-context-popover-title">Token 分布</strong><small id="ai-context-popover-description">按当前模型上下文窗口计算</small></div><button id="ai-context-popover-close" class="ai-context-popover-close" type="button" aria-label="关闭 Token 分布">×</button></header>
                 <div id="ai-context-distribution" class="ai-context-distribution" role="list" aria-label="当前 Token 分布"></div>
               </section>
-              <button id="ai-send" class="ai-send-button" type="button" aria-label="发送消息">发送</button>
+              <button id="ai-send" class="ai-send-button" type="button" data-state="send" aria-label="发送消息" title="发送消息"><svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 3 9.5 14.5M21 3l-7 18-4.5-6.5L3 10l18-7Z"></path></svg></button>
             </div>
           </div>
         </div>
@@ -1173,6 +1173,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2"></script>
   </body>
 </html>
