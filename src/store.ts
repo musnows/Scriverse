@@ -1,4 +1,4 @@
-import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
+import { CHARACTER_GENDERS, DRAFT_SETTING_MODULES, type AiInjectedEntities, type CharacterGender, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import {
@@ -190,6 +190,7 @@ type DraftInput = {
 
 type CharacterInput = {
   name: string;
+  gender?: CharacterGender;
   isDead?: boolean;
   code?: string;
   aliases?: string[];
@@ -230,6 +231,7 @@ export type AttachmentInput = {
 
 type CharacterSnapshot = {
   name: string;
+  gender: CharacterGender;
   isDead: boolean;
   code?: string;
   aliases: string[];
@@ -646,6 +648,12 @@ type RestorableFileSnapshotVolume = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function characterGender(value: unknown): CharacterGender {
+  return typeof value === "string" && CHARACTER_GENDERS.includes(value as CharacterGender)
+    ? value as CharacterGender
+    : "unknown";
 }
 
 function invalidFileSnapshot(): never {
@@ -5666,6 +5674,7 @@ export class Store {
     delete profile.sections;
     return {
       name: String(character.name),
+      gender: characterGender(character.gender),
       isDead: Boolean(character.isDead),
       code: String(character.code),
       aliases: [...(character.aliases as string[])],
@@ -5754,13 +5763,14 @@ export class Store {
     this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, code, gender, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          is_dead, locked_fields_json, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
         input.code?.trim() ?? "",
+        input.gender ?? "unknown",
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -6464,10 +6474,11 @@ export class Store {
       const lockedCurrent = this.getCharacter(characterId);
       this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       this.db.run(
-        `UPDATE characters SET name = ?, code = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
+        `UPDATE characters SET name = ?, code = ?, gender = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
          is_dead = ?, locked_fields_json = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         input.code === undefined ? String(current.code) : input.code.trim(),
+        input.gender ?? characterGender(current.gender),
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -6556,7 +6567,7 @@ export class Store {
     }
     return this.updateCharacter(
       characterId,
-      { ...snapshot, isDead: snapshot.isDead ?? false, code: snapshot.code ?? "" },
+      { ...snapshot, gender: snapshot.gender ?? "unknown", isDead: snapshot.isDead ?? false, code: snapshot.code ?? "" },
       "restore",
       requiredString(version, "id"),
       `恢复至 v${versionNo}`,
@@ -6587,13 +6598,14 @@ export class Store {
     ) + 1;
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, code, gender, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          is_dead, locked_fields_json, first_chapter_id, version_no, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
         snapshot.code ?? "",
+        snapshot.gender ?? "unknown",
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -6699,6 +6711,7 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       code: requiredString(row, "code"),
+      gender: characterGender(row.gender),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
       raceId: race ? String(race.id) : null,
       race: race ? {

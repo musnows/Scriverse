@@ -7,9 +7,9 @@ import { documentShortSearchTerms, normalizeDocumentSearchText, splitDocumentPar
 
 export type Row = Record<string, unknown>;
 export const PLATFORM_AI_WORK_ID = "__scriverse_platform_ai__";
-// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位。
+// 版本 81 用于列表查询索引；版本 82 由 Store 写入实体版本基线标记；版本 83 创建协作状态表；版本 84 创建备份加密表；版本 85 持久化协作变更动作；版本 86 扩展直接图片上传格式；版本 87 增加作品与分卷回收站；版本 88 持久化 AI 对话分支幂等键；版本 89 持久化 AI 对话流请求锁与幂等状态；版本 90 持久化 AI 连通性测试冷却状态；版本 91 建立章节段落行号索引；版本 92 增加 AI 对话收藏状态；版本 93 优化伏笔计划回收章节查询；版本 94 增加模型思考强度；版本 95 增加供应商最大输出参数选择；版本 96 扩展模型思考强度档位；版本 97 增加人物性别字段。
 export const ENTITY_VERSION_BASELINE_MIGRATION_VERSION = 82;
-export const DATABASE_SCHEMA_VERSION = 96;
+export const DATABASE_SCHEMA_VERSION = 97;
 export const SQLITE_IOERR_SHMSIZE = 4874;
 
 export type AvailableDiskSpace = {
@@ -320,6 +320,7 @@ export class Database {
         work_id TEXT NOT NULL REFERENCES works(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
         code TEXT NOT NULL DEFAULT '',
+        gender TEXT NOT NULL DEFAULT 'unknown' CHECK(gender IN ('male', 'female', 'none', 'unknown')),
         aliases_json TEXT NOT NULL DEFAULT '[]',
         species TEXT NOT NULL DEFAULT '',
         race_id TEXT REFERENCES races(id) ON DELETE SET NULL,
@@ -1040,6 +1041,7 @@ export class Database {
           };
           const snapshot = {
             name: String(character.name),
+            gender: ["male", "female", "none", "unknown"].includes(String(character.gender)) ? String(character.gender) : "unknown",
             aliases: parseJson(character.aliases_json, []),
             species: String(character.species ?? ""),
             organizationIds,
@@ -3678,6 +3680,21 @@ export class Database {
       }
       this.transaction(() => {
         this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (96, ?)", new Date().toISOString());
+      });
+      const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
+      if (integrity.some((row) => row.integrity_check !== "ok")) {
+        throw new Error(`数据库完整性检查失败：${integrity.map((row) => row.integrity_check).join("；")}`);
+      }
+      const foreignKeys = this.all("PRAGMA foreign_key_check");
+      if (foreignKeys.length > 0) throw new Error(`数据库外键检查失败：发现 ${foreignKeys.length} 条异常记录`);
+    }
+    if (!applied.has(97)) {
+      this.transaction(() => {
+        const columns = new Set(this.all("PRAGMA table_info(characters)").map((row) => String(row.name)));
+        if (!columns.has("gender")) {
+          this.run("ALTER TABLE characters ADD COLUMN gender TEXT NOT NULL DEFAULT 'unknown' CHECK(gender IN ('male', 'female', 'none', 'unknown'))");
+        }
+        this.run("INSERT INTO schema_migrations (version, applied_at) VALUES (97, ?)", new Date().toISOString());
       });
       const integrity = this.all<{ integrity_check: string }>("PRAGMA integrity_check");
       if (integrity.some((row) => row.integrity_check !== "ok")) {

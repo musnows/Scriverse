@@ -166,6 +166,36 @@ describe("书架、别名、大纲伏笔和一致性守卫 API", () => {
     await request(runtime.app).patch(`/api/organizations/${organization.body.data.id}`).send({ isDissolved: null }).expect(400);
   });
 
+  it("维护角色性别枚举、默认值与版本历史", async () => {
+    const { workId } = await seedWork(runtime);
+    const unspecified = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "未知角色" }).expect(201);
+    expect(unspecified.body.data.gender).toBe("unknown");
+    const maleCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", gender: "male" }).expect(201);
+    expect(maleCharacter.body.data.gender).toBe("male");
+
+    const character = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
+      name: "魔斯拉",
+      gender: "female"
+    }).expect(201);
+    expect(character.body.data.gender).toBe("female");
+
+    const updated = await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({
+      gender: "none",
+      changeNote: "调整性别设定"
+    }).expect(200);
+    expect(updated.body.data).toMatchObject({ gender: "none", versionNo: 2 });
+
+    const versions = await request(runtime.app).get(`/api/characters/${character.body.data.id}/versions`).expect(200);
+    expect(versions.body.data[0]).toMatchObject({ changeNote: "调整性别设定", snapshot: { gender: "none" } });
+    expect(versions.body.data[1]).toMatchObject({ snapshot: { gender: "female" } });
+
+    const restored = await request(runtime.app).post(`/api/characters/${character.body.data.id}/restore`).send({ versionNo: 1 }).expect(200);
+    expect(restored.body.data).toMatchObject({ gender: "female", versionNo: 3 });
+
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "错误角色", gender: "other" }).expect(400);
+    await request(runtime.app).patch(`/api/characters/${character.body.data.id}`).send({ gender: null }).expect(400);
+  });
+
   it("在作品内统一约束主名和全部别名，并规范化无向关系", async () => {
     const { workId } = await seedWork(runtime);
     const first = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉", aliases: ["小魔", "Mothra"] }).expect(201);

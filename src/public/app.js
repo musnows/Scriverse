@@ -30,7 +30,7 @@ import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-ma
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
-import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
+import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
 import { chapterDiffSummary, diffChapterLines } from "/chapter-version-diff.js?v=20260812-chapter-version-diff-v1";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260809-global-replace-v1";
 import {
@@ -50,8 +50,9 @@ import {
   settingStatusLabel,
   taskScopeLabel,
   timelineStatusLabel,
+  characterGenderLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260809-global-replace-v1";
+} from "/display-labels.js?v=20260816-character-gender-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
@@ -1275,6 +1276,7 @@ const moduleListPages = {
   reviews: 1
 };
 const characterFilters = { raceIds: [], organizationIds: [] };
+const CHARACTER_GENDER_OPTIONS = [["unknown", "未知"], ["male", "男 / 雄"], ["female", "女 / 雌"], ["none", "无性别"]];
 let characterFiltersPanelOpen = false;
 const settingFilters = { keyword: "", category: "", lockState: "all" };
 let settingFiltersPanelOpen = false;
@@ -8324,6 +8326,7 @@ async function renderCharacters(page = characterListPage) {
     <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
     <div class="character-card-heading"><h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
+    <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
     ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
     ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
@@ -8337,6 +8340,7 @@ async function renderCharacters(page = characterListPage) {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
       item.code ? `编号 ${item.code}` : "",
+      `性别 ${characterGenderLabel(item.gender)}`,
       item.species ? (racePathLabel(item.race) || item.species) : "",
       ...(item.aliases ?? []).slice(0, 3),
       (item.organizations ?? []).length ? (item.organizations ?? []).map((organization) => organization.name).join("、") : ""
@@ -12878,6 +12882,7 @@ function renderCharacterEditorFields(item) {
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       field("name", "标准名", "text", item?.name) +
+      field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
       field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
       (!canReadModule("races")
@@ -12931,6 +12936,7 @@ function collectCharacterBody(form) {
   delete profile.sections;
   const body = {
     name: String(form.get("name") ?? "").trim(),
+    gender: String(form.get("gender") ?? "unknown"),
     isDead: form.has("isDead"),
     code: String(form.get("code") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
