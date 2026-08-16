@@ -1693,10 +1693,17 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     }).expect(200);
 
     const rerun = await request(runtime.app).post(`/api/tasks/${original.body.data.id}/rerun`).send({}).expect(201);
-    expect(rerun.body.data.scope).not.toHaveProperty("relationshipSourceRefs");
+    expect(rerun.body.data.scope.relationshipSourceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourceType: "chapter",
+        sourceId: chapters[0].id,
+        sourceVersion: "2"
+      })
+    ]));
     expect(rerun.body.data.sourceVersions[chapters[0].id]).toBe(2);
     const completed = await request(runtime.app).post(`/api/tasks/${rerun.body.data.id}/run`).send({}).expect(200);
     expect(completed.body.data.status).toBe("review");
+    expect(completed.body.data.result.sourcePreviewApplied).toBe(true);
     expect(userPrompts.join("\n")).toContain("林舟与沈星在北港重新订立盟约。");
   });
 
@@ -2124,13 +2131,13 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         additionalPrompt: "重点检查失联前后的关系连续性。"
       }
     }).expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 + 设定集 · 定向 2 人：林舟、沈星");
+    expect(task.body.data.scopeSummary).toBe("全书 + 设定集 · 定向 2 人：林舟、沈星 · 已预检 5 条来源");
     expect(task.body.data.scope.targetCharacters).toEqual([{ id: linId, name: "林舟" }, { id: shenId, name: "沈星" }]);
+    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     await request(runtime.app).patch(`/api/characters/${linId}`).send({ name: "林舟（调查员）" }).expect(200);
     const taskPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
     expect(taskPage.body.data.items.find((item: { id: string }) => item.id === task.body.data.id)?.scopeSummary)
-      .toBe("全书 + 设定集 · 定向 2 人：林舟、沈星");
-    const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
+      .toBe("全书 + 设定集 · 定向 2 人：林舟、沈星 · 已预检 5 条来源");
     expect(result.body.data.result).toMatchObject({
       candidateCount: 1,
       targetedCharacterIds: [linId, shenId],
@@ -2143,7 +2150,8 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(userPrompts.some((prompt) => prompt.includes("小说人物关系全局归纳器"))).toBe(true);
     expect(userPrompts.some((prompt) => prompt.includes("沈星直接说明两人一直是朋友"))).toBe(true);
     expect(userPrompts.every((prompt) => !prompt.includes("北港旧约只认可长期互信"))).toBe(true);
-    expect(userPrompts.every((prompt) => prompt.includes("林舟") && prompt.includes("调查员"))).toBe(true);
+    expect(userPrompts.every((prompt) => prompt.includes("林舟"))).toBe(true);
+    expect(userPrompts.some((prompt) => prompt.includes("调查员"))).toBe(true);
     expect(systemPrompts.every((prompt) => prompt.includes("重点检查失联前后的关系连续性"))).toBe(true);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data.some((relationship: { id: string }) => relationship.id === unrelated.body.data.id)).toBe(true);
@@ -2440,7 +2448,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(selection.exactKeys).toContain(`setting:${setting.body.data.id}`);
   });
 
-  it("来源候选超限时保存结构化诊断并可通过身份资料修复", async () => {
+  it("来源候选超限时在创建前拒绝并让历史任务彻底失败", async () => {
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "[]" } }]
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -2452,13 +2460,12 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     (runtime.ai as unknown as { relationshipFuzzyIndexMatches: () => Set<string> }).relationshipFuzzyIndexMatches = () =>
       new Set(Array.from({ length: 201 }, (_, index) => `setting:diagnostic_${index}`));
 
-    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+    const rejected = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",
       scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
       modelId
-    }).expect(201);
-    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({}).expect(409);
-    expect(failed.body.error).toMatchObject({
+    }).expect(409);
+    expect(rejected.body.error).toMatchObject({
       code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
       details: {
         characterId: target.body.data.id,
@@ -2468,7 +2475,18 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
         identityAnchorCount: 0
       }
     });
-    const detail = await request(runtime.app).get(`/api/tasks/${task.body.data.id}/detail`).expect(200);
+    const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
+    expect(tasks.body.data.items).toEqual([]);
+
+    const legacyTask = runtime.store.createTask(workId, {
+      taskType: "relationship-analysis",
+      scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
+      modelId
+    });
+    const failed = await request(runtime.app).post(`/api/tasks/${legacyTask.id}/run`).send({}).expect(409);
+    expect(failed.body.error.code).toBe("RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED");
+    const detail = await request(runtime.app).get(`/api/tasks/${legacyTask.id}/detail`).expect(200);
+    expect(detail.body.data.status).toBe("failed");
     expect(detail.body.data.failures).toEqual([expect.objectContaining({
       code: "RELATIONSHIP_MATCH_CANDIDATES_EXCEEDED",
       message: "“魔斯拉”的拼音疑似来源仍然过多；请取消勾选“分析前按人物名称和拼音过滤来源”后重新预览",
@@ -2500,12 +2518,14 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: { type: "book", includeAllSettings: true, characterIds: [target.body.data.id] },
       modelId
     }).expect(201);
+    expect(retry.body.data.scope.relationshipSourceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: "character", sourceId: target.body.data.id })
+    ]));
     const completed = await request(runtime.app).post(`/api/tasks/${retry.body.data.id}/run`).send({}).expect(200);
     expect(completed.body.data.result).toMatchObject({
       preFilterRelationshipSources: true,
-      sourceSelection: expect.objectContaining({ exactSourceCount: expect.any(Number) })
+      sourcePreviewApplied: true
     });
-    expect(completed.body.data.result.sourceSelection.exactSourceCount).toBeGreaterThan(0);
   });
 
   it("通过拼音疑似写法确认来源并并发安全地去重审核项", async () => {
@@ -2565,7 +2585,8 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const runTask = async () => {
       const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
         taskType: "relationship-analysis",
-        scope: { type: "book", characterIds: [target.body.data.id] }
+        scope: { type: "book", characterIds: [target.body.data.id] },
+        modelId
       }).expect(201);
       return request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     };
@@ -2589,12 +2610,19 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     expect(userPrompts.every((prompt) => !prompt.includes("这段正文没有任何目标人物，不应作为全文发送。"))).toBe(true);
 
     const promptCount = userPrompts.length;
-    await runTask();
+    const repeatedTask = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+      taskType: "relationship-analysis",
+      scope: { type: "book", characterIds: [target.body.data.id] },
+      modelId
+    }).expect(201);
+    const verificationCountBeforeRun = userPrompts.filter((prompt) => prompt.includes("人物名称变体确认器")).length;
+    await request(runtime.app).post(`/api/tasks/${repeatedTask.body.data.id}/run`).send({}).expect(200);
+    expect(userPrompts.filter((prompt) => prompt.includes("人物名称变体确认器"))).toHaveLength(verificationCountBeforeRun);
     const repeatedTaskPrompts = userPrompts.slice(promptCount);
     expect(repeatedTaskPrompts.every((prompt) => !prompt.includes("审核项：疑似人物名错字"))).toBe(true);
   });
 
-  it("疑似写法确认结果不完整时不写入关系和审核项", async () => {
+  it("疑似写法确认结果不完整时在创建前失败且不写入任务和审核项", async () => {
     fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "[]" } }]
     }), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -2606,13 +2634,14 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     const target = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "魔斯拉" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "拉顿" }).expect(201);
     const modelId = await configureAi(runtime, workId);
-    const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
+    const failed = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",
-      scope: { type: "book", characterIds: [target.body.data.id] }
-    }).expect(201);
-
-    const failed = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(502);
+      scope: { type: "book", characterIds: [target.body.data.id] },
+      modelId
+    }).expect(502);
     expect(failed.body.error.code).toBe("RELATIONSHIP_VARIANT_VERIFICATION_FAILED");
+    const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
+    expect(tasks.body.data.items.filter((item: { taskType: string }) => item.taskType === "relationship-analysis")).toEqual([]);
     const relationships = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);
     expect(relationships.body.data).toEqual([]);
     const reviews = await request(runtime.app).get(`/api/works/${workId}/reviews`).expect(200);
@@ -2652,7 +2681,8 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     };
     const task = await request(runtime.app).post(`/api/works/${workId}/tasks`).send({
       taskType: "relationship-analysis",
-      scope: { type: "book", characterIds: [target.body.data.id] }
+      scope: { type: "book", characterIds: [target.body.data.id] },
+      modelId
     }).expect(201);
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result).toMatchObject({ coveredChapterCount: 1 });
@@ -2845,7 +2875,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       scope: { type: "book", characterIds: [linId], replaceExistingRelationships: true }
     });
     const task = await createTask().expect(201);
-    expect(task.body.data.scopeSummary).toBe("全书 · 定向 1 人：林舟 · 覆盖已有关系");
+    expect(task.body.data.scopeSummary).toBe("全书 · 定向 1 人：林舟 · 已预检 2 条来源 · 覆盖已有关系");
     const result = await request(runtime.app).post(`/api/tasks/${task.body.data.id}/run`).send({ modelId }).expect(200);
     expect(result.body.data.result.replacedRelationshipCount).toBe(2);
     const replaced = await request(runtime.app).get(`/api/works/${workId}/relationships`).expect(200);

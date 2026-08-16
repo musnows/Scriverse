@@ -108,6 +108,17 @@ export type ContextScope = {
   preFilterRelationshipSources?: boolean;
   previewRelationshipChanges?: boolean;
   relationshipSourceRefs?: Array<{ sourceType: string; sourceId: string; sourceVersion: string }>;
+  /** 服务端创建任务时固化的来源筛选摘要；创建 API 不接收该内部字段。 */
+  relationshipSourceSelectionSummary?: {
+    policyVersion: number;
+    indexGeneration: number;
+    exactSourceCount: number;
+    fuzzyCandidateCount: number;
+    confirmedSourceCount: number;
+    rejectedSourceCount: number;
+    uncertainSourceCount: number;
+    reviewIds: string[];
+  };
   replaceExistingRelationships?: boolean;
   excludeRelationshipConstraints?: boolean;
   suppressAutomaticContext?: boolean;
