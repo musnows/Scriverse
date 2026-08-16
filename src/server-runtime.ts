@@ -11,6 +11,7 @@ import { isDevelopmentAuthBypassEnabled, resolveRuntimeSecurity, type RuntimeSec
 import { logger, sanitizeError } from "./logger.js";
 import { resolveReleaseCheckIntervalMs, resolveReleaseCheckRetries, resolveReleaseCheckTimeoutMs } from "./release-update.js";
 import { resolveImageUploadLimits } from "./upload-limits.js";
+import { resolveBetaVersionLabel } from "./version.js";
 
 export type LocalServerOptions = {
   host: string;
@@ -227,6 +228,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       disableUserAuth: devAuthBypass,
       devAuthBypass,
       developmentServer: isDevelopmentServer(options.env),
+      betaVersionLabel: resolveBetaVersionLabel(options.env),
       releaseCheckIntervalMs: resolveReleaseCheckIntervalMs(options.env.APP_UPDATE_CHECK_INTERVAL_MINUTES),
       releaseCheckTimeoutMs: resolveReleaseCheckTimeoutMs(options.env.APP_UPDATE_CHECK_TIMEOUT_SECONDS),
       releaseCheckRetries: resolveReleaseCheckRetries(options.env.APP_UPDATE_CHECK_RETRIES),

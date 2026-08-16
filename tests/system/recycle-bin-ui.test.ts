@@ -47,6 +47,6 @@ describe("作品与正文回收站界面", () => {
     expect(styles.text).toContain(".recycle-bin-section-list");
     expect(styles.text).toContain(".recycle-bin-card { grid-template-columns: minmax(0, 1fr);");
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
-    expect(page.text).toContain('/app.js?v=20260816-relationship-chapter-settings-v1');
+    expect(page.text).toContain('/app.js?v=20260816-beta-version-label-v1');
   });
 });

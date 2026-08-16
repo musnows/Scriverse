@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createRuntime } from "../../src/app.js";
+import { resolveBetaVersionLabel } from "../../src/version.js";
 import { runWithRequestActor } from "../../src/request-context.js";
 
 type JsonObject = Record<string, unknown>;
@@ -238,7 +239,8 @@ const runtime = createRuntime({
   masterSecret: "browser-e2e-master-secret-at-least-32-characters",
   security: { allowPrivateAiEndpoints: true, enforceSameOrigin: false, apiRateLimit: 10_000 },
   aiStreamIdleTimeoutMs,
-  aiChatTabLimit: Number(process.env.E2E_AI_CHAT_TAB_LIMIT ?? 5)
+  aiChatTabLimit: Number(process.env.E2E_AI_CHAT_TAB_LIMIT ?? 5),
+  betaVersionLabel: resolveBetaVersionLabel(process.env)
 });
 const registered = runtime.auth.register({ username: "browser-e2e", password: "BrowserE2E123!" });
 const fixture = runWithRequestActor(registered.session.user, () => {

@@ -810,6 +810,8 @@ export type RuntimeOptions = {
   revealCaptchaAnswer?: boolean;
   /** 当前服务是否由开发模式启动。 */
   developmentServer?: boolean;
+  /** Beta 镜像展示版本；正式版本未指定时继续展示 APP_VERSION。 */
+  betaVersionLabel?: string;
   /** 图片上传大小限制；未指定时使用默认值。 */
   uploadLimits?: ImageUploadLimits;
   /** 交互式 AI 流的事件空闲超时；生产启动值由环境变量解析，测试可注入更短时长。 */
@@ -1340,6 +1342,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       status: "ok",
       bootId,
       version: APP_VERSION,
+      versionLabel: options.betaVersionLabel ?? null,
       protocol: "openai-chat-completions",
       protocols: [...AI_PROVIDER_PROTOCOLS],
       development: options.developmentServer === true,
