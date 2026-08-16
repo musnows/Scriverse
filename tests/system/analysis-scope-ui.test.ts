@@ -90,10 +90,11 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('pendingLabel: "创建中…"');
     expect(application).toContain('pendingMessage: "正在创建分析任务，请稍候"');
     expect(application).toContain('errorPrefix: "任务创建失败："');
-    expect(application).toContain('toast("分析任务已创建，已进入任务队列");\n    void refreshAnalysisTaskViewsAfterCreate(workId)');
+    expect(application).toContain('toast("分析任务已创建，已进入任务队列");\n    await refreshAnalysisTaskViewsAfterCreate(workId)');
     expect(application).toContain('async function refreshAnalysisTaskViewsAfterCreate(workId)');
     expect(application).toContain('renderTasks(1, { refresh: true })');
     expect(application).toContain('toast(`任务已创建，但列表刷新失败：${error.message}`, "error")');
+    expect(page).toContain('feature=analysis-task-queue-refresh-v1');
     expect(page).toContain('id="dialog-submit-status"');
     expect(page).toContain('class="dialog-submit-progress" role="progressbar"');
     expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
