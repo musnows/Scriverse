@@ -26,6 +26,7 @@ describe("人物关系图搜索界面", () => {
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1');
+    expect(application.text).toContain('class="relationship-table-wrapper"');
     expect(graph.text).toContain('export function searchRelationshipNodes(nodes, query, limit = 8)');
     expect(graph.text).toContain('testId: "relationship-node-search"');
     expect(graph.text).toContain('testId: "galaxy-node-search"');
