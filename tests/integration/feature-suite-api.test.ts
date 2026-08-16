@@ -1387,7 +1387,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
       characterApplication: { status: "pending", totalCount: 2 }
     });
     const prompts = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).messages[1].content as string);
-    expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(1);
+    expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(4);
     expect(prompts.some((prompt) => prompt.includes('fragment="'))).toBe(true);
     const beforeApply = await request(runtime.app).get(`/api/works/${workId}/characters`).expect(200);
     expect(beforeApply.body.data).toEqual([]);
@@ -1858,7 +1858,7 @@ describe("续写守卫和全书关系 Map-Reduce", () => {
     ].sort()).toEqual(["林舟", "沈星"].sort());
     expect(result.body.data.result.policyOmittedSegmentCount).toBeGreaterThan(0);
     const prompts = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).messages[1].content as string);
-    expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(1);
+    expect(prompts.filter((prompt) => (prompt.match(/<CHAPTER id=/gu) ?? []).length > 1)).toHaveLength(4);
     expect(prompts.some((prompt) => prompt.includes('fragment="'))).toBe(true);
     const fragmentLengths = prompts
       .filter((prompt) => prompt.includes('fragment="'))
