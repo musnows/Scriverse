@@ -93,4 +93,15 @@ describe("Docker 依赖清单规范化", () => {
     expect(runtimeStage).toContain('ENTRYPOINT ["/nodejs/bin/node"]');
     expect(runtimeStage).toContain("TZ=Asia/Shanghai");
   });
+
+  it("仅由 develop Docker 工作流注入 Beta 提交版本", () => {
+    const dockerfile = readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
+    const developWorkflow = readFileSync(new URL("../../.github/workflows/docker-develop.yml", import.meta.url), "utf8");
+    const stableWorkflow = readFileSync(new URL("../../.github/workflows/docker-publish.yml", import.meta.url), "utf8");
+
+    expect(dockerfile).toContain('ARG SCRIVERSE_BETA_COMMIT=""');
+    expect(dockerfile).toContain('SCRIVERSE_BETA_COMMIT="${SCRIVERSE_BETA_COMMIT}"');
+    expect(developWorkflow).toContain("SCRIVERSE_BETA_COMMIT=${{ steps.commit.outputs.sha }}");
+    expect(stableWorkflow).not.toContain("SCRIVERSE_BETA_COMMIT");
+  });
 });

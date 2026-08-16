@@ -36,6 +36,8 @@ FROM ${RUNTIME_IMAGE} AS runtime
 
 WORKDIR /app
 
+ARG SCRIVERSE_BETA_COMMIT=""
+
 COPY --from=build /usr/local/bin/node /nodejs/bin/node
 COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -48,7 +50,8 @@ ENV NODE_ENV=production \
     TZ=Asia/Shanghai \
     HOST=0.0.0.0 \
     PORT=13210 \
-    DATA_DIR=/app/.data
+    DATA_DIR=/app/.data \
+    SCRIVERSE_BETA_COMMIT="${SCRIVERSE_BETA_COMMIT}"
 
 USER 1000:1000
 

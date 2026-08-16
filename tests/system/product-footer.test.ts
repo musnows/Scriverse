@@ -37,6 +37,8 @@ describe("产品信息页脚", () => {
     expect(page.text).toContain('class="settings-update-dot hidden" data-settings-update-dot');
     expect(page.text).toContain('class="product-footer-update hidden" data-product-footer-update');
     expect(application.text).toContain("async function initializeProductFooters()");
+    expect(application.text).toContain('const versionLabel = String(health?.versionLabel ?? "").trim()');
+    expect(application.text).toContain('element.textContent = versionLabel || (version ? `v${version}` : "v—")');
     expect(application.text).toContain("function applyProductUpdateMetadata(update)");
     expect(application.text).toContain('api("/api/update-check")');
     expect(application.text).toContain('element.textContent = `发现新版本 v${latestVersion}，查看更新说明`;');
@@ -52,8 +54,27 @@ describe("产品信息页脚", () => {
     expect(styles.text).toContain(".product-footer-development {");
     expect(styles.text).toContain(".settings-update-dot {");
     expect(styles.text).toContain(".product-footer .product-footer-update {");
-    expect(health.body.data).toMatchObject({ version: APP_VERSION, development: true });
+    expect(health.body.data).toMatchObject({ version: APP_VERSION, versionLabel: null, development: true });
     expect(health.body.data.bootId).toMatch(/^[0-9a-f-]{36}$/u);
+  });
+
+  it("优先返回 Beta 镜像展示版本且保留稳定版号", async () => {
+    const betaRuntime = createRuntime({
+      databasePath: ":memory:",
+      masterSecret: "product-footer-beta-version-test-secret",
+      disableUserAuth: true,
+      serveUi: false,
+      betaVersionLabel: "12345678 beta"
+    });
+    try {
+      const health = await request(betaRuntime.app).get("/api/health").expect(200);
+      expect(health.body.data).toMatchObject({
+        version: APP_VERSION,
+        versionLabel: "12345678 beta"
+      });
+    } finally {
+      await betaRuntime.close();
+    }
   });
 
   it("通过公开接口返回最新稳定版探测结果", async () => {

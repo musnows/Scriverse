@@ -3981,8 +3981,9 @@ function invalidateModuleRequestsAfterMutation(path, method) {
 
 function applyProductHealthMetadata(health) {
   const version = String(health?.version ?? "").trim();
+  const versionLabel = String(health?.versionLabel ?? "").trim();
   document.querySelectorAll("[data-product-footer-version]").forEach((element) => {
-    element.textContent = version ? `v${version}` : "v—";
+    element.textContent = versionLabel || (version ? `v${version}` : "v—");
   });
   document.querySelectorAll("[data-product-footer-development]").forEach((element) => {
     element.classList.toggle("hidden", health?.development !== true);
