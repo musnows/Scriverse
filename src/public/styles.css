@@ -3814,8 +3814,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .chapter-foreshadow-reminder-counter { grid-column: 1 / -1; justify-self: start; }
   .chapter-foreshadow-reminder-actions button { width: 100%; min-width: 0; min-height: 38px; }
   .chapter-foreshadow-reminder[data-multiple="true"] #chapter-foreshadow-reminder-resolve { grid-column: span 2; }
-  .editor-actions { position: fixed; z-index: 34; right: 0; bottom: calc(76px + env(safe-area-inset-bottom)); left: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: min(300px, 84vw); max-width: none; gap: 6px; padding: 10px; border: 1px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; background: var(--panel); box-shadow: -12px 0 36px rgba(36, 30, 24, .2); transform: translateX(0); transition: transform .2s ease; }
-  .app-shell.left-panel-collapsed .editor-actions { transform: translateX(0); pointer-events: auto; }
+  .editor-actions { position: static; z-index: auto; right: auto; bottom: auto; left: auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; max-width: none; gap: 6px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; transition: none; }
+  .app-shell.left-panel-collapsed .editor-actions { transform: none; pointer-events: auto; }
   .editor-actions .chapter-stats { grid-column: 1 / -1; }
   .editor-actions > button { min-width: 0; min-height: 36px; padding-inline: 8px; font-size: 11px; }
   .chapter-title { font-size: 23px; }
