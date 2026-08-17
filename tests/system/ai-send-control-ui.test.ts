@@ -19,6 +19,8 @@ describe("AI 对话发送与终止按钮", () => {
     expect(application).toContain('button.classList.toggle("is-stop", sending);');
     expect(application).toContain('const label = sending ? "终止当前回复" : switching ? "正在切换对话" : "发送消息";');
     expect(styles).toContain(".ai-send-button-icon { width: 17px; height: 17px;");
+    expect(styles).toContain(".ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-height: 32px; height: 32px;");
+    expect(styles).toContain(".ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; min-height: 32px; height: 32px;");
     expect(styles).toContain(".ai-send-button.is-stop .ai-send-button-icon");
     expect(styles).not.toContain(".ai-send-button.is-stop { background");
     expect(styles).not.toContain(".ai-send-button.is-stop:hover");

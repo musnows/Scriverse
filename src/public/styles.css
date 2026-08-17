@@ -2720,7 +2720,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-prompt-reference button { width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font: 14px/1 var(--font-latin), monospace; }
 .ai-prompt-reference button:hover, .ai-prompt-reference button:focus-visible { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .prompt-composer-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; align-items: center; }
-.ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 32px; place-items: center; width: 32px; height: 32px; overflow: visible; border: 0; border-radius: 50%; background: conic-gradient(var(--context-meter-color) calc(var(--context-usage) * 1%), rgba(143,132,116,.2) 0); color: var(--ink); font-family: var(--font-latin); line-height: 1; cursor: pointer; }
+.ai-context-meter { --context-usage: 0; --context-meter-color: var(--green); position: relative; display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-height: 32px; height: 32px; overflow: visible; border: 0; border-radius: 50%; background: conic-gradient(var(--context-meter-color) calc(var(--context-usage) * 1%), rgba(143,132,116,.2) 0); color: var(--ink); font-family: var(--font-latin); line-height: 1; cursor: pointer; }
 .ai-context-meter::before { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--paper); box-shadow: inset 0 0 0 1px rgba(143,132,116,.12); }
 .ai-context-meter:hover, .ai-context-meter:focus-visible, .ai-context-meter[aria-expanded="true"] { outline: 0; filter: brightness(.96); }
 .ai-context-meter:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
@@ -2747,7 +2747,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-context-distribution-row[data-key="skills"] { --distribution-color: var(--muted); }
 .ai-context-distribution-row[data-key="context"] { --distribution-color: var(--green); }
 .ai-context-distribution-row[data-key="left"] { --distribution-color: color-mix(in srgb, var(--muted) 55%, transparent); }
-.ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(139,61,44,.2); }
+.ai-send-button { display: grid; flex: 0 0 32px; place-items: center; width: 32px; min-width: 32px; min-height: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; background: var(--accent); color: #fff; box-shadow: 0 4px 12px rgba(139,61,44,.2); }
 .ai-send-button:hover, .ai-send-button:focus-visible { background: var(--accent-dark); outline: 0; }
 .ai-send-button:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent), 0 4px 12px rgba(139,61,44,.2); }
 .ai-send-button:disabled { cursor: wait; opacity: .62; }
