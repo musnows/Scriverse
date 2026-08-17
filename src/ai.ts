@@ -5217,7 +5217,7 @@ export class AiManager {
         ].join("\n")
       : enabledToolIds.length > 0
       ? [
-          `当前可用作品查询和计算工具：${enabledToolIds.join("、")}。`,
+          `${enabledToolIds.includes("calculate_time") ? "当前可用作品查询和计算工具" : "当前可用作品查询工具"}：${enabledToolIds.join("、")}。`,
           ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
           "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
