@@ -83,10 +83,20 @@ export const WORK_AGENT_TOOL_IDS = [
   "search_story_entities",
   "read_character_sections",
   "search_drafts",
-  "image"
+  "image",
+  "calculate_time"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
 const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+const LEGACY_DEFAULT_WORK_AGENT_TOOLS = [
+  "story_index",
+  "read_chapters",
+  "grep",
+  "search_story_entities",
+  "read_character_sections",
+  "search_drafts",
+  "image"
+] as const satisfies readonly WorkAgentToolId[];
 
 export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
   const source = Array.isArray(value)
@@ -100,6 +110,7 @@ export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
     const toolId = item === "query_story_knowledge" ? "search_story_entities" : item;
     if (WORK_AGENT_TOOL_IDS.includes(toolId as WorkAgentToolId)) enabled.add(toolId as WorkAgentToolId);
   }
+  if (LEGACY_DEFAULT_WORK_AGENT_TOOLS.every((toolId) => enabled.has(toolId))) enabled.add("calculate_time");
   return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
 }
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
@@ -2783,7 +2794,7 @@ export class Store {
 
   replaceWorkText(
     workId: string,
-    input: { find: string; replacement: string; scope: "prose" | "settings" | "prose-and-settings" }
+    input: { find: string; replacement: string; scope: "prose" | "settings" | "prose-and-settings"; volumeId?: string | null }
   ): Record<string, unknown> {
     const find = input.find;
     if (!find) throw new AppError(400, "REPLACE_TEXT_REQUIRED", "查找内容不能为空");
@@ -2791,6 +2802,16 @@ export class Store {
       throw new AppError(400, "REPLACE_SCOPE_INVALID", "替换范围无效");
     }
     const work = this.getWork(workId);
+    const volumeId = input.volumeId ?? null;
+    if (volumeId) {
+      const volume = this.getVolume(volumeId);
+      if (String(volume.workId) !== workId) {
+        throw new AppError(400, "REPLACE_VOLUME_INVALID", "分卷不属于当前作品");
+      }
+      if (input.scope === "settings") {
+        throw new AppError(400, "REPLACE_VOLUME_SCOPE_INVALID", "分卷范围只能用于正文替换");
+      }
+    }
     const permissions = work.modulePermissions as WorkModulePermissions;
     const requestedProse = input.scope === "prose" || input.scope === "prose-and-settings";
     const requestedSettings = input.scope === "settings" || input.scope === "prose-and-settings";
@@ -2825,10 +2846,16 @@ export class Store {
 
     this.db.transaction(() => {
       if (includeProse) {
-        const chapters = this.db.all(
-          "SELECT id, content FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
-          workId
-        );
+        const chapters = volumeId
+          ? this.db.all(
+            "SELECT id, content FROM chapters WHERE work_id = ? AND volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+            workId,
+            volumeId
+          )
+          : this.db.all(
+            "SELECT id, content FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+            workId
+          );
         for (const row of chapters) {
           const chapterId = requiredString(row, "id");
           const result = replaceLiteral(requiredString(row, "content"));
@@ -2855,6 +2882,7 @@ export class Store {
         this.audit(workId, "work.global-replace", "work", workId, {
           operationId,
           scope: input.scope,
+          volumeId,
           chapterCount,
           settingCount,
           totalMatches,
@@ -2867,6 +2895,7 @@ export class Store {
     return {
       operationId,
       scope: input.scope,
+      volumeId,
       chapterCount,
       settingCount,
       totalMatches,

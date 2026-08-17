@@ -587,7 +587,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
 }
 
-const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"] as const;
+const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
 const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
@@ -597,7 +597,8 @@ const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_sto
   grep: ["prose"],
   read_character_sections: ["characters"],
   search_drafts: ["drafts"],
-  image: ["settings"]
+  image: ["settings"],
+  calculate_time: []
 };
 const IMAGE_TOOL_READ_MODULES: readonly WorkPermissionModule[] = [
   "settings",
@@ -958,6 +959,18 @@ const recallRelationshipArguments = z.object({
   characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   cursor: agentToolCursor
 }).strict();
+const calculateTimeArguments = z.object({
+  operation: z.enum(["diff", "add"]),
+  startYear: z.number().int().min(-9999).max(9999),
+  startMonth: z.number().int().min(1).max(12),
+  startDay: z.number().int().min(1).max(31),
+  endYear: z.number().int().min(-9999).max(9999).optional(),
+  endMonth: z.number().int().min(1).max(12).optional(),
+  endDay: z.number().int().min(1).max(31).optional(),
+  addYears: z.number().int().min(-9999).max(9999).optional(),
+  addMonths: z.number().int().min(-9999).max(9999).optional(),
+  addDays: z.number().int().min(-999999).max(999999).optional()
+}).strict();
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
@@ -1037,6 +1050,14 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "recall_relationship",
       description: "查询当前扮演角色的人物关系，并返回关系双方的权威 gender：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据关系或剧情自行推断。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
       parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  calculate_time: {
+    type: "function",
+    function: {
+      name: "calculate_time",
+      description: "纯计算工具，用于计算两个日期之间的天数差（diff 模式），或从一个日期推算另一个日期（add 模式）。所有计算仅使用 JavaScript Date 对象，不涉及任何外部资源、数据库或文件系统访问。diff 模式需要 startYear/startMonth/startDay 和 endYear/endMonth/endDay；add 模式需要 startYear/startMonth/startDay，以及可选的 addYears/addMonths/addDays。返回结果包含总天数差或推算后的日期，以及中间经过的闰年列表。",
+      parameters: { type: "object", properties: { operation: { type: "string", enum: ["diff", "add"] }, startYear: { type: "integer", minimum: -9999, maximum: 9999 }, startMonth: { type: "integer", minimum: 1, maximum: 12 }, startDay: { type: "integer", minimum: 1, maximum: 31 }, endYear: { type: "integer", minimum: -9999, maximum: 9999 }, endMonth: { type: "integer", minimum: 1, maximum: 12 }, endDay: { type: "integer", minimum: 1, maximum: 31 }, addYears: { type: "integer", minimum: -9999, maximum: 9999 }, addMonths: { type: "integer", minimum: -9999, maximum: 9999 }, addDays: { type: "integer", minimum: -999999, maximum: 999999 } }, required: ["operation", "startYear", "startMonth", "startDay"], additionalProperties: false }
     }
   }
 };
@@ -5248,14 +5269,16 @@ export class AiManager {
     );
     const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship")
       ? [
-          `当前可用的内部记忆能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
+          `当前可用的内部能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
+          ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
       ? [
-          `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
+          `${enabledToolIds.includes("calculate_time") ? "当前可用作品查询和计算工具" : "当前可用作品查询工具"}：${enabledToolIds.join("、")}。`,
+          ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
           "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
@@ -5545,6 +5568,7 @@ export class AiManager {
       if (canReadWorkModule(permissions, "relationships") && (!requested || requested.has("recall_relationship"))) {
         roleplayTools.push("recall_relationship");
       }
+      roleplayTools.push("calculate_time");
       return roleplayTools;
     }
     const sourceTools = conversationId && taskType === "chat"
@@ -5574,6 +5598,7 @@ export class AiManager {
       return Object.values(AGENT_ENTITY_CATEGORY_MODULES).some((module) => canReadWorkModule(permissions, module));
     }
     if (toolId === "image") return IMAGE_TOOL_READ_MODULES.some((module) => canReadWorkModule(permissions, module));
+    if (toolId === "calculate_time") return true;
     return AGENT_TOOL_READ_MODULES[toolId].every((module) => canReadWorkModule(permissions, module));
   }
 
@@ -5734,6 +5759,7 @@ export class AiManager {
       : name === "image" ? imageArguments
       : name === "recall_self" ? recallSelfArguments
       : name === "recall_relationship" ? recallRelationshipArguments
+      : name === "calculate_time" ? calculateTimeArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
     const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
@@ -5743,7 +5769,8 @@ export class AiManager {
       ? toolId as ConfiguredAgentToolId
       : null;
     const toolAvailable = roleplayCharacterId
-      ? (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
+      ? (toolId === "calculate_time" && enabledTools.has(toolId))
+        || (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
         || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
     if (!schema || !toolId || !toolAvailable) {
@@ -6206,7 +6233,224 @@ export class AiManager {
         result
       };
     }
+    if (name === "calculate_time") {
+      const parsed = calculateTimeArguments.safeParse(suppliedArguments);
+      if (!parsed.success) {
+        const details = parsed.error.issues.map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`).join("; ");
+        return {
+          id: toolCall.id,
+          name,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "failed",
+          result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID", message: `Invalid arguments for calculate_time: ${details}` } }
+        };
+      }
+      const args = parsed.data;
+      try {
+        return this.executeCalculateTime(toolCall, calledAt, args);
+      } catch (error) {
+        const appError = error instanceof AppError ? error : null;
+        return {
+          id: toolCall.id,
+          name,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "failed",
+          result: { ok: false, error: { code: appError?.code ?? "CALCULATE_TIME_FAILED", message: appError?.message ?? "Time calculation failed." } }
+        };
+      }
+    }
     throw new Error(`Unhandled agent tool: ${name}`);
+  }
+
+  private executeCalculateTime(
+    toolCall: CompletionToolCall,
+    calledAt: string,
+    args: z.infer<typeof calculateTimeArguments>
+  ): AgentToolCallResult {
+    const operation = args.operation;
+    const startYear = args.startYear;
+    const startMonth = args.startMonth;
+    const startDay = args.startDay;
+
+    // 验证起始日期有效性
+    this.validateDate(startYear, startMonth, startDay);
+
+    if (operation === "diff") {
+      const endYear = args.endYear ?? startYear;
+      const endMonth = args.endMonth ?? startMonth;
+      const endDay = args.endDay ?? startDay;
+
+      // 验证结束日期有效性
+      this.validateDate(endYear, endMonth, endDay);
+
+      const startDate = this.createUtcDate(startYear, startMonth, startDay);
+      const endDate = this.createUtcDate(endYear, endMonth, endDay);
+
+      const diffMs = endDate.getTime() - startDate.getTime();
+      const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      // 计算中间经过的闰年
+      const leapYears = this.getLeapYearsInRange(
+        Math.min(startYear, endYear),
+        Math.max(startYear, endYear)
+      );
+
+      // 计算精确的年/月/日差值
+      const { years, months, days } = this.calculateYMDDiff(startDate, endDate);
+
+      return {
+        id: toolCall.id,
+        name: toolCall.function.name,
+        calledAt,
+        arguments: { operation, startYear, startMonth, startDay, endYear, endMonth, endDay },
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            operation: "diff",
+            startDate: `${startYear}年${startMonth}月${startDay}日`,
+            endDate: `${endYear}年${endMonth}月${endDay}日`,
+            totalDays,
+            direction: totalDays >= 0 ? "forward" : "backward",
+            absoluteDays: Math.abs(totalDays),
+            ymdBreakdown: {
+              years,
+              months,
+              days
+            },
+            leapYears: leapYears.length > 0 ? leapYears : undefined,
+            note: totalDays === 0 ? "两个日期相同" : `相差 ${Math.abs(totalDays)} 天`
+          }
+        }
+      };
+    }
+
+    // add 模式：从起始日期推算未来/过去日期
+    const addYears = args.addYears ?? 0;
+    const addMonths = args.addMonths ?? 0;
+    const addDaysVal = args.addDays ?? 0;
+
+    // 验证结果日期不会超出范围
+    const resultYear = startYear + addYears;
+    if (resultYear < -9999 || resultYear > 9999) {
+      throw new AppError(400, "DATE_RANGE_EXCEEDED", `推算结果年份 ${resultYear} 超出允许范围 [-9999, 9999]`);
+    }
+
+    // 使用 JavaScript Date 进行日期推算，手动处理月末边界（如 1月31日 + 1个月 = 2月28/29日）
+    // 先计算目标年月，再将日期截断到该月的最大天数
+    const totalMonths = (startYear + addYears) * 12 + (startMonth - 1) + addMonths;
+    let rYear = Math.floor(totalMonths / 12);
+    let rMonth = totalMonths - rYear * 12 + 1;
+    // 目标月份的最大天数（用于月末边界截断）
+    const maxDayInTargetMonth = this.getDaysInMonth(rYear, rMonth);
+    // 将起始日期截断到目标月份的最大天数（处理月末边界）
+    const resultDate = this.createUtcDate(rYear, rMonth, Math.min(startDay, maxDayInTargetMonth));
+    // 让 Date 正确处理 addDays 的跨月和跨年进位/借位
+    resultDate.setUTCDate(resultDate.getUTCDate() + addDaysVal);
+    rYear = resultDate.getUTCFullYear();
+    rMonth = resultDate.getUTCMonth() + 1;
+    const rDay = resultDate.getUTCDate();
+
+    // 验证结果日期有效性
+    if (rYear < -9999 || rYear > 9999) {
+      throw new AppError(400, "DATE_RANGE_EXCEEDED", `推算结果年份 ${rYear} 超出允许范围 [-9999, 9999]`);
+    }
+
+    return {
+      id: toolCall.id,
+      name: toolCall.function.name,
+      calledAt,
+      arguments: { operation, startYear, startMonth, startDay, addYears, addMonths, addDays: addDaysVal },
+      status: "completed",
+      result: {
+        ok: true,
+        data: {
+          operation: "add",
+          startDate: `${startYear}年${startMonth}月${startDay}日`,
+          resultDate: `${rYear}年${rMonth}月${rDay}日`,
+          added: { years: addYears, months: addMonths, days: addDaysVal },
+          isLeapYear: this.isLeapYear(rYear),
+          note: `从 ${startYear}年${startMonth}月${startDay}日 推算 ${addYears > 0 ? `+${addYears}` : addYears < 0 ? `${addYears}` : "无"}年 ${addMonths > 0 ? `+${addMonths}` : addMonths < 0 ? `${addMonths}` : "无"}月 ${addDaysVal > 0 ? `+${addDaysVal}` : addDaysVal < 0 ? `${addDaysVal}` : "无"}天`
+        }
+      }
+    };
+  }
+
+  /** 验证日期是否有效。 */
+  private validateDate(year: number, month: number, day: number): void {
+    if (month < 1 || month > 12) {
+      throw new AppError(400, "INVALID_DATE", `月份 ${month} 不在 [1, 12] 范围内`);
+    }
+    const daysInMonth = this.getDaysInMonth(year, month);
+    if (day < 1 || day > daysInMonth) {
+      throw new AppError(400, "INVALID_DATE", `${year}年${month}月只有 ${daysInMonth} 天，日期 ${day} 无效`);
+    }
+  }
+
+  /** 获取指定年月有多少天。 */
+  private getDaysInMonth(year: number, month: number): number {
+    if (month === 2) return this.isLeapYear(year) ? 29 : 28;
+    return [4, 6, 9, 11].includes(month) ? 30 : 31;
+  }
+
+  /** 创建指定公历日期的 UTC Date，避免 Date.UTC 将 0 到 99 年解释为 1900 到 1999 年。 */
+  private createUtcDate(year: number, month: number, day: number): Date {
+    const date = new Date(0);
+    date.setUTCFullYear(year, month - 1, day);
+    date.setUTCHours(0, 0, 0, 0);
+    return date;
+  }
+
+  /** 判断是否为闰年。 */
+  private isLeapYear(year: number): boolean {
+    return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+  }
+
+  /** 获取指定范围内的所有闰年。 */
+  private getLeapYearsInRange(startYear: number, endYear: number): number[] {
+    const leaps: number[] = [];
+    // 从 startYear 开始找到第一个 >= startYear 的闰年
+    let year = startYear;
+    while (year <= endYear) {
+      if (this.isLeapYear(year)) {
+        leaps.push(year);
+      }
+      year += 1;
+    }
+    return leaps;
+  }
+
+  /** 计算两个日期之间的年/月/日差值（考虑日历规则）。 */
+  private calculateYMDDiff(startDate: Date, endDate: Date): { years: number; months: number; days: number } {
+    const isBackward = endDate.getTime() < startDate.getTime();
+    const earlierDate = isBackward ? endDate : startDate;
+    const laterDate = isBackward ? startDate : endDate;
+    const earlierYear = earlierDate.getUTCFullYear();
+    const earlierMonth = earlierDate.getUTCMonth() + 1;
+    const earlierDay = earlierDate.getUTCDate();
+    const laterYear = laterDate.getUTCFullYear();
+    const laterMonth = laterDate.getUTCMonth() + 1;
+    const laterDay = laterDate.getUTCDate();
+
+    let totalMonths = (laterYear - earlierYear) * 12 + (laterMonth - earlierMonth);
+    let remainingDays = laterDay - earlierDay;
+
+    if (remainingDays < 0) {
+      totalMonths -= 1;
+      // 上个月的最后一天
+      const prevMonth = laterMonth === 1 ? 12 : laterMonth - 1;
+      const prevYear = laterMonth === 1 ? laterYear - 1 : laterYear;
+      remainingDays += this.getDaysInMonth(prevYear, prevMonth);
+    }
+
+    const years = Math.floor(totalMonths / 12);
+    const months = totalMonths % 12;
+    const direction = isBackward ? -1 : 1;
+    const signedValue = (value: number): number => value === 0 ? 0 : value * direction;
+
+    return { years: signedValue(years), months: signedValue(months), days: signedValue(remainingDays) };
   }
 
   private constrainParametersForContext(

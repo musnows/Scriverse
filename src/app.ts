@@ -34,7 +34,7 @@ import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes } from "./store.js";
+import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -222,7 +222,8 @@ const settingSchema = z.object({
 const globalReplaceSchema = z.object({
   find: z.string().min(1).max(500),
   replacement: z.string().max(200_000),
-  scope: z.enum(["prose", "settings", "prose-and-settings"])
+  scope: z.enum(["prose", "settings", "prose-and-settings"]),
+  volumeId: identifier.nullable().optional()
 }).strict();
 
 const draftSchema = z.object({
@@ -618,7 +619,7 @@ const workAiSettingsSchema = z.object({
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentToolCallLimit: z.number().int().min(5).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  agentTools: z.array(z.enum(WORK_AGENT_TOOL_IDS)).max(WORK_AGENT_TOOL_IDS.length).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -1093,6 +1094,13 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
   const result: Record<string, unknown> = {
     ...scopedRecord
   };
+  if (result.roleplayCharacter) {
+    result.agentTools = [
+      ...(permissions.characters !== "none" ? ["recall_self"] : []),
+      ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      "calculate_time"
+    ];
+  }
   if ((permissions.prose === "none" || permissions.characters === "none") && Array.isArray(result.messages)) {
     result.messages = result.messages.map((item) => redactAiConversationMessage(item, permissions));
   }

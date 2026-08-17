@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1";
+import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
@@ -28,6 +28,7 @@ import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContex
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
+import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
@@ -52,7 +53,7 @@ import {
   timelineStatusLabel,
   characterGenderLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260816-character-gender-v1";
+} from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
@@ -76,8 +77,8 @@ import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canW
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
-import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
-import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260817-character-filter-state-v1";
+import { filterRelationships, sortCharacterRelationships } from "/relationship-filters.js?v=20260818-character-relationship-group-v1";
 import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
@@ -122,6 +123,21 @@ const defaultPageSizes = Object.freeze({
   analysisTasks: 30,
   fileVersions: 30
 });
+const GALAXY_MOTION_MODE_STORAGE_KEY = "scriverse.galaxy-motion-mode.v1";
+
+function storedGalaxyMotionMode() {
+  try {
+    return normalizeGalaxyMotionMode(localStorage.getItem(GALAXY_MOTION_MODE_STORAGE_KEY));
+  } catch {
+    return "auto";
+  }
+}
+
+function persistGalaxyMotionMode(mode) {
+  const normalized = normalizeGalaxyMotionMode(mode);
+  try { localStorage.setItem(GALAXY_MOTION_MODE_STORAGE_KEY, normalized); } catch { /* 浏览器禁用存储时仅保留本次选择 */ }
+  return normalized;
+}
 
 function normalizePageSize(value, fallback = 30) {
   const candidate = Number(value);
@@ -915,6 +931,7 @@ function replacePageRoute(route) {
   const hash = serializePageRoute(route);
   if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
   schedulePresenceHeartbeat();
+  syncTopSearchButton();
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
@@ -1126,6 +1143,149 @@ function currentPageRoute() {
   return { view: "welcome", workId };
 }
 
+function isChapterSearchContext() {
+  return Boolean(state.work && state.chapter && !$("#editor-view").classList.contains("hidden"));
+}
+
+function syncTopSearchButton() {
+  const button = $("#top-search-button");
+  const chapterContext = isChapterSearchContext();
+  button.classList.toggle("hidden", chapterContext);
+  button.disabled = !state.work || chapterContext || !canReadAggregateContent();
+  if (!chapterContext) closeChapterSearchPanel({ restoreFocus: false });
+}
+
+function chapterSearchMatches() {
+  return findTextMatches($("#chapter-content").value, $("#chapter-search-query").value);
+}
+
+function renderChapterSearchStatus() {
+  const query = $("#chapter-search-query").value;
+  const matches = chapterSearchMatches();
+  const status = $("#chapter-search-status");
+  const readOnly = !canEditProse() || chapterEditorReadOnly;
+  const replaceButtons = [$("#chapter-search-replace"), $("#chapter-search-replace-all")];
+  replaceButtons.forEach((button) => { button.disabled = readOnly || matches.length === 0; });
+  $("#chapter-search-previous").disabled = matches.length === 0;
+  $("#chapter-search-next").disabled = matches.length === 0;
+  if (!query) {
+    status.textContent = "输入关键词后开始搜索";
+    return;
+  }
+  if (!matches.length) {
+    status.textContent = "本章未找到匹配内容";
+    return;
+  }
+  const current = chapterSearchMatchIndex >= 0 ? chapterSearchMatchIndex + 1 : 0;
+  status.textContent = current ? `第 ${current} / ${matches.length} 处` : `找到 ${matches.length} 处`;
+}
+
+function syncChapterSearchControls() {
+  if (!$("#chapter-search-panel")) return;
+  const matches = chapterSearchMatches();
+  if (chapterSearchMatchIndex >= matches.length) chapterSearchMatchIndex = matches.length - 1;
+  renderChapterSearchStatus();
+}
+
+function selectChapterSearchMatch(index) {
+  const matches = chapterSearchMatches();
+  if (!matches.length) {
+    chapterSearchMatchIndex = -1;
+    renderChapterSearchStatus();
+    return;
+  }
+  chapterSearchMatchIndex = (index + matches.length) % matches.length;
+  const input = $("#chapter-content");
+  const start = matches[chapterSearchMatchIndex];
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(start, start + $("#chapter-search-query").value.length);
+  renderChapterSearchStatus();
+}
+
+function moveChapterSearchMatch(direction) {
+  const matches = chapterSearchMatches();
+  if (!matches.length) {
+    renderChapterSearchStatus();
+    return;
+  }
+  const nextIndex = chapterSearchMatchIndex < 0
+    ? direction > 0 ? 0 : matches.length - 1
+    : chapterSearchMatchIndex + direction;
+  selectChapterSearchMatch(nextIndex);
+}
+
+function openChapterSearchPanel() {
+  if (!isChapterSearchContext()) return false;
+  const panel = $("#chapter-search-panel");
+  panel.classList.remove("hidden");
+  panel.setAttribute("aria-hidden", "false");
+  syncChapterSearchControls();
+  queueMicrotask(() => {
+    const input = $("#chapter-search-query");
+    input.focus();
+    if (input.value) input.select();
+  });
+  return true;
+}
+
+function closeChapterSearchPanel({ restoreFocus = true } = {}) {
+  const panel = $("#chapter-search-panel");
+  if (!panel || panel.classList.contains("hidden")) return;
+  panel.classList.add("hidden");
+  panel.setAttribute("aria-hidden", "true");
+  chapterSearchMatchIndex = -1;
+  if (restoreFocus && isChapterSearchContext()) $("#chapter-content").focus({ preventScroll: true });
+}
+
+function resetChapterSearchPanel() {
+  closeChapterSearchPanel({ restoreFocus: false });
+  $("#chapter-search-query").value = "";
+  $("#chapter-replace-query").value = "";
+  chapterSearchMatchIndex = -1;
+  renderChapterSearchStatus();
+}
+
+function replaceCurrentChapterSearchMatch() {
+  if (!isChapterSearchContext() || !canEditProse() || chapterEditorReadOnly) {
+    toast("请先进入编辑模式", "error");
+    return;
+  }
+  const query = $("#chapter-search-query").value;
+  const matches = chapterSearchMatches();
+  if (!query || !matches.length) return renderChapterSearchStatus();
+  const index = chapterSearchMatchIndex < 0 ? 0 : chapterSearchMatchIndex;
+  const start = matches[index];
+  const input = $("#chapter-content");
+  const replacement = $("#chapter-replace-query").value;
+  input.value = `${input.value.slice(0, start)}${replacement}${input.value.slice(start + query.length)}`;
+  chapterSearchMatchIndex = Math.min(index, Math.max(0, findTextMatches(input.value, query).length - 1));
+  updateChapterStats();
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+  scheduleChapterAutoSave(120);
+  syncChapterSearchControls();
+  toast("已替换本章 1 处，等待自动保存");
+}
+
+function replaceAllChapterSearchMatches() {
+  if (!isChapterSearchContext() || !canEditProse() || chapterEditorReadOnly) {
+    toast("请先进入编辑模式", "error");
+    return;
+  }
+  const query = $("#chapter-search-query").value;
+  const input = $("#chapter-content");
+  const result = replaceTextMatches(input.value, query, $("#chapter-replace-query").value);
+  if (!result.matches) return renderChapterSearchStatus();
+  input.value = result.content;
+  chapterSearchMatchIndex = -1;
+  updateChapterStats();
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+  scheduleChapterAutoSave(120);
+  syncChapterSearchControls();
+  toast(`已替换本章 ${result.matches} 处，等待自动保存`);
+}
+
 function loadPanelLayout() {
   try {
     const stored = JSON.parse(localStorage.getItem(panelLayoutStorageKey) ?? "{}");
@@ -1235,6 +1395,7 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
 let chapterForeshadowReminderRequestId = 0;
 let chapterForeshadowReminders = [];
@@ -1276,8 +1437,9 @@ const moduleListPages = {
   comments: 1,
   reviews: 1
 };
-const characterFilters = { raceIds: [], organizationIds: [] };
+const characterFilters = { raceIds: [], organizationIds: [], genderValues: [], deathState: "all" };
 const CHARACTER_GENDER_OPTIONS = [["unknown", "未知"], ["male", "男 / 雄"], ["female", "女 / 雌"], ["none", "无性别"]];
+const CHARACTER_DEATH_STATE_OPTIONS = [["all", "全部状态"], ["alive", "未死亡"], ["dead", "已死亡"]];
 let characterFiltersPanelOpen = false;
 const settingFilters = { keyword: "", category: "", lockState: "all" };
 let settingFiltersPanelOpen = false;
@@ -1336,6 +1498,7 @@ function applyChapterEditorMode() {
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
+  syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -2313,7 +2476,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_drafts: "搜索想法",
   recall_self: "回忆自身",
   image: "读取设定图片",
-  recall_relationship: "回忆人物关系"
+  recall_relationship: "回忆人物关系",
+  calculate_time: "计算日期"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -2325,7 +2489,8 @@ const AI_TOOL_DESCRIPTIONS = {
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  calculate_time: "计算日期差值，或从起始日期推算目标日期。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -4740,7 +4905,6 @@ async function persistChapter({ automatic = false } = {}) {
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
       setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
-      if (!automatic) toast(`正文已保存为 v${state.chapter.versionNo}`);
     } else {
       scheduleChapterAutoSave(250);
     }
@@ -5813,10 +5977,27 @@ function syncGlobalReplaceScopeOptions() {
   const selected = options.find((option) => option.checked && !option.disabled) ?? options.find((option) => !option.disabled);
   options.forEach((option) => { option.checked = option === selected; });
   const scope = selected?.value ?? "";
+  const volumeSelect = $("#replace-volume");
+  const volumeEnabled = scope === "prose" || scope === "prose-and-settings";
+  volumeSelect.disabled = !volumeEnabled || !canEditProse();
+  $("#replace-volume-description").textContent = scope === "settings"
+    ? "当前选择了设定库，分卷筛选不会生效。"
+    : "选择分卷后，只替换该分卷的章节正文；设定库不按分卷筛选。";
   $("#replace-submit").disabled = !scope || !canGlobalReplaceScope(scope);
   $("#replace-permission-note").textContent = scope
     ? "替换完成后，命中的章节和设定会分别生成新的版本历史。"
     : "当前账户没有可写入的正文或设定库权限。";
+}
+
+function renderGlobalReplaceVolumeOptions() {
+  const select = $("#replace-volume");
+  const currentValue = select.value;
+  const volumes = Array.isArray(state.work?.volumes) ? state.work.volumes : [];
+  select.innerHTML = [
+    '<option value="">全部分卷（整部作品正文）</option>',
+    ...volumes.map((volume) => `<option value="${esc(volume.id)}">${esc(volume.title)}</option>`)
+  ].join("");
+  select.value = volumes.some((volume) => String(volume.id) === currentValue) ? currentValue : "";
 }
 
 function openGlobalReplaceDialog() {
@@ -5830,6 +6011,7 @@ function openGlobalReplaceDialog() {
   }
   if ($("#search-dialog").open) $("#search-dialog").close();
   $("#replace-form").reset();
+  renderGlobalReplaceVolumeOptions();
   syncGlobalReplaceScopeOptions();
   $("#replace-dialog").showModal();
   queueMicrotask(() => $("#replace-find").focus());
@@ -5917,6 +6099,7 @@ async function submitGlobalReplace(event) {
   const find = $("#replace-find").value;
   const replacement = $("#replace-with").value;
   const scope = $("#replace-form").querySelector('input[name="replaceScope"]:checked')?.value ?? "prose";
+  const volumeId = scope === "settings" ? null : ($("#replace-volume").value || null);
   if (!find.trim()) {
     toast("请输入要查找的内容", "error");
     $("#replace-find").focus();
@@ -5939,8 +6122,14 @@ async function submitGlobalReplace(event) {
     return;
   }
   const scopeLabel = globalReplaceScopeLabels[scope] ?? "正文";
+  const selectedVolume = volumeId
+    ? state.work.volumes.find((volume) => String(volume.id) === volumeId)
+    : null;
+  const targetLabel = selectedVolume
+    ? `${scopeLabel}（正文仅限“${selectedVolume.title}”分卷${scope === "prose-and-settings" ? "，设定库仍为全部设定库" : ""}）`
+    : scopeLabel;
   const replacementLabel = replacement ? `“${replacement}”` : "空内容";
-  const confirmed = await confirmToast(`将把《${state.work.title}》的${scopeLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
+  const confirmed = await confirmToast(`将把《${state.work.title}》的${targetLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
     title: "确认全局替换",
     confirmLabel: "确认替换"
   });
@@ -5965,7 +6154,7 @@ async function submitGlobalReplace(event) {
   try {
     const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
       method: "POST",
-      body: { find, replacement, scope },
+      body: { find, replacement, scope, volumeId },
       skipOptimisticVersion: true
     });
     $("#replace-dialog").close();
@@ -6946,6 +7135,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
     if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
     return false;
   }
+  resetChapterSearchPanel();
   dismissDeleteToasts();
   if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
   cancelChapterAutoSave();
@@ -7476,7 +7666,14 @@ function handleReadingWheel(event) {
 }
 
 async function saveChapter() {
-  return persistChapter({ automatic: false });
+  const dismissSavingToast = persistentToast("正在保存中");
+  try {
+    const saved = await persistChapter({ automatic: false });
+    if (saved) toast(`保存成功（正文 v${saved.versionNo}）`);
+    return saved;
+  } finally {
+    dismissSavingToast();
+  }
 }
 
 function tidyChapterBlankLines() {
@@ -8305,7 +8502,10 @@ async function renderSettings(page = moduleListPages.settings) {
 }
 
 async function renderCharacters(page = characterListPage) {
-  const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const hasCharacterFilters = characterFilters.raceIds.length > 0
+    || characterFilters.organizationIds.length > 0
+    || characterFilters.genderValues.length > 0
+    || characterFilters.deathState !== "all";
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters
@@ -8369,16 +8569,25 @@ async function renderCharacters(page = characterListPage) {
     : "";
   const selectedRaceIds = new Set(characterFilters.raceIds);
   const selectedOrganizationIds = new Set(characterFilters.organizationIds);
+  const selectedGenderValues = new Set(characterFilters.genderValues);
   const selectedRaceNames = races.filter((race) => selectedRaceIds.has(String(race.id))).map((race) => racePathLabel(race) || race.name);
   const selectedOrganizationNames = organizations.filter((organization) => selectedOrganizationIds.has(String(organization.id))).map((organization) => organization.name);
+  const selectedGenderNames = CHARACTER_GENDER_OPTIONS
+    .filter(([value]) => selectedGenderValues.has(value))
+    .map(([, label]) => label);
+  const selectedDeathStateLabel = CHARACTER_DEATH_STATE_OPTIONS.find(([value]) => value === characterFilters.deathState)?.[1] ?? "全部状态";
   const filterOptionList = (items, selectedIds, valueKey = "id") => items.map((item) => {
     const value = String(item[valueKey]);
     const label = valueKey === "id" ? (racePathLabel(item) || item.name) : item.name;
     return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
   }).join("");
-  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
+  const genderFilterOptions = CHARACTER_GENDER_OPTIONS.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedGenderValues.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("");
+  const deathStateFilterOptions = CHARACTER_DEATH_STATE_OPTIONS.map(([value, label]) => `<label class="character-filter-option"><input type="radio" name="character-death-state" value="${esc(value)}" ${characterFilters.deathState === value ? "checked" : ""}><span>${esc(label)}</span></label>`).join("");
+  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar character-filter-toolbar-with-extra-filters${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
     <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)}</div></details>
     <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按性别筛选</span><strong>${selectedGenderNames.length ? `已选 ${selectedGenderNames.length} 项` : "全部性别"}</strong></summary><div id="character-gender-filter" class="character-filter-options">${genderFilterOptions}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按死亡状态筛选</span><strong>${esc(selectedDeathStateLabel)}</strong></summary><div id="character-death-filter" class="character-filter-options">${deathStateFilterOptions}</div></details>
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   mountCharacterFilterToggle();
@@ -8400,10 +8609,24 @@ async function renderCharacters(page = characterListPage) {
     characterListPage = 1;
     await renderCharacters(1);
   });
+  $("#character-gender-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
+    characterFilters.genderValues = readSelectedValues("#character-gender-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#character-death-filter").addEventListener("change", async (event) => {
+    characterFiltersPanelOpen = true;
+    characterFilters.deathState = CHARACTER_DEATH_STATE_OPTIONS.some(([value]) => value === event.target.value) ? event.target.value : "all";
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
   $("#clear-character-filters")?.addEventListener("click", async () => {
     characterFiltersPanelOpen = true;
     characterFilters.raceIds = [];
     characterFilters.organizationIds = [];
+    characterFilters.genderValues = [];
+    characterFilters.deathState = "all";
     characterListPage = 1;
     await renderCharacters(1);
   });
@@ -9008,6 +9231,8 @@ async function renderRelationships(page = moduleListPages.relationships) {
     const galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, {
       workId: state.work.id,
       frameRate: state.uiSettings.galaxyFrameRate,
+      motionMode: storedGalaxyMotionMode(),
+      onMotionModeChange: persistGalaxyMotionMode,
       onClose: () => {
         if (state.galaxy === galaxy) state.galaxy = null;
       }
@@ -10800,7 +11025,7 @@ async function renderBookAiSettings() {
   const host = $("#module-content");
   const workId = String(state.work.id);
   const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
@@ -10833,7 +11058,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算日期差值，或从起始日期推算目标日期，不读取作品内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -12113,8 +12338,11 @@ function renderCharacterEditorRelationships() {
     const category = relationshipCategoryLabel(relationship.category);
     const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
     const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
+    const actions = !entityEditorReadOnly && canEditModule("relationships")
+      ? `<div class="character-relationship-actions"><button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button><button class="danger-button" type="button" data-character-relationship-delete="${esc(relationship.id)}">删除关系</button></div>`
+      : "";
     return `<article class="character-relationship-row">
-      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${!entityEditorReadOnly && canEditModule("relationships") ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${actions}</div>
       <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
     </article>`;
   }).join("");
@@ -12122,6 +12350,14 @@ function renderCharacterEditorRelationships() {
   host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
     const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
     if (relationship) void openRelationshipDialog(relationship, { characterId });
+  }));
+  host.querySelectorAll("[data-character-relationship-delete]").forEach((button) => button.addEventListener("click", () => {
+    const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipDelete);
+    if (!relationship) return;
+    button.disabled = true;
+    void deleteRelationshipRecord(relationship, characterId).finally(() => {
+      if (button.isConnected) button.disabled = false;
+    });
   }));
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
@@ -12141,7 +12377,7 @@ async function loadCharacterEditorRelationships(characterId, { refresh = false }
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
-    characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationships = sortCharacterRelationships(relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId), characterId);
     characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
@@ -12163,6 +12399,21 @@ async function refreshRelationshipSurfaces(characterId = null) {
     tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
+}
+
+async function deleteRelationshipRecord(item, characterId = null) {
+  const relationshipName = `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}`;
+  if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return false;
+  if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return false;
+  try {
+    await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await Promise.all([refreshRelationshipSurfaces(characterId), loadAiReferences()]);
+    deleteToast(`已删除人物关系“${relationshipName}”`);
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
 }
 
 const characterSectionTypeLabels = {
@@ -13558,7 +13809,6 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  const relationshipName = item ? `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}` : "";
   const management = item && canEditModule("relationships") ? `<section class="entity-dialog-management" aria-label="人物关系操作">
     <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
@@ -13576,16 +13826,7 @@ async function openRelationshipDialog(item, options = {}) {
       dialog.showModal();
     };
     dialog.close();
-    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return reopenDialog();
-    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return reopenDialog();
-    try {
-      await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
-      await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
-      deleteToast(`已删除人物关系“${relationshipName}”`);
-    } catch (error) {
-      reopenDialog();
-      toast(error.message, "error");
-    }
+    if (!await deleteRelationshipRecord(item, options.characterId ?? null)) return reopenDialog();
   });
 }
 
@@ -16278,6 +16519,20 @@ $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-search-close").addEventListener("click", () => closeChapterSearchPanel());
+$("#chapter-search-query").addEventListener("input", () => {
+  chapterSearchMatchIndex = -1;
+  renderChapterSearchStatus();
+});
+$("#chapter-search-query").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  moveChapterSearchMatch(event.shiftKey ? -1 : 1);
+});
+$("#chapter-search-previous").addEventListener("click", () => moveChapterSearchMatch(-1));
+$("#chapter-search-next").addEventListener("click", () => moveChapterSearchMatch(1));
+$("#chapter-search-replace").addEventListener("click", replaceCurrentChapterSearchMatch);
+$("#chapter-search-replace-all").addEventListener("click", replaceAllChapterSearchMatches);
 $("#chapter-foreshadow-reminder-previous").addEventListener("click", () => {
   showChapterForeshadowReminderAt(chapterForeshadowReminderIndex - 1);
 });
@@ -16745,6 +17000,10 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (!$("#chapter-search-panel").classList.contains("hidden")) {
+      closeChapterSearchPanel();
+      return;
+    }
     if (!$("#ai-history-action-menu").classList.contains("hidden")) return;
     if (!$("#ai-conversation-switcher-menu").classList.contains("hidden")) {
       setAiConversationSwitcherVisible(false);
@@ -16769,6 +17028,10 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   event.stopPropagation();
   if (event.repeat) return;
+  if (isChapterSearchContext()) {
+    openChapterSearchPanel();
+    return;
+  }
   openSearchDialog().catch((error) => toast(error.message, "error"));
 }, { capture: true });
 $("#ai-context-meter").addEventListener("click", () => {

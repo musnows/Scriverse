@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -257,6 +257,23 @@
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
+            <section id="chapter-search-panel" class="chapter-search-panel hidden" role="dialog" aria-labelledby="chapter-search-title" aria-describedby="chapter-search-description" aria-hidden="true">
+              <header class="chapter-search-panel-header">
+                <div><span class="eyebrow">正文工具</span><h2 id="chapter-search-title">本章搜索与替换</h2><p id="chapter-search-description">只搜索当前打开的正文章节，不需要选择章节。</p></div>
+                <button id="chapter-search-close" class="dialog-close" type="button" aria-label="关闭本章搜索">×</button>
+              </header>
+              <div class="chapter-search-fields">
+                <label>查找本章内容<input id="chapter-search-query" type="search" maxlength="500" autocomplete="off" placeholder="输入要查找的文字"></label>
+                <label>替换为<input id="chapter-replace-query" type="text" maxlength="200000" autocomplete="off" placeholder="留空表示删除"></label>
+              </div>
+              <div class="chapter-search-actions">
+                <span id="chapter-search-status" role="status" aria-live="polite">输入关键词后开始搜索</span>
+                <button id="chapter-search-previous" class="ghost-button" type="button">上一个</button>
+                <button id="chapter-search-next" class="ghost-button" type="button">下一个</button>
+                <button id="chapter-search-replace" class="ghost-button" type="button">替换</button>
+                <button id="chapter-search-replace-all" class="primary-button" type="button">全部替换</button>
+              </div>
+            </section>
           </div>
           <section id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden" aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title">
             <div class="chapter-foreshadow-reminder-summary">
@@ -708,7 +725,7 @@
           <label>关键词<input id="search-query" name="query" type="search" maxlength="100" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
           <label>资料类型<select id="search-type" name="type">
             <option value="">全部资料</option>
-            <option value="chapter">章节</option>
+            <option value="chapter">正文章节</option>
             <option value="setting">设定</option>
             <option value="character">角色</option>
             <option value="race">种族</option>
@@ -738,6 +755,8 @@
         <div class="replace-dialog-body">
           <label class="replace-field">查找内容<input id="replace-find" name="find" type="text" maxlength="500" autocomplete="off" required placeholder="输入要查找的文字"></label>
           <label class="replace-field">替换为<textarea id="replace-with" name="replacement" maxlength="200000" rows="4" placeholder="输入替换后的文字；留空表示删除"></textarea></label>
+          <label class="replace-field">正文分卷<select id="replace-volume" name="volumeId" aria-describedby="replace-volume-description"><option value="">全部分卷（整部作品正文）</option></select></label>
+          <p id="replace-volume-description" class="replace-range-note">选择分卷后，只替换该分卷的章节正文；设定库不按分卷筛选。</p>
           <fieldset class="replace-scope-fieldset" aria-describedby="replace-scope-description">
             <legend>替换范围</legend>
             <p id="replace-scope-description">默认只替换章节正文内容。</p>
@@ -1160,6 +1179,8 @@
         <button id="galaxy-close" class="galaxy-close" type="button" aria-label="关闭人物关系银河图" data-testid="galaxy-close">×</button>
         <output id="galaxy-stats" class="galaxy-stats" aria-live="polite" data-testid="galaxy-stats"></output>
         <aside class="galaxy-controls" aria-label="银河图控制">
+          <label class="galaxy-motion-field" for="galaxy-motion-mode"><span>动效</span><select id="galaxy-motion-mode" aria-label="银河图动效模式" aria-describedby="galaxy-motion-status" data-testid="galaxy-motion-mode"><option value="auto">自动</option><option value="on">开启</option><option value="reduced">减少</option><option value="off">关闭</option></select></label>
+          <output id="galaxy-motion-status" class="galaxy-motion-status" aria-live="polite" data-testid="galaxy-motion-status"></output>
           <button id="galaxy-stars" type="button" aria-pressed="true" data-testid="galaxy-stars">隐藏背景星点</button>
           <button id="galaxy-grid" type="button" aria-pressed="false" data-testid="galaxy-grid">显示空间网格</button>
           <button id="galaxy-rotation" type="button" aria-pressed="false" data-testid="galaxy-rotation">暂停旋转</button>
@@ -1177,6 +1198,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=analysis-task-expired-toast-v1&feature=analysis-task-stability-delay-v1"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=calculate-time-tool-v1&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1"></script>
   </body>
 </html>

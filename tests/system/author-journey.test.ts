@@ -240,6 +240,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('class="character-species"');
     expect(application.text).toContain("refreshRelationshipSurfaces");
     expect(application.text).toContain("data-character-relationship-edit");
+    expect(application.text).toContain("data-character-relationship-delete");
+    expect(application.text).toContain("sortCharacterRelationships");
+    expect(application.text).toContain("async function deleteRelationshipRecord(item, characterId = null)");
     expect(application.text).toContain('const canEditRelationships = canEditModule("relationships");');
     expect(application.text).toContain('canEditRelationships ? `<button data-edit-relationship=');
     expect(application.text).toContain("data-dialog-relationship-delete");
@@ -713,10 +716,10 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".task-auto-run-panel");
     expect(styles.text).toContain("grid-template-columns: minmax(0, 1fr) 268px;");
     expect(styles.text).toContain(".task-auto-run-header { display: grid; grid-column: 1 / -1;");
-    expect(styles.text).toContain("grid-column: 2;\n  grid-row: 2 / 5;");
-    expect(styles.text).toContain("justify-self: start;");
-    expect(styles.text).toContain("width: 192px;");
-    expect(styles.text).toContain(".task-auto-run-progress-ring { position: relative; display: grid; width: 192px; height: 192px;");
+    expect(styles.text).toContain("position: absolute;\n  top: 50%;\n  right: 90px;");
+    expect(styles.text).toContain("transform: translateY(-50%);");
+    expect(styles.text).toContain("width: 184px;");
+    expect(styles.text).toContain(".task-auto-run-progress-ring { position: relative; display: grid; width: 184px; height: 184px;");
     expect(styles.text).toContain(".task-auto-run-actions { display: flex; align-items: start;");
     expect(styles.text).not.toContain(".task-auto-run-actions { display: flex; grid-column: 2;");
     expect(styles.text).toContain(".task-auto-run-progress-ring-value { stroke: var(--accent);");
