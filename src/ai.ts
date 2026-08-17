@@ -6276,16 +6276,9 @@ export class AiManager {
 
     // 使用 JavaScript Date 进行日期推算，手动处理月末边界（如 1月31日 + 1个月 = 2月28/29日）
     // 先计算目标年月，再将日期截断到该月的最大天数
-    let rYear = startYear + addYears;
-    let rMonth = startMonth + addMonths;
-    // 处理月份进位/借位（支持负数）
-    if (rMonth > 0) {
-      rYear += Math.floor((rMonth - 1) / 12);
-      rMonth = ((rMonth - 1) % 12) + 1;
-    } else {
-      rYear -= Math.floor((-rMonth) / 12);
-      rMonth = 12 - ((-rMonth - 1) % 12);
-    }
+    const totalMonths = (startYear + addYears) * 12 + (startMonth - 1) + addMonths;
+    let rYear = Math.floor(totalMonths / 12);
+    let rMonth = totalMonths - rYear * 12 + 1;
     // 目标月份的最大天数（用于月末边界截断）
     const maxDayInTargetMonth = this.getDaysInMonth(rYear, rMonth);
     // 将起始日期截断到目标月份的最大天数（处理月末边界）
