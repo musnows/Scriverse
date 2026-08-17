@@ -241,6 +241,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("refreshRelationshipSurfaces");
     expect(application.text).toContain("data-character-relationship-edit");
     expect(application.text).toContain("data-character-relationship-delete");
+    expect(application.text).toContain("sortCharacterRelationships");
     expect(application.text).toContain("async function deleteRelationshipRecord(item, characterId = null)");
     expect(application.text).toContain('const canEditRelationships = canEditModule("relationships");');
     expect(application.text).toContain('canEditRelationships ? `<button data-edit-relationship=');

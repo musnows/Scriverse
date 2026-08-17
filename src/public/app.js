@@ -78,7 +78,7 @@ import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normaliz
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260817-character-filter-state-v1";
-import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterRelationships, sortCharacterRelationships } from "/relationship-filters.js?v=20260818-character-relationship-group-v1";
 import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
@@ -12367,7 +12367,7 @@ async function loadCharacterEditorRelationships(characterId, { refresh = false }
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
-    characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationships = sortCharacterRelationships(relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId), characterId);
     characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
