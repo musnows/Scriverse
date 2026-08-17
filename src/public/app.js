@@ -6458,6 +6458,7 @@ function resetWorkScopedUiCaches() {
   state.characters = [];
   state.settings = [];
   state.races = [];
+  state.organizations = [];
   characterListPage = 1;
   draftTypeFilter = "all";
   draftBindingFilters = [];
@@ -11491,13 +11492,17 @@ async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
   const generation = workScopedUiGeneration;
-  const [characters, settings] = await Promise.all([
+  const [characters, settings, races, organizations] = await Promise.all([
     canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
-    canReadModule("settings") ? api(`/api/works/${workId}/settings/context`) : Promise.resolve([])
+    canReadModule("settings") ? api(`/api/works/${workId}/settings/context`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${workId}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? apiAllPages(`/api/works/${workId}/organizations`) : Promise.resolve([])
   ]);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
   state.settings = settings;
+  state.races = races;
+  state.organizations = organizations;
   renderAiRoleplayCharacterSelect();
   loadedAiReferencesWorkId = workId;
 }
@@ -14629,6 +14634,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   try {
     try {
       await ensureAiModelsLoaded();
+      await ensureAiReferencesLoaded();
     } catch (error) {
       if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
       setAiChatTabStatus(tab, "error");
@@ -15135,20 +15141,27 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
   }
-  const mentionNames = role === "user"
-    ? userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)
+  const mentionGroups = role === "user"
+    ? [
+      ["角色", metadata?.mentionCharacterIds, state.characters],
+      ["种族", metadata?.mentionRaceIds, state.races],
+      ["组织", metadata?.mentionOrganizationIds, state.organizations]
+    ]
+      .flatMap(([kind, ids, items]) => userMessageMentionNames(ids, items).map((name) => ({ kind, name })))
     : [];
-  if (mentionNames.length) {
+  if (mentionGroups.length) {
     const references = document.createElement("div");
     references.className = "user-message-mentions";
     const label = document.createElement("span");
     label.className = "user-message-mentions-label";
-    label.textContent = "引用角色";
+    label.textContent = "引用";
     references.append(label);
-    for (const name of mentionNames) {
+    for (const { kind, name } of mentionGroups) {
       const reference = document.createElement("span");
       reference.className = "user-message-mention";
       reference.textContent = name;
+      reference.title = `${kind}：${name}`;
+      reference.setAttribute("aria-label", `${kind}：${name}`);
       references.append(reference);
     }
     message.append(references);
