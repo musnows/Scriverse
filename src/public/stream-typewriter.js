@@ -122,6 +122,18 @@ export function createStreamTypewriter({
       pendingCharacters.push(...characters);
       schedule();
     },
+    replace(value) {
+      if (scheduledFrame !== null) {
+        cancelFrame(scheduledFrame);
+        scheduledFrame = null;
+      }
+      visibleCharacters.splice(0, visibleCharacters.length, ...Array.from(String(value ?? "")));
+      pendingCharacters.splice(0);
+      finishing = false;
+      render();
+      resolveIdle();
+      return snapshot();
+    },
     finish() {
       if (!pendingCharacters.length && scheduledFrame === null) return Promise.resolve(snapshot());
       finishing = true;

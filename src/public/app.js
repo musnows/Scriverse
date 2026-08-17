@@ -20,7 +20,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260815-ai-stream-typewriter-v4";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
@@ -14889,6 +14889,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     }
   });
   let streamedText = "";
+  let streamedPendingText = "";
   let generatedMetadata = {};
   let toolCalls = [];
   let processSteps = [];
@@ -14899,7 +14900,6 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   let contextAction = "ready";
   let warningOnly = false;
   let streamContextCompacted = false;
-  let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
   const processStepTypewriters = new Map();
@@ -14917,7 +14917,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
       onRender: (text) => {
         if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
-        renderStreamingProcessSteps(finalAnswerStarted);
+        renderStreamingProcessSteps(false);
         scrollAiFeedToBottom(feed);
       }
     });
@@ -14990,18 +14990,21 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         }
       } else if (eventName === "delta") {
         mountAssistantMessage();
-        const firstFinalDelta = streamedText.length === 0;
         const delta = typeof payload.delta === "string" ? payload.delta : "";
         streamedText += delta;
-        if (streamedText.length > 0) finalAnswerStarted = true;
+        streamedPendingText += delta;
         typewriter.append(delta);
-        if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         mountAssistantMessage();
         const step = { ...payload };
         const append = step.append === true;
         delete step.append;
+        if (step.type === "intermediate" && typeof step.content === "string" && streamedPendingText.endsWith(step.content)) {
+          streamedPendingText = streamedPendingText.slice(0, -step.content.length);
+          streamedText = streamedText.slice(0, -step.content.length);
+          typewriter.replace(streamedText);
+        }
         const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
@@ -15009,7 +15012,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         if (typeof step.content === "string" && step.content.length > 0 && step.type === "thinking") {
           processStepTypewriter(targetStep).append(step.content);
         }
-        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(false, elapsedProcessTime());
         meta.textContent = step.type === "thinking"
           ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
           : step.type === "context_compaction"
@@ -15024,7 +15027,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         if (toolCall.status === "failed") setAiChatTabStatus(tab, "error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
-        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(false, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom(feed);
       } else if (eventName === "context_compacted") {

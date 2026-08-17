@@ -2762,7 +2762,7 @@ describe("AI 供应商、模型与建议 API", () => {
     });
   });
 
-  it("OpenAI 工具参数收齐前只转发正文，结束标记后才执行工具并继续流式回答", async () => {
+  it("OpenAI 工具参数收齐前暂存正文，结束标记后才执行工具并继续流式回答", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     let releaseFirstRound = (): void => undefined;
@@ -2819,7 +2819,7 @@ describe("AI 供应商、模型与建议 API", () => {
       onToolCall: (toolCall) => toolEvents.push({ arguments: toolCall.arguments })
     }, (delta) => deltas.push(delta));
     const safetyRelease = setTimeout(releaseFirstRound, 1_000);
-    for (let index = 0; index < 100 && deltas.length === 0; index += 1) {
+    for (let index = 0; index < 100 && firstRoundFinished === false; index += 1) {
       await new Promise((resolve) => setTimeout(resolve, 2));
     }
     expect(deltas).toEqual(["我先读取目录。"]);
@@ -2829,7 +2829,8 @@ describe("AI 供应商、模型与建议 API", () => {
     clearTimeout(safetyRelease);
 
     const generated = await generatedPromise;
-    expect(generated.content).toBe("我先读取目录。已读取目录。");
+    expect(deltas).toEqual(["我先读取目录。", "已读取", "目录。"]);
+    expect(generated.content).toBe("已读取目录。");
     expect(generated.toolCalls).toEqual([
       expect.objectContaining({ id: "stream-tool", name: "story_index", arguments: { offset: 0, limit: 1 }, status: "completed" })
     ]);
@@ -2886,7 +2887,10 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('"type":"thinking","round":2,"content":"目录结果足以回答。"');
     expect(streamed.text.indexOf('"type":"thinking","round":1')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"我先读取作品目录。"}');
-    expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
+    expect(streamed.text).toContain('event: process_step\ndata: {"id":"process_');
+    expect(streamed.text).toContain('"type":"intermediate","round":1,"content":"我先读取作品目录。"');
+    expect(streamed.text.indexOf('"delta":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"'));
+    expect(streamed.text.indexOf('"type":"intermediate","round":1,"content":"我先读取作品目录。"')).toBeLessThan(streamed.text.indexOf("event: tool_call"));
     expect(streamed.text).toContain('"name":"story_index"');
     expect(streamed.text).toContain('"arguments":{"offset":0,"limit":1}');
     expect(streamed.text).toMatch(/"calledAt":"\d{4}-\d{2}-\d{2}T/u);
@@ -2903,7 +2907,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const streamedConversation = await request(runtime.app).get(`/api/ai-conversations/${completePayload.conversationId}`).expect(200);
     expect(streamedConversation.body.data.messages.at(-1).metadata.processDurationMs).toBe(completePayload.processDurationMs);
     const generatedSuggestions = await request(runtime.app).get(`/api/works/${workId}/suggestions`).expect(200);
-    expect(generatedSuggestions.body.data[0].content).toBe("我先读取作品目录。已读取目录。");
+    expect(generatedSuggestions.body.data[0].content).toBe("已读取目录。");
 
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const toolCalls = [{ id: "stream-tool", name: "story_index", calledAt: "2026-07-17T12:34:56.000Z", arguments: { offset: 0, limit: 1 }, status: "completed", result: { ok: true, data: { totalChapters: 1 } } }];

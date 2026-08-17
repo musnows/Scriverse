@@ -5,6 +5,7 @@ export type StreamTypewriterProgress = {
 
 export type StreamTypewriter = {
   append(value: unknown): void;
+  replace(value: unknown): string;
   finish(): Promise<string>;
   reveal(): string;
 };
