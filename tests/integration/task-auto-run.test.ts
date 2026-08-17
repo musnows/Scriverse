@@ -119,6 +119,7 @@ describe("分析任务自动运行", () => {
       autoRunBatchLimit: 20,
       autoRunDailyTaskLimit: 0,
       autoRunFailureThreshold: 3,
+      autoRunStabilityDelayMinutes: 2,
       autoRunPaused: false,
       autoRunPauseReason: "",
       autoRunResumeAt: null,
@@ -146,6 +147,12 @@ describe("分析任务自动运行", () => {
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       autoRunFailureThreshold: 0
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunStabilityDelayMinutes: 0
+    }).expect(400);
+    await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
+      autoRunStabilityDelayMinutes: 121
     }).expect(400);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       bookSummaryContextPercent: 91
@@ -177,6 +184,7 @@ describe("分析任务自动运行", () => {
     }).expect(400);
     const updated = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({
       dailyTokenQuota: 10_000,
+      autoRunStabilityDelayMinutes: 1,
       bookSummaryContextPercent: 35,
       contextCompactThreshold: 90,
       agentToolCallLimit: 80,
@@ -184,6 +192,7 @@ describe("分析任务自动运行", () => {
       alwaysIncludeSettingInfo: true
     }).expect(200);
     expect(updated.body.data.dailyTokenQuota).toBe(10_000);
+    expect(updated.body.data.autoRunStabilityDelayMinutes).toBe(1);
     expect(updated.body.data.bookSummaryContextPercent).toBe(35);
     expect(updated.body.data.contextCompactThreshold).toBe(90);
     expect(updated.body.data.agentToolCallLimit).toBe(80);
@@ -277,6 +286,43 @@ describe("分析任务自动运行", () => {
     const secondPage = await request(runtime.app).get(`/api/works/${workId}/tasks?page=2`).expect(200);
     expect(secondPage.body.data).toMatchObject({ page: 2, limit: 30, total: 55, hasMore: false, nextPage: null });
     expect(secondPage.body.data.items).toHaveLength(25);
+  });
+
+  it("正文持续编辑时重置稳定等待，并在停止编辑后才创建章节理解任务", async () => {
+    const runtime = createTestRuntime();
+    runtimes.push(runtime);
+    const work = runtime.store.createWork({ title: "章节分析稳定等待测试" });
+    const volume = runtime.store.createVolume(String(work.id), { title: "第一卷" });
+    const chapter = runtime.store.createChapter(String(work.id), {
+      volumeId: String(volume.id),
+      title: "第一章",
+      content: "初始正文"
+    });
+    const workId = String(work.id);
+    const chapterId = String(chapter.id);
+
+    vi.useFakeTimers();
+    try {
+      runtime.store.saveChapter(chapterId, { content: "第一次编辑" });
+      expect(runtime.store.countPendingTasks(workId)).toBe(0);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(runtime.store.countPendingTasks(workId)).toBe(0);
+
+      runtime.store.saveChapter(chapterId, { content: "第二次编辑" });
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(runtime.store.countPendingTasks(workId)).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runtime.store.countPendingTasks(workId)).toBe(1);
+      const taskId = String(runtime.store.listTaskSummariesPage(workId, { page: 1, limit: 10, offset: 0 }).items[0]?.id);
+      expect(runtime.store.getTask(taskId)).toMatchObject({
+        taskType: "chapter-analysis",
+        status: "pending",
+        sourceVersions: { [chapterId]: 3 }
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each(["structure", "report-update", "future-analysis"])("不支持的任务类型 %s 明确失败且自动运行不重试", async (taskType) => {

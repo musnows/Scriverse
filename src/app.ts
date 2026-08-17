@@ -614,6 +614,7 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   autoRunDailyTaskLimit: z.number().int().min(0).max(10_000).optional(),
   autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
+  autoRunStabilityDelayMinutes: z.number().int().min(1).max(120).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentToolCallLimit: z.number().int().min(5).optional(),
@@ -2606,6 +2607,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       if (input.autoRunEnabled === true && !before.autoRunEnabled) updated = ai.resumeAutoRun(workId);
       else ai.scheduleAutoRun(workId);
     }
+    if (input.autoRunStabilityDelayMinutes !== undefined) ai.rescheduleChapterAnalysisTasks(workId);
     data(response, updated);
   });
   app.get("/api/works/:workId/ai-conversations", (request, response) => {
