@@ -1464,10 +1464,15 @@ export class Store {
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
+  private chapterAnalysisInvalidatedHandler: ((workId: string, chapterId: string, versionNo: number) => void) | null = null;
   private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 
   setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.analysisTaskQueuedHandler = handler;
+  }
+
+  setChapterAnalysisInvalidatedHandler(handler: ((workId: string, chapterId: string, versionNo: number) => void) | null): void {
+    this.chapterAnalysisInvalidatedHandler = handler;
   }
 
   setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {
@@ -1479,6 +1484,14 @@ export class Store {
       this.analysisTaskQueuedHandler?.(workId);
     } catch {
       // 自动运行调度失败不影响主写入路径
+    }
+  }
+
+  private notifyChapterAnalysisInvalidated(workId: string, chapterId: string, versionNo: number): void {
+    try {
+      this.chapterAnalysisInvalidatedHandler?.(workId, chapterId, versionNo);
+    } catch {
+      // 稳定等待调度失败不影响主写入路径
     }
   }
 
@@ -1497,6 +1510,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       autoRunDailyTaskLimit: Math.min(10_000, Math.max(0, Number(row?.auto_run_daily_task_limit ?? 0) || 0)),
       autoRunFailureThreshold: Math.min(10, Math.max(1, Number(row?.auto_run_failure_threshold ?? 3) || 3)),
+      autoRunStabilityDelayMinutes: Math.min(120, Math.max(1, Number(row?.auto_run_stability_delay_minutes ?? 2) || 2)),
       autoRunPaused: Number(row?.auto_run_paused ?? 0) === 1,
       autoRunPauseReason: String(row?.auto_run_pause_reason ?? ""),
       autoRunResumeAt: row?.auto_run_resume_at === null || row?.auto_run_resume_at === undefined ? null : String(row.auto_run_resume_at),
@@ -1526,6 +1540,7 @@ export class Store {
     autoRunBatchLimit?: number;
     autoRunDailyTaskLimit?: number;
     autoRunFailureThreshold?: number;
+    autoRunStabilityDelayMinutes?: number;
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
     agentToolCallLimit?: number;
@@ -1548,6 +1563,7 @@ export class Store {
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
     const nextDailyTaskLimit = input.autoRunDailyTaskLimit ?? Number(current.autoRunDailyTaskLimit);
     const nextFailureThreshold = input.autoRunFailureThreshold ?? Number(current.autoRunFailureThreshold);
+    const nextStabilityDelayMinutes = input.autoRunStabilityDelayMinutes ?? Number(current.autoRunStabilityDelayMinutes);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
@@ -1563,11 +1579,11 @@ export class Store {
     this.db.run(
       `INSERT INTO work_ai_settings (
          work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
-         auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+         auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_stability_delay_minutes, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
          agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1576,6 +1592,7 @@ export class Store {
          auto_run_batch_limit = excluded.auto_run_batch_limit,
          auto_run_daily_task_limit = excluded.auto_run_daily_task_limit,
          auto_run_failure_threshold = excluded.auto_run_failure_threshold,
+         auto_run_stability_delay_minutes = excluded.auto_run_stability_delay_minutes,
          auto_run_paused = excluded.auto_run_paused,
          auto_run_pause_reason = excluded.auto_run_pause_reason,
          auto_run_resume_at = excluded.auto_run_resume_at,
@@ -1597,6 +1614,7 @@ export class Store {
       Math.min(200, Math.max(1, nextBatchLimit)),
       Math.min(10_000, Math.max(0, nextDailyTaskLimit)),
       Math.min(10, Math.max(1, nextFailureThreshold)),
+      Math.min(120, Math.max(1, nextStabilityDelayMinutes)),
       current.autoRunPaused ? 1 : 0,
       String(current.autoRunPauseReason ?? ""),
       current.autoRunResumeAt === null ? null : String(current.autoRunResumeAt),
@@ -1619,6 +1637,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
       autoRunDailyTaskLimit: Math.min(10_000, Math.max(0, nextDailyTaskLimit)),
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
+      autoRunStabilityDelayMinutes: Math.min(120, Math.max(1, nextStabilityDelayMinutes)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
       agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
@@ -3593,8 +3612,6 @@ export class Store {
     this.db.run(
       `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
        WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
-       AND NOT (status = 'pending' AND task_type = 'chapter-analysis'
-         AND json_extract(scope_json, '$.chapterId') = ?)
        AND (json_extract(scope_json, '$.chapterId') = ?
          OR EXISTS (SELECT 1 FROM json_each(scope_json, '$.chapterIds') WHERE json_each.value = ?)
          OR json_extract(scope_json, '$.type') = 'book'
@@ -3609,37 +3626,9 @@ export class Store {
       chapterId,
       chapterId,
       chapterId,
-      chapterId,
       chapterId
     );
-    const existing = this.db.get(
-      `SELECT id FROM analysis_tasks WHERE work_id = ? AND task_type = 'chapter-analysis' AND status = 'pending'
-       AND json_extract(scope_json, '$.chapterId') = ?`,
-      workId,
-      chapterId
-    );
-    if (!existing) {
-      const timestamp = now();
-      this.db.run(
-        `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
-         VALUES (?, ?, 'chapter-analysis', ?, 'pending', ?, ?, ?, ?)`,
-        id("task"),
-        workId,
-        JSON.stringify({ type: "chapter", chapterId }),
-        JSON.stringify({ [chapterId]: versionNo }),
-        timestamp,
-        timestamp,
-        currentRequestActor()?.userId ?? null
-      );
-    } else {
-      this.db.run(
-        "UPDATE analysis_tasks SET source_versions_json = ?, updated_at = ? WHERE id = ?",
-        JSON.stringify({ [chapterId]: versionNo }),
-        now(),
-        requiredString(existing, "id")
-      );
-    }
-    this.notifyAnalysisTaskQueued(workId);
+    this.notifyChapterAnalysisInvalidated(workId, chapterId, versionNo);
   }
 
   private mapWorks(rows: Row[]): Record<string, unknown>[] {

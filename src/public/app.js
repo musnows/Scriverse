@@ -9184,7 +9184,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
     moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh }),
     canReadModule("ai-settings")
       ? moduleApi("tasks", `/api/works/${state.work.id}/ai-settings`, { refresh })
-      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunStabilityDelayMinutes: 2, autoRunPaused: false })
   ]);
   if (!taskPage.items.length && page > 1) return renderTasks(page - 1, { refresh });
   taskListPage = taskPage.page;
@@ -9221,6 +9221,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
         <div class="task-auto-run-copy">
           <strong id="task-auto-run-title">自动执行待分析任务</strong>
           <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+          <small>正文停止编辑后，等待稳定窗口结束才会创建章节理解任务。</small>
           <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
         </div>
         <div class="task-auto-run-actions">
@@ -9232,11 +9233,13 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
         <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
         <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
         <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        <label>停止编辑后创建任务<input id="task-auto-run-stability-delay" type="number" min="1" max="120" value="${esc(String(settings.autoRunStabilityDelayMinutes ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-stability-help"></label>
         ${autoRunEditing
           ? `<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">${autoRunPauseLabel}</button>`
           : ""}
       </div>
       <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
+      <p id="task-auto-run-stability-help" class="task-auto-run-help">正文连续 ${esc(String(settings.autoRunStabilityDelayMinutes ?? 2))} 分钟没有编辑，才会创建章节理解任务；最低 1 分钟。</p>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
       ${autoRunPaused ? `<p class="task-auto-run-alert" role="status"><strong>自动执行已暂停</strong><span>${esc(settings.autoRunPauseReason || "需要人工确认后恢复")}</span>${settings.autoRunResumeAt ? `<small>预计 ${esc(formatDateTime(settings.autoRunResumeAt))} 自动恢复</small>` : ""}</p>` : ""}
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
@@ -9290,7 +9293,8 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
           autoRunEnabled: $("#task-auto-run-enabled").checked,
           autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
           autoRunDailyTaskLimit: Number($("#task-auto-run-daily-limit").value),
-          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value)
+          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value),
+          autoRunStabilityDelayMinutes: Number($("#task-auto-run-stability-delay").value)
         }
       });
       toast(updated.autoRunEnabled

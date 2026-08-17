@@ -693,6 +693,9 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain("同时运行上限");
     expect(application.text).toContain("每日任务上限");
     expect(application.text).toContain("连续失败暂停阈值");
+    expect(application.text).toContain('id="task-auto-run-stability-delay"');
+    expect(application.text).toContain("停止编辑后创建任务");
+    expect(application.text).toContain("稳定窗口");
     expect(application.text).toContain("恢复自动执行");
     expect(application.text).not.toContain("每轮任务上限");
     expect(application.text).not.toContain("开始下一轮");
