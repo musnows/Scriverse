@@ -22,7 +22,7 @@ describe("沉浸式阅读预览界面", () => {
     const readingState = await request(runtime.app).get("/reading-preview.js").expect(200);
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1');
+    expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('id="reader-open-button" class="module-nav-secondary hidden"');
     expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="reader-open-button"[\s\S]*data-module="comments"/u);
