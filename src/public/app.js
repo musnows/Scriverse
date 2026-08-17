@@ -76,7 +76,7 @@ import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canW
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
-import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
+import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260817-character-filter-state-v1";
 import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
 import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
@@ -1275,8 +1275,9 @@ const moduleListPages = {
   comments: 1,
   reviews: 1
 };
-const characterFilters = { raceIds: [], organizationIds: [] };
+const characterFilters = { raceIds: [], organizationIds: [], genderValues: [], deathState: "all" };
 const CHARACTER_GENDER_OPTIONS = [["unknown", "未知"], ["male", "男 / 雄"], ["female", "女 / 雌"], ["none", "无性别"]];
+const CHARACTER_DEATH_STATE_OPTIONS = [["all", "全部状态"], ["alive", "未死亡"], ["dead", "已死亡"]];
 let characterFiltersPanelOpen = false;
 const settingFilters = { keyword: "", category: "", lockState: "all" };
 let settingFiltersPanelOpen = false;
@@ -8304,7 +8305,10 @@ async function renderSettings(page = moduleListPages.settings) {
 }
 
 async function renderCharacters(page = characterListPage) {
-  const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const hasCharacterFilters = characterFilters.raceIds.length > 0
+    || characterFilters.organizationIds.length > 0
+    || characterFilters.genderValues.length > 0
+    || characterFilters.deathState !== "all";
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters
@@ -8368,16 +8372,25 @@ async function renderCharacters(page = characterListPage) {
     : "";
   const selectedRaceIds = new Set(characterFilters.raceIds);
   const selectedOrganizationIds = new Set(characterFilters.organizationIds);
+  const selectedGenderValues = new Set(characterFilters.genderValues);
   const selectedRaceNames = races.filter((race) => selectedRaceIds.has(String(race.id))).map((race) => racePathLabel(race) || race.name);
   const selectedOrganizationNames = organizations.filter((organization) => selectedOrganizationIds.has(String(organization.id))).map((organization) => organization.name);
+  const selectedGenderNames = CHARACTER_GENDER_OPTIONS
+    .filter(([value]) => selectedGenderValues.has(value))
+    .map(([, label]) => label);
+  const selectedDeathStateLabel = CHARACTER_DEATH_STATE_OPTIONS.find(([value]) => value === characterFilters.deathState)?.[1] ?? "全部状态";
   const filterOptionList = (items, selectedIds, valueKey = "id") => items.map((item) => {
     const value = String(item[valueKey]);
     const label = valueKey === "id" ? (racePathLabel(item) || item.name) : item.name;
     return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
   }).join("");
-  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
+  const genderFilterOptions = CHARACTER_GENDER_OPTIONS.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedGenderValues.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("");
+  const deathStateFilterOptions = CHARACTER_DEATH_STATE_OPTIONS.map(([value, label]) => `<label class="character-filter-option"><input type="radio" name="character-death-state" value="${esc(value)}" ${characterFilters.deathState === value ? "checked" : ""}><span>${esc(label)}</span></label>`).join("");
+  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar character-filter-toolbar-with-extra-filters${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
     <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)}</div></details>
     <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按性别筛选</span><strong>${selectedGenderNames.length ? `已选 ${selectedGenderNames.length} 项` : "全部性别"}</strong></summary><div id="character-gender-filter" class="character-filter-options">${genderFilterOptions}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按死亡状态筛选</span><strong>${esc(selectedDeathStateLabel)}</strong></summary><div id="character-death-filter" class="character-filter-options">${deathStateFilterOptions}</div></details>
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   mountCharacterFilterToggle();
@@ -8399,10 +8412,24 @@ async function renderCharacters(page = characterListPage) {
     characterListPage = 1;
     await renderCharacters(1);
   });
+  $("#character-gender-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
+    characterFilters.genderValues = readSelectedValues("#character-gender-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#character-death-filter").addEventListener("change", async (event) => {
+    characterFiltersPanelOpen = true;
+    characterFilters.deathState = CHARACTER_DEATH_STATE_OPTIONS.some(([value]) => value === event.target.value) ? event.target.value : "all";
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
   $("#clear-character-filters")?.addEventListener("click", async () => {
     characterFiltersPanelOpen = true;
     characterFilters.raceIds = [];
     characterFilters.organizationIds = [];
+    characterFilters.genderValues = [];
+    characterFilters.deathState = "all";
     characterListPage = 1;
     await renderCharacters(1);
   });

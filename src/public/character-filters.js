@@ -8,14 +8,29 @@ function characterOrganizationIds(character) {
     .filter(Boolean);
 }
 
-export function filterCharacters(characters, { raceIds = [], organizationIds = [] } = {}) {
+function characterGender(character) {
+  const gender = String(character?.gender ?? "unknown");
+  return ["male", "female", "none", "unknown"].includes(gender) ? gender : "unknown";
+}
+
+/**
+ * @param {unknown[]} characters
+ * @param {{ raceIds?: string[]; organizationIds?: string[]; genderValues?: string[]; deathState?: string }} [options]
+ */
+export function filterCharacters(characters, options = {}) {
+  const { raceIds = [], organizationIds = [], genderValues = [], deathState = "all" } = options;
   const selectedRaceIds = new Set(raceIds.map(String).filter(Boolean));
   const selectedOrganizationIds = new Set(organizationIds.map(String).filter(Boolean));
+  const selectedGenderValues = new Set(genderValues.map(String).filter(Boolean));
+  const selectedDeathState = deathState === "alive" || deathState === "dead" ? deathState : "all";
   return characters.filter((character) => {
     const matchesRace = selectedRaceIds.size === 0 || selectedRaceIds.has(characterRaceId(character));
     const matchesOrganization = selectedOrganizationIds.size === 0
       || characterOrganizationIds(character).some((organizationId) => selectedOrganizationIds.has(organizationId));
-    return matchesRace && matchesOrganization;
+    const matchesGender = selectedGenderValues.size === 0 || selectedGenderValues.has(characterGender(character));
+    const matchesDeathState = selectedDeathState === "all"
+      || (selectedDeathState === "dead" ? Boolean(character?.isDead) : !Boolean(character?.isDead));
+    return matchesRace && matchesOrganization && matchesGender && matchesDeathState;
   });
 }
 
