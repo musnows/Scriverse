@@ -1334,9 +1334,9 @@ function applyPanelLayout(persist = false) {
     ? (panelLayout.leftCollapsed ? "打开作品模块" : "关闭作品模块")
     : (panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏"));
   $("#mobile-module-tab").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
-  $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
+  $("#ai-panel-toggle").textContent = aiConversationWorkspaceOpen ? "×" : (panelLayout.aiCollapsed ? "‹" : "›");
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
-  $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
+  $("#ai-panel-toggle").setAttribute("aria-label", aiConversationWorkspaceOpen ? "关闭创作助手全屏面板" : (panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手"));
   syncMobileAiPanelSafeTop();
   scheduleChapterLineNumbers();
   if (persist) {
@@ -1346,7 +1346,12 @@ function applyPanelLayout(persist = false) {
 
 function ensureAiPanelExpanded() {
   if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) return;
-  setAiConversationWorkspaceVisible(true);
+  if (isMobileViewport()) {
+    setAiConversationWorkspaceVisible(true);
+    return;
+  }
+  panelLayout.aiCollapsed = false;
+  applyPanelLayout(true);
 }
 
 function setupPanelResize(handle, side) {
@@ -2187,20 +2192,21 @@ function setAiConversationSwitcherVisible(visible) {
 }
 
 function setAiConversationWorkspaceVisible(visible) {
+  const mobileWorkspace = isMobileViewport();
   aiConversationWorkspaceOpen = Boolean(visible);
-  if (aiConversationWorkspaceOpen) {
-    panelLayout.aiCollapsed = false;
-    $("#app").classList.remove("ai-panel-collapsed");
-  }
+  panelLayout.aiCollapsed = aiConversationWorkspaceOpen ? false : mobileWorkspace;
   $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
   $(".ai-panel").classList.toggle("is-conversation-workspace", aiConversationWorkspaceOpen);
   $("#ai-assistant-entry").classList.toggle("active", aiConversationWorkspaceOpen);
   $("#ai-assistant-entry").setAttribute("aria-expanded", String(aiConversationWorkspaceOpen));
+  applyPanelLayout(true);
   $("#ai-chat-tabs").classList.add("hidden");
   $("#ai-workspace-close").classList.toggle("hidden", !aiConversationWorkspaceOpen);
   $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
   setAiConversationSwitcherVisible(false);
   renderAiChatTabs();
+  $("#ai-panel-toggle").textContent = aiConversationWorkspaceOpen ? "×" : (panelLayout.aiCollapsed ? "‹" : "›");
+  $("#ai-panel-toggle").setAttribute("aria-label", aiConversationWorkspaceOpen ? "关闭创作助手全屏面板" : (panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手"));
   if (aiConversationWorkspaceOpen) {
     window.requestAnimationFrame(() => $("#ai-prompt").focus({ preventScroll: true }));
   }
@@ -16718,6 +16724,8 @@ $("#ai-assistant-entry").addEventListener("click", () => {
   if (isMobileViewport()) {
     panelLayout.leftCollapsed = true;
     applyPanelLayout(true);
+    setAiConversationWorkspaceVisible(true);
+    return;
   }
   setAiConversationWorkspaceVisible(true);
 });
