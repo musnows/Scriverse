@@ -1589,6 +1589,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .platform-image-tool-field select { width: 100%; height: 36px; min-height: 36px; padding: 8px 10px; font-size: 12px; }
 .platform-image-tool-panel .config-save-button { flex: 0 0 auto; min-height: 36px; padding: 8px 14px; }
 .task-auto-run-panel {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 268px;
   gap: 12px;
@@ -1635,14 +1636,14 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .task-auto-run-alert strong { color: var(--ink); }
 .task-auto-run-alert span, .task-auto-run-alert small { color: var(--muted); }
 .task-auto-run-progress {
+  position: absolute;
+  top: 50%;
+  right: 90px;
   display: grid;
-  grid-column: 2;
-  grid-row: 2 / 5;
-  align-self: center;
-  justify-self: start;
-  width: 192px;
+  width: 184px;
+  transform: translateY(-50%);
 }
-.task-auto-run-progress-ring { position: relative; display: grid; width: 192px; height: 192px; place-items: center; }
+.task-auto-run-progress-ring { position: relative; display: grid; width: 184px; height: 184px; place-items: center; }
 .task-auto-run-progress-ring svg { display: block; width: 100%; height: 100%; overflow: visible; transform: rotate(-90deg); }
 .task-auto-run-progress-ring-track, .task-auto-run-progress-ring-value { fill: none; stroke-width: 8; }
 .task-auto-run-progress-ring-track { stroke: color-mix(in srgb, var(--line) 72%, transparent); }
@@ -3559,7 +3560,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .task-auto-run-panel { grid-template-columns: minmax(0, 1fr); column-gap: 0; }
   .task-auto-run-header, .task-auto-run-controls, .task-auto-run-meta { grid-column: 1; }
   .task-auto-run-help, .task-auto-run-alert { grid-column: 1; }
-  .task-auto-run-progress { grid-column: 1; grid-row: auto; justify-self: stretch; width: 100%; }
+  .task-auto-run-progress { position: static; top: auto; right: auto; width: 100%; transform: none; }
   .task-auto-run-progress-ring { display: none; }
   .task-auto-run-progress-bar-layout { display: grid; gap: 6px; width: 100%; }
   .settings-hub-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

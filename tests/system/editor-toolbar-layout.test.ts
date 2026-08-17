@@ -52,6 +52,8 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".editor-view.is-read-only #save-button");
     expect(application.text).toContain("function applyChapterEditorMode()");
     expect(application.text).toContain("function enterChapterEditMode()");
+    expect(application.text).toContain('persistentToast("正在保存中")');
+    expect(application.text).toContain('toast(`保存成功（正文 v${saved.versionNo}）`)');
     expect(application.text).toContain('$("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);');
     expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", enterChapterEditMode)');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
