@@ -37,7 +37,11 @@ describe("全局替换界面", () => {
     expect(application.text).toContain("function submitGlobalReplace(");
     expect(application.text).toContain("function syncGlobalReplaceScopeOptions(");
     expect(application.text).toContain("function renderGlobalReplaceVolumeOptions(");
+    expect(application.text).toContain("function openChapterSearchPanel(");
+    expect(application.text).toContain("if (isChapterSearchContext()) {");
     expect(application.text).toContain('/replace`');
+    expect(page.text).toContain('id="chapter-search-panel" class="chapter-search-panel hidden"');
+    expect(page.text).toContain('id="chapter-search-replace-all"');
     expect(styles.text).toContain(".replace-dialog-body");
     expect(styles.text).toContain(".replace-scope-option:has(input:checked)");
   });

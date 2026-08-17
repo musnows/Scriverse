@@ -28,6 +28,7 @@ import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContex
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
+import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
 import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
@@ -914,6 +915,7 @@ function replacePageRoute(route) {
   const hash = serializePageRoute(route);
   if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
   schedulePresenceHeartbeat();
+  syncTopSearchButton();
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
@@ -1125,6 +1127,149 @@ function currentPageRoute() {
   return { view: "welcome", workId };
 }
 
+function isChapterSearchContext() {
+  return Boolean(state.work && state.chapter && !$("#editor-view").classList.contains("hidden"));
+}
+
+function syncTopSearchButton() {
+  const button = $("#top-search-button");
+  const chapterContext = isChapterSearchContext();
+  button.classList.toggle("hidden", chapterContext);
+  button.disabled = !state.work || chapterContext || !canReadAggregateContent();
+  if (!chapterContext) closeChapterSearchPanel({ restoreFocus: false });
+}
+
+function chapterSearchMatches() {
+  return findTextMatches($("#chapter-content").value, $("#chapter-search-query").value);
+}
+
+function renderChapterSearchStatus() {
+  const query = $("#chapter-search-query").value;
+  const matches = chapterSearchMatches();
+  const status = $("#chapter-search-status");
+  const readOnly = !canEditProse() || chapterEditorReadOnly;
+  const replaceButtons = [$("#chapter-search-replace"), $("#chapter-search-replace-all")];
+  replaceButtons.forEach((button) => { button.disabled = readOnly || matches.length === 0; });
+  $("#chapter-search-previous").disabled = matches.length === 0;
+  $("#chapter-search-next").disabled = matches.length === 0;
+  if (!query) {
+    status.textContent = "输入关键词后开始搜索";
+    return;
+  }
+  if (!matches.length) {
+    status.textContent = "本章未找到匹配内容";
+    return;
+  }
+  const current = chapterSearchMatchIndex >= 0 ? chapterSearchMatchIndex + 1 : 0;
+  status.textContent = current ? `第 ${current} / ${matches.length} 处` : `找到 ${matches.length} 处`;
+}
+
+function syncChapterSearchControls() {
+  if (!$("#chapter-search-panel")) return;
+  const matches = chapterSearchMatches();
+  if (chapterSearchMatchIndex >= matches.length) chapterSearchMatchIndex = matches.length - 1;
+  renderChapterSearchStatus();
+}
+
+function selectChapterSearchMatch(index) {
+  const matches = chapterSearchMatches();
+  if (!matches.length) {
+    chapterSearchMatchIndex = -1;
+    renderChapterSearchStatus();
+    return;
+  }
+  chapterSearchMatchIndex = (index + matches.length) % matches.length;
+  const input = $("#chapter-content");
+  const start = matches[chapterSearchMatchIndex];
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(start, start + $("#chapter-search-query").value.length);
+  renderChapterSearchStatus();
+}
+
+function moveChapterSearchMatch(direction) {
+  const matches = chapterSearchMatches();
+  if (!matches.length) {
+    renderChapterSearchStatus();
+    return;
+  }
+  const nextIndex = chapterSearchMatchIndex < 0
+    ? direction > 0 ? 0 : matches.length - 1
+    : chapterSearchMatchIndex + direction;
+  selectChapterSearchMatch(nextIndex);
+}
+
+function openChapterSearchPanel() {
+  if (!isChapterSearchContext()) return false;
+  const panel = $("#chapter-search-panel");
+  panel.classList.remove("hidden");
+  panel.setAttribute("aria-hidden", "false");
+  syncChapterSearchControls();
+  queueMicrotask(() => {
+    const input = $("#chapter-search-query");
+    input.focus();
+    if (input.value) input.select();
+  });
+  return true;
+}
+
+function closeChapterSearchPanel({ restoreFocus = true } = {}) {
+  const panel = $("#chapter-search-panel");
+  if (!panel || panel.classList.contains("hidden")) return;
+  panel.classList.add("hidden");
+  panel.setAttribute("aria-hidden", "true");
+  chapterSearchMatchIndex = -1;
+  if (restoreFocus && isChapterSearchContext()) $("#chapter-content").focus({ preventScroll: true });
+}
+
+function resetChapterSearchPanel() {
+  closeChapterSearchPanel({ restoreFocus: false });
+  $("#chapter-search-query").value = "";
+  $("#chapter-replace-query").value = "";
+  chapterSearchMatchIndex = -1;
+  renderChapterSearchStatus();
+}
+
+function replaceCurrentChapterSearchMatch() {
+  if (!isChapterSearchContext() || !canEditProse() || chapterEditorReadOnly) {
+    toast("请先进入编辑模式", "error");
+    return;
+  }
+  const query = $("#chapter-search-query").value;
+  const matches = chapterSearchMatches();
+  if (!query || !matches.length) return renderChapterSearchStatus();
+  const index = chapterSearchMatchIndex < 0 ? 0 : chapterSearchMatchIndex;
+  const start = matches[index];
+  const input = $("#chapter-content");
+  const replacement = $("#chapter-replace-query").value;
+  input.value = `${input.value.slice(0, start)}${replacement}${input.value.slice(start + query.length)}`;
+  chapterSearchMatchIndex = Math.min(index, Math.max(0, findTextMatches(input.value, query).length - 1));
+  updateChapterStats();
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+  scheduleChapterAutoSave(120);
+  syncChapterSearchControls();
+  toast("已替换本章 1 处，等待自动保存");
+}
+
+function replaceAllChapterSearchMatches() {
+  if (!isChapterSearchContext() || !canEditProse() || chapterEditorReadOnly) {
+    toast("请先进入编辑模式", "error");
+    return;
+  }
+  const query = $("#chapter-search-query").value;
+  const input = $("#chapter-content");
+  const result = replaceTextMatches(input.value, query, $("#chapter-replace-query").value);
+  if (!result.matches) return renderChapterSearchStatus();
+  input.value = result.content;
+  chapterSearchMatchIndex = -1;
+  updateChapterStats();
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+  scheduleChapterAutoSave(120);
+  syncChapterSearchControls();
+  toast(`已替换本章 ${result.matches} 处，等待自动保存`);
+}
+
 function loadPanelLayout() {
   try {
     const stored = JSON.parse(localStorage.getItem(panelLayoutStorageKey) ?? "{}");
@@ -1234,6 +1379,7 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
 let chapterForeshadowReminderRequestId = 0;
 let chapterForeshadowReminders = [];
@@ -1336,6 +1482,7 @@ function applyChapterEditorMode() {
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
+  syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -6971,6 +7118,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
     if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
     return false;
   }
+  resetChapterSearchPanel();
   dismissDeleteToasts();
   if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
   cancelChapterAutoSave();
@@ -16319,6 +16467,20 @@ $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-search-close").addEventListener("click", () => closeChapterSearchPanel());
+$("#chapter-search-query").addEventListener("input", () => {
+  chapterSearchMatchIndex = -1;
+  renderChapterSearchStatus();
+});
+$("#chapter-search-query").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  moveChapterSearchMatch(event.shiftKey ? -1 : 1);
+});
+$("#chapter-search-previous").addEventListener("click", () => moveChapterSearchMatch(-1));
+$("#chapter-search-next").addEventListener("click", () => moveChapterSearchMatch(1));
+$("#chapter-search-replace").addEventListener("click", replaceCurrentChapterSearchMatch);
+$("#chapter-search-replace-all").addEventListener("click", replaceAllChapterSearchMatches);
 $("#chapter-foreshadow-reminder-previous").addEventListener("click", () => {
   showChapterForeshadowReminderAt(chapterForeshadowReminderIndex - 1);
 });
@@ -16786,6 +16948,10 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (!$("#chapter-search-panel").classList.contains("hidden")) {
+      closeChapterSearchPanel();
+      return;
+    }
     if (!$("#ai-history-action-menu").classList.contains("hidden")) return;
     if (!$("#ai-conversation-switcher-menu").classList.contains("hidden")) {
       setAiConversationSwitcherVisible(false);
@@ -16810,6 +16976,10 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   event.stopPropagation();
   if (event.repeat) return;
+  if (isChapterSearchContext()) {
+    openChapterSearchPanel();
+    return;
+  }
   openSearchDialog().catch((error) => toast(error.message, "error"));
 }, { capture: true });
 $("#ai-context-meter").addEventListener("click", () => {
