@@ -2181,6 +2181,12 @@ export class AiManager {
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly chapterAnalysisTimers = new Map<string, {
+    timer: ReturnType<typeof setTimeout>;
+    workId: string;
+    chapterId: string;
+    versionNo: number;
+  }>();
   private autoRunStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly relationshipIndexBuilds = new Map<string, Promise<number>>();
   private readonly relationshipSelectionCache = new Map<string, RelationshipLocalSourceSelection>();
@@ -2224,6 +2230,9 @@ export class AiManager {
     this.retrySleep = options.retrySleep ?? waitForAiRetry;
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
+    this.store.setChapterAnalysisInvalidatedHandler((workId, chapterId, versionNo) => {
+      this.scheduleChapterAnalysisTask(workId, chapterId, versionNo);
+    });
     this.autoRunStartupTimer = setTimeout(() => {
       this.autoRunStartupTimer = null;
       for (const workId of this.store.listAutoRunWorkIds()) this.scheduleAutoRun(workId);
@@ -2799,6 +2808,11 @@ export class AiManager {
     if (autoRunTimer) clearTimeout(autoRunTimer);
     this.autoRunTimers.delete(workId);
     this.autoRunStarting.delete(workId);
+    for (const entry of [...this.chapterAnalysisTimers.values()]) {
+      if (entry.workId !== workId) continue;
+      clearTimeout(entry.timer);
+      this.chapterAnalysisTimers.delete(this.chapterAnalysisTimerKey(entry.workId, entry.chapterId));
+    }
     const relationshipIndexTimer = this.relationshipIndexSyncTimers.get(workId);
     if (relationshipIndexTimer) clearTimeout(relationshipIndexTimer);
     this.relationshipIndexSyncTimers.delete(workId);
@@ -2816,12 +2830,15 @@ export class AiManager {
     for (const timer of this.autoRunTimers.values()) clearTimeout(timer);
     this.autoRunTimers.clear();
     this.autoRunStarting.clear();
+    for (const entry of this.chapterAnalysisTimers.values()) clearTimeout(entry.timer);
+    this.chapterAnalysisTimers.clear();
     this.relationshipIndexDisposed = true;
     for (const timer of this.relationshipIndexSyncTimers.values()) clearTimeout(timer);
     this.relationshipIndexSyncTimers.clear();
     if (this.relationshipIndexTimer) clearTimeout(this.relationshipIndexTimer);
     this.relationshipIndexTimer = null;
     this.store.setAnalysisTaskQueuedHandler(null);
+    this.store.setChapterAnalysisInvalidatedHandler(null);
     this.store.setRelationshipIndexQueuedHandler(null);
     logger.info("ai.manager.disposed");
   }
@@ -2832,6 +2849,49 @@ export class AiManager {
     const created = new Set<string>();
     this.autoRunStarting.set(workId, created);
     return created;
+  }
+
+  private chapterAnalysisTimerKey(workId: string, chapterId: string): string {
+    return `${workId}\u0000${chapterId}`;
+  }
+
+  private scheduleChapterAnalysisTask(workId: string, chapterId: string, versionNo: number): void {
+    const key = this.chapterAnalysisTimerKey(workId, chapterId);
+    const existing = this.chapterAnalysisTimers.get(key);
+    if (existing) clearTimeout(existing.timer);
+    let delayMinutes = 2;
+    try {
+      const settings = this.store.getWorkAiSettings(workId);
+      delayMinutes = Math.min(120, Math.max(1, Number(settings.autoRunStabilityDelayMinutes ?? 2) || 2));
+    } catch {
+      return;
+    }
+    const delayMs = delayMinutes * 60_000;
+    const timer = setTimeout(() => {
+      this.chapterAnalysisTimers.delete(key);
+      try {
+        const chapter = this.store.getChapter(chapterId);
+        if (String(chapter.workId) !== workId || Number(chapter.versionNo) !== versionNo || chapter.deletedAt) return;
+        this.store.createTask(workId, {
+          taskType: "chapter-analysis",
+          scope: { type: "chapter", chapterId }
+        });
+        logger.info("ai.chapter_analysis_task.created_after_stability", { workId, chapterId, versionNo, delayMs });
+      } catch (error) {
+        logger.warn("ai.chapter_analysis_task.create_after_stability_failed", { workId, chapterId, versionNo, delayMs, error: aiErrorForLog(error) });
+      }
+    }, delayMs);
+    this.chapterAnalysisTimers.set(key, { timer, workId, chapterId, versionNo });
+    logger.debug("ai.chapter_analysis_task.scheduled_after_stability", { workId, chapterId, versionNo, delayMs });
+  }
+
+  rescheduleChapterAnalysisTasks(workId: string): void {
+    for (const entry of [...this.chapterAnalysisTimers.values()]) {
+      if (entry.workId !== workId) continue;
+      clearTimeout(entry.timer);
+      this.chapterAnalysisTimers.delete(this.chapterAnalysisTimerKey(entry.workId, entry.chapterId));
+      this.scheduleChapterAnalysisTask(entry.workId, entry.chapterId, entry.versionNo);
+    }
   }
 
   private async drainAutoRun(workId: string): Promise<void> {

@@ -25,27 +25,35 @@ describe("作品、导入和章节版本 API", () => {
     expect(chapter).not.toHaveProperty("content");
     expect(JSON.stringify(imported.body)).not.toContain("林舟收到信号。");
 
-    const saved = await request(runtime.app)
-      .patch(`/api/chapters/${chapter.id}`)
-      .send({ content: "林舟收到来自深空的信号。" })
-      .expect(200);
-    expect(saved.body.data).toMatchObject({ versionNo: 2, analysisStatus: "expired" });
+    vi.useFakeTimers();
+    try {
+      const saved = await request(runtime.app)
+        .patch(`/api/chapters/${chapter.id}`)
+        .send({ content: "林舟收到来自深空的信号。" })
+        .expect(200);
+      expect(saved.body.data).toMatchObject({ versionNo: 2, analysisStatus: "expired" });
 
-    await request(runtime.app)
-      .patch(`/api/chapters/${chapter.id}`)
-      .send({ content: "林舟收到来自深空的求救信号。", source: "auto" })
-      .expect(200);
+      await request(runtime.app)
+        .patch(`/api/chapters/${chapter.id}`)
+        .send({ content: "林舟收到来自深空的求救信号。", source: "auto" })
+        .expect(200);
 
-    const versions = await request(runtime.app).get(`/api/chapters/${chapter.id}/versions`).expect(200);
-    expect(versions.body.data.map((item: { versionNo: number }) => item.versionNo)).toEqual([3, 2, 1]);
-    expect(versions.body.data[0].source).toBe("auto");
+      const versions = await request(runtime.app).get(`/api/chapters/${chapter.id}/versions`).expect(200);
+      expect(versions.body.data.map((item: { versionNo: number }) => item.versionNo)).toEqual([3, 2, 1]);
+      expect(versions.body.data[0].source).toBe("auto");
 
-    const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
-    expect(tasks.body.data.items).toHaveLength(1);
-    expect(tasks.body.data.items[0]).toMatchObject({ status: "pending" });
-    expect(tasks.body.data.items[0]).not.toHaveProperty("sourceVersions");
-    const task = await request(runtime.app).get(`/api/tasks/${tasks.body.data.items[0].id}`).expect(200);
-    expect(task.body.data).toMatchObject({ status: "pending", sourceVersions: { [chapter.id]: 3 } });
+      expect((await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200)).body.data.items).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      const tasks = await request(runtime.app).get(`/api/works/${workId}/tasks`).expect(200);
+      expect(tasks.body.data.items).toHaveLength(1);
+      expect(tasks.body.data.items[0]).toMatchObject({ status: "pending" });
+      expect(tasks.body.data.items[0]).not.toHaveProperty("sourceVersions");
+      const task = await request(runtime.app).get(`/api/tasks/${tasks.body.data.items[0].id}`).expect(200);
+      expect(task.body.data).toMatchObject({ status: "pending", sourceVersions: { [chapter.id]: 3 } });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const restored = await request(runtime.app).post(`/api/chapters/${chapter.id}/restore`).send({ versionNo: 1 }).expect(200);
     expect(restored.body.data).toMatchObject({ content: "林舟收到信号。", versionNo: 4 });

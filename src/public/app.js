@@ -78,7 +78,7 @@ import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normaliz
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
 import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260817-character-filter-state-v1";
-import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterRelationships, sortCharacterRelationships } from "/relationship-filters.js?v=20260818-character-relationship-group-v1";
 import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
@@ -9404,7 +9404,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
     moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh }),
     canReadModule("ai-settings")
       ? moduleApi("tasks", `/api/works/${state.work.id}/ai-settings`, { refresh })
-      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunStabilityDelayMinutes: 2, autoRunPaused: false })
   ]);
   if (!taskPage.items.length && page > 1) return renderTasks(page - 1, { refresh });
   taskListPage = taskPage.page;
@@ -9441,6 +9441,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
         <div class="task-auto-run-copy">
           <strong id="task-auto-run-title">自动执行待分析任务</strong>
           <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+          <small>正文停止编辑后，等待稳定窗口结束才会创建章节理解任务。</small>
           <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
         </div>
         <div class="task-auto-run-actions">
@@ -9452,11 +9453,13 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
         <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
         <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
         <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        <label>停止编辑后创建任务<input id="task-auto-run-stability-delay" type="number" min="1" max="120" value="${esc(String(settings.autoRunStabilityDelayMinutes ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-stability-help"></label>
         ${autoRunEditing
           ? `<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">${autoRunPauseLabel}</button>`
           : ""}
       </div>
       <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
+      <p id="task-auto-run-stability-help" class="task-auto-run-help">正文连续 ${esc(String(settings.autoRunStabilityDelayMinutes ?? 2))} 分钟没有编辑，才会创建章节理解任务；最低 1 分钟。</p>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
       ${autoRunPaused ? `<p class="task-auto-run-alert" role="status"><strong>自动执行已暂停</strong><span>${esc(settings.autoRunPauseReason || "需要人工确认后恢复")}</span>${settings.autoRunResumeAt ? `<small>预计 ${esc(formatDateTime(settings.autoRunResumeAt))} 自动恢复</small>` : ""}</p>` : ""}
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
@@ -9510,7 +9513,8 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
           autoRunEnabled: $("#task-auto-run-enabled").checked,
           autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
           autoRunDailyTaskLimit: Number($("#task-auto-run-daily-limit").value),
-          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value)
+          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value),
+          autoRunStabilityDelayMinutes: Number($("#task-auto-run-stability-delay").value)
         }
       });
       toast(updated.autoRunEnabled
@@ -12329,8 +12333,11 @@ function renderCharacterEditorRelationships() {
     const category = relationshipCategoryLabel(relationship.category);
     const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
     const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
+    const actions = !entityEditorReadOnly && canEditModule("relationships")
+      ? `<div class="character-relationship-actions"><button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button><button class="danger-button" type="button" data-character-relationship-delete="${esc(relationship.id)}">删除关系</button></div>`
+      : "";
     return `<article class="character-relationship-row">
-      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${!entityEditorReadOnly && canEditModule("relationships") ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${actions}</div>
       <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
     </article>`;
   }).join("");
@@ -12338,6 +12345,14 @@ function renderCharacterEditorRelationships() {
   host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
     const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
     if (relationship) void openRelationshipDialog(relationship, { characterId });
+  }));
+  host.querySelectorAll("[data-character-relationship-delete]").forEach((button) => button.addEventListener("click", () => {
+    const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipDelete);
+    if (!relationship) return;
+    button.disabled = true;
+    void deleteRelationshipRecord(relationship, characterId).finally(() => {
+      if (button.isConnected) button.disabled = false;
+    });
   }));
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
@@ -12357,7 +12372,7 @@ async function loadCharacterEditorRelationships(characterId, { refresh = false }
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
-    characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationships = sortCharacterRelationships(relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId), characterId);
     characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
@@ -12379,6 +12394,21 @@ async function refreshRelationshipSurfaces(characterId = null) {
     tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
+}
+
+async function deleteRelationshipRecord(item, characterId = null) {
+  const relationshipName = `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}`;
+  if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return false;
+  if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return false;
+  try {
+    await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await Promise.all([refreshRelationshipSurfaces(characterId), loadAiReferences()]);
+    deleteToast(`已删除人物关系“${relationshipName}”`);
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
 }
 
 const characterSectionTypeLabels = {
@@ -13774,7 +13804,6 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  const relationshipName = item ? `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}` : "";
   const management = item && canEditModule("relationships") ? `<section class="entity-dialog-management" aria-label="人物关系操作">
     <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
@@ -13792,16 +13821,7 @@ async function openRelationshipDialog(item, options = {}) {
       dialog.showModal();
     };
     dialog.close();
-    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return reopenDialog();
-    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return reopenDialog();
-    try {
-      await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
-      await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
-      deleteToast(`已删除人物关系“${relationshipName}”`);
-    } catch (error) {
-      reopenDialog();
-      toast(error.message, "error");
-    }
+    if (!await deleteRelationshipRecord(item, options.characterId ?? null)) return reopenDialog();
   });
 }
 

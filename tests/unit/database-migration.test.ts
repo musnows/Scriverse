@@ -282,6 +282,7 @@ describe("数据库版本化迁移", () => {
         "auto_run_batch_limit",
         "auto_run_daily_task_limit",
         "auto_run_failure_threshold",
+        "auto_run_stability_delay_minutes",
         "auto_run_paused",
         "auto_run_pause_reason",
         "auto_run_resume_at",
