@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -407,24 +407,30 @@
           <h1 id="reader-title">阅读预览</h1>
         </div>
         <details id="reader-settings" class="reader-settings">
-          <summary>显示设置</summary>
+          <summary>阅读设置</summary>
           <div class="reader-settings-panel">
-            <label>字号<select id="reader-font-size" aria-label="阅读字号">
-              <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
-            </select></label>
-            <label>行距<select id="reader-line-height" aria-label="阅读行距">
-              <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
-            </select></label>
-            <label>主题<select id="reader-theme" aria-label="阅读主题">
-              <option value="auto">跟随工作台</option><option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
-            </select></label>
+            <section class="reader-settings-group" aria-labelledby="reader-display-settings-title">
+              <span id="reader-display-settings-title" class="reader-settings-section-title">显示设置</span>
+              <label>字号<select id="reader-font-size" aria-label="阅读字号">
+                <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
+              </select></label>
+              <label>行距<select id="reader-line-height" aria-label="阅读行距">
+                <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
+              </select></label>
+              <label>主题<select id="reader-theme" aria-label="阅读主题">
+                <option value="auto">跟随工作台</option><option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
+              </select></label>
+            </section>
+            <section class="reader-settings-group reader-navigation-group" aria-labelledby="reader-navigation-title">
+              <span id="reader-navigation-title" class="reader-settings-section-title">阅读导航</span>
+              <div class="reader-jump-controls" aria-label="阅读导航与模式">
+                <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
+                <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
+                <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
+              </div>
+            </section>
           </div>
         </details>
-        <div class="reader-jump-controls" aria-label="阅读导航与模式">
-          <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
-          <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
-          <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
-        </div>
       </header>
       <main id="reader-viewport" class="reader-viewport" tabindex="0" aria-describedby="reader-keyboard-hint">
         <article id="reader-document" class="reader-document" aria-live="polite">

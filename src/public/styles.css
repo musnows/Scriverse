@@ -4132,6 +4132,9 @@ body { font-size: var(--ui-font-size); }
   background: var(--reader-surface);
   box-shadow: 0 18px 44px rgba(20, 18, 15, .2);
 }
+.reader-settings-group { display: grid; min-width: 0; gap: 10px; }
+.reader-settings-section-title { color: var(--reader-ink); font-size: 10px; font-weight: 600; }
+.reader-navigation-group { padding-top: 10px; border-top: 1px solid var(--reader-line); }
 .reader-settings-panel label,
 .reader-jump-controls label { display: grid; min-width: 0; gap: 4px; color: var(--reader-muted); font-size: 9px; }
 .reader-settings-panel select,
@@ -4154,6 +4157,14 @@ body { font-size: var(--ui-font-size); }
   width: min(920px, 100%);
   margin: 0 auto;
 }
+.reader-settings-panel .reader-jump-controls {
+  grid-column: auto;
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  margin: 0;
+  gap: 8px;
+}
+.reader-settings-panel .reader-jump-controls label:last-child { grid-column: auto; }
 .reader-viewport {
   position: relative;
   min-width: 0;
@@ -4260,8 +4271,6 @@ body { font-size: var(--ui-font-size); }
   .reader-settings > summary { min-height: 40px; }
   .reader-settings > summary { padding: 7px 10px; }
   .reader-settings-panel { position: static; width: min(250px, calc(100vw - 24px)); margin-top: 9px; }
-  .reader-jump-controls { grid-column: 1 / -1; grid-row: 3; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 7px; }
-  .reader-jump-controls label:last-child { grid-column: 1 / -1; }
   .reader-settings-panel select, .reader-jump-controls select { min-height: 40px; font-size: 10px; }
   .reader-document { width: 100%; padding: 34px 20px 58px; border: 0; box-shadow: none; }
   .reader-chapter-header { margin-bottom: 30px; }
