@@ -1334,9 +1334,9 @@ function applyPanelLayout(persist = false) {
     ? (panelLayout.leftCollapsed ? "打开作品模块" : "关闭作品模块")
     : (panelLayout.leftCollapsed ? "展开作品侧栏" : "收起作品侧栏"));
   $("#mobile-module-tab").setAttribute("aria-expanded", String(!panelLayout.leftCollapsed));
-  $("#ai-panel-toggle").textContent = panelLayout.aiCollapsed ? "‹" : "›";
+  $("#ai-panel-toggle").textContent = aiConversationWorkspaceOpen ? "×" : (panelLayout.aiCollapsed ? "‹" : "›");
   $("#ai-panel-toggle").setAttribute("aria-expanded", String(!panelLayout.aiCollapsed));
-  $("#ai-panel-toggle").setAttribute("aria-label", panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手");
+  $("#ai-panel-toggle").setAttribute("aria-label", aiConversationWorkspaceOpen ? "关闭创作助手全屏面板" : (panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手"));
   syncMobileAiPanelSafeTop();
   scheduleChapterLineNumbers();
   if (persist) {
@@ -2205,6 +2205,8 @@ function setAiConversationWorkspaceVisible(visible) {
   $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
   setAiConversationSwitcherVisible(false);
   renderAiChatTabs();
+  $("#ai-panel-toggle").textContent = aiConversationWorkspaceOpen ? "×" : (panelLayout.aiCollapsed ? "‹" : "›");
+  $("#ai-panel-toggle").setAttribute("aria-label", aiConversationWorkspaceOpen ? "关闭创作助手全屏面板" : (panelLayout.aiCollapsed ? "展开创作助手" : "收起创作助手"));
   if (aiConversationWorkspaceOpen) {
     window.requestAnimationFrame(() => $("#ai-prompt").focus({ preventScroll: true }));
   }
