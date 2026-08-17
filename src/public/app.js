@@ -4905,7 +4905,6 @@ async function persistChapter({ automatic = false } = {}) {
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
       setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
-      if (!automatic) toast(`正文已保存为 v${state.chapter.versionNo}`);
     } else {
       scheduleChapterAutoSave(250);
     }
@@ -7667,7 +7666,14 @@ function handleReadingWheel(event) {
 }
 
 async function saveChapter() {
-  return persistChapter({ automatic: false });
+  const dismissSavingToast = persistentToast("正在保存中");
+  try {
+    const saved = await persistChapter({ automatic: false });
+    if (saved) toast(`保存成功（正文 v${saved.versionNo}）`);
+    return saved;
+  } finally {
+    dismissSavingToast();
+  }
 }
 
 function tidyChapterBlankLines() {
