@@ -115,6 +115,27 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(409);
   });
 
+  it("供应商连接测试复用 402 普通重试策略", async () => {
+    const { providerId } = await configureAi();
+    let modelListAttempts = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        modelListAttempts += 1;
+        if (modelListAttempts <= 3) {
+          return new Response(JSON.stringify({ error: { message: "payment required" } }), { status: 402 });
+        }
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { max_tokens?: number };
+      expect(body.max_tokens).toBe(10);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
+    });
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({ ok: true, availableModels: ["mock-novel-model"] });
+    expect(modelListAttempts).toBe(4);
+  });
+
   it("供应商可切换 max_completion_tokens，连通性测试与生成请求使用相同字段", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
@@ -1493,12 +1514,12 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.content).toBe("工具失败信息已正确处理。");
   });
 
-  it("上游返回非限流 4xx 时不进行无效重试", async () => {
+  it("上游返回 402 时按普通策略默认重试 3 次", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     fetchMock.mockClear();
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { message: "invalid request" } }), {
-      status: 400,
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "invalid request" } }), {
+      status: 402,
       headers: { "Content-Type": "application/json" }
     }));
 
@@ -1509,7 +1530,46 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(502);
 
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("上游返回 403 时不重试", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "forbidden" } }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" }
+    }));
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "触发上游权限错误。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(502);
+
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([429, 502])("上游返回 %s 时按退避策略默认重试 10 次", async (status) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "temporarily unavailable" } }), {
+      status,
+      headers: { "Content-Type": "application/json" }
+    }));
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "触发上游退避重试。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(502);
+
+    expect(fetchMock).toHaveBeenCalledTimes(11);
   });
 
   it("工具配额限制不改动 prompt cache 前缀的 tools 定义与系统消息", async () => {
@@ -2454,7 +2514,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"主回答"}');
     expect(streamed.text).toContain("event: complete");
     expect(streamed.text).not.toContain("event: error");
-    expect(titleRequestCount).toBe(1);
+    expect(titleRequestCount).toBe(4);
   });
 
   it("侧栏问答失败时通过 SSE 返回受控错误信息", async () => {

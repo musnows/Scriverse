@@ -509,7 +509,10 @@ describe("分析任务自动运行", () => {
     }).expect(200);
     await waitFor(() => releaseGates.length >= 2);
     releaseGates.splice(0).forEach((release) => release());
-    await waitFor(() => Boolean(runtime.store.getWorkAiSettings(workId).autoRunPaused));
+    await waitFor(() => {
+      releaseGates.splice(0).forEach((release) => release());
+      return Boolean(runtime.store.getWorkAiSettings(workId).autoRunPaused);
+    });
     while (runtime.store.countRunningTasks(workId) > 0) {
       releaseGates.splice(0).forEach((release) => release());
       await new Promise((resolve) => setTimeout(resolve, 20));

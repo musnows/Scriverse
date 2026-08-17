@@ -36,6 +36,8 @@ services:
       APP_ALLOW_REGISTRATION: "${APP_ALLOW_REGISTRATION:-false}"
       APP_SETUP_TOKEN: "${APP_SETUP_TOKEN:-}"
       APP_TRUST_PROXY: "${APP_TRUST_PROXY:-false}"
+      SCRIVERSE_AI_RETRY_COUNT: "${SCRIVERSE_AI_RETRY_COUNT:-3}"
+      SCRIVERSE_AI_BACKOFF_RETRY_COUNT: "${SCRIVERSE_AI_BACKOFF_RETRY_COUNT:-10}"
       SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS: "${SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS:-30}"
       SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION: "${SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION:-5}"
       SCRIVERSE_STARTUP_RETRY_LIMIT: "${SCRIVERSE_STARTUP_RETRY_LIMIT:-2}"
@@ -54,6 +56,8 @@ SCRIVERSE_TAG=latest
 APP_ALLOW_REGISTRATION=true
 APP_SETUP_TOKEN=请替换为至少32个字符的随机初始化令牌
 APP_TRUST_PROXY=false
+SCRIVERSE_AI_RETRY_COUNT=3
+SCRIVERSE_AI_BACKOFF_RETRY_COUNT=10
 SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS=30
 SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION=5
 SCRIVERSE_STARTUP_RETRY_LIMIT=2
@@ -87,6 +91,8 @@ docker compose up -d --force-recreate
 `SCRIVERSE_PRE_MIGRATION_BACKUP_RETENTION` 控制启动迁移前的完整数据库备份保留数量，默认保留 5 个版本，最少保留 2 个版本。每次启动时会清理超出数量的最旧完整备份，再为本次迁移保留一个备份位置，避免迁移失败后的重启循环持续占满磁盘。
 
 `SCRIVERSE_STARTUP_RETRY_LIMIT` 控制连续启动失败的次数，默认允许 2 次。达到上限后服务会停止重复执行初始化和迁移流程，并保留 `<DATA_DIR>/.startup-retry.json` 供排查；修复根因后删除该文件再启动服务。
+
+`SCRIVERSE_AI_RETRY_COUNT` 控制除 `403`、`429`、`502` 外 AI 上游 HTTP 错误的重试次数，默认 3 次。`SCRIVERSE_AI_BACKOFF_RETRY_COUNT` 控制 `429` 和 `502` 的指数退避重试次数，默认 10 次。两者的有效整数均按 1–20 次钳制，非法值回退到默认值；`403` 始终不重试。退避等待从 500 毫秒开始并在 5 秒封顶，秒数格式的 `Retry-After` 也按 5 秒封顶。修改后重新创建容器生效。
 
 `SCRIVERSE_AI_STREAM_IDLE_TIMEOUT_SECONDS` 控制交互式 AI 流等待首个或下一个有效事件的空闲时间，默认 30 秒，有效整数按 10–120 秒钳制，非法值回退为 30 秒。每收到一个有效事件都会重新计时，因此它不是总时长上限，也不改变分析任务等其他 AI 请求的超时策略；修改后重新创建容器生效。
 

@@ -1,11 +1,16 @@
-import { createRuntime, type Runtime } from "../src/app.js";
+import { createRuntime, type Runtime, type RuntimeOptions } from "../src/app.js";
 
-export function createTestRuntime(fetchImpl?: typeof fetch): Runtime {
+export function createTestRuntime(
+  fetchImpl?: typeof fetch,
+  options: Pick<RuntimeOptions, "aiRetryPolicy" | "aiRetrySleep"> = {}
+): Runtime {
   const runtime = createRuntime({
     databasePath: ":memory:",
     masterSecret: "test-master-secret-with-at-least-32-characters",
     disableUserAuth: true,
     ...(fetchImpl ? { fetchImpl } : {}),
+    aiRetrySleep: async () => undefined,
+    ...options,
     serveUi: false
   });
   // 每个测试运行时复用同一个本地监听端口，避免 Supertest 为每次请求反复创建临时端口。
