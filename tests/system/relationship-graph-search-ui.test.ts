@@ -25,7 +25,7 @@ describe("人物关系图搜索界面", () => {
 
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page.text).toContain('feature=galaxy-compact-controls-v2');
-    expect(page.text).toContain('feature=galaxy-motion-mode-v1');
+    expect(page.text).toContain('feature=galaxy-motion-mode-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v2');
     expect(application.text).toContain('class="relationship-table-wrapper"');
@@ -52,6 +52,7 @@ describe("人物关系图搜索界面", () => {
     expect(styles.text).toContain('.galaxy-close { position: fixed; z-index: 8; top: 22px; right: 25px; width: 36px; height: 36px; min-height: 0;');
     expect(styles.text).toContain('.galaxy-shell.is-motion-off');
     expect(styles.text).toContain('.galaxy-motion-field');
+    expect(styles.text).toContain('.galaxy-motion-field select option { background: #101722; color: #dcecff; }');
     expect(styles.text).toContain('.relationship-node-search:not(.is-galaxy)');
     expect(styles.text).toContain('.relationship-map-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh;');
     expect(styles.text).not.toContain('width: min(1400px, 96vw);');
