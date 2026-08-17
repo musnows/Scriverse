@@ -6221,8 +6221,8 @@ export class AiManager {
       // 验证结束日期有效性
       this.validateDate(endYear, endMonth, endDay);
 
-      const startDate = new Date(Date.UTC(startYear, startMonth - 1, startDay));
-      const endDate = new Date(Date.UTC(endYear, endMonth - 1, endDay));
+      const startDate = this.createUtcDate(startYear, startMonth, startDay);
+      const endDate = this.createUtcDate(endYear, endMonth, endDay);
 
       const diffMs = endDate.getTime() - startDate.getTime();
       const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
@@ -6327,8 +6327,8 @@ export class AiManager {
 
   /** 获取指定年月有多少天。 */
   private getDaysInMonth(year: number, month: number): number {
-    // Date.UTC(year, month, 0) 会返回上个月最后一天
-    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+    if (month === 2) return this.isLeapYear(year) ? 29 : 28;
+    return [4, 6, 9, 11].includes(month) ? 30 : 31;
   }
 
   /** 创建指定公历日期的 UTC Date，避免 Date.UTC 将 0 到 99 年解释为 1900 到 1999 年。 */

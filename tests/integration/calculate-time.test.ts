@@ -123,6 +123,50 @@ describe("AI 时间计算工具", () => {
     expect(data.totalDays).toBe(60);
   });
 
+  it("diff 模式：正确处理公元 0 年和 0 到 99 年的边界", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "测试章节。");
+    const workId = String(seeded.work.id);
+
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        candidateWorkId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number,
+        roleplayCharacterId?: string | null,
+        allowedToolIds?: ReadonlySet<string>
+      ) => Promise<Record<string, unknown>>;
+    };
+
+    const execution1 = await internalAi.executeAgentTool(workId, buildToolCall("calculate_time", {
+      operation: "diff",
+      startYear: 1,
+      startMonth: 1,
+      startDay: 1,
+      endYear: 100,
+      endMonth: 1,
+      endDay: 1
+    }));
+    const result1 = execution1.result as Record<string, unknown>;
+    const data1 = result1.data as Record<string, unknown>;
+    expect(execution1.status).toBe("completed");
+    expect(data1.totalDays).toBe(36159);
+
+    const execution2 = await internalAi.executeAgentTool(workId, buildToolCall("calculate_time", {
+      operation: "diff",
+      startYear: 0,
+      startMonth: 2,
+      startDay: 29,
+      endYear: 0,
+      endMonth: 3,
+      endDay: 1
+    }));
+    const result2 = execution2.result as Record<string, unknown>;
+    const data2 = result2.data as Record<string, unknown>;
+    expect(execution2.status).toBe("completed");
+    expect(data2.totalDays).toBe(1);
+  });
+
   it("diff 模式：同一天差值为零", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "测试章节。");
