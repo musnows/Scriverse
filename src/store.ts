@@ -83,10 +83,20 @@ export const WORK_AGENT_TOOL_IDS = [
   "search_story_entities",
   "read_character_sections",
   "search_drafts",
-  "image"
+  "image",
+  "calculate_time"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
 const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+const LEGACY_DEFAULT_WORK_AGENT_TOOLS = [
+  "story_index",
+  "read_chapters",
+  "grep",
+  "search_story_entities",
+  "read_character_sections",
+  "search_drafts",
+  "image"
+] as const satisfies readonly WorkAgentToolId[];
 
 export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
   const source = Array.isArray(value)
@@ -100,6 +110,7 @@ export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
     const toolId = item === "query_story_knowledge" ? "search_story_entities" : item;
     if (WORK_AGENT_TOOL_IDS.includes(toolId as WorkAgentToolId)) enabled.add(toolId as WorkAgentToolId);
   }
+  if (LEGACY_DEFAULT_WORK_AGENT_TOOLS.every((toolId) => enabled.has(toolId))) enabled.add("calculate_time");
   return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
 }
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
