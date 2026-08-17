@@ -73,7 +73,7 @@ import { splitRelationshipKeywordInput, splitRelationshipKeywords, uniqueRelatio
 import { tokenizeVisibleSpaces } from "/whitespace-visualization.js?v=20260718-visible-whitespace";
 import { buildRaceForest, eligibleRaceParents, orderRaceFilterOptions, racePathLabel } from "/race-hierarchy.js?v=20260729-race-tree-all-v1";
 import { ANALYSIS_TYPES, analysisTypeDescription } from "/analysis-types.js?v=20260721-analysis-descriptions";
-import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260731-drafts-to-ideas-v1";
+import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canWritePermissionModule, canWriteUiModule, emptyModulePermissions, firstReadableUiModule, normalizeModulePermissions, permissionSummary } from "/work-permissions.js?v=20260818-annotation-permissions-v1";
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
@@ -374,6 +374,13 @@ function canEditWork(work = state.work) {
 
 function canEditProse(work = state.work) {
   return canWriteUiModule(work, "editor");
+}
+
+function canManageChapterAnnotation(annotation, work = state.work) {
+  if (!work) return false;
+  if (annotation.kind !== "todo") return canEditProse(work);
+  if (["admin", "owner"].includes(String(work.accessRole))) return true;
+  return annotation.createdByUserId === state.user?.userId && canWritePermissionModule(work, "todos");
 }
 
 function canReplaceProse(work = state.work) {
@@ -1501,7 +1508,7 @@ function applyChapterEditorMode() {
   $("#chapter-content").setAttribute("aria-readonly", String(viewOnly));
   $("#chapter-edit-button").classList.toggle("hidden", permissionBlocked || !chapterEditorReadOnly || !state.chapter);
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
-  $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
+  $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter || !canReadModule("comments"));
   $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
   syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
@@ -3589,7 +3596,8 @@ function addSelectedLinesAsCitation() {
 }
 
 async function createSelectedLineAnnotation(kind) {
-  if (!state.chapter || !chapterLineSelection || !canEditProse()) return;
+  const permissionModule = kind === "todo" ? "todos" : "comments";
+  if (!state.chapter || !chapterLineSelection || !canWritePermissionModule(state.work, permissionModule)) return;
   const selection = selectedChapterLinePayload(chapterLineSelection.start, chapterLineSelection.end);
   closeLineCitationMenu();
   const note = await inputToast(kind === "todo" ? "描述需要后续处理的事项" : `评论第 ${selection.safeStart + 1} 行正文`, {
@@ -3633,7 +3641,7 @@ function chapterAnnotationCard(annotation, { showSource = false } = {}) {
     <blockquote>${esc(annotation.quote || "空白行")}</blockquote>
     <p data-annotation-content>${esc(annotation.note)}</p>
     <small>${esc(annotation.actor)} · ${esc(formatDateTime(annotation.updatedAt))} · v${Number(annotation.versionNo)}</small>
-    <footer><button type="button" data-annotation-locate>定位原文</button>${canEditProse() ? `<button type="button" data-annotation-edit>${annotation.kind === "todo" ? "编辑待办" : "编辑评论"}</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : (annotation.kind === "todo" ? "完成待办" : "解决评论")}</button><button class="danger-button" type="button" data-annotation-delete>${annotation.kind === "todo" ? "删除待办" : "删除评论"}</button>` : ""}</footer>
+    <footer><button type="button" data-annotation-locate>定位原文</button>${canManageChapterAnnotation(annotation) ? `<button type="button" data-annotation-edit>${annotation.kind === "todo" ? "编辑待办" : "编辑评论"}</button><button type="button" data-annotation-status>${annotation.status === "resolved" ? "重新打开" : (annotation.kind === "todo" ? "完成待办" : "解决评论")}</button><button class="danger-button" type="button" data-annotation-delete>${annotation.kind === "todo" ? "删除待办" : "删除评论"}</button>` : ""}</footer>
   </article>`;
 }
 
@@ -3713,7 +3721,7 @@ async function loadChapterAnnotations() {
 
 async function openChapterAnnotationsDialog() {
   if (!state.chapter) return;
-  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文评论`;
+  $("#chapter-annotations-meta").textContent = `《${state.chapter.title}》的正文评论与待办`;
   $("#chapter-annotations-list").innerHTML = '<p class="entity-history-empty">正在加载评论…</p>';
   if (!$("#chapter-annotations-dialog").open) $("#chapter-annotations-dialog").showModal();
   try {
@@ -3735,8 +3743,8 @@ function showLineCitationMenu(event, lineIndex) {
     selectChapterLines(lineIndex, lineIndex);
   }
   const menu = $("#line-citation-menu");
-  $("#add-line-annotation").classList.toggle("hidden", !canEditProse());
-  $("#add-line-todo").classList.toggle("hidden", !canEditProse());
+  $("#add-line-annotation").classList.toggle("hidden", !canWritePermissionModule(state.work, "comments"));
+  $("#add-line-todo").classList.toggle("hidden", !canWritePermissionModule(state.work, "todos"));
   const { start, end } = chapterLineSelection;
   $("#line-citation-label").textContent = start === end ? `第 ${start + 1} 行` : `第 ${start + 1}-${end + 1} 行`;
   menu.classList.remove("hidden");
@@ -5873,7 +5881,7 @@ function renderMemberPermissionGrid(value) {
     <select data-member-permission="${esc(item.id)}" aria-label="${esc(item.label)}权限">
       <option value="none" ${permissions[item.id] === "none" ? "selected" : ""}>无权限</option>
       <option value="read" ${permissions[item.id] === "read" ? "selected" : ""}>只读</option>
-      <option value="write" ${permissions[item.id] === "write" ? "selected" : ""}>可编辑</option>
+      <option value="write" ${permissions[item.id] === "write" ? "selected" : ""}>${["comments", "todos"].includes(item.id) ? "可添加" : "可编辑"}</option>
     </select>
   </label>`).join("");
 }
@@ -7725,7 +7733,7 @@ const moduleMeta = {
   timeline: ["剧情脉络", "大事件时间轴", "候选事件经作者确认后，才进入正式时间线。", "新建事件"],
   outlines: ["创作规划", "大纲/伏笔", "为每章维护目标、冲突与转折，并持续提醒尚未回收的伏笔。", "新建伏笔"],
   relationships: ["跨章证据", "人物关系", "记录关系方向、阶段、置信度与原文依据。", "新建关系"],
-  comments: ["正文协作", "正文评论", "集中查看并处理当前作品所有章节的评论与待办。", ""],
+  comments: ["正文协作", "正文评论与待办", "集中查看并处理当前作品所有章节的评论与待办。", ""],
   reviews: ["作者决策", "审核队列", "集中处理冲突、候选设定、低置信度关系和时间问题。", "新增审核项"],
   tasks: ["AI 深度分析", "AI 分析中心", "对全书或指定章节运行人物关系、世界观、设定、事件与一致性分析。", "开始 AI 分析"],
   "ai-settings": ["书籍提示词", "本书 AI 设置", "本书系统提示词会追加在内置提示词和平台全局提示词之后；任务默认模型只作用于当前作品。", "保存设置"]
@@ -9295,8 +9303,8 @@ async function renderWorkChapterComments(page = moduleListPages.comments) {
   moduleListPages.comments = pageResult.page;
   mountModuleCount(total);
   $("#module-content").innerHTML = result.items.length
-    ? `<div class="chapter-comment-module-list">${result.items.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div>${renderModulePagination(pageResult, "comments", "正文评论列表")}`
-    : emptyModule("还没有正文评论", "在任一正文行上点击右键，即可添加评论或待办。");
+    ? `<div class="chapter-comment-module-list">${result.items.map((annotation) => chapterAnnotationCard(annotation, { showSource: true })).join("")}</div>${renderModulePagination(pageResult, "comments", "正文评论与待办列表")}`
+    : emptyModule("还没有正文评论或待办", "在任一正文行上点击右键，即可添加评论或待办。");
   bindModulePagination("comments", renderWorkChapterComments);
   bindChapterAnnotationCards($("#module-content"), result.items, {
     refresh: () => renderWorkChapterComments(pageResult.page),

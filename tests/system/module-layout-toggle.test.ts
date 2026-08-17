@@ -27,6 +27,7 @@ describe("知识模块布局切换", () => {
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('&feature=ai-message-actions-v1')
     expect(page.text).toContain('&feature=assistant-responsive-navigation-v3')
+    expect(page.text).toContain('&feature=annotation-permissions-v1')
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');

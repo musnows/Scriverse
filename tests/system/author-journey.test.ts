@@ -639,7 +639,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('data-permission-preset="read"');
     expect(application.text).toContain('data-member-permission=');
     expect(application.text).toContain('body: existing ? { permissions } : { userId, permissions }');
-    expect(application.text).toContain('/work-permissions.js?v=20260731-drafts-to-ideas-v1');
+    expect(application.text).toContain('/work-permissions.js?v=20260818-annotation-permissions-v1');
     expect(workPermissions.text).toContain('label: "AI 对话"');
     expect(workPermissions.text).toContain('label: "AI 分析"');
     expect(workPermissions.text).toContain('id: "ai-chat"');
