@@ -1346,7 +1346,12 @@ function applyPanelLayout(persist = false) {
 
 function ensureAiPanelExpanded() {
   if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) return;
-  setAiConversationWorkspaceVisible(true);
+  if (isMobileViewport()) {
+    setAiConversationWorkspaceVisible(true);
+    return;
+  }
+  panelLayout.aiCollapsed = false;
+  applyPanelLayout(true);
 }
 
 function setupPanelResize(handle, side) {
@@ -2187,10 +2192,17 @@ function setAiConversationSwitcherVisible(visible) {
 }
 
 function setAiConversationWorkspaceVisible(visible) {
-  aiConversationWorkspaceOpen = Boolean(visible);
+  const mobileWorkspace = isMobileViewport();
+  aiConversationWorkspaceOpen = Boolean(visible && mobileWorkspace);
   if (aiConversationWorkspaceOpen) {
     panelLayout.aiCollapsed = false;
     $("#app").classList.remove("ai-panel-collapsed");
+  } else if (visible && !mobileWorkspace) {
+    panelLayout.aiCollapsed = false;
+    applyPanelLayout(true);
+  } else if (!visible && mobileWorkspace) {
+    panelLayout.aiCollapsed = true;
+    applyPanelLayout(true);
   }
   $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
   $(".ai-panel").classList.toggle("is-conversation-workspace", aiConversationWorkspaceOpen);
@@ -16687,6 +16699,7 @@ if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLin
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncMobileAiPanelSafeTop).observe($("#chapter-foreshadow-reminder"));
 window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
+  if (!isMobileViewport() && aiConversationWorkspaceOpen) setAiConversationWorkspaceVisible(false);
   applyPanelLayout();
   scheduleChapterLineNumbers();
 });
@@ -16698,8 +16711,10 @@ $("#ai-assistant-entry").addEventListener("click", () => {
   if (isMobileViewport()) {
     panelLayout.leftCollapsed = true;
     applyPanelLayout(true);
+    setAiConversationWorkspaceVisible(true);
+    return;
   }
-  setAiConversationWorkspaceVisible(true);
+  ensureAiPanelExpanded();
 });
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
