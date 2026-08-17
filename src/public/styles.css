@@ -976,8 +976,9 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .replace-dialog > form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-height: 0; }
 .replace-dialog-body { display: grid; min-height: 0; gap: 16px; padding: 20px 24px 6px; overflow-y: auto; }
 .replace-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
-.replace-field input, .replace-field textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.replace-field input, .replace-field textarea, .replace-field select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 13px; line-height: 1.6; }
 .replace-field textarea { min-height: 96px; resize: vertical; }
+.replace-field select:disabled { cursor: not-allowed; opacity: .55; }
 .replace-scope-fieldset { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .replace-scope-fieldset legend { padding: 0 6px; color: var(--ink); font-size: 12px; font-weight: 650; }
 .replace-scope-fieldset legend, .replace-scope-fieldset > p { grid-column: 1 / -1; }
@@ -991,6 +992,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .replace-scope-option input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .replace-permission-note { margin: 0; color: var(--accent-dark); font-size: 10px; line-height: 1.5; }
 .replace-permission-note:empty { display: none; }
+.replace-range-note { margin: -8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .replace-dialog .primary-button:disabled { cursor: not-allowed; opacity: .42; }
 .search-results { display: grid; gap: 8px; max-height: min(52vh, 480px); overflow: auto; }
 .search-results-summary { margin: 0; padding: 2px 2px 5px; color: var(--muted); font-size: 10px; }
@@ -1360,12 +1362,26 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 
 .hidden { display: none !important; }
 .editor-view { container-name: editor-workspace; container-type: inline-size; display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; }
-.editor-toolbar { display: grid; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
+.editor-toolbar { position: relative; display: grid; grid-template-areas: "path path" "title actions"; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-end; column-gap: 20px; row-gap: 6px; padding: 25px 7% 18px; border-bottom: 1px solid var(--line); }
 #chapter-path { grid-area: path; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-title { grid-area: title; display: block; width: 100%; min-width: 0; border: 0; border-radius: 0; background: transparent; font-size: 27px; padding: 0; }
 .chapter-title:focus { box-shadow: none; border-bottom: 1px solid var(--accent); }
 .editor-actions { grid-area: actions; display: flex; align-items: center; gap: 10px; }
 .chapter-stats { color: var(--muted); font-size: 11px; }
+.chapter-search-panel { position: absolute; z-index: 8; top: calc(100% + 8px); right: 7%; display: grid; width: min(520px, calc(100% - 14%)); gap: 12px; padding: 14px; border: 1px solid var(--line-strong); outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 7px; background: var(--panel); box-shadow: 0 16px 36px rgba(36, 30, 24, .22); }
+.chapter-search-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.chapter-search-panel-header .eyebrow { margin-bottom: 4px; }
+.chapter-search-panel-header h2 { margin: 0; color: var(--ink); font-size: 15px; font-weight: 650; }
+.chapter-search-panel-header p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.chapter-search-panel-header .dialog-close { flex: 0 0 auto; }
+.chapter-search-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.chapter-search-fields label { display: grid; gap: 5px; min-width: 0; color: var(--muted); font-size: 10px; }
+.chapter-search-fields input { width: 100%; min-width: 0; min-height: 34px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 12px; }
+.chapter-search-fields input:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 16%, transparent); }
+.chapter-search-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.chapter-search-actions > span { flex: 1 1 120px; min-width: 0; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.chapter-search-actions button { min-height: 32px; padding: 6px 9px; font-size: 10px; }
+.chapter-search-actions button:disabled { cursor: not-allowed; opacity: .45; }
 .chapter-foreshadow-reminder { --reminder-color: #80713d; display: grid; grid-template-areas: "summary actions" "details details"; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px 18px; padding: 10px 7%; border-bottom: 1px solid color-mix(in srgb, var(--reminder-color) 32%, var(--line)); background: color-mix(in srgb, var(--reminder-color) 7%, var(--surface)); }
 .chapter-foreshadow-reminder[data-role="payoff"] { --reminder-color: #49745c; }
 .chapter-foreshadow-reminder-summary { grid-area: summary; display: flex; min-width: 0; align-items: center; gap: 10px; }
@@ -3774,6 +3790,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .welcome-grid { grid-template-columns: 1fr; margin-top: 34px; }
 
   .editor-toolbar { padding: 18px var(--mobile-gutter) 14px; }
+  .chapter-search-panel { top: calc(100% + 8px); right: var(--mobile-gutter); left: var(--mobile-gutter); width: auto; max-height: calc(100dvh - 120px); overflow-y: auto; }
+  .chapter-search-fields { grid-template-columns: minmax(0, 1fr); }
   .chapter-foreshadow-reminder { padding: 10px var(--mobile-gutter); }
   .chapter-foreshadow-reminder-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
   .chapter-foreshadow-reminder-counter { grid-column: 1 / -1; justify-self: start; }
