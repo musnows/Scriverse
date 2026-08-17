@@ -25,7 +25,7 @@ describe("知识模块布局切换", () => {
 
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
-    expect(page.text).toContain('<script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=calculate-time-tool-v1"></script>')
+    expect(page.text).toContain('<script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=calculate-time-tool-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1"></script>')
     expect(page.text).toContain('id="setting-editor-readonly-badge"');
     expect(page.text).toContain('id="character-editor-readonly-badge"');
     expect(page.text).toContain('id="knowledge-editor-readonly-badge"');
@@ -102,7 +102,7 @@ expect(application.text).toContain('/display-labels.js?v=20260816-character-gend
     expect(application.text).toContain("characterPage.hasMore");
     expect(application.text).toContain("pageCharacters.length && (characterPage.page > 1 || characterPage.hasMore)");
     expect(application.text).toContain("if (!characterPage.items.length && page > 1) return renderCharacters(page - 1)");
-    expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;');
+    expect(application.text).toContain('const hasCharacterFilters = characterFilters.raceIds.length > 0\n    || characterFilters.organizationIds.length > 0\n    || characterFilters.genderValues.length > 0\n    || characterFilters.deathState !== "all";');
     expect(application.text).toContain('moduleApiAllPages("characters", `/api/works/${state.work.id}/characters`)');
     expect(application.text).toContain('filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)');
     expect(application.text).toContain('filterOptionList(organizations, selectedOrganizationIds, "id")');
