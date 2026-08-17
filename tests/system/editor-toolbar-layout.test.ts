@@ -35,6 +35,9 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain("function chapterAnnotationCard(");
     expect(application.text).toContain("function bindChapterAnnotationCards(");
     expect(application.text).toContain("function renderChapterAnnotations(");
+    expect(application.text).toContain("/annotation-counts");
+    expect(application.text).toContain("lineAnnotationCount");
+    expect(application.text).toContain("?line=${encodeURIComponent(line)}");
     expect(application.text).toContain("async function renderWorkChapterComments(");
     expect(application.text).toContain('/chapter-annotations`');
     expect(application.text).toContain('renderModulePagination(pageResult, "comments", "正文评论与待办列表")');

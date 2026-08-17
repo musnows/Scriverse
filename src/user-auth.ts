@@ -974,6 +974,7 @@ function workModuleRequirements(request: Request, write: boolean, annotationAcce
     return { anyWrite: globalReplaceWriteModules(request) };
   }
   if (/^\/api\/chapters\/[^/]+\/outline$/u.test(pathname)) return direct("outlines");
+  if (/^\/api\/chapters\/[^/]+\/annotation-counts$/u.test(pathname)) return { anyRead: ["comments", "todos"] };
   if (/^\/api\/chapters\/[^/]+\/annotations$/u.test(pathname)) {
     return write ? direct(chapterAnnotationPermissionModule(requestBodyRecord(request).kind)) : { anyRead: ["comments", "todos"] };
   }

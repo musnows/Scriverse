@@ -126,6 +126,7 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('addEventListener("pointermove"');
     expect(styles.text).toContain(".chapter-line-number.is-line-selected");
     expect(styles.text).toContain(".chapter-line-number.is-line-selected::after");
+    expect(styles.text).toContain(".app-shell:not(.shelf-mode):not(.ai-workspace-mode) { grid-template-columns: minmax(0, 1fr); }");
     expect(styles.text).toContain(".chapter-space-marker::after");
     expect(styles.text).toContain(".chapter-space-marker.tab::after");
     expect(styles.text).toContain("width: 100vw; height: 100%");

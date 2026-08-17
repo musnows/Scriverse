@@ -1435,6 +1435,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(visibleAnnotations.body.data).toEqual([
       expect.objectContaining({ id: ownerNote.body.data.id, kind: "note" })
     ]);
+    const visibleCounts = await collaborator.agent.get(`/api/chapters/${chapterId}/annotation-counts`).expect(200);
+    expect(visibleCounts.body.data).toEqual([{ line: 1, count: 1 }]);
     const visibleWorkAnnotations = await collaborator.agent.get(`/api/works/${workId}/chapter-annotations?page=1&limit=30`).expect(200);
     expect(visibleWorkAnnotations.body.data.items).toEqual([
       expect.objectContaining({ id: ownerNote.body.data.id, kind: "note" })

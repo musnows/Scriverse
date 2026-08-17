@@ -1798,9 +1798,16 @@ export function createRuntime(options: RuntimeOptions): Runtime {
     const pagination = parsePagination(request.query);
     data(response, pagination ? store.listChapterInsightsPage(request.params.chapterId, pagination) : store.listChapterInsights(request.params.chapterId));
   });
-  app.get("/api/chapters/:chapterId/annotations", (request, response) => {
+  app.get("/api/chapters/:chapterId/annotation-counts", (request, response) => {
     const permissions = requestPermissions(request);
-    data(response, store.listChapterAnnotations(request.params.chapterId, readableChapterAnnotationKinds(permissions)));
+    data(response, store.listChapterAnnotationCounts(request.params.chapterId, readableChapterAnnotationKinds(permissions)));
+  });
+  app.get("/api/chapters/:chapterId/annotations", (request, response) => {
+    const line = request.query.line === undefined
+      ? undefined
+      : parse(z.coerce.number().int().positive().max(100_000), request.query.line);
+    const permissions = requestPermissions(request);
+    data(response, store.listChapterAnnotations(request.params.chapterId, readableChapterAnnotationKinds(permissions), line));
   });
   app.get("/api/works/:workId/chapter-annotations", (request, response) => {
     const pagination = parsePagination(request.query);
