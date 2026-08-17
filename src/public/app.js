@@ -2193,21 +2193,13 @@ function setAiConversationSwitcherVisible(visible) {
 
 function setAiConversationWorkspaceVisible(visible) {
   const mobileWorkspace = isMobileViewport();
-  aiConversationWorkspaceOpen = Boolean(visible && mobileWorkspace);
-  if (aiConversationWorkspaceOpen) {
-    panelLayout.aiCollapsed = false;
-    $("#app").classList.remove("ai-panel-collapsed");
-  } else if (visible && !mobileWorkspace) {
-    panelLayout.aiCollapsed = false;
-    applyPanelLayout(true);
-  } else if (!visible && mobileWorkspace) {
-    panelLayout.aiCollapsed = true;
-    applyPanelLayout(true);
-  }
+  aiConversationWorkspaceOpen = Boolean(visible);
+  panelLayout.aiCollapsed = aiConversationWorkspaceOpen ? false : mobileWorkspace;
   $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
   $(".ai-panel").classList.toggle("is-conversation-workspace", aiConversationWorkspaceOpen);
   $("#ai-assistant-entry").classList.toggle("active", aiConversationWorkspaceOpen);
   $("#ai-assistant-entry").setAttribute("aria-expanded", String(aiConversationWorkspaceOpen));
+  applyPanelLayout(true);
   $("#ai-chat-tabs").classList.add("hidden");
   $("#ai-workspace-close").classList.toggle("hidden", !aiConversationWorkspaceOpen);
   $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
@@ -16699,7 +16691,6 @@ if (typeof ResizeObserver !== "undefined") new ResizeObserver(scheduleChapterLin
 if (typeof ResizeObserver !== "undefined") new ResizeObserver(syncMobileAiPanelSafeTop).observe($("#chapter-foreshadow-reminder"));
 window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
-  if (!isMobileViewport() && aiConversationWorkspaceOpen) setAiConversationWorkspaceVisible(false);
   applyPanelLayout();
   scheduleChapterLineNumbers();
 });
@@ -16714,7 +16705,7 @@ $("#ai-assistant-entry").addEventListener("click", () => {
     setAiConversationWorkspaceVisible(true);
     return;
   }
-  ensureAiPanelExpanded();
+  setAiConversationWorkspaceVisible(true);
 });
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");

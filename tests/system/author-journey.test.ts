@@ -761,7 +761,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('button.hasAttribute("data-work-settings")');
     expect(application.text).toContain("openWorkSettingsDialog(work)");
     expect(application.text).toContain('$("#ai-assistant-entry").addEventListener("click"');
-    expect(application.text).toContain('aiConversationWorkspaceOpen = Boolean(visible && mobileWorkspace)');
+    expect(application.text).toContain('aiConversationWorkspaceOpen = Boolean(visible)');
+    expect(application.text).toContain('panelLayout.aiCollapsed = aiConversationWorkspaceOpen ? false : mobileWorkspace;');
     expect(application.text).toContain('if (isMobileViewport()) {');
     expect(application.text).toContain('tasks: ["AI 深度分析", "AI 分析中心"');
     expect(application.text).toContain('openDialog("开始 AI 分析"');
