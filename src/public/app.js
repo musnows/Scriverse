@@ -429,6 +429,7 @@ function applyWorkAccessMode() {
   $("#module-nav [data-module=\"comments\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("comments"));
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#reader-open-button").classList.toggle("permission-hidden", proseHidden);
+  $("#ai-assistant-entry").classList.toggle("permission-hidden", !state.work || aiHidden);
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
@@ -1344,9 +1345,8 @@ function applyPanelLayout(persist = false) {
 }
 
 function ensureAiPanelExpanded() {
-  if (!panelLayout.aiCollapsed) return;
-  panelLayout.aiCollapsed = false;
-  applyPanelLayout(true);
+  if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) return;
+  setAiConversationWorkspaceVisible(true);
 }
 
 function setupPanelResize(handle, side) {
@@ -2187,13 +2187,23 @@ function setAiConversationSwitcherVisible(visible) {
 }
 
 function setAiConversationWorkspaceVisible(visible) {
-  aiConversationWorkspaceOpen = Boolean(visible && aiChatTabLimit > 1);
+  aiConversationWorkspaceOpen = Boolean(visible);
+  if (aiConversationWorkspaceOpen) {
+    panelLayout.aiCollapsed = false;
+    $("#app").classList.remove("ai-panel-collapsed");
+  }
+  $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
   $(".ai-panel").classList.toggle("is-conversation-workspace", aiConversationWorkspaceOpen);
+  $("#ai-assistant-entry").classList.toggle("active", aiConversationWorkspaceOpen);
+  $("#ai-assistant-entry").setAttribute("aria-expanded", String(aiConversationWorkspaceOpen));
   $("#ai-chat-tabs").classList.add("hidden");
   $("#ai-workspace-close").classList.toggle("hidden", !aiConversationWorkspaceOpen);
   $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
   setAiConversationSwitcherVisible(false);
   renderAiChatTabs();
+  if (aiConversationWorkspaceOpen) {
+    window.requestAnimationFrame(() => $("#ai-prompt").focus({ preventScroll: true }));
+  }
 }
 
 function applyAiChatTabLimit(value) {
@@ -2202,7 +2212,6 @@ function applyAiChatTabLimit(value) {
   $(".ai-panel").classList.toggle("is-single-conversation", singleSession);
   if (singleSession) {
     setAiConversationSwitcherVisible(false);
-    setAiConversationWorkspaceVisible(false);
   }
   renderAiChatTabs();
 }
@@ -7704,7 +7713,7 @@ function showWelcome(hasWork = false) {
 }
 
 function markActiveModule(module) {
-  $("#module-nav").querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.module === module));
+  $("#module-nav").querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.module === module || (button.id === "ai-assistant-entry" && aiConversationWorkspaceOpen)));
 }
 
 const moduleMeta = {
@@ -16694,6 +16703,17 @@ window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
   applyPanelLayout();
   scheduleChapterLineNumbers();
+});
+$("#ai-assistant-entry").addEventListener("click", () => {
+  if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) {
+    return toast("当前账户没有创作助手读取权限", "error");
+  }
+  setModuleNavExpanded(false);
+  if (isMobileViewport()) {
+    panelLayout.leftCollapsed = true;
+    applyPanelLayout(true);
+  }
+  setAiConversationWorkspaceVisible(true);
 });
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
