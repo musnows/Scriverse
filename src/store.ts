@@ -1,4 +1,4 @@
-import { DRAFT_SETTING_MODULES, type AiInjectedEntities, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
+import { CHARACTER_GENDERS, DRAFT_SETTING_MODULES, type AiInjectedEntities, type CharacterGender, type ContextScope, type DraftSettingModule, type ParsedNovel } from "./domain.js";
 import { createHash } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import {
@@ -83,10 +83,20 @@ export const WORK_AGENT_TOOL_IDS = [
   "search_story_entities",
   "read_character_sections",
   "search_drafts",
-  "image"
+  "image",
+  "calculate_time"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
 const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
+const LEGACY_DEFAULT_WORK_AGENT_TOOLS = [
+  "story_index",
+  "read_chapters",
+  "grep",
+  "search_story_entities",
+  "read_character_sections",
+  "search_drafts",
+  "image"
+] as const satisfies readonly WorkAgentToolId[];
 
 export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
   const source = Array.isArray(value)
@@ -100,6 +110,7 @@ export function normalizeWorkAgentTools(value: unknown): WorkAgentToolId[] {
     const toolId = item === "query_story_knowledge" ? "search_story_entities" : item;
     if (WORK_AGENT_TOOL_IDS.includes(toolId as WorkAgentToolId)) enabled.add(toolId as WorkAgentToolId);
   }
+  if (LEGACY_DEFAULT_WORK_AGENT_TOOLS.every((toolId) => enabled.has(toolId))) enabled.add("calculate_time");
   return WORK_AGENT_TOOL_IDS.filter((toolId) => enabled.has(toolId));
 }
 export type AttachmentPermissionModule = typeof attachmentPermissionModules[number];
@@ -190,6 +201,7 @@ type DraftInput = {
 
 type CharacterInput = {
   name: string;
+  gender?: CharacterGender;
   isDead?: boolean;
   code?: string;
   aliases?: string[];
@@ -230,6 +242,7 @@ export type AttachmentInput = {
 
 type CharacterSnapshot = {
   name: string;
+  gender: CharacterGender;
   isDead: boolean;
   code?: string;
   aliases: string[];
@@ -646,6 +659,12 @@ type RestorableFileSnapshotVolume = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function characterGender(value: unknown): CharacterGender {
+  return typeof value === "string" && CHARACTER_GENDERS.includes(value as CharacterGender)
+    ? value as CharacterGender
+    : "unknown";
 }
 
 function invalidFileSnapshot(): never {
@@ -1456,10 +1475,15 @@ export class Store {
   }
 
   private analysisTaskQueuedHandler: ((workId: string) => void) | null = null;
+  private chapterAnalysisInvalidatedHandler: ((workId: string, chapterId: string, versionNo: number) => void) | null = null;
   private relationshipIndexQueuedHandler: ((workId: string) => void) | null = null;
 
   setAnalysisTaskQueuedHandler(handler: ((workId: string) => void) | null): void {
     this.analysisTaskQueuedHandler = handler;
+  }
+
+  setChapterAnalysisInvalidatedHandler(handler: ((workId: string, chapterId: string, versionNo: number) => void) | null): void {
+    this.chapterAnalysisInvalidatedHandler = handler;
   }
 
   setRelationshipIndexQueuedHandler(handler: ((workId: string) => void) | null): void {
@@ -1471,6 +1495,14 @@ export class Store {
       this.analysisTaskQueuedHandler?.(workId);
     } catch {
       // 自动运行调度失败不影响主写入路径
+    }
+  }
+
+  private notifyChapterAnalysisInvalidated(workId: string, chapterId: string, versionNo: number): void {
+    try {
+      this.chapterAnalysisInvalidatedHandler?.(workId, chapterId, versionNo);
+    } catch {
+      // 稳定等待调度失败不影响主写入路径
     }
   }
 
@@ -1489,6 +1521,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, Number(row?.auto_run_batch_limit ?? 20) || 20)),
       autoRunDailyTaskLimit: Math.min(10_000, Math.max(0, Number(row?.auto_run_daily_task_limit ?? 0) || 0)),
       autoRunFailureThreshold: Math.min(10, Math.max(1, Number(row?.auto_run_failure_threshold ?? 3) || 3)),
+      autoRunStabilityDelayMinutes: Math.min(120, Math.max(1, Number(row?.auto_run_stability_delay_minutes ?? 2) || 2)),
       autoRunPaused: Number(row?.auto_run_paused ?? 0) === 1,
       autoRunPauseReason: String(row?.auto_run_pause_reason ?? ""),
       autoRunResumeAt: row?.auto_run_resume_at === null || row?.auto_run_resume_at === undefined ? null : String(row.auto_run_resume_at),
@@ -1518,6 +1551,7 @@ export class Store {
     autoRunBatchLimit?: number;
     autoRunDailyTaskLimit?: number;
     autoRunFailureThreshold?: number;
+    autoRunStabilityDelayMinutes?: number;
     bookSummaryContextPercent?: number;
     contextCompactThreshold?: number;
     agentToolCallLimit?: number;
@@ -1540,6 +1574,7 @@ export class Store {
     const nextBatchLimit = input.autoRunBatchLimit ?? Number(current.autoRunBatchLimit);
     const nextDailyTaskLimit = input.autoRunDailyTaskLimit ?? Number(current.autoRunDailyTaskLimit);
     const nextFailureThreshold = input.autoRunFailureThreshold ?? Number(current.autoRunFailureThreshold);
+    const nextStabilityDelayMinutes = input.autoRunStabilityDelayMinutes ?? Number(current.autoRunStabilityDelayMinutes);
     const nextBookSummaryContextPercent = input.bookSummaryContextPercent ?? Number(current.bookSummaryContextPercent);
     const nextContextCompactThreshold = input.contextCompactThreshold ?? Number(current.contextCompactThreshold);
     const nextAgentToolCallLimit = input.agentToolCallLimit ?? Number(current.agentToolCallLimit);
@@ -1555,11 +1590,11 @@ export class Store {
     this.db.run(
       `INSERT INTO work_ai_settings (
          work_id, system_prompt, daily_token_quota, auto_run_enabled, auto_run_concurrency, auto_run_batch_limit,
-         auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_paused, auto_run_pause_reason,
+         auto_run_daily_task_limit, auto_run_failure_threshold, auto_run_stability_delay_minutes, auto_run_paused, auto_run_pause_reason,
          auto_run_resume_at, auto_run_consecutive_failures, book_summary_context_percent,
          context_compact_threshold, agent_tool_call_limit, agent_tool_call_global_multiplier,
          agent_tools_json, title_generation_model_id, image_tool_model_id, always_include_setting_info, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(work_id) DO UPDATE SET
          system_prompt = excluded.system_prompt,
          daily_token_quota = excluded.daily_token_quota,
@@ -1568,6 +1603,7 @@ export class Store {
          auto_run_batch_limit = excluded.auto_run_batch_limit,
          auto_run_daily_task_limit = excluded.auto_run_daily_task_limit,
          auto_run_failure_threshold = excluded.auto_run_failure_threshold,
+         auto_run_stability_delay_minutes = excluded.auto_run_stability_delay_minutes,
          auto_run_paused = excluded.auto_run_paused,
          auto_run_pause_reason = excluded.auto_run_pause_reason,
          auto_run_resume_at = excluded.auto_run_resume_at,
@@ -1589,6 +1625,7 @@ export class Store {
       Math.min(200, Math.max(1, nextBatchLimit)),
       Math.min(10_000, Math.max(0, nextDailyTaskLimit)),
       Math.min(10, Math.max(1, nextFailureThreshold)),
+      Math.min(120, Math.max(1, nextStabilityDelayMinutes)),
       current.autoRunPaused ? 1 : 0,
       String(current.autoRunPauseReason ?? ""),
       current.autoRunResumeAt === null ? null : String(current.autoRunResumeAt),
@@ -1611,6 +1648,7 @@ export class Store {
       autoRunBatchLimit: Math.min(200, Math.max(1, nextBatchLimit)),
       autoRunDailyTaskLimit: Math.min(10_000, Math.max(0, nextDailyTaskLimit)),
       autoRunFailureThreshold: Math.min(10, Math.max(1, nextFailureThreshold)),
+      autoRunStabilityDelayMinutes: Math.min(120, Math.max(1, nextStabilityDelayMinutes)),
       bookSummaryContextPercent: Math.min(90, Math.max(1, nextBookSummaryContextPercent)),
       contextCompactThreshold: Math.min(90, Math.max(50, nextContextCompactThreshold)),
       agentToolCallLimit: Math.min(maximumAgentToolCallLimit, Math.max(5, nextAgentToolCallLimit)),
@@ -2756,7 +2794,7 @@ export class Store {
 
   replaceWorkText(
     workId: string,
-    input: { find: string; replacement: string; scope: "prose" | "settings" | "prose-and-settings" }
+    input: { find: string; replacement: string; scope: "prose" | "settings" | "prose-and-settings"; volumeId?: string | null }
   ): Record<string, unknown> {
     const find = input.find;
     if (!find) throw new AppError(400, "REPLACE_TEXT_REQUIRED", "查找内容不能为空");
@@ -2764,6 +2802,16 @@ export class Store {
       throw new AppError(400, "REPLACE_SCOPE_INVALID", "替换范围无效");
     }
     const work = this.getWork(workId);
+    const volumeId = input.volumeId ?? null;
+    if (volumeId) {
+      const volume = this.getVolume(volumeId);
+      if (String(volume.workId) !== workId) {
+        throw new AppError(400, "REPLACE_VOLUME_INVALID", "分卷不属于当前作品");
+      }
+      if (input.scope === "settings") {
+        throw new AppError(400, "REPLACE_VOLUME_SCOPE_INVALID", "分卷范围只能用于正文替换");
+      }
+    }
     const permissions = work.modulePermissions as WorkModulePermissions;
     const requestedProse = input.scope === "prose" || input.scope === "prose-and-settings";
     const requestedSettings = input.scope === "settings" || input.scope === "prose-and-settings";
@@ -2798,10 +2846,16 @@ export class Store {
 
     this.db.transaction(() => {
       if (includeProse) {
-        const chapters = this.db.all(
-          "SELECT id, content FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
-          workId
-        );
+        const chapters = volumeId
+          ? this.db.all(
+            "SELECT id, content FROM chapters WHERE work_id = ? AND volume_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+            workId,
+            volumeId
+          )
+          : this.db.all(
+            "SELECT id, content FROM chapters WHERE work_id = ? AND deleted_at IS NULL ORDER BY sort_order, created_at",
+            workId
+          );
         for (const row of chapters) {
           const chapterId = requiredString(row, "id");
           const result = replaceLiteral(requiredString(row, "content"));
@@ -2828,6 +2882,7 @@ export class Store {
         this.audit(workId, "work.global-replace", "work", workId, {
           operationId,
           scope: input.scope,
+          volumeId,
           chapterCount,
           settingCount,
           totalMatches,
@@ -2840,6 +2895,7 @@ export class Store {
     return {
       operationId,
       scope: input.scope,
+      volumeId,
       chapterCount,
       settingCount,
       totalMatches,
@@ -3585,8 +3641,6 @@ export class Store {
     this.db.run(
       `UPDATE analysis_tasks SET status = 'expired', updated_at = ?
        WHERE work_id = ? AND status IN ('pending', 'running', 'completed', 'partial', 'review')
-       AND NOT (status = 'pending' AND task_type = 'chapter-analysis'
-         AND json_extract(scope_json, '$.chapterId') = ?)
        AND (json_extract(scope_json, '$.chapterId') = ?
          OR EXISTS (SELECT 1 FROM json_each(scope_json, '$.chapterIds') WHERE json_each.value = ?)
          OR json_extract(scope_json, '$.type') = 'book'
@@ -3601,37 +3655,9 @@ export class Store {
       chapterId,
       chapterId,
       chapterId,
-      chapterId,
       chapterId
     );
-    const existing = this.db.get(
-      `SELECT id FROM analysis_tasks WHERE work_id = ? AND task_type = 'chapter-analysis' AND status = 'pending'
-       AND json_extract(scope_json, '$.chapterId') = ?`,
-      workId,
-      chapterId
-    );
-    if (!existing) {
-      const timestamp = now();
-      this.db.run(
-        `INSERT INTO analysis_tasks (id, work_id, task_type, scope_json, status, source_versions_json, created_at, updated_at, created_by_user_id)
-         VALUES (?, ?, 'chapter-analysis', ?, 'pending', ?, ?, ?, ?)`,
-        id("task"),
-        workId,
-        JSON.stringify({ type: "chapter", chapterId }),
-        JSON.stringify({ [chapterId]: versionNo }),
-        timestamp,
-        timestamp,
-        currentRequestActor()?.userId ?? null
-      );
-    } else {
-      this.db.run(
-        "UPDATE analysis_tasks SET source_versions_json = ?, updated_at = ? WHERE id = ?",
-        JSON.stringify({ [chapterId]: versionNo }),
-        now(),
-        requiredString(existing, "id")
-      );
-    }
-    this.notifyAnalysisTaskQueued(workId);
+    this.notifyChapterAnalysisInvalidated(workId, chapterId, versionNo);
   }
 
   private mapWorks(rows: Row[]): Record<string, unknown>[] {
@@ -5666,6 +5692,7 @@ export class Store {
     delete profile.sections;
     return {
       name: String(character.name),
+      gender: characterGender(character.gender),
       isDead: Boolean(character.isDead),
       code: String(character.code),
       aliases: [...(character.aliases as string[])],
@@ -5754,13 +5781,14 @@ export class Store {
     this.assertOrganizationsInWork(workId, organizationIds);
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, code, gender, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          is_dead, locked_fields_json, first_chapter_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
         input.code?.trim() ?? "",
+        input.gender ?? "unknown",
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -6146,7 +6174,8 @@ export class Store {
   searchCharacterProfileSections(workId: string, query: string, limit = 20): Record<string, unknown>[] {
     this.getWork(workId);
     const normalized = normalizeDocumentSearchText(query);
-    const columns = `SELECT section.*, character.name AS character_name, character.is_dead AS character_is_dead
+    const columns = `SELECT section.*, character.name AS character_name, character.gender AS character_gender,
+                            character.is_dead AS character_is_dead
       FROM character_profile_section_search search
       JOIN character_profile_sections section ON section.id = search.section_id
       JOIN characters character ON character.id = search.character_id`;
@@ -6171,6 +6200,7 @@ export class Store {
     return rows.map((row) => ({
       ...this.mapCharacterProfileSection(row),
       characterName: requiredString(row, "character_name"),
+      gender: requiredString(row, "character_gender"),
       isDead: booleanValue(row, "character_is_dead")
     }));
   }
@@ -6464,10 +6494,11 @@ export class Store {
       const lockedCurrent = this.getCharacter(characterId);
       this.assertExpectedRevision("character", characterId, expectedVersionNo, "人物", Number(lockedCurrent.versionNo));
       this.db.run(
-        `UPDATE characters SET name = ?, code = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
+        `UPDATE characters SET name = ?, code = ?, gender = ?, aliases_json = ?, species = ?, race_id = ?, attributes_json = ?, profile_json = ?, current_state_json = ?,
          is_dead = ?, locked_fields_json = ?, first_chapter_id = ?, updated_at = ? WHERE id = ?`,
         names.name,
         input.code === undefined ? String(current.code) : input.code.trim(),
+        input.gender ?? characterGender(current.gender),
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -6556,7 +6587,7 @@ export class Store {
     }
     return this.updateCharacter(
       characterId,
-      { ...snapshot, isDead: snapshot.isDead ?? false, code: snapshot.code ?? "" },
+      { ...snapshot, gender: snapshot.gender ?? "unknown", isDead: snapshot.isDead ?? false, code: snapshot.code ?? "" },
       "restore",
       requiredString(version, "id"),
       `恢复至 v${versionNo}`,
@@ -6587,13 +6618,14 @@ export class Store {
     ) + 1;
     this.db.transaction(() => {
       this.db.run(
-        `INSERT INTO characters (id, work_id, name, code, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
+        `INSERT INTO characters (id, work_id, name, code, gender, aliases_json, species, race_id, attributes_json, profile_json, current_state_json,
          is_dead, locked_fields_json, first_chapter_id, version_no, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         characterId,
         workId,
         names.name,
         snapshot.code ?? "",
+        snapshot.gender ?? "unknown",
         JSON.stringify(names.aliases),
         species,
         raceId,
@@ -6699,6 +6731,7 @@ export class Store {
       workId: requiredString(row, "work_id"),
       name: requiredString(row, "name"),
       code: requiredString(row, "code"),
+      gender: characterGender(row.gender),
       aliases: indexedAliases.length > 0 ? indexedAliases : json(requiredString(row, "aliases_json"), []),
       raceId: race ? String(race.id) : null,
       race: race ? {
@@ -10056,14 +10089,15 @@ export class Store {
     includeCharacterNames = true
   ): string {
     const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
+    const chapterSettingsLabel = scope.includeAllSettings === true ? " + 设定集" : "";
     if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
       const labels = scope.chapterIds
         .filter((chapterId): chapterId is string => typeof chapterId === "string")
         .map((chapterId) => chapterSummaries.get(chapterId) ?? "章节已删除");
       const preview = labels.slice(0, 3).join("、");
-      return `指定章节（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+      return `指定章节${chapterSettingsLabel}（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
     }
-    if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${targetedSuffix}`;
+    if (typeof scope.chapterId === "string") return `${chapterSummaries.get(scope.chapterId) ?? "章节已删除"}${chapterSettingsLabel}${targetedSuffix}`;
     if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
       const labels = scope.volumeIds
         .filter((volumeId): volumeId is string => typeof volumeId === "string")
@@ -10092,6 +10126,7 @@ export class Store {
     includeCharacterNames = true
   ): string {
     const targetedSuffix = this.taskTargetedSuffix(scope, characterNames, includeCharacterNames);
+    const chapterSettingsLabel = scope.includeAllSettings === true ? " + 设定集" : "";
     if (Array.isArray(scope.chapterIds) && scope.chapterIds.length > 0) {
       const labels = scope.chapterIds.map((chapterId) => {
         const chapter = this.db.get(
@@ -10105,7 +10140,7 @@ export class Store {
         return chapter ? `${requiredString(chapter, "volume_title")} · ${requiredString(chapter, "title")}` : "章节已删除";
       });
       const preview = labels.slice(0, 3).join("、");
-      return `指定章节（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
+      return `指定章节${chapterSettingsLabel}（${labels.length}）：${preview}${labels.length > 3 ? "……" : ""}${targetedSuffix}`;
     }
     if (typeof scope.chapterId === "string") {
       const chapter = this.db.get(
@@ -10116,10 +10151,10 @@ export class Store {
         scope.chapterId,
         workId
       );
-      if (!chapter) return `章节已删除${targetedSuffix}`;
+      if (!chapter) return `章节已删除${chapterSettingsLabel}${targetedSuffix}`;
       const title = requiredString(chapter, "title");
       const volumeTitle = requiredString(chapter, "volume_title");
-      return `${volumeTitle} · ${title}${targetedSuffix}`;
+      return `${volumeTitle} · ${title}${chapterSettingsLabel}${targetedSuffix}`;
     }
     if (Array.isArray(scope.volumeIds) && scope.volumeIds.length > 0) {
       const labels = scope.volumeIds.map((volumeId) => {
@@ -10394,7 +10429,7 @@ export class Store {
        ), character_race_paths AS (
          SELECT character_id, path FROM character_race_lineage WHERE parent_race_id IS NULL
        )
-       SELECT character.id, character.name, character.aliases_json, character.species, character.is_dead,
+       SELECT character.id, character.name, character.aliases_json, character.species, character.gender, character.is_dead,
               COALESCE(path.path, character.species) AS race_path
        FROM characters character LEFT JOIN character_race_paths path ON path.character_id = character.id
        WHERE character.work_id = ? AND character.merged_into_character_id IS NULL AND (
@@ -10430,6 +10465,7 @@ export class Store {
         title: requiredString(row, "name"),
         snippet: [requiredString(row, "race_path"), ...json<string[]>(requiredString(row, "aliases_json"), [])].filter(Boolean).join("、"),
         racePath: requiredString(row, "race_path"),
+        gender: requiredString(row, "gender"),
         isDead: booleanValue(row, "is_dead")
       })),
       ...characterSections.map((section) => ({
@@ -10439,6 +10475,7 @@ export class Store {
         title: `${String(section.characterName)} / ${String(section.title)}`,
         snippet: snippet(String(section.contentMarkdown)),
         sectionType: String(section.sectionType),
+        gender: String(section.gender),
         isDead: Boolean(section.isDead)
       })),
       ...settings.map((row) => ({ type: "setting", id: requiredString(row, "id"), title: requiredString(row, "title"), snippet: snippet(requiredString(row, "content")), category: requiredString(row, "category") })),

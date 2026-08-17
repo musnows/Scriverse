@@ -31,6 +31,7 @@ describe("AI 对话历史弹窗", () => {
     expect(page.text).toContain('id="ai-history-list" class="ai-history-list"');
     expect(page.text).toContain('id="ai-history-action-menu" class="ai-history-action-menu hidden" role="menu"');
     expect(page.text).toContain('data-ai-history-action="favorite"');
+    expect(page.text).toContain('data-ai-history-action="copy-session-id"');
     expect(page.text).toContain('data-ai-history-action="export"');
     expect(page.text).toContain('data-ai-history-action="delete"');
     expect(page.text).toContain('id="ai-history-pagination" class="module-pagination ai-history-pagination hidden"');
@@ -49,6 +50,9 @@ describe("AI 对话历史弹窗", () => {
     expect(application.text).toContain('book: "全书"');
     expect(application.text).toContain('chat: "问答"');
     expect(application.text).toContain("function syncAiHistoryActionMenu(conversation)");
+    expect(application.text).toContain("async function copyAiConversationSessionId(conversation)");
+    expect(application.text).toContain('if (action === "copy-session-id") {');
+    expect(application.text).toContain('toast("对话 Session ID 已复制")');
     expect(application.text).toContain('/api/ai-conversations/${encodeURIComponent(conversation.id)}/favorite');
     expect(application.text).toContain('method: "DELETE"');
     expect(application.text).toContain("收藏的对话不能清理，请先取消收藏");

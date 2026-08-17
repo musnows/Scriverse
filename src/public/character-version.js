@@ -1,5 +1,6 @@
 const fieldLabels = Object.freeze({
   name: "标准名",
+  gender: "性别",
   isDead: "死亡标识",
   code: "编号",
   aliases: "别名",

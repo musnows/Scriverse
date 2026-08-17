@@ -23,10 +23,13 @@ export function aiRequestTargetsState(request, current) {
 
 export function createAiRequestManager() {
   let generation = 0;
-  let active = null;
+  const activeRequests = new Map();
+
+  const requestKey = (input) => normalizedId(input?.tabId) ?? "default";
 
   const snapshot = (input, controller, requestGeneration) => Object.freeze({
     generation: requestGeneration,
+    tabId: requestKey(input),
     workId: normalizedId(input.workId),
     conversationId: normalizedId(input.conversationId),
     userMessageId: normalizedId(input.userMessageId),
@@ -35,27 +38,36 @@ export function createAiRequestManager() {
 
   const isCurrent = (request) => Boolean(
     request
-    && active
-    && !active.controller.signal.aborted
-    && active.snapshot.generation === request.generation
-    && active.controller.signal === request.signal
+    && activeRequests.has(request.tabId)
+    && !activeRequests.get(request.tabId).controller.signal.aborted
+    && activeRequests.get(request.tabId).snapshot.generation === request.generation
+    && activeRequests.get(request.tabId).controller.signal === request.signal
   );
 
-  const cancel = (reason = "AI 请求已取消") => {
-    if (!active) return false;
-    const current = active;
-    active = null;
+  const cancel = (reason = "AI 请求已取消", tabId = "default") => {
+    const key = requestKey({ tabId });
+    const current = activeRequests.get(key);
+    if (!current) return false;
+    activeRequests.delete(key);
     current.controller.abort(createAiRequestAbortError(reason));
     return true;
   };
 
+  const cancelAll = (reason = "AI 请求已取消") => {
+    const requests = [...activeRequests.values()];
+    activeRequests.clear();
+    for (const current of requests) current.controller.abort(createAiRequestAbortError(reason));
+    return requests.length;
+  };
+
   const begin = (input) => {
-    cancel("新的 AI 请求已开始");
+    const key = requestKey(input);
+    cancel("新的 AI 请求已开始", key);
     const controller = new AbortController();
     generation += 1;
     const request = snapshot(input, controller, generation);
     if (!request.workId) throw new Error("AI 请求必须绑定作品");
-    active = { controller, snapshot: request };
+    activeRequests.set(key, { controller, snapshot: request });
     return request;
   };
 
@@ -73,18 +85,20 @@ export function createAiRequestManager() {
     if (request.userMessageId && userMessageId !== request.userMessageId) {
       throw new Error("AI 请求不能改绑到其他用户消息");
     }
+    const current = activeRequests.get(request.tabId);
     const next = snapshot({
+      tabId: request.tabId,
       workId: request.workId,
       conversationId,
       userMessageId
-    }, active.controller, request.generation);
-    active.snapshot = next;
+    }, current.controller, request.generation);
+    current.snapshot = next;
     return next;
   };
 
   const finish = (request) => {
     if (!isCurrent(request)) return false;
-    active = null;
+    activeRequests.delete(request.tabId);
     return true;
   };
 
@@ -92,8 +106,11 @@ export function createAiRequestManager() {
     begin,
     bind,
     cancel,
+    cancelAll,
     finish,
-    hasActive: () => active !== null,
+    hasActive: (tabId = null) => tabId === null
+      ? activeRequests.size > 0
+      : activeRequests.has(requestKey({ tabId })),
     isCurrent
   };
 }

@@ -1,8 +1,52 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipEdgeGeometry, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_MOTION_MODES, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_REDUCED_MOTION_EDGE_THRESHOLD, GALAXY_REDUCED_MOTION_NODE_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyMotionProfile, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipCanvasPixelRatio, getRelationshipEdgeGeometry, getRelationshipGraphRenderProfile, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
+  it("关系网达到当前规模后切换为 Canvas 连线并限制像素密度", () => {
+    expect(getRelationshipGraphRenderProfile(179, 260)).toEqual({ dense: false, edgeMode: "svg" });
+    expect(getRelationshipGraphRenderProfile(180, 261)).toEqual({ dense: true, edgeMode: "canvas" });
+    expect(getRelationshipGraphRenderProfile(223, 289)).toEqual({ dense: true, edgeMode: "canvas" });
+    expect(getRelationshipCanvasPixelRatio(2, 1200, 640)).toBe(1.25);
+    expect(getRelationshipCanvasPixelRatio(2, 1600, 900)).toBeCloseTo(Math.sqrt(2_000_000 / (1600 * 900)));
+  });
+
+  it("银河图超过性能阈值后自动减少动效，并允许始终开启或彻底关闭", () => {
+    expect(GALAXY_MOTION_MODES).toEqual(["auto", "on", "reduced", "off"]);
+    expect(GALAXY_REDUCED_MOTION_NODE_THRESHOLD).toBe(80);
+    expect(GALAXY_REDUCED_MOTION_EDGE_THRESHOLD).toBe(120);
+    expect(normalizeGalaxyMotionMode("invalid")).toBe("auto");
+    expect(getGalaxyMotionProfile("auto", 80, 120)).toMatchObject({
+      effectiveMode: "full",
+      starfieldPhysics: true,
+      focusAnimation: true
+    });
+    expect(getGalaxyMotionProfile("auto", 98, 121)).toMatchObject({
+      effectiveMode: "reduced",
+      reducedByThreshold: true,
+      starfieldPhysics: false,
+      focusAnimation: true,
+      maximumFrameRate: 24
+    });
+    expect(getGalaxyMotionProfile("on", 980, 1_210, true)).toMatchObject({
+      requestedMode: "on",
+      effectiveMode: "full",
+      reducedBySystem: false,
+      reducedByThreshold: false,
+      starfieldPhysics: true,
+      focusAnimation: true,
+      maximumFrameRate: null
+    });
+    expect(getGalaxyMotionProfile("auto", 20, 20, true)).toMatchObject({ effectiveMode: "reduced", reducedBySystem: true });
+    expect(getGalaxyMotionProfile("off", 20, 20)).toMatchObject({
+      effectiveMode: "off",
+      starfieldPhysics: false,
+      focusAnimation: false,
+      cssMotion: false,
+      maximumFrameRate: null
+    });
+  });
+
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {
     const characters = [{ id: "a", name: "甲" }, { id: "b", name: "乙" }];
     const graph = buildRelationshipGraph(characters, [
@@ -231,6 +275,13 @@ describe("人物关系图数据与布局", () => {
     expect(getRelationshipNodeLabelFontSize(1.8, 209) * 1.8).toBeCloseTo(8);
     expect(getRelationshipNodeLabelFontSize(1.25, 140) * 1.25).toBeCloseTo(8.5);
     expect(getRelationshipNodeLabelFontSize(1, 80)).toBe(9);
+  });
+
+  it("超大关系网进一步收紧默认标签，避免文本层成为渲染热点", () => {
+    expect(shouldShowRelationshipNodeLabel(24, 1, 721, 1)).toBe(false);
+    expect(shouldShowRelationshipNodeLabel(24, 8, 721, 1)).toBe(false);
+    expect(shouldShowRelationshipNodeLabel(24, 12, 721, 1)).toBe(true);
+    expect(shouldShowRelationshipNodeLabel(24, 1, 721, 1.36)).toBe(true);
   });
 
   it("拖拽节点时用弹簧与斥力带动关联节点并产生惯性位移", () => {

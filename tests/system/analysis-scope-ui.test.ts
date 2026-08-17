@@ -12,7 +12,9 @@ describe("AI 分析范围交互", () => {
     ]);
 
     expect(application).toContain('allSettingsOption.textContent = "全书 + 设定集"');
+    expect(application).toContain('chapterSettingsOption.textContent = "指定章节 + 设定集"');
     expect(application).toContain('settingsOnlyOption.textContent = "仅设定集"');
+    expect(application).toContain('["chapter-with-settings", "book-with-settings"].includes(scopeType)');
     expect(application).toContain('const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings"');
     expect(application).toContain('function analysisTaskModelPurpose(taskType)');
     expect(application).toContain('name="modelId" required aria-describedby="analysis-task-model-help"');
@@ -24,6 +26,9 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('const enabled = taskTypeSelect.value === "relationship-analysis"');
     expect(application).toContain('[["chapter", "指定章节"], ["book", "全书"]]');
     expect(application).toContain('data-task-scope-volume-input');
+    expect(application).toContain('data-task-scope-volume-toggle');
+    expect(application).toContain('setTaskScopeVolumeCollapsed');
+    expect(application).toContain('for (const collapseButton of scopeVolumeCollapseButtons)');
     expect(application).toContain('勾选以全选本卷章节');
     expect(application).not.toContain('data-task-scope-field="volume"');
     expect(application).toContain('const chapterIds = form.getAll("chapterIds").map(String).filter(Boolean)');
@@ -36,7 +41,8 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('上下文更长的模型');
     expect(application).toContain('error.code === "AI_CONTEXT_TOO_LARGE"');
     expect(application).not.toContain('taskType === "character-identity-audit" || scopeType === "book"');
-    expect(application).toContain('const enabled = scopeTypeSelect.value === "chapter"');
+    expect(application).toContain('const enabled = ["chapter", "chapter-with-settings"].includes(scopeTypeSelect.value)');
+    expect(application).toContain('bookScopeOption.before(chapterSettingsOption)');
     expect(application).toContain('scopeFields[kind].setAttribute("aria-disabled", String(!enabled))');
     expect(application).toContain('scopeTriggers[kind].disabled = !enabled');
     expect(application).toContain('data-task-scope-search');
@@ -84,19 +90,23 @@ describe("AI 分析范围交互", () => {
     expect(application).toContain('pendingLabel: "创建中…"');
     expect(application).toContain('pendingMessage: "正在创建分析任务，请稍候"');
     expect(application).toContain('errorPrefix: "任务创建失败："');
-    expect(application).toContain('toast("分析任务已创建，已进入任务队列");\n    void refreshAnalysisTaskViewsAfterCreate(workId)');
+    expect(application).toContain('toast("分析任务已创建，已进入任务队列");\n    await refreshAnalysisTaskViewsAfterCreate(workId)');
     expect(application).toContain('async function refreshAnalysisTaskViewsAfterCreate(workId)');
     expect(application).toContain('renderTasks(1, { refresh: true })');
     expect(application).toContain('toast(`任务已创建，但列表刷新失败：${error.message}`, "error")');
+    expect(page).toContain('feature=analysis-task-queue-refresh-v1');
     expect(page).toContain('id="dialog-submit-status"');
     expect(page).toContain('class="dialog-submit-progress" role="progressbar"');
     expect(styles).toContain(".task-chapter-field.is-disabled { opacity: .48; }");
     expect(styles).toContain(".task-chapter-field select:disabled { cursor: not-allowed; }");
     expect(styles).toContain(".task-scope-picker { display: grid; gap: 8px; min-width: 0; }");
     expect(styles).toContain(".task-scope-options { display: grid; align-content: start; gap: 6px;");
+    expect(styles).toContain(".task-scope-volume-options { display: grid; gap: 5px;");
+    expect(styles).toContain(".task-scope-volume-group.is-collapsed > .task-scope-volume-options { display: none; }");
+    expect(styles).toContain(".task-scope-volume-collapse { display: inline-grid;");
     expect(styles).toContain(".task-scope-panel-grid { display: grid;");
     expect(styles).toContain(".task-scope-selected-list { display: grid;");
-    expect(styles).toContain(".task-scope-checkbox { display: inline-grid;");
+    expect(styles).toContain(".task-scope-checkbox { display: inline-grid; width: 18px; height: 18px; place-items: center; border: 1px solid var(--line);");
     expect(styles).toContain(".task-scope-author-note-banner {");
     expect(styles).toContain(".dialog-fields .task-scope-search input { min-height: 34px;");
     expect(styles).toContain(".relationship-character-bubble {");

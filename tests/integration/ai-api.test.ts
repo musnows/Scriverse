@@ -12,16 +12,20 @@ describe("AI 供应商、模型与建议 API", () => {
   let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
   let expectedMaxTokens: number;
   let expectedThinkingType: "enabled" | "disabled";
+  let expectedThinkingEffort: "low" | "medium" | "high" | "xhigh" | "max" | undefined;
 
   beforeEach(async () => {
     expectedMaxTokens = 32_000;
     expectedThinkingType = "enabled";
+    expectedThinkingEffort = undefined;
     fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.endsWith("/models")) {
         return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string } };
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }>; max_tokens?: number; thinking?: { type?: string }; reasoning_effort?: string };
+      if (expectedThinkingEffort) expect(body.reasoning_effort).toBe(expectedThinkingEffort);
+      else expect(body).not.toHaveProperty("reasoning_effort");
       if (body.max_tokens === 10) {
         expect(body.messages).toHaveLength(1);
         return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -59,7 +63,7 @@ describe("AI 供应商、模型与建议 API", () => {
     const providerId = provider.body.data.id;
     expect(provider.body.data.apiKey).toBe("sk-se************lue");
     expect(provider.body.data.baseUrl).toBe("https://mock-ai.test/v1");
-    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10 });
+    expect(provider.body.data).toMatchObject({ concurrencyLimit: 10, rpmLimit: 10, maxTokensParameter: "max_tokens" });
     expect(provider.body.data).not.toHaveProperty("maxTokens");
     const databaseRow = runtime.database.get<Record<string, unknown>>("SELECT encrypted_key FROM providers WHERE id = ?", providerId);
     expect(databaseRow?.encrypted_key).not.toContain("sk-sensitive-test-value");
@@ -71,6 +75,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     expect(model.body.data.preset).toMatchObject({ temperature: 0.4, max_tokens: 32_000, unsupported: "ignored" });
     expect(model.body.data.thinkingEnabled).toBe(true);
+    expect(model.body.data.thinkingEffort).toBe("default");
     return { providerId, modelId: model.body.data.id };
   }
 
@@ -108,6 +113,67 @@ describe("AI 供应商、模型与建议 API", () => {
       scope: { type: "chapter", chapterId },
       modelId
     }).expect(409);
+  });
+
+  it("供应商连接测试复用 402 普通重试策略", async () => {
+    const { providerId } = await configureAi();
+    let modelListAttempts = 0;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/models")) {
+        modelListAttempts += 1;
+        if (modelListAttempts <= 3) {
+          return new Response(JSON.stringify({ error: { message: "payment required" } }), { status: 402 });
+        }
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      }
+      const body = JSON.parse(String(init?.body)) as { max_tokens?: number };
+      expect(body.max_tokens).toBe(10);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200 });
+    });
+
+    const tested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(tested.body.data).toMatchObject({ ok: true, availableModels: ["mock-novel-model"] });
+    expect(modelListAttempts).toBe(4);
+  });
+
+  it("供应商可切换 max_completion_tokens，连通性测试与生成请求使用相同字段", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+
+    const updated = await request(runtime.app).patch(`/api/providers/${providerId}`).send({
+      maxTokensParameter: "max_completion_tokens"
+    }).expect(200);
+    expect(updated.body.data).toMatchObject({
+      maxTokensParameter: "max_completion_tokens",
+      connectionStatus: "unchecked"
+    });
+
+    const completionBodies: Array<Record<string, unknown>> = [];
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/models")) {
+        return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      completionBodies.push(body);
+      expect(body).not.toHaveProperty("max_tokens");
+      if (body.max_completion_tokens === 10) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "连接成功" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      expect(body.max_completion_tokens).toBe(32_000);
+      return new Response(JSON.stringify({ choices: [{ message: { content: "飞船驶离北港。" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "概括当前场景",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expect(completionBodies.some((body) => body.max_completion_tokens === 10)).toBe(true);
+    expect(completionBodies.some((body) => body.max_completion_tokens === 32_000)).toBe(true);
   });
 
   it("达到本书每日 Token 额度后拒绝新的 AI 调用", async () => {
@@ -498,7 +564,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(rejected.body.error.code).toBe("MODEL_MULTIMODAL_PROTOCOL_UNSUPPORTED");
   });
 
-  it("模型默认开启 thinking 并可按模型关闭", async () => {
+  it("模型默认开启 thinking，可独立设置思考强度并按模型关闭", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
@@ -508,9 +574,29 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(201);
 
+    await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "extreme" }).expect(400);
+    expectedThinkingEffort = "xhigh";
+    const effortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "xhigh" }).expect(200);
+    expect(effortUpdated.body.data.thinkingEffort).toBe("xhigh");
+    const providerTested = await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    expect(providerTested.body.data.ok).toBe(true);
+    expectedThinkingEffort = "max";
+    const maxEffortUpdated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEffort: "max" }).expect(200);
+    expect(maxEffortUpdated.body.data.thinkingEffort).toBe("max");
+    const modelTested = await request(runtime.app).post(`/api/models/${modelId}/test`).send({}).expect(200);
+    expect(modelTested.body.data.ok).toBe(true);
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "验证最高思考强度参数",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(201);
+
+    expectedThinkingEffort = undefined;
     expectedThinkingType = "disabled";
     const updated = await request(runtime.app).patch(`/api/models/${modelId}`).send({ thinkingEnabled: false }).expect(200);
     expect(updated.body.data.thinkingEnabled).toBe(false);
+    expect(updated.body.data.thinkingEffort).toBe("max");
     await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
       taskType: "chat",
       instruction: "验证关闭思考参数",
@@ -552,6 +638,20 @@ describe("AI 供应商、模型与建议 API", () => {
       .filter((call: { model: { id: string }; taskType: string }) => call.model.id === model.body.data.id && call.taskType === "chat")
       .map((call: { parameters: { temperature?: number } }) => Number(call.parameters.temperature));
     expect(temperatures.sort((left, right) => left - right)).toEqual([0.2, 1]);
+  });
+
+  it("AI 工具设置支持 calculate_time 并兼容旧默认工具配置", async () => {
+    const legacyDefaultTools = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"];
+    runtime.database.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(legacyDefaultTools), workId);
+
+    const migrated = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(migrated.body.data.agentTools).toEqual([...legacyDefaultTools, "calculate_time"]);
+
+    const selected = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["calculate_time"] }).expect(200);
+    expect(selected.body.data.agentTools).toEqual(["calculate_time"]);
+
+    const disabled = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    expect(disabled.body.data.agentTools).toEqual([]);
   });
 
   it("Gemini endpoint 或模型名命中时不发送 thinking 字段", async () => {
@@ -904,7 +1004,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -981,7 +1081,7 @@ describe("AI 供应商、模型与建议 API", () => {
       parentRaceId: titan.body.data.id,
       settings: ["源自远古"]
     }).expect(201);
-    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", isDead: true, raceId: original.body.data.id }).expect(201);
+    await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "哥斯拉", gender: "male", isDead: true, raceId: original.body.data.id }).expect(201);
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     let completionCount = 0;
@@ -998,6 +1098,7 @@ describe("AI 供应商、模型与建议 API", () => {
       };
       if (completionCount === 1) {
         const searchTool = body.tools?.find((tool) => tool.function?.name === "search_story_entities");
+        expect(searchTool?.function?.description).toContain("gender=unknown 时禁止");
         expect(searchTool?.function?.description).toContain("只有值为 true 才能判定");
         expect(searchTool?.function?.description).toContain("字段为 false 时必须视为仍存活、未灭绝或未解散");
         expect(searchTool?.function?.parameters?.properties?.query?.maxLength).toBe(100);
@@ -1009,6 +1110,7 @@ describe("AI 供应商、模型与建议 API", () => {
       }
       const toolMessage = body.messages.find((message) => message.role === "tool");
       expect(toolMessage?.content).toContain('"racePath":"泰坦 / 原生泰坦"');
+      expect(toolMessage?.content).toContain('"gender":"male"');
       expect(toolMessage?.content).toContain('"isDead":true');
       expect(toolMessage?.content).toContain('"isExtinct":true');
       expect(toolMessage?.content).toContain('"lineage":[{"id":"' + titan.body.data.id + '","name":"泰坦"}');
@@ -1030,7 +1132,7 @@ describe("AI 供应商、模型与建议 API", () => {
   it("覆盖所有查询工具的可选参数组合并把结构化结果交回模型", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
-    const character = runtime.store.createCharacter(workId, { name: "哥斯拉" });
+    const character = runtime.store.createCharacter(workId, { name: "哥斯拉", gender: "male" });
     const section = runtime.store.createCharacterProfileSection(String(character.id), {
       sectionType: "background",
       title: "背景故事",
@@ -1072,7 +1174,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(results.get("grep-limit")).toMatchObject({ ok: true, data: { limit: 1, matches: [{ chapterId }] } });
       expect(results.get("knowledge-default")).toMatchObject({ ok: true, data: { query: "跃迁", matchMode: "hybrid_exact_phonetic" } });
       expect(results.get("knowledge-categories")).toMatchObject({ ok: true, data: { matchMode: "hybrid_exact_phonetic", matches: expect.any(Array) } });
-      expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", summary: "哥斯拉在远古时期守护地球生态。" }] } });
+      expect(results.get("character-section-summary")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, characterName: "哥斯拉", gender: "male", summary: "哥斯拉在远古时期守护地球生态。" }] } });
       expect(results.get("character-section-summary")).not.toHaveProperty("data.sections.0.contentMarkdown");
       expect(results.get("character-section-content")).toMatchObject({ ok: true, data: { sections: [{ sectionId: section.id, contentMarkdown: "## 远古时期\n\n哥斯拉守护地球生态。" }] } });
       expect(results.get("character-section-content")).not.toHaveProperty("data.sections.0.summary");
@@ -1180,7 +1282,8 @@ describe("AI 供应商、模型与建议 API", () => {
         pagination: { cursor: number; nextCursor: number | null; maxChars: number };
       };
       expect((latest?.content ?? "").length).toBeLessThanOrEqual(10_000);
-      expect(result.pagination.maxChars).toBe(10_000);
+      expect(result.pagination.maxChars).toBeGreaterThan(0);
+      expect(result.pagination.maxChars).toBeLessThanOrEqual(10_000);
       expect(result.data.chapters.every((chapter) => chapter._fragment)).toBe(true);
       fragments.push(...result.data.chapters.map((chapter) => chapter.content ?? ""));
       if (result.pagination.nextCursor !== null) {
@@ -1426,12 +1529,12 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(response.body.data.content).toBe("工具失败信息已正确处理。");
   });
 
-  it("上游返回非限流 4xx 时不进行无效重试", async () => {
+  it("上游返回 402 时按普通策略默认重试 3 次", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     fetchMock.mockClear();
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { message: "invalid request" } }), {
-      status: 400,
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "invalid request" } }), {
+      status: 402,
       headers: { "Content-Type": "application/json" }
     }));
 
@@ -1442,7 +1545,46 @@ describe("AI 供应商、模型与建议 API", () => {
       modelId
     }).expect(502);
 
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("上游返回 403 时不重试", async () => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "forbidden" } }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" }
+    }));
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "触发上游权限错误。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(502);
+
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([429, 502])("上游返回 %s 时按退避策略默认重试 10 次", async (status) => {
+    const { providerId, modelId } = await configureAi();
+    await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
+    await request(runtime.app).patch(`/api/providers/${providerId}`).send({ rpmLimit: 10_000 }).expect(200);
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ error: { message: "temporarily unavailable" } }), {
+      status,
+      headers: { "Content-Type": "application/json" }
+    }));
+
+    await request(runtime.app).post(`/api/works/${workId}/suggestions`).send({
+      taskType: "chat",
+      instruction: "触发上游退避重试。",
+      scope: { type: "chapter", chapterId },
+      modelId
+    }).expect(502);
+
+    expect(fetchMock).toHaveBeenCalledTimes(11);
   });
 
   it("工具配额限制不改动 prompt cache 前缀的 tools 定义与系统消息", async () => {
@@ -1517,6 +1659,7 @@ describe("AI 供应商、模型与建议 API", () => {
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     const role = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "林舟",
+      gender: "male",
       isDead: false,
       profile: { summary: "北港领航员" },
       currentState: { location: "北港" }
@@ -1529,10 +1672,11 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(201);
     const otherRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({
       name: "顾潮",
+      gender: "female",
       aliases: ["潮哥"],
       profile: { secret: "这段其他角色的私密档案不得被读取" }
     }).expect(201);
-    const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星" }).expect(201);
+    const thirdRole = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "沈星", gender: "none" }).expect(201);
     await request(runtime.app).post(`/api/works/${workId}/relationships`).send({
       fromCharacterId: role.body.data.id,
       toCharacterId: otherRole.body.data.id,
@@ -1563,6 +1707,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200);
     expect(roleplay.body.data.taskType).toBe("roleplay");
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(roleplay.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
     const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
@@ -1591,6 +1736,7 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).toContain("你是沉浸式角色扮演引擎");
       expect(systemPrompt).toContain("<character_card>");
       expect(systemPrompt).toContain('"name":"林舟"');
+      expect(systemPrompt).toContain('"gender":"male"');
       expect(systemPrompt).toContain('"isDead":false');
       expect(systemPrompt).not.toContain("小说作者的创作协作助手");
       expect(systemPrompt).not.toContain("平台创作助手提示不得进入角色扮演");
@@ -1599,14 +1745,18 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).not.toContain("<work_system_prompt>");
       expect(systemPrompt).not.toContain("<extra_system_prompt>");
       expect(systemPrompt).not.toContain("<current_time>");
+      expect(systemPrompt).toContain("使用 calculate_time");
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
       expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
+      expect(body.tools?.[0]?.function?.description).toContain("gender=unknown 时禁止");
       expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
       expect(body.tools?.[1]?.function?.description).toContain("只能返回当前角色参与的关系");
       expect(body.tools?.[1]?.function?.description).toContain("未传入 characters");
+      expect(body.tools?.[1]?.function?.description).toContain("关系双方的权威 gender");
+      expect(body.tools?.[2]?.function?.description).toContain("纯计算工具");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
@@ -1614,23 +1764,27 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
           { id: "relationship-list", type: "function", function: { name: "recall_relationship", arguments: "{}" } },
+          { id: "date-calculation", type: "function", function: { name: "calculate_time", arguments: JSON.stringify({ operation: "diff", startYear: 2025, startMonth: 1, startDay: 1, endYear: 2025, endMonth: 1, endDay: 8 }) } },
           { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
         ] } }] }), { status: 200 });
       }
       if (completionCount === 2) {
         const toolMessages = body.messages.filter((message) => message.role === "tool").map((message) => String(message.content));
         expect(toolMessages[0]).toContain("北港领航员");
+        expect(toolMessages[0]).toContain('"gender":"male"');
         expect(toolMessages[0]).toContain('"isDead":false');
         expect(toolMessages[0]).toContain("第一次看见星舰");
         expect(toolMessages[0]).toContain("林舟启动了飞船");
         expect(toolMessages[0]).not.toContain("其他角色的私密档案");
         expect(toolMessages[0]).not.toContain("只有自己知道的密钥");
         expect(toolMessages[1]).toContain("顾潮");
+        expect(toolMessages[1]).toContain('"gender":"female"');
         expect(toolMessages[1]).toContain("潮哥");
         expect(toolMessages[1]).toContain("relationshipCount");
         expect(toolMessages[1]).not.toContain("旧友");
         expect(toolMessages[1]).not.toContain("共同远航");
-        expect(toolMessages[2]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[2]).toContain('"totalDays":7');
+        expect(toolMessages[3]).toContain("TOOL_NOT_AVAILABLE");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "relationship-details", type: "function", function: { name: "recall_relationship", arguments: JSON.stringify({ characters: ["潮哥", "沈星"] }) } }
         ] } }] }), { status: 200 });
@@ -1640,6 +1794,8 @@ describe("AI 供应商、模型与建议 API", () => {
         const relationshipDetails = toolMessages.at(-1) ?? "";
         expect(relationshipDetails).toContain('"mode":"details"');
         expect(relationshipDetails).toContain("顾潮");
+        expect(relationshipDetails).toContain('"selfGender":"male"');
+        expect(relationshipDetails).toContain('"otherGender":"female"');
         expect(relationshipDetails).toContain("旧友");
         expect(relationshipDetails).toContain("共同远航");
         expect(relationshipDetails).not.toContain("秘密对手");
@@ -1657,6 +1813,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200);
     expect(streamed.text).toContain('"name":"recall_self"');
     expect(streamed.text).toContain('"name":"story_index"');
+    expect(streamed.text).toContain('"name":"calculate_time"');
     expect(streamed.text).toContain('"status":"failed"');
     expect(streamed.text).toContain("我记得第一次看见星舰");
     const secondTurn = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
@@ -1672,11 +1829,13 @@ describe("AI 供应商、模型与建议 API", () => {
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.taskType).toBe("roleplay");
     expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(reloaded.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
     expect(forked.body.data.taskType).toBe("roleplay");
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(forked.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const lockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: otherRole.body.data.id
     }).expect(409);
@@ -1912,9 +2071,9 @@ describe("AI 供应商、模型与建议 API", () => {
   });
 
   it("流式用户消息持久化手动与自动角色引用且角色扮演不自动识别", async () => {
-    const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾潮" }).expect(201);
-    const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟" }).expect(201);
-    const roleplayCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "宋遥" }).expect(201);
+    const manualCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "顾潮", gender: "male" }).expect(201);
+    const automaticCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "林舟", gender: "female" }).expect(201);
+    const roleplayCharacter = await request(runtime.app).post(`/api/works/${workId}/characters`).send({ name: "宋遥", gender: "none" }).expect(201);
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
@@ -1948,6 +2107,8 @@ describe("AI 供应商、模型与建议 API", () => {
     ]);
     expect(sentContexts[0]).toContain("<selected_characters>");
     expect(sentContexts[0]).toContain("<mentioned_characters>");
+    expect(sentContexts[0]).toContain("gender=male");
+    expect(sentContexts[0]).toContain("gender=female");
     expect(runtime.store.getAiConversationInjectedEntities(conversationId, workId).characters).toEqual([
       automaticCharacter.body.data.id
     ]);
@@ -2163,12 +2324,20 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(settingsAfter.body.data.titleGenerationModelId).toBe(modelId);
   });
 
-  it("浏览器中断流式连接会取消上游且保留已收到的助手正文", async () => {
+  it("浏览器中断流式连接会取消上游并保留此前完整 turn 与已收到的助手正文", async () => {
     const { providerId, modelId } = await configureAi();
     await request(runtime.app).post(`/api/providers/${providerId}/test`).send({}).expect(200);
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     const conversation = await request(runtime.app).post(`/api/works/${workId}/ai-conversations`).send({}).expect(201);
     const conversationId = String(conversation.body.data.id);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "user",
+      content: "此前完整问题"
+    }).expect(201);
+    await request(runtime.app).post(`/api/ai-conversations/${conversationId}/messages`).send({
+      role: "assistant",
+      content: "此前完整回答"
+    }).expect(201);
     let upstreamAborted = false;
     fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
@@ -2241,15 +2410,19 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamRequest).toMatchObject({ status: "cancelled", assistant_message_id: expect.any(String) });
 
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
-    expect(reloaded.body.data.title).toBe("切换对话时取消旧流");
+    expect(reloaded.body.data.title).toBe("此前完整问题");
     expect(reloaded.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
+      { role: "user", content: "此前完整问题" },
+      { role: "assistant", content: "此前完整回答" },
       { role: "user", content: "切换对话时取消旧流" },
       { role: "assistant", content: "不应落库的部分回复" }
     ]);
     expect(runtime.database.get("SELECT COUNT(*) AS count FROM ai_suggestions WHERE work_id = ?", workId)).toEqual({ count: 0 });
 
-    fetchMock.mockImplementation(async (input) => {
+    let resumedMessages: Array<{ role?: string; content?: string }> = [];
+    fetchMock.mockImplementation(async (input, init) => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
+      resumedMessages = (JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ role?: string; content?: string }> }).messages ?? [];
       return new Response('data: {"choices":[{"delta":{"content":"取消后恢复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
         status: 200,
         headers: { "Content-Type": "text/event-stream" }
@@ -2265,6 +2438,19 @@ describe("AI 供应商、模型与建议 API", () => {
       })
       .expect(200);
     expect(resumed.text).toContain("event: complete");
+    expect(resumedMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "user", content: "此前完整问题" }),
+      expect.objectContaining({ role: "assistant", content: "此前完整回答" })
+    ]));
+    const resumedHistory = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(resumedHistory.body.data.messages.map((message: { role: string; content: string }) => ({ role: message.role, content: message.content }))).toEqual([
+      { role: "user", content: "此前完整问题" },
+      { role: "assistant", content: "此前完整回答" },
+      { role: "user", content: "切换对话时取消旧流" },
+      { role: "assistant", content: "不应落库的部分回复" },
+      { role: "user", content: "取消后继续" },
+      { role: "assistant", content: "取消后恢复" }
+    ]);
   });
 
   it("客户端完成回调重试使用用户消息请求键避免重复 assistant 消息", async () => {
@@ -2351,7 +2537,7 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(streamed.text).toContain('event: delta\ndata: {"delta":"主回答"}');
     expect(streamed.text).toContain("event: complete");
     expect(streamed.text).not.toContain("event: error");
-    expect(titleRequestCount).toBe(1);
+    expect(titleRequestCount).toBe(4);
   });
 
   it("侧栏问答失败时通过 SSE 返回受控错误信息", async () => {

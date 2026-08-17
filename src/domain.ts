@@ -12,6 +12,9 @@ export const DRAFT_SETTING_MODULES = [
 ] as const;
 export type DraftSettingModule = (typeof DRAFT_SETTING_MODULES)[number];
 
+export const CHARACTER_GENDERS = ["male", "female", "none", "unknown"] as const;
+export type CharacterGender = (typeof CHARACTER_GENDERS)[number];
+
 export const TASK_TYPES = [
   "chat",
   "continue",
@@ -108,6 +111,17 @@ export type ContextScope = {
   preFilterRelationshipSources?: boolean;
   previewRelationshipChanges?: boolean;
   relationshipSourceRefs?: Array<{ sourceType: string; sourceId: string; sourceVersion: string }>;
+  /** 服务端创建任务时固化的来源筛选摘要；创建 API 不接收该内部字段。 */
+  relationshipSourceSelectionSummary?: {
+    policyVersion: number;
+    indexGeneration: number;
+    exactSourceCount: number;
+    fuzzyCandidateCount: number;
+    confirmedSourceCount: number;
+    rejectedSourceCount: number;
+    uncertainSourceCount: number;
+    reviewIds: string[];
+  };
   replaceExistingRelationships?: boolean;
   excludeRelationshipConstraints?: boolean;
   suppressAutomaticContext?: boolean;

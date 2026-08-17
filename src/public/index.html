@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260815-ai-history-favorite-v3&feature=ai-tool-call-copy-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -133,6 +133,7 @@
             <button type="button" data-module="relationships"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98"/><path d="m15.41 6.51-6.82 3.98"/></svg>关系</button>
             <button type="button" data-module="races"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="4" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="20" cy="16" r="2"/><path d="M9 10a5 5 0 0 1 5 5v3.5a3.5 3.5 0 0 1-6.84 1.045Q6.52 17.48 4.46 16.84A3.5 3.5 0 0 1 5.5 10Z"/></svg>种族</button>
             <button class="ai-analysis-entry" type="button" data-module="tasks"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>AI 分析</button>
+            <button id="ai-assistant-entry" class="ai-assistant-entry" type="button" aria-controls="ai-panel" aria-expanded="false"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4h0A2.5 2.5 0 0 1 4 13.5z"/><path d="M8 8h8M8 11h5"/></svg>创作助手</button>
             <button id="module-more-button" type="button" aria-expanded="false"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg><span class="nav-label">更多</span></button>
             <button id="reader-open-button" class="module-nav-secondary hidden" type="button" aria-label="打开沉浸式阅读预览" title="阅读预览"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H11v16H5.5A2.5 2.5 0 0 0 3 21.5Z"/><path d="M21 5.5A2.5 2.5 0 0 0 18.5 3H13v16h5.5a2.5 2.5 0 0 1 2.5 2.5Z"/></svg>阅读预览</button>
             <button class="module-nav-secondary hidden" type="button" data-module="comments"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg><span class="nav-label">正文评论</span></button>
@@ -257,6 +258,23 @@
               <button id="tidy-blank-lines-button" class="ghost-button" type="button">整理空行</button>
               <button id="save-button" class="primary-button" type="button">保存正文</button>
             </div>
+            <section id="chapter-search-panel" class="chapter-search-panel hidden" role="dialog" aria-labelledby="chapter-search-title" aria-describedby="chapter-search-description" aria-hidden="true">
+              <header class="chapter-search-panel-header">
+                <div><span class="eyebrow">正文工具</span><h2 id="chapter-search-title">本章搜索与替换</h2><p id="chapter-search-description">只搜索当前打开的正文章节，不需要选择章节。</p></div>
+                <button id="chapter-search-close" class="dialog-close" type="button" aria-label="关闭本章搜索">×</button>
+              </header>
+              <div class="chapter-search-fields">
+                <label>查找本章内容<input id="chapter-search-query" type="search" maxlength="500" autocomplete="off" placeholder="输入要查找的文字"></label>
+                <label>替换为<input id="chapter-replace-query" type="text" maxlength="200000" autocomplete="off" placeholder="留空表示删除"></label>
+              </div>
+              <div class="chapter-search-actions">
+                <span id="chapter-search-status" role="status" aria-live="polite">输入关键词后开始搜索</span>
+                <button id="chapter-search-previous" class="ghost-button" type="button">上一个</button>
+                <button id="chapter-search-next" class="ghost-button" type="button">下一个</button>
+                <button id="chapter-search-replace" class="ghost-button" type="button">替换</button>
+                <button id="chapter-search-replace-all" class="primary-button" type="button">全部替换</button>
+              </div>
+            </section>
           </div>
           <section id="chapter-foreshadow-reminder" class="chapter-foreshadow-reminder hidden" aria-live="polite" aria-labelledby="chapter-foreshadow-reminder-title">
             <div class="chapter-foreshadow-reminder-summary">
@@ -305,27 +323,36 @@
         </section>
       </main>
 
-      <aside class="ai-panel">
+      <aside id="ai-panel" class="ai-panel">
         <div id="ai-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整创作助手宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="ai-heading">
           <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
           <div class="ai-heading-title"><span id="ai-status-dot" class="status-dot" role="status" aria-label="创作助手状态：正常" title="创作助手状态：正常"></span><strong>创作助手</strong></div>
           <div class="ai-heading-actions">
-            <span id="ai-conversation-title" title="当前对话">新对话</span>
+            <button id="ai-conversation-switcher" class="ai-conversation-switcher" type="button" aria-label="切换打开的对话" aria-controls="ai-conversation-switcher-menu" aria-expanded="false" aria-haspopup="dialog" title="切换打开的对话"><span id="ai-conversation-title">新对话</span><small id="ai-open-conversation-count">1</small><svg viewBox="0 0 12 8" aria-hidden="true" focusable="false"><path d="M1 1.5 6 6.5l5-5"></path></svg></button>
+            <button id="ai-workspace-close" class="hidden" type="button" aria-label="退出多会话工作台">退出</button>
             <button id="ai-history-toggle" type="button" aria-label="历史记录" aria-controls="ai-history-dialog" aria-expanded="false" aria-haspopup="dialog" title="历史记录"><svg class="ai-heading-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5M12 7v5l3.5 2"></path></svg></button>
             <button id="ai-new-conversation" type="button" aria-label="新建对话" title="新建对话">＋</button>
           </div>
         </div>
+        <section id="ai-conversation-switcher-menu" class="ai-conversation-switcher-menu hidden" role="dialog" aria-labelledby="ai-conversation-switcher-title">
+          <header><div><strong id="ai-conversation-switcher-title">打开的对话</strong><small id="ai-conversation-switcher-limit">1 / 5</small></div><button id="ai-conversation-switcher-close" type="button" aria-label="关闭对话切换器">×</button></header>
+          <div id="ai-open-conversation-list" class="ai-open-conversation-list" role="list"></div>
+          <footer><button id="ai-switcher-history" type="button">打开历史记录</button><button id="ai-workspace-open" type="button">进入多会话工作台</button></footer>
+        </section>
+        <div id="ai-chat-tabs" class="ai-chat-tabs hidden" role="tablist" aria-label="Agent 对话页签" aria-hidden="true"></div>
         <div class="quick-actions" aria-label="快捷指令">
           <button type="button" data-task="chat" data-prompt="总结当前章节，并列出尚未解决的冲突。">总结本章</button>
           <button type="button" data-task="continue" data-prompt="续写当前章节，保持现有叙事风格和人物状态。">续写</button>
           <button type="button" data-task="chat" data-prompt="提供三种后续剧情方向，并说明各自与既有设定的兼容性。">三种方向</button>
           <button type="button" data-task="chat" data-prompt="检查当前章节与锁定设定、人物状态和时间线的冲突。">检查冲突</button>
         </div>
-        <div id="ai-feed" class="ai-feed">
-          <div class="assistant-message">
-            <span>助手</span>
-            <div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div>
+        <div id="ai-chat-panels" class="ai-chat-panels">
+          <div id="ai-feed" class="ai-feed" role="tabpanel">
+            <div class="assistant-message">
+              <span>助手</span>
+              <div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div>
+            </div>
           </div>
         </div>
         <div class="prompt-box">
@@ -365,7 +392,7 @@
                 <header class="ai-context-popover-header"><div><strong id="ai-context-popover-title">Token 分布</strong><small id="ai-context-popover-description">按当前模型上下文窗口计算</small></div><button id="ai-context-popover-close" class="ai-context-popover-close" type="button" aria-label="关闭 Token 分布">×</button></header>
                 <div id="ai-context-distribution" class="ai-context-distribution" role="list" aria-label="当前 Token 分布"></div>
               </section>
-              <button id="ai-send" class="ai-send-button" type="button" aria-label="发送消息">发送</button>
+              <button id="ai-send" class="ai-send-button" type="button" data-state="send" aria-label="发送消息" title="发送消息"><svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 3 9.5 14.5M21 3l-7 18-4.5-6.5L3 10l18-7Z"></path></svg></button>
             </div>
           </div>
         </div>
@@ -380,24 +407,30 @@
           <h1 id="reader-title">阅读预览</h1>
         </div>
         <details id="reader-settings" class="reader-settings">
-          <summary>显示设置</summary>
+          <summary>阅读设置</summary>
           <div class="reader-settings-panel">
-            <label>字号<select id="reader-font-size" aria-label="阅读字号">
-              <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
-            </select></label>
-            <label>行距<select id="reader-line-height" aria-label="阅读行距">
-              <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
-            </select></label>
-            <label>主题<select id="reader-theme" aria-label="阅读主题">
-              <option value="auto">跟随工作台</option><option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
-            </select></label>
+            <section class="reader-settings-group" aria-labelledby="reader-display-settings-title">
+              <span id="reader-display-settings-title" class="reader-settings-section-title">显示设置</span>
+              <label>字号<select id="reader-font-size" aria-label="阅读字号">
+                <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
+              </select></label>
+              <label>行距<select id="reader-line-height" aria-label="阅读行距">
+                <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
+              </select></label>
+              <label>主题<select id="reader-theme" aria-label="阅读主题">
+                <option value="auto">跟随工作台</option><option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
+              </select></label>
+            </section>
+            <section class="reader-settings-group reader-navigation-group" aria-labelledby="reader-navigation-title">
+              <span id="reader-navigation-title" class="reader-settings-section-title">阅读导航</span>
+              <div class="reader-jump-controls" aria-label="阅读导航与模式">
+                <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
+                <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
+                <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
+              </div>
+            </section>
           </div>
         </details>
-        <div class="reader-jump-controls" aria-label="阅读导航与模式">
-          <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
-          <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
-          <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
-        </div>
       </header>
       <main id="reader-viewport" class="reader-viewport" tabindex="0" aria-describedby="reader-keyboard-hint">
         <article id="reader-document" class="reader-document" aria-live="polite">
@@ -699,7 +732,7 @@
           <label>关键词<input id="search-query" name="query" type="search" maxlength="100" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
           <label>资料类型<select id="search-type" name="type">
             <option value="">全部资料</option>
-            <option value="chapter">章节</option>
+            <option value="chapter">正文章节</option>
             <option value="setting">设定</option>
             <option value="character">角色</option>
             <option value="race">种族</option>
@@ -729,6 +762,8 @@
         <div class="replace-dialog-body">
           <label class="replace-field">查找内容<input id="replace-find" name="find" type="text" maxlength="500" autocomplete="off" required placeholder="输入要查找的文字"></label>
           <label class="replace-field">替换为<textarea id="replace-with" name="replacement" maxlength="200000" rows="4" placeholder="输入替换后的文字；留空表示删除"></textarea></label>
+          <label class="replace-field">正文分卷<select id="replace-volume" name="volumeId" aria-describedby="replace-volume-description"><option value="">全部分卷（整部作品正文）</option></select></label>
+          <p id="replace-volume-description" class="replace-range-note">选择分卷后，只替换该分卷的章节正文；设定库不按分卷筛选。</p>
           <fieldset class="replace-scope-fieldset" aria-describedby="replace-scope-description">
             <legend>替换范围</legend>
             <p id="replace-scope-description">默认只替换章节正文内容。</p>
@@ -1122,6 +1157,10 @@
           <span>收藏对话</span>
           <small>收藏后不会被清理</small>
         </button>
+        <button type="button" role="menuitem" data-ai-history-action="copy-session-id">
+          <span>复制 Session ID</span>
+          <small>复制用于后端问题定位的对话标识</small>
+        </button>
         <button type="button" role="menuitem" data-ai-history-action="export">
           <span>导出 Markdown</span>
           <small>下载当前对话的角色、时间和消息正文</small>
@@ -1147,6 +1186,8 @@
         <button id="galaxy-close" class="galaxy-close" type="button" aria-label="关闭人物关系银河图" data-testid="galaxy-close">×</button>
         <output id="galaxy-stats" class="galaxy-stats" aria-live="polite" data-testid="galaxy-stats"></output>
         <aside class="galaxy-controls" aria-label="银河图控制">
+          <label class="galaxy-motion-field" for="galaxy-motion-mode"><span>动效</span><select id="galaxy-motion-mode" aria-label="银河图动效模式" aria-describedby="galaxy-motion-status" data-testid="galaxy-motion-mode"><option value="auto">自动</option><option value="on">开启</option><option value="reduced">减少</option><option value="off">关闭</option></select></label>
+          <output id="galaxy-motion-status" class="galaxy-motion-status" aria-live="polite" data-testid="galaxy-motion-status"></output>
           <button id="galaxy-stars" type="button" aria-pressed="true" data-testid="galaxy-stars">隐藏背景星点</button>
           <button id="galaxy-grid" type="button" aria-pressed="false" data-testid="galaxy-grid">显示空间网格</button>
           <button id="galaxy-rotation" type="button" aria-pressed="false" data-testid="galaxy-rotation">暂停旋转</button>
@@ -1164,6 +1205,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260815-ai-stream-persistence-v4&feature=ai-tool-call-copy-v1"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=calculate-time-tool-v1&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1&feature=ai-assistant-workspace-v1&feature=volume-detail-icon-v1&feature=reader-manual-chapter-navigation-v1"></script>
   </body>
 </html>

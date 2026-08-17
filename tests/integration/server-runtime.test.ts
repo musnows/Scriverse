@@ -17,7 +17,8 @@ import {
   startLocalServer,
   type RunningLocalServer
 } from "../../src/server-runtime.js";
-import { APP_VERSION } from "../../src/version.js";
+import { APP_VERSION, SCRIVERSE_BETA_COMMIT_ENV } from "../../src/version.js";
+import { AI_CHAT_TAB_LIMIT_ENV } from "../../src/ai-chat-tab-limit.js";
 import { loadMasterSecret } from "../../src/credential-vault.js";
 import { DATABASE_SCHEMA_VERSION, Database, readDatabaseSchemaVersion } from "../../src/database.js";
 import {
@@ -102,6 +103,45 @@ describe("本地服务运行时", () => {
       data: { uploadLimits: { avatarBytes: number; coverBytes: number; attachmentBytes: number } };
     };
     expect(health.data.uploadLimits).toEqual({ avatarBytes: 1024, coverBytes: 2048, attachmentBytes: 4096 });
+  });
+
+  it("通过环境变量将 Beta 提交版本传入运行时健康接口", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-beta-version-"));
+    roots.push(root);
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: {
+        NODE_ENV: "test",
+        [SCRIVERSE_BETA_COMMIT_ENV]: "1234567890abcdef1234567890abcdef12345678"
+      }
+    });
+    runningServers.push(running);
+
+    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as {
+      data: { version: string; versionLabel: string };
+    };
+    expect(health.data).toMatchObject({ version: APP_VERSION, versionLabel: "12345678 beta" });
+  });
+
+  it("通过环境变量将 Agent 对话上限传入运行时健康接口", async () => {
+    const root = mkdtempSync(join(tmpdir(), "scriverse-ai-chat-limit-"));
+    roots.push(root);
+    const running = await startLocalServer({
+      host: "127.0.0.1",
+      port: 0,
+      dataDirectory: root,
+      databasePath: join(root, "novel.db"),
+      env: { NODE_ENV: "test", [AI_CHAT_TAB_LIMIT_ENV]: "1" }
+    });
+    runningServers.push(running);
+
+    const health = await fetch(`${running.url}/api/health`).then((response) => response.json()) as {
+      data: { aiChatTabLimit: number };
+    };
+    expect(health.data.aiChatTabLimit).toBe(1);
   });
 
   it("解析迁移备份保留数量并限制最低值", () => {

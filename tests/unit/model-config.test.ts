@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
+import { MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelPayload, supportsMultimodalModelProtocol } from "../../src/public/model-config.js";
 
 describe("AI 模型配置", () => {
   it("仅允许 OpenAI Chat Completions 供应商使用多模态能力", () => {
@@ -12,13 +12,41 @@ describe("AI 模型配置", () => {
   it("新模型默认开启 thinking 并写入配置载荷", () => {
     const values = modelFormValues();
     expect(values.thinkingEnabled).toBe(true);
-    expect(modelPayload({ ...values, displayName: "思考模型", modelId: "thinking-model" }).thinkingEnabled).toBe(true);
+    expect(values.thinkingEffort).toBe("default");
+    expect(modelPayload({ ...values, displayName: "思考模型", modelId: "thinking-model" })).toMatchObject({
+      thinkingEnabled: true,
+      thinkingEffort: "default"
+    });
+  });
+
+  it("显示全部思考强度的原始英文值并保留扩展档位", () => {
+    expect(MODEL_THINKING_EFFORT_OPTIONS).toEqual([
+      ["default", "模型默认"],
+      ["low", "低（low）"],
+      ["medium", "中（medium）"],
+      ["high", "高（high）"],
+      ["xhigh", "超高（xhigh）"],
+      ["max", "最高（max）"]
+    ]);
+    expect(modelFormValues({ thinkingEffort: "xhigh" }).thinkingEffort).toBe("xhigh");
+    const values = modelFormValues({ thinkingEffort: "max" });
+    expect(modelPayload({ ...values, displayName: "最高强度模型", modelId: "max-effort-model" }).thinkingEffort).toBe("max");
   });
 
   it("保留模型已有的 thinking 关闭状态", () => {
-    const values = modelFormValues({ thinkingEnabled: false });
+    const values = modelFormValues({ thinkingEnabled: false, thinkingEffort: "high" });
     expect(values.thinkingEnabled).toBe(false);
-    expect(modelPayload({ ...values, displayName: "普通模型", modelId: "plain-model" }).thinkingEnabled).toBe(false);
+    expect(values.thinkingEffort).toBe("high");
+    expect(modelPayload({ ...values, displayName: "普通模型", modelId: "plain-model" })).toMatchObject({
+      thinkingEnabled: false,
+      thinkingEffort: "high"
+    });
+  });
+
+  it("拒绝未知思考强度并回退为模型默认", () => {
+    const values = modelFormValues({ thinkingEffort: "unsupported" });
+    expect(values.thinkingEffort).toBe("default");
+    expect(modelPayload({ ...values, displayName: "兼容模型", modelId: "compatible-model", thinkingEffort: "unsupported" as never }).thinkingEffort).toBe("default");
   });
 
   it("保留多模态能力和默认读图模型选项", () => {

@@ -2142,6 +2142,10 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", owner.csrfToken)
       .send({ name: "TOP_SECRET_CHARACTER" })
       .expect(201);
+    await owner.agent.post(`/api/works/${workId}/characters`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ name: "TOP_SECRET_OTHER" })
+      .expect(201);
     const targetedTask = await owner.agent.post(`/api/works/${workId}/tasks`)
       .set("X-CSRF-Token", owner.csrfToken)
       .send({
@@ -2149,7 +2153,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
         scope: { type: "book", characterIds: [secretCharacter.body.data.id] }
       })
       .expect(201);
-    expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER");
+    expect(targetedTask.body.data.scopeSummary).toBe("全书 · 定向 1 人：TOP_SECRET_CHARACTER · 已预检 0 条来源");
     const collaboratorTargetedTask = await analysisOnly.agent.post(`/api/works/${workId}/tasks`)
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({
@@ -2217,13 +2221,13 @@ describe("用户、作品权限与操作者追踪 API", () => {
     await analysisOnly.agent.get(`/api/works/${workId}/characters`).expect(403);
     const protectedTasks = await analysisOnly.agent.get(`/api/works/${workId}/tasks?page=1&limit=30`).expect(200);
     const protectedTaskSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === targetedTask.body.data.id);
-    expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskSummary.scopeSummary).toBe("全书 · 定向 1 人 · 已预检 0 条来源");
     expect(JSON.stringify(protectedTaskSummary)).not.toContain("TOP_SECRET_CHARACTER");
     const protectedSelectionSummary = protectedTasks.body.data.items.find((item: { id: string }) => item.id === secretSelectionTask.body.data.id);
     expect(protectedSelectionSummary.scopeSummary).toBe("选定内容（正文读取权限受限）");
     expect(JSON.stringify(protectedSelectionSummary)).not.toContain("TOP_SECRET_SELECTION_PROSE");
     const protectedTaskDetail = await analysisOnly.agent.get(`/api/tasks/${targetedTask.body.data.id}`).expect(200);
-    expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskDetail.body.data.scopeSummary).toBe("全书 · 定向 1 人 · 已预检 0 条来源");
     expect(protectedTaskDetail.body.data.scope.targetCharacters).toBeUndefined();
     expect(protectedTaskDetail.body.data.result.relationshipResults[0].fromCharacterName).toBeUndefined();
     expect(protectedTaskDetail.body.data.result.relationshipResults[0].toCharacterName).toBeUndefined();
@@ -2287,7 +2291,7 @@ describe("用户、作品权限与操作者追踪 API", () => {
       .set("X-CSRF-Token", analysisOnly.csrfToken)
       .send({})
       .expect(200);
-    expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人");
+    expect(protectedTaskCancellation.body.data.scopeSummary).toBe("全书 · 定向 1 人 · 已预检 0 条来源");
     expect(protectedTaskCancellation.body.data.scope.targetCharacters).toBeUndefined();
     expect(JSON.stringify(protectedTaskCancellation.body.data)).not.toContain("TOP_SECRET_CHARACTER");
     const protectedTaskRerun = await analysisOnly.agent.post(`/api/tasks/${targetedTask.body.data.id}/rerun`)
@@ -2901,6 +2905,60 @@ describe("用户、作品权限与操作者追踪 API", () => {
       workId
     )).toEqual({ action: "work.member-added" });
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
+  });
+
+  it("仅向有权限的已登录用户暴露对话 Session ID，不暴露认证会话 ID", async () => {
+    const owner = await register(runtime, "ai_session_id_owner");
+    const reader = await register(runtime, "ai_session_id_reader");
+    const outsider = await register(runtime, "ai_session_id_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "Session ID 权限边界作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: reader.user.userId,
+        permissions: {
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "read",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const created = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "诊断对话" })
+      .expect(201);
+    const conversationId = String(created.body.data.id);
+
+    const unauthenticated = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(401);
+    expect(unauthenticated.body.error.code).toBe("AUTH_REQUIRED");
+    const forbidden = await outsider.agent.get(`/api/ai-conversations/${conversationId}`).expect(403);
+    expect(forbidden.body.error.code).toBe("WORK_ACCESS_DENIED");
+
+    const readable = await reader.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(readable.body.data.id).toBe(conversationId);
+    expect(readable.body.data).not.toHaveProperty("sessionId");
+    expect(readable.body.data).not.toHaveProperty("csrfToken");
+    expect(readable.body.data).not.toHaveProperty("token");
+
+    const authSession = await reader.agent.get("/api/auth/session").expect(200);
+    expect(authSession.body.data).not.toHaveProperty("id");
+    expect(authSession.body.data).not.toHaveProperty("sessionId");
+    expect(authSession.body.data).not.toHaveProperty("token");
+    expect(authSession.body.data.csrfToken).toBe(reader.csrfToken);
   });
 
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {

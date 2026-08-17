@@ -83,7 +83,7 @@ export function occurrenceRoleLabel(value) {
 
 export function searchResultTypeLabel(value) {
   return enumLabel({
-    chapter: "章节",
+    chapter: "正文章节",
     setting: "设定",
     character: "角色",
     race: "种族",
@@ -104,4 +104,8 @@ export function characterStateFieldLabel(value) {
     location: "位置",
     condition: "状况"
   }, normalized, normalized || "未命名字段");
+}
+
+export function characterGenderLabel(value) {
+  return enumLabel({ male: "男 / 雄", female: "女 / 雌", none: "无性别", unknown: "未知" }, value, "未知");
 }

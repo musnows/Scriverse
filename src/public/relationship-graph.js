@@ -40,7 +40,26 @@ const NETWORK_LAYOUTS = Object.freeze({
   expanded: Object.freeze({ width: 1600, height: 900, marginX: 64, marginY: 56, desiredEdgeLength: 236, repulsionStrength: 22800 })
 });
 const RELATIONSHIP_EDGE_GAP = 24;
+export const RELATIONSHIP_CANVAS_NODE_THRESHOLD = 180;
+export const RELATIONSHIP_CANVAS_EDGE_THRESHOLD = 260;
+export const RELATIONSHIP_MAX_CANVAS_PIXELS = 2_000_000;
 let relationshipRendererSequence = 0;
+
+export function getRelationshipGraphRenderProfile(nodeCount, edgeCount) {
+  const nodes = Math.max(0, Math.floor(Number(nodeCount) || 0));
+  const edges = Math.max(0, Math.floor(Number(edgeCount) || 0));
+  const dense = nodes > RELATIONSHIP_CANVAS_NODE_THRESHOLD || edges > RELATIONSHIP_CANVAS_EDGE_THRESHOLD;
+  return {
+    dense,
+    edgeMode: dense ? "canvas" : "svg"
+  };
+}
+
+export function getRelationshipCanvasPixelRatio(devicePixelRatio, width, height) {
+  const ratio = clamp(Number(devicePixelRatio) || 1, 1, 1.25);
+  const area = Math.max(1, Number(width) || 1) * Math.max(1, Number(height) || 1);
+  return Math.max(1, Math.min(ratio, Math.sqrt(RELATIONSHIP_MAX_CANVAS_PIXELS / area)));
+}
 
 export function getRelationshipNetworkInitialScale(nodeCount, expanded = false) {
   if (expanded) return 1;
@@ -66,8 +85,9 @@ export function getRelationshipNodeFocusView(position, viewport, layout, current
 
 export function shouldShowRelationshipNodeLabel(nodeIndex, degree, nodeCount, viewScale, expanded = false) {
   const count = Math.max(0, Number(nodeCount) || 0);
-  const defaultLabelLimit = count > 180 ? 36 : count > 120 ? 48 : count > 80 ? 64 : count;
-  return Boolean(expanded) || Number(nodeIndex) < defaultLabelLimit || Number(degree) >= 4 || Number(viewScale) > 1.35;
+  const defaultLabelLimit = count > 720 ? 24 : count > 360 ? 30 : count > 180 ? 36 : count > 120 ? 48 : count > 80 ? 64 : count;
+  const degreeLabelThreshold = count > 720 ? 12 : count > 360 ? 8 : 4;
+  return Boolean(expanded) || Number(nodeIndex) < defaultLabelLimit || Number(degree) >= degreeLabelThreshold || Number(viewScale) > 1.35;
 }
 
 export function getRelationshipNodeLabelFontSize(viewScale, nodeCount) {
@@ -283,6 +303,9 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_TARGET_FRAME_RATE = 30;
 export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60, 90, 120, 144, 165, 240]);
+export const GALAXY_MOTION_MODES = Object.freeze(["auto", "on", "reduced", "off"]);
+export const GALAXY_REDUCED_MOTION_NODE_THRESHOLD = 80;
+export const GALAXY_REDUCED_MOTION_EDGE_THRESHOLD = 120;
 export const GALAXY_BASE_STAR_COUNT = 7200;
 export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_MAX_CANVAS_PIXELS = 4_000_000;
@@ -298,6 +321,31 @@ export const GALAXY_LAYOUT_CONFIG = Object.freeze({
 export function normalizeGalaxyFrameRate(value) {
   const candidate = Number(value);
   return GALAXY_FRAME_RATE_OPTIONS.includes(candidate) ? candidate : GALAXY_TARGET_FRAME_RATE;
+}
+
+export function normalizeGalaxyMotionMode(value) {
+  return GALAXY_MOTION_MODES.includes(value) ? value : "auto";
+}
+
+export function getGalaxyMotionProfile(mode, nodeCount, edgeCount, prefersReducedMotion = false) {
+  const requestedMode = normalizeGalaxyMotionMode(mode);
+  const thresholdExceeded = Math.max(0, Number(nodeCount) || 0) > GALAXY_REDUCED_MOTION_NODE_THRESHOLD
+    || Math.max(0, Number(edgeCount) || 0) > GALAXY_REDUCED_MOTION_EDGE_THRESHOLD;
+  const reducedBySystem = requestedMode === "auto" && Boolean(prefersReducedMotion);
+  const reducedByThreshold = requestedMode === "auto" && thresholdExceeded;
+  const effectiveMode = requestedMode === "off"
+    ? "off"
+    : requestedMode === "reduced" || reducedBySystem || reducedByThreshold ? "reduced" : "full";
+  return {
+    requestedMode,
+    effectiveMode,
+    reducedBySystem,
+    reducedByThreshold,
+    starfieldPhysics: effectiveMode === "full",
+    focusAnimation: effectiveMode !== "off",
+    cssMotion: effectiveMode !== "off",
+    maximumFrameRate: effectiveMode === "reduced" ? 24 : null
+  };
 }
 
 export function formatRelationshipLabel(edge, separator = " · ") {
@@ -405,7 +453,11 @@ export function getRelationshipEdgeGeometry(from, to, sourceRadius = 0, targetRa
       : `M ${start.x.toFixed(1)} ${start.y.toFixed(1)} L ${end.x.toFixed(1)} ${end.y.toFixed(1)}`,
     labelX: labelPoint.x,
     labelY: labelPoint.y,
-    angle: Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI
+    angle: Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI,
+    start,
+    control,
+    end,
+    curved
   };
 }
 
@@ -604,31 +656,49 @@ export function buildRelationshipGraph(characters, relationships) {
 function separateOverlappingNetworkNodes(nodes, layout) {
   const iterations = nodes.length > 150 ? 44 : 24;
   const padding = nodes.length > 120 ? 12 : 9;
+  const cellSize = 96;
+  const cellKey = (x, y) => `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     let overlapCount = 0;
+    const grid = new Map();
+    nodes.forEach((node, index) => {
+      const key = cellKey(node.x, node.y);
+      const bucket = grid.get(key) ?? [];
+      bucket.push(index);
+      grid.set(key, bucket);
+    });
     for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
       const left = nodes[leftIndex];
-      for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
-        const right = nodes[rightIndex];
-        let dx = right.x - left.x;
-        let dy = right.y - left.y;
-        let distance = Math.hypot(dx, dy);
-        if (distance < 0.001) {
-          const angle = (hashString(`${left.id}:${right.id}`) / 4294967296) * Math.PI * 2;
-          dx = Math.cos(angle);
-          dy = Math.sin(angle);
-          distance = 1;
+      const cellX = Math.floor(left.x / cellSize);
+      const cellY = Math.floor(left.y / cellSize);
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+          const bucket = grid.get(`${cellX + offsetX}:${cellY + offsetY}`);
+          if (!bucket) continue;
+          for (const rightIndex of bucket) {
+            if (rightIndex <= leftIndex) continue;
+            const right = nodes[rightIndex];
+            let dx = right.x - left.x;
+            let dy = right.y - left.y;
+            let distance = Math.hypot(dx, dy);
+            if (distance < 0.001) {
+              const angle = (hashString(`${left.id}:${right.id}`) / 4294967296) * Math.PI * 2;
+              dx = Math.cos(angle);
+              dy = Math.sin(angle);
+              distance = 1;
+            }
+            const minimumDistance = left.radius + right.radius + padding;
+            if (distance >= minimumDistance) continue;
+            overlapCount += 1;
+            const correction = (minimumDistance - distance) * 0.52;
+            const nx = dx / distance;
+            const ny = dy / distance;
+            left.x -= nx * correction;
+            left.y -= ny * correction;
+            right.x += nx * correction;
+            right.y += ny * correction;
+          }
         }
-        const minimumDistance = left.radius + right.radius + padding;
-        if (distance >= minimumDistance) continue;
-        overlapCount += 1;
-        const correction = (minimumDistance - distance) * 0.52;
-        const nx = dx / distance;
-        const ny = dy / distance;
-        left.x -= nx * correction;
-        left.y -= ny * correction;
-        right.x += nx * correction;
-        right.y += ny * correction;
       }
     }
     for (const node of nodes) {
@@ -1024,6 +1094,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
 
   const rendererId = ++relationshipRendererSequence;
   const layout = options.expanded ? NETWORK_LAYOUTS.expanded : NETWORK_LAYOUTS.standard;
+  const renderProfile = getRelationshipGraphRenderProfile(graph.stats.nodeCount, graph.stats.edgeCount);
   const laidOut = layoutRelationshipNetwork(graph, options.seed ?? "relationship-network-v3", { expanded: options.expanded });
   const positions = new Map(laidOut.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
   const originalPositions = new Map([...positions].map(([id, position]) => [id, { ...position }]));
@@ -1098,16 +1169,23 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   toolbar.append(nodeSearch.element, actions);
 
   const viewport = document.createElement("div");
-  viewport.className = "relationship-mindmap relationship-network relationship-obsidian";
+  viewport.className = `relationship-mindmap relationship-network relationship-obsidian${renderProfile.dense ? " is-dense" : ""}`;
   viewport.dataset.testid = "relationship-network";
   viewport.dataset.layoutWidth = String(layout.width);
   viewport.dataset.layoutHeight = String(layout.height);
   viewport.dataset.interaction = "idle";
   viewport.dataset.renderStrategy = "obsidian-force-graph";
+  viewport.dataset.edgeRenderStrategy = renderProfile.edgeMode;
   viewport.dataset.edgeLabelStrategy = "selected-only";
   const stage = document.createElement("div");
   stage.className = "relationship-mindmap-stage relationship-network-stage";
   viewport.append(stage);
+  const edgeCanvas = renderProfile.dense ? document.createElement("canvas") : null;
+  if (edgeCanvas) {
+    edgeCanvas.className = "relationship-network-edge-canvas";
+    edgeCanvas.setAttribute("aria-hidden", "true");
+    stage.append(edgeCanvas);
+  }
 
   const focusBadge = document.createElement("div");
   focusBadge.className = "relationship-network-focus";
@@ -1167,6 +1245,15 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   const edgeElementsByNode = new Map(graph.nodes.map((node) => [node.id, []]));
   const edgeCurveOffsets = assignRelationshipEdgeCurves(graph.edges);
   const nodeVisualRadii = new Map(graph.nodes.map((node) => [node.id, Math.max(4, Number(node.nodeSize) / 2 || 4)]));
+  const edgeCanvasContext = edgeCanvas?.getContext("2d") ?? null;
+  const edgeCanvasPixelRatio = edgeCanvas
+    ? getRelationshipCanvasPixelRatio(window.devicePixelRatio, layout.width, layout.height)
+    : 1;
+  if (edgeCanvas && edgeCanvasContext) {
+    edgeCanvas.width = Math.round(layout.width * edgeCanvasPixelRatio);
+    edgeCanvas.height = Math.round(layout.height * edgeCanvasPixelRatio);
+    edgeCanvasContext.setTransform(edgeCanvasPixelRatio, 0, 0, edgeCanvasPixelRatio, 0, 0);
+  }
   const updateEdgeGeometry = ({ edge, hitPath, path }, { includeHit = true } = {}) => {
     const from = positions.get(edge.source);
     const to = positions.get(edge.target);
@@ -1178,8 +1265,9 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       nodeVisualRadii.get(edge.target),
       edgeCurveOffsets.get(edge.id)
     );
-    path.setAttribute("d", geometry.path);
+    path?.setAttribute("d", geometry.path);
     if (includeHit) hitPath.setAttribute("d", geometry.path);
+    return geometry;
   };
   const updateLabelGeometry = (edge) => {
     const from = positions.get(edge.source);
@@ -1209,6 +1297,68 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     label.setAttribute("y", middleY.toFixed(2));
     label.setAttribute("transform", `rotate(${angle.toFixed(2)} ${middleX.toFixed(2)} ${middleY.toFixed(2)})`);
   };
+  const edgeCanvasColors = edgeCanvas
+    ? (() => {
+      const styles = getComputedStyle(container);
+      return {
+        normal: styles.getPropertyValue("--relationship-edge").trim() || "rgba(255,255,255,.26)",
+        directed: styles.getPropertyValue("--relationship-edge-directed").trim() || "rgba(214,218,232,.5)",
+        highlight: styles.getPropertyValue("--relationship-edge-highlight").trim() || "#9fc8ee",
+        selected: styles.getPropertyValue("--relationship-edge-selected").trim() || "#f0b47d"
+      };
+    })()
+    : null;
+  const drawCanvasEdges = () => {
+    if (!edgeCanvasContext || !edgeCanvasColors) return;
+    edgeCanvasContext.clearRect(0, 0, layout.width, layout.height);
+    edgeCanvasContext.lineCap = "round";
+    edgeCanvasContext.lineJoin = "round";
+    for (const edgeElement of edgeElements) {
+      const geometry = updateEdgeGeometry(edgeElement, { includeHit: false });
+      if (!geometry) continue;
+      const selected = edgeElement.edge.id === selectedEdgeId;
+      const focusedNodeId = hoveredId ?? selectedId;
+      const highlighted = Boolean(focusedNodeId && (edgeElement.edge.source === focusedNodeId || edgeElement.edge.target === focusedNodeId));
+      const dimmed = Boolean(selectedEdgeId ? !selected : focusedNodeId && !highlighted);
+      edgeCanvasContext.globalAlpha = dimmed ? 0.06 : selected ? 1 : highlighted ? 1 : 0.92;
+      edgeCanvasContext.strokeStyle = selected
+        ? edgeCanvasColors.selected
+        : highlighted
+          ? edgeCanvasColors.highlight
+          : edgeElement.edge.directed
+            ? edgeCanvasColors.directed
+            : edgeCanvasColors.normal;
+      edgeCanvasContext.lineWidth = selected ? 1.8 : highlighted ? 1.35 : 1;
+      edgeCanvasContext.setLineDash(edgeElement.edge.confirmationStatus === "pending" ? [4, 6] : []);
+      edgeCanvasContext.beginPath();
+      edgeCanvasContext.moveTo(geometry.start.x, geometry.start.y);
+      if (geometry.curved) edgeCanvasContext.quadraticCurveTo(geometry.control.x, geometry.control.y, geometry.end.x, geometry.end.y);
+      else edgeCanvasContext.lineTo(geometry.end.x, geometry.end.y);
+      edgeCanvasContext.stroke();
+      if (edgeElement.edge.directed) {
+        const tangentX = geometry.end.x - (geometry.curved ? geometry.control.x : geometry.start.x);
+        const tangentY = geometry.end.y - (geometry.curved ? geometry.control.y : geometry.start.y);
+        const angle = Math.atan2(tangentY, tangentX);
+        const arrowLength = selected ? 7 : 5.5;
+        const arrowWidth = selected ? 3.2 : 2.6;
+        edgeCanvasContext.fillStyle = edgeCanvasContext.strokeStyle;
+        edgeCanvasContext.beginPath();
+        edgeCanvasContext.moveTo(geometry.end.x, geometry.end.y);
+        edgeCanvasContext.lineTo(
+          geometry.end.x - Math.cos(angle) * arrowLength + Math.sin(angle) * arrowWidth,
+          geometry.end.y - Math.sin(angle) * arrowLength - Math.cos(angle) * arrowWidth
+        );
+        edgeCanvasContext.lineTo(
+          geometry.end.x - Math.cos(angle) * arrowLength - Math.sin(angle) * arrowWidth,
+          geometry.end.y - Math.sin(angle) * arrowLength + Math.cos(angle) * arrowWidth
+        );
+        edgeCanvasContext.closePath();
+        edgeCanvasContext.fill();
+      }
+    }
+    edgeCanvasContext.setLineDash([]);
+    edgeCanvasContext.globalAlpha = 1;
+  };
   for (const edge of graph.edges) {
     const hitPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
     hitPath.classList.add("mind-edge-hit");
@@ -1216,28 +1366,32 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     hitPath.setAttribute("role", "button");
     hitPath.setAttribute("tabindex", "0");
     hitPath.setAttribute("aria-label", `选择 ${graph.nodeById.get(edge.source)?.name ?? "未知角色"} 与 ${graph.nodeById.get(edge.target)?.name ?? "未知角色"} 的关系：${formatRelationshipLabel(edge)}`);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.classList.add("mind-edge", "obsidian-edge");
-    path.dataset.edgeId = edge.id;
-    path.dataset.edgeSource = edge.source;
-    path.dataset.edgeTarget = edge.target;
-    path.style.setProperty("--edge-opacity", "0.24");
-    path.style.setProperty("--edge-width", "1");
-    if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
-    if (edge.directed) {
-      path.classList.add("is-directed");
-      path.setAttribute("marker-end", `url(#${arrowMarkerId})`);
+    const path = renderProfile.dense ? null : document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path?.classList.add("mind-edge", "obsidian-edge");
+    if (path) {
+      path.dataset.edgeId = edge.id;
+      path.dataset.edgeSource = edge.source;
+      path.dataset.edgeTarget = edge.target;
+      path.style.setProperty("--edge-opacity", "0.24");
+      path.style.setProperty("--edge-width", "1");
+      if (edge.confirmationStatus === "pending") path.classList.add("is-pending");
+      if (edge.directed) {
+        path.classList.add("is-directed");
+        path.setAttribute("marker-end", `url(#${arrowMarkerId})`);
+      }
     }
     const sourceName = graph.nodeById.get(edge.source)?.name ?? "未知角色";
     const targetName = graph.nodeById.get(edge.target)?.name ?? "未知角色";
     hitPath.setAttribute("aria-label", `选择 ${sourceName}${edge.directed ? " 指向 " : " 与 "}${targetName} 的关系：${formatRelationshipLabel(edge)}`);
-    svg.append(hitPath, path);
+    if (renderProfile.dense) svg.append(hitPath);
+    else svg.append(hitPath, path);
     const edgeElement = { edge, hitPath, path };
     edgeElements.push(edgeElement);
     edgeElementsByNode.get(edge.source)?.push(edgeElement);
     edgeElementsByNode.get(edge.target)?.push(edgeElement);
     updateEdgeGeometry(edgeElement);
   }
+  drawCanvasEdges();
   const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
   label.setAttribute("text-anchor", "middle");
   label.classList.add("mind-edge-label", "is-edge-selected", "hidden");
@@ -1254,6 +1408,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   const updateAllGeometry = () => {
     nodeElements.forEach((_, nodeId) => updateNodePosition(nodeId));
     edgeElements.forEach((edgeElement) => updateEdgeGeometry(edgeElement));
+    drawCanvasEdges();
   };
   const updateAdjacentGeometry = (nodeIds, { includeHit = false } = {}) => {
     const dirtyEdges = new Set();
@@ -1264,6 +1419,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       for (let index = 0; index < connected.length; index += 1) dirtyEdges.add(connected[index]);
     }
     dirtyEdges.forEach((edgeElement) => updateEdgeGeometry(edgeElement, { includeHit }));
+    drawCanvasEdges();
   };
   const stopPhysicsLoop = () => {
     if (physicsFrame) window.cancelAnimationFrame(physicsFrame);
@@ -1455,7 +1611,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
   const clearEdgeSelectionClasses = () => {
     nodeElements.forEach((button) => button.classList.remove("is-edge-endpoint"));
     edgeElements.forEach((item) => {
-      item.path.classList.remove("is-edge-selected");
+      item.path?.classList.remove("is-edge-selected");
       item.hitPath.setAttribute("aria-pressed", "false");
     });
     label.classList.add("hidden");
@@ -1467,7 +1623,7 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
       button.classList.remove("is-selected", "is-related", "is-dimmed", "is-hovered");
     });
     edgeElements.forEach((item) => {
-      item.path.classList.remove("is-highlighted", "is-dimmed");
+      item.path?.classList.remove("is-highlighted", "is-dimmed");
     });
     focusText.textContent = "力导向布局 · 稳定均衡配色";
     edgeDetail.classList.add("hidden");
@@ -1488,9 +1644,10 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     });
     edgeElements.forEach((item) => {
       const active = item.edge.source === nodeId || item.edge.target === nodeId;
-      item.path.classList.toggle("is-highlighted", active);
-      item.path.classList.toggle("is-dimmed", !active);
+      item.path?.classList.toggle("is-highlighted", active);
+      item.path?.classList.toggle("is-dimmed", !active);
     });
+    drawCanvasEdges();
     const name = graph.nodeById.get(nodeId)?.name ?? "未知角色";
     focusText.textContent = hover ? `悬浮：${name}` : `聚焦：${name}`;
     edgeDetail.classList.add("hidden");
@@ -1524,11 +1681,12 @@ export function renderRelationshipMindMap(container, graph, options = {}) {
     });
     edgeElements.forEach((item) => {
       const active = item.edge.id === selection.edgeId;
-      item.path.classList.toggle("is-highlighted", false);
-      item.path.classList.toggle("is-edge-selected", active);
-      item.path.classList.toggle("is-dimmed", !active);
+      item.path?.classList.toggle("is-highlighted", false);
+      item.path?.classList.toggle("is-edge-selected", active);
+      item.path?.classList.toggle("is-dimmed", !active);
       item.hitPath.setAttribute("aria-pressed", String(active));
     });
+    drawCanvasEdges();
     const fullLabel = selection.label;
     label.dataset.edgeId = selection.edgeId;
     label.dataset.fullLabel = fullLabel;
@@ -2130,7 +2288,13 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const stats = dialog.querySelector("#galaxy-stats");
   const detail = dialog.querySelector("#galaxy-detail");
   const shell = dialog.querySelector(".galaxy-shell");
-  const targetFrameRate = normalizeGalaxyFrameRate(options.frameRate);
+  const motionModeControl = dialog.querySelector("#galaxy-motion-mode");
+  const motionStatus = dialog.querySelector("#galaxy-motion-status");
+  const configuredFrameRate = normalizeGalaxyFrameRate(options.frameRate);
+  const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let requestedMotionMode = normalizeGalaxyMotionMode(options.motionMode);
+  let motionProfile = getGalaxyMotionProfile(requestedMotionMode, graph.stats.nodeCount, graph.stats.edgeCount, reducedMotionMedia.matches);
+  let targetFrameRate = motionProfile.maximumFrameRate ?? configuredFrameRate;
   const seed = `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`;
   const layout = layoutGalaxy(graph, seed);
   const stars = createGalaxyStarfield(`${seed}|stars`);
@@ -2170,7 +2334,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let cameraFocus = null;
   let draggedNode = null;
   let starPhysicsEnergy = 0;
-  let paused = false;
+  let rotationPaused = false;
   let starsVisible = true;
   let gridVisible = false;
   let destroyed = false;
@@ -2192,6 +2356,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.dataset.starPhysicsEnergy = "0";
   shell.dataset.rotationSpeed = String(GALAXY_ROTATION_RADIANS_PER_MS);
   shell.dataset.targetFrameRate = String(targetFrameRate);
+  shell.dataset.motionNodeThreshold = String(GALAXY_REDUCED_MOTION_NODE_THRESHOLD);
+  shell.dataset.motionEdgeThreshold = String(GALAXY_REDUCED_MOTION_EDGE_THRESHOLD);
   shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
   shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
   shell.dataset.layoutDesiredEdgeLength = String(GALAXY_LAYOUT_CONFIG.desiredEdgeLength);
@@ -2429,7 +2595,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.dataset.renderedFrameCount = String(renderedFrameCount);
   };
 
-  const shouldAnimate = () => !paused || Boolean(cameraFocus) || Boolean(draggedNode) || starPhysicsEnergy > 0.01;
+  const shouldRotate = () => !rotationPaused;
+  const shouldAnimate = () => shouldRotate()
+    || Boolean(cameraFocus)
+    || (motionProfile.starfieldPhysics && (Boolean(draggedNode) || starPhysicsEnergy > 0.01));
 
   const renderFrame = (time) => {
     animationFrame = 0;
@@ -2455,8 +2624,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         shell.classList.remove("is-focusing-node");
       }
     }
-    if (!paused && !cameraDrag) camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS;
-    if (draggedNode || starPhysicsEnergy > 0.01) {
+    if (shouldRotate() && !cameraDrag) camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS;
+    if (motionProfile.starfieldPhysics && (draggedNode || starPhysicsEnergy > 0.01)) {
       starPhysicsEnergy = stepGalaxyStarfieldPhysics(stars, draggedNode, { deltaMs: elapsed || 16.667 });
       shell.dataset.starPhysicsEnergy = starPhysicsEnergy.toFixed(3);
     }
@@ -2485,9 +2654,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
 
   const focusCameraOnNode = (node) => {
     const target = getGalaxyNodeFocusCamera(node, camera);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     shell.dataset.focusedNodeId = node.id;
-    if (reducedMotion) {
+    if (!motionProfile.focusAnimation) {
       Object.assign(camera, target);
       drawScene();
       return;
@@ -2618,7 +2786,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           dragged: false
         };
         draggedNode = node;
-        startAnimation();
+        if (motionProfile.starfieldPhysics) startAnimation();
         button.setPointerCapture(event.pointerId);
         button.classList.add("is-dragging");
         button.setAttribute("aria-grabbed", "true");
@@ -2699,17 +2867,75 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     drawScene();
   };
 
+  const resetStarfieldPhysics = () => {
+    for (const star of stars) {
+      star.x = star.originX;
+      star.z = star.originZ;
+      star.vx = 0;
+      star.vz = 0;
+    }
+    starPhysicsEnergy = 0;
+    shell.dataset.starPhysicsEnergy = "0";
+  };
+
   const updateRotationControl = () => {
-    shell.classList.toggle("is-paused", paused);
+    shell.classList.toggle("is-paused", rotationPaused);
     const control = dialog.querySelector("#galaxy-rotation");
-    control.setAttribute("aria-pressed", String(paused));
-    control.textContent = paused ? "继续旋转" : "暂停旋转";
+    control.disabled = false;
+    control.setAttribute("aria-pressed", String(rotationPaused));
+    control.textContent = rotationPaused ? "继续旋转" : "暂停旋转";
+  };
+
+  const updateMotionControls = () => {
+    const automaticallyReduced = motionProfile.reducedBySystem || motionProfile.reducedByThreshold;
+    motionModeControl.value = requestedMotionMode;
+    motionModeControl.dataset.effectiveMode = motionProfile.effectiveMode;
+    shell.dataset.motionRequestedMode = requestedMotionMode;
+    shell.dataset.motionMode = motionProfile.effectiveMode;
+    shell.dataset.motionAutoReduced = String(automaticallyReduced);
+    shell.classList.toggle("is-motion-reduced", motionProfile.effectiveMode !== "full");
+    shell.classList.toggle("is-motion-off", motionProfile.effectiveMode === "off");
+    motionStatus.value = motionProfile.effectiveMode === "off"
+      ? "全部动效已关闭"
+      : requestedMotionMode === "on"
+        ? "动效始终开启"
+        : requestedMotionMode === "reduced"
+          ? "持续动效已减少"
+          : motionProfile.reducedByThreshold
+            ? "图谱较大，已自动减少"
+            : motionProfile.reducedBySystem
+              ? "跟随系统，已减少"
+              : "当前为完整动效";
+    motionStatus.title = `超过 ${GALAXY_REDUCED_MOTION_NODE_THRESHOLD} 个节点或 ${GALAXY_REDUCED_MOTION_EDGE_THRESHOLD} 条关系时自动减少动效`;
+    updateRotationControl();
+  };
+
+  const applyMotionMode = (mode, { persist = true, redraw = true } = {}) => {
+    requestedMotionMode = normalizeGalaxyMotionMode(mode);
+    motionProfile = getGalaxyMotionProfile(
+      requestedMotionMode,
+      graph.stats.nodeCount,
+      graph.stats.edgeCount,
+      reducedMotionMedia.matches
+    );
+    targetFrameRate = motionProfile.maximumFrameRate ?? configuredFrameRate;
+    shell.dataset.targetFrameRate = String(targetFrameRate);
+    if (!motionProfile.starfieldPhysics) resetStarfieldPhysics();
+    if (!motionProfile.focusAnimation && cameraFocus) {
+      Object.assign(camera, cameraFocus.to);
+      cancelCameraFocus();
+    }
+    updateMotionControls();
+    if (redraw) drawScene();
+    if (shouldAnimate()) startAnimation();
+    else stopAnimation();
+    if (persist) options.onMotionModeChange?.(requestedMotionMode);
   };
 
   const open = () => {
     if (destroyed) return;
     if (!dialog.open) dialog.showModal();
-    paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    rotationPaused = false;
     starsVisible = true;
     gridVisible = false;
     background.classList.remove("hidden-stars");
@@ -2722,6 +2948,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.dataset.resourceState = "active";
     stats.value = `${graph.stats.nodeCount} 个节点 / ${graph.stats.edgeCount} 条关系`;
     renderNodes();
+    applyMotionMode(requestedMotionMode, { persist: false, redraw: false });
     drawScene();
     if (shouldAnimate()) startAnimation();
     dialog.querySelector("#galaxy-close").focus();
@@ -2736,6 +2963,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   listen(dialog.querySelector("#galaxy-reset"), "click", reset);
   listen(dialog.querySelector("#galaxy-zoom-in"), "click", () => zoom(1.18));
   listen(dialog.querySelector("#galaxy-zoom-out"), "click", () => zoom(1 / 1.18));
+  listen(motionModeControl, "change", (event) => applyMotionMode(event.currentTarget.value));
+  listen(reducedMotionMedia, "change", () => {
+    if (requestedMotionMode === "auto") applyMotionMode(requestedMotionMode, { persist: false });
+  });
   listen(dialog.querySelector("#galaxy-stars"), "click", (event) => {
     starsVisible = !starsVisible;
     background.classList.toggle("hidden-stars", !starsVisible);
@@ -2751,7 +2982,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     drawScene();
   });
   listen(dialog.querySelector("#galaxy-rotation"), "click", () => {
-    paused = !paused;
+    rotationPaused = !rotationPaused;
     updateRotationControl();
     drawScene();
     if (shouldAnimate()) startAnimation();
@@ -2843,7 +3074,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     backdrop = null;
     shell.dataset.resourceState = "released";
     shell.dataset.starCount = "0";
-    shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused", "is-focusing-node");
+    shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused", "is-focusing-node", "is-motion-reduced", "is-motion-off");
   };
 
   listen(dialog, "close", () => {

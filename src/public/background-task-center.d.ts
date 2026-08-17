@@ -25,4 +25,13 @@ export function collectBackgroundTaskTransitions(
   transitions: BackgroundTaskTransition[];
 };
 
+export function filterBackgroundTaskTransitionsForAnnouncement(
+  transitions: BackgroundTaskTransition[] | null | undefined,
+  previousExpiredNoticeTimes: Map<string, number>,
+  now?: number
+): {
+  noticeTimes: Map<string, number>;
+  transitions: BackgroundTaskTransition[];
+};
+
 export function backgroundTaskPollDelay(activityCount: unknown, dialogOpen?: boolean): number;

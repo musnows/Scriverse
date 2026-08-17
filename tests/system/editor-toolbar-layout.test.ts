@@ -52,6 +52,8 @@ describe("编辑器工具栏布局", () => {
     expect(styles.text).toContain(".editor-view.is-read-only #save-button");
     expect(application.text).toContain("function applyChapterEditorMode()");
     expect(application.text).toContain("function enterChapterEditMode()");
+    expect(application.text).toContain('persistentToast("正在保存中")');
+    expect(application.text).toContain('toast(`保存成功（正文 v${saved.versionNo}）`)');
     expect(application.text).toContain('$("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);');
     expect(application.text).toContain('$("#chapter-edit-button").addEventListener("click", enterChapterEditMode)');
     expect(styles.text).toContain('#chapter-path { grid-area: path;');
@@ -140,9 +142,10 @@ describe("编辑器工具栏布局", () => {
     expect(application.text).toContain('function collectVditorVisualLineRects(surface)');
     expect(application.text).toContain('buildVditorLineNumberRows');
     expect(styles.text).toContain('.chapter-stats { display: none; }');
-    expect(styles.text).toContain('.app-shell.left-panel-collapsed .editor-actions { transform: translateX(0); pointer-events: auto; }');
+    expect(styles.text).toContain('.editor-actions { position: static; z-index: auto;');
+    expect(styles.text).toContain('.app-shell.left-panel-collapsed .editor-actions { transform: none; pointer-events: auto; }');
     expect(styles.text).toContain('grid-row: 2 / -1;');
-    expect(styles.text).toContain('bottom: calc(76px + env(safe-area-inset-bottom));');
+    expect(styles.text).not.toContain('bottom: calc(76px + env(safe-area-inset-bottom));');
     expect(styles.text).toContain('#left-panel-toggle { flex: 0 0 30px; width: 30px; height: 30px; }');
     expect(styles.text).toContain('.ai-heading #ai-panel-toggle { flex-basis: 30px; width: 30px; height: 30px; }');
   });

@@ -10,8 +10,10 @@ import { tmpdir } from "node:os";
 import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { z, ZodError } from "zod";
-import { AI_PROVIDER_PROTOCOLS } from "./ai-protocol.js";
+import { AI_PROVIDER_PROTOCOLS, MAX_TOKENS_PARAMETERS } from "./ai-protocol.js";
 import { aiConversationExportContentDisposition, exportAiConversationMarkdown } from "./ai-conversation-export.js";
+import { DEFAULT_AI_CHAT_TAB_LIMIT } from "./ai-chat-tab-limit.js";
+import type { AiRetryPolicy } from "./ai-retry.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { AttachmentStorage } from "./attachment-storage.js";
 import { AiManager } from "./ai.js";
@@ -27,12 +29,12 @@ import { CredentialVault } from "./credential-vault.js";
 import { Database } from "./database.js";
 import { assertSafeDocxArchive } from "./docx-security.js";
 import { EPUB_MIME_TYPE, epubContentDisposition } from "./epub-export.js";
-import { CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
+import { CHARACTER_GENDERS, CREATABLE_ANALYSIS_TASK_TYPES, DRAFT_SETTING_MODULES, TASK_TYPES, type ContextScope, type TaskType } from "./domain.js";
 import { AppError } from "./errors.js";
 import { isOfficialGoogleVertexBaseUrl, parseGoogleServiceAccount } from "./google-vertex-auth.js";
 import { HYBRID_SEARCH_TYPES, MAXIMUM_WORK_SEARCH_QUERY_LENGTH, readableHybridSearchTypes } from "./hybrid-search.js";
 import { applyImportFileHints, parseNovelText } from "./parser.js";
-import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes } from "./store.js";
+import { aiConversationTaskTypes, attachmentPermissionModules, RECYCLE_BIN_RETENTION_DAYS, Store, versionedEntityTypes, WORK_AGENT_TOOL_IDS } from "./store.js";
 import { paginated, parsePagination } from "./pagination.js";
 import { normalizeUploadFileName } from "./utils.js";
 import { assertSafeAiEndpoint, assertSafeS3Endpoint, createApiRateLimitMiddleware, createAuthenticationRateLimitMiddleware, createBasicAuthMiddleware, createCaptchaRateLimitMiddleware, createExpensiveApiRateLimitMiddleware, createSameOriginMiddleware, createSecurityHeadersMiddleware, createUploadRateLimitMiddleware, enforceCaseInsensitiveRouting, normalizeApiPath, resolveTrustProxySetting, verifySetupToken, type RuntimeSecurityOptions } from "./security.js";
@@ -220,7 +222,8 @@ const settingSchema = z.object({
 const globalReplaceSchema = z.object({
   find: z.string().min(1).max(500),
   replacement: z.string().max(200_000),
-  scope: z.enum(["prose", "settings", "prose-and-settings"])
+  scope: z.enum(["prose", "settings", "prose-and-settings"]),
+  volumeId: identifier.nullable().optional()
 }).strict();
 
 const draftSchema = z.object({
@@ -233,6 +236,7 @@ const draftSchema = z.object({
 
 const characterSchema = z.object({
   name: nonEmpty.max(200),
+  gender: z.enum(CHARACTER_GENDERS).optional(),
   isDead: z.boolean().optional(),
   code: z.string().trim().max(200).optional(),
   aliases: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
@@ -399,6 +403,7 @@ const providerBaseSchema = z.object({
   baseUrl: z.string().url().refine((value) => value.startsWith("http://") || value.startsWith("https://"), "接口地址必须使用 HTTP 或 HTTPS"),
   apiKey: z.string().trim().min(1).max(50_000),
   protocol: z.enum(AI_PROVIDER_PROTOCOLS).optional(),
+  maxTokensParameter: z.enum(MAX_TOKENS_PARAMETERS).optional(),
   status: z.enum(["enabled", "disabled"]).optional(),
   note: z.string().max(10_000).optional(),
   concurrencyLimit: z.number().int().min(1).max(100).optional(),
@@ -456,6 +461,7 @@ const modelSchema = z.object({
   outputNote: z.string().max(10_000).optional(),
   preset: jsonObject.optional(),
   thinkingEnabled: z.boolean().optional(),
+  thinkingEffort: z.enum(["default", "low", "medium", "high", "xhigh", "max"]).optional(),
   multimodalEnabled: z.boolean().optional(),
   imageToolDefault: z.boolean().optional(),
   enabled: z.boolean().optional(),
@@ -608,11 +614,12 @@ const workAiSettingsSchema = z.object({
   autoRunBatchLimit: z.number().int().min(1).max(200).optional(),
   autoRunDailyTaskLimit: z.number().int().min(0).max(10_000).optional(),
   autoRunFailureThreshold: z.number().int().min(1).max(10).optional(),
+  autoRunStabilityDelayMinutes: z.number().int().min(1).max(120).optional(),
   bookSummaryContextPercent: z.number().int().min(1).max(90).optional(),
   contextCompactThreshold: z.number().int().min(50).max(90).optional(),
   agentToolCallLimit: z.number().int().min(5).optional(),
   agentToolCallGlobalMultiplier: z.number().int().min(1).max(6).optional(),
-  agentTools: z.array(z.enum(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"])).max(7).optional(),
+  agentTools: z.array(z.enum(WORK_AGENT_TOOL_IDS)).max(WORK_AGENT_TOOL_IDS.length).optional(),
   alwaysIncludeSettingInfo: z.boolean().optional(),
   titleGenerationModelId: z.string().trim().max(200).optional(),
   imageToolModelId: identifier.nullable().optional()
@@ -679,8 +686,8 @@ const relationshipAnalysisScopeSchema = z.object({
   if (scope.volumeIds && new Set(scope.volumeIds).size !== scope.volumeIds.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["volumeIds"], message: "分卷不能重复选择" });
   }
-  if (scope.includeAllSettings && scope.type !== "book") {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书人物关系分析" });
+  if (scope.includeAllSettings && scope.type !== "book" && scope.type !== "chapter") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["includeAllSettings"], message: "包含所有设定仅支持全书或指定章节人物关系分析" });
   }
   if (scope.characterIds && new Set(scope.characterIds).size !== scope.characterIds.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["characterIds"], message: "被分析角色不能重复" });
@@ -807,10 +814,18 @@ export type RuntimeOptions = {
   revealCaptchaAnswer?: boolean;
   /** 当前服务是否由开发模式启动。 */
   developmentServer?: boolean;
+  /** Beta 镜像展示版本；正式版本未指定时继续展示 APP_VERSION。 */
+  betaVersionLabel?: string;
   /** 图片上传大小限制；未指定时使用默认值。 */
   uploadLimits?: ImageUploadLimits;
   /** 交互式 AI 流的事件空闲超时；生产启动值由环境变量解析，测试可注入更短时长。 */
   aiStreamIdleTimeoutMs?: number;
+  /** AI 上游 HTTP 状态码重试配置；生产启动值由环境变量解析。 */
+  aiRetryPolicy?: Partial<AiRetryPolicy>;
+  /** 测试用：替换 AI HTTP 重试等待。 */
+  aiRetrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
+  /** 同一浏览器工作区允许同时打开的 Agent 对话数量。 */
+  aiChatTabLimit?: number;
   /** 测试与嵌入运行时可替换 S3 客户端及数据库快照来源。 */
   backupOptions?: S3BackupManagerOptions;
 };
@@ -1079,6 +1094,13 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
   const result: Record<string, unknown> = {
     ...scopedRecord
   };
+  if (result.roleplayCharacter) {
+    result.agentTools = [
+      ...(permissions.characters !== "none" ? ["recall_self"] : []),
+      ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      "calculate_time"
+    ];
+  }
   if ((permissions.prose === "none" || permissions.characters === "none") && Array.isArray(result.messages)) {
     result.messages = result.messages.map((item) => redactAiConversationMessage(item, permissions));
   }
@@ -1157,6 +1179,7 @@ function redactVersionSnapshots(
 
 export function createRuntime(options: RuntimeOptions): Runtime {
   const uploadLimits = options.uploadLimits ?? DEFAULT_IMAGE_UPLOAD_LIMITS;
+  const aiChatTabLimit = options.aiChatTabLimit ?? DEFAULT_AI_CHAT_TAB_LIMIT;
   logger.info("runtime.initializing", {
     databasePath: options.databasePath,
     serveUi: options.serveUi ?? true,
@@ -1296,7 +1319,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       }, false, actor?.allowAdminAccess ?? false);
     },
     attachmentStorage,
-    { interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS }
+    {
+      interactiveStreamIdleTimeoutMs: options.aiStreamIdleTimeoutMs ?? DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS,
+      retryPolicy: options.aiRetryPolicy,
+      retrySleep: options.aiRetrySleep
+    }
   );
   const app = express();
   enforceCaseInsensitiveRouting(app);
@@ -1334,9 +1361,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       status: "ok",
       bootId,
       version: APP_VERSION,
+      versionLabel: options.betaVersionLabel ?? null,
       protocol: "openai-chat-completions",
       protocols: [...AI_PROVIDER_PROTOCOLS],
       development: options.developmentServer === true,
+      aiChatTabLimit,
       uploadLimits
     });
   });
@@ -2370,11 +2399,18 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       input.modelId
     ));
   });
-  app.post("/api/works/:workId/tasks", (request, response) => {
+  app.post("/api/works/:workId/tasks", async (request, response) => {
     const input = parse(analysisTaskSchema, request.body);
+    const permissions = requestPermissions(request, request.params.workId);
+    const deniedModules = analysisTaskReadModules(input.taskType, input.scope).filter((module) => permissions[module] === "none");
+    if (deniedModules.length > 0) {
+      throw new AppError(403, "WORK_MODULE_READ_DENIED", "你没有读取创建分析任务所需资料模块的权限", {
+        modules: deniedModules
+      });
+    }
     data(response, redactTaskCharacterNames(
-      ai.createTask(request.params.workId, input),
-      requestPermissions(request, request.params.workId)
+      await ai.createTask(request.params.workId, input),
+      permissions
     ), 201);
   });
   app.post("/api/works/:workId/tasks/auto-run", (request, response) => {
@@ -2436,7 +2472,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       requestPermissions(request)
     ));
   });
-  app.post("/api/tasks/:taskId/rerun", (request, response) => {
+  app.post("/api/tasks/:taskId/rerun", async (request, response) => {
     const input = parse(z.object({ modelId: identifier.optional() }).strict(), request.body ?? {});
     const task = store.getTask(request.params.taskId);
     const permissions = requestPermissions(request, String(task.workId));
@@ -2447,7 +2483,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       });
     }
     data(response, redactTaskCharacterNames(
-      ai.rerunTask(request.params.taskId, input.modelId),
+      await ai.rerunTask(request.params.taskId, input.modelId),
       requestPermissions(request)
     ), 201);
   });
@@ -2571,6 +2607,7 @@ export function createRuntime(options: RuntimeOptions): Runtime {
       if (input.autoRunEnabled === true && !before.autoRunEnabled) updated = ai.resumeAutoRun(workId);
       else ai.scheduleAutoRun(workId);
     }
+    if (input.autoRunStabilityDelayMinutes !== undefined) ai.rescheduleChapterAnalysisTasks(workId);
     data(response, updated);
   });
   app.get("/api/works/:workId/ai-conversations", (request, response) => {

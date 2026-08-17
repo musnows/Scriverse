@@ -15,6 +15,7 @@ import {
   settingStatusLabel,
   taskScopeLabel,
   timelineStatusLabel,
+  characterGenderLabel,
   characterStateFieldLabel
 } from "../../src/public/display-labels.js";
 
@@ -39,6 +40,7 @@ describe("前端枚举中文标签", () => {
     expect(providerProtocolLabel("anthropic-messages")).toBe("Anthropic Messages");
     expect(providerProtocolLabel("google-vertex")).toBe("Google Vertex");
     expect(chapterVersionSourceLabel("ai-suggestion")).toBe("AI 建议");
+    expect(searchResultTypeLabel("chapter")).toBe("正文章节");
     expect(searchResultTypeLabel("timeline-event")).toBe("时间线事件");
     expect(searchResultTypeLabel("chapter-outline")).toBe("章节大纲");
     expect(searchResultTypeLabel("review")).toBe("审核项");
@@ -49,6 +51,14 @@ describe("前端枚举中文标签", () => {
     expect(characterStateFieldLabel("condition")).toBe("状况");
     expect(characterStateFieldLabel("自定义字段")).toBe("自定义字段");
     expect(characterStateFieldLabel("energy")).toBe("energy");
+  });
+
+  it("将角色性别枚举显示为同时适用于人物与非人角色的文案", () => {
+    expect(characterGenderLabel("male")).toBe("男 / 雄");
+    expect(characterGenderLabel("female")).toBe("女 / 雌");
+    expect(characterGenderLabel("none")).toBe("无性别");
+    expect(characterGenderLabel("unknown")).toBe("未知");
+    expect(characterGenderLabel("invalid")).toBe("未知");
   });
 
   it("保留中文自定义值并隐藏未知英文枚举", () => {

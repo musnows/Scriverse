@@ -1,9 +1,10 @@
-import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260809-galaxy-size-threshold-v1";
+import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
 import { shouldShowAiQuickActions } from "/ai-conversation.js?v=20260713-quick-actions";
-import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260812-ai-request-snapshot-v1";
+import { createAiChatTabManager, normalizeAiChatTabLimit } from "/ai-chat-tabs.js?v=20260816-ai-chat-switcher-v2";
+import { aiRequestTargetsState, createAiRequestAbortError, createAiRequestManager, isAiRequestCancellation } from "/ai-request-manager.js?v=20260816-ai-chat-tabs-v1";
 import { calculateLineNumberTextOffset, calculateLineNumberTop } from "/line-number-layout.js?v=20260713-row-box-alignment";
 import { buildChapterLineMirror, findChapterLineWindow } from "/chapter-editor-virtualization.js?v=20260810-visible-lines-v1";
 import {
@@ -15,7 +16,7 @@ import {
   visibleForeshadowReminders
 } from "/foreshadow-reminder.js?v=20260812-editor-reminder-v1";
 import { buildVditorLineNumberRows } from "/vditor-line-number-layout.js?v=20260729-vditor-line-numbers-v3";
-import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260803-multimodal-model-config-v2";
+import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_OPTIONS, isKimiModelId, modelContextWindowGuidance, modelFormValues, modelOptionLabel, modelPayload, supportsMultimodalModelProtocol } from "/model-config.js?v=20260816-extended-thinking-effort-v1";
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
@@ -27,9 +28,10 @@ import { formatAiContextUsagePercent, formatAiContextUsageTooltip, mergeAiContex
 import { formatAiToolCallResult } from "/ai-tool-call.js?v=20260801-ai-tool-result-chars-v1";
 import { copyAiRawMarkdown } from "/ai-message-actions.js?v=20260713-copy-raw-markdown";
 import { bindPlainTextPaste } from "/plain-text-paste.js?v=20260815-plain-text-paste-v1";
+import { findTextMatches, replaceTextMatches } from "/chapter-search.js?v=20260818-chapter-search-replace-v1";
 import { THEME_STORAGE_KEY, nextTheme, normalizeTheme, themeToggleLabel } from "/theme.js?v=20260713-dark-mode";
 import { buildCharacterDetails, buildCharacterState, characterStateEntries, normalizeCharacterDetails, normalizeCharacterSections } from "/character-profile.js?v=20260713-character-editor";
-import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260801-entity-lifecycle-v1";
+import { characterVersionSourceLabel, describeCharacterVersionChanges } from "/character-version.js?v=20260816-character-gender-v1";
 import { chapterDiffSummary, diffChapterLines } from "/chapter-version-diff.js?v=20260812-chapter-version-diff-v1";
 import { VERSIONED_ENTITY_LABELS, entityVersionSnapshotSummary, entityVersionSourceLabel } from "/entity-version.js?v=20260809-global-replace-v1";
 import {
@@ -49,8 +51,9 @@ import {
   settingStatusLabel,
   taskScopeLabel,
   timelineStatusLabel,
+  characterGenderLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260809-global-replace-v1";
+} from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
@@ -74,8 +77,8 @@ import { WORK_PERMISSION_MODULES, canReadPermissionModule, canReadUiModule, canW
 import { MODULE_LAYOUT_STORAGE_KEY, LEGACY_SETTINGS_LAYOUT_STORAGE_KEY, normalizeModuleLayout } from "/module-layout.js?v=20260723-module-layout-toggle";
 import { isGlobalSearchShortcut } from "/keyboard-shortcuts.js?v=20260723-global-search";
 import { prioritizeGlobalSearchResults, resolveGlobalSearchTarget, splitGlobalSearchHighlight } from "/global-search.js?v=20260804-agent-history-score-sort-v1";
-import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260725-character-filters";
-import { filterRelationships } from "/relationship-filters.js?v=20260726-relationship-filters";
+import { filterCharacters, paginateCharacters } from "/character-filters.js?v=20260817-character-filter-state-v1";
+import { filterRelationships, sortCharacterRelationships } from "/relationship-filters.js?v=20260818-character-relationship-group-v1";
 import { filterSettings } from "/setting-filters.js?v=20260810-setting-inline-filters-v1";
 import {
   prepareTimelineEvents,
@@ -88,7 +91,7 @@ import {
   outlineBoardRequestPath,
   outlineBoardUnresolvedCount
 } from "/outline-board.js?v=20260813-outline-board-page-v1";
-import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions, filterBackgroundTaskTransitionsForAnnouncement } from "/background-task-center.js?v=20260817-analysis-task-expired-toast-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
@@ -120,6 +123,21 @@ const defaultPageSizes = Object.freeze({
   analysisTasks: 30,
   fileVersions: 30
 });
+const GALAXY_MOTION_MODE_STORAGE_KEY = "scriverse.galaxy-motion-mode.v1";
+
+function storedGalaxyMotionMode() {
+  try {
+    return normalizeGalaxyMotionMode(localStorage.getItem(GALAXY_MOTION_MODE_STORAGE_KEY));
+  } catch {
+    return "auto";
+  }
+}
+
+function persistGalaxyMotionMode(mode) {
+  const normalized = normalizeGalaxyMotionMode(mode);
+  try { localStorage.setItem(GALAXY_MOTION_MODE_STORAGE_KEY, normalized); } catch { /* 浏览器禁用存储时仅保留本次选择 */ }
+  return normalized;
+}
 
 function normalizePageSize(value, fallback = 30) {
   const candidate = Number(value);
@@ -177,6 +195,7 @@ const state = {
 };
 
 const aiRequestManager = createAiRequestManager();
+const aiChatTabManager = createAiChatTabManager(() => createAiIdempotencyKey());
 const moduleRequestCache = createModuleRequestCache();
 const cachedWorkModules = new Set([
   "drafts",
@@ -240,6 +259,7 @@ let backgroundTaskCenterRequest = 0;
 let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
+let backgroundTaskCenterExpiredNoticeTimes = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 let s3BackupTargets = [];
 let s3BackupRuns = [];
@@ -409,6 +429,7 @@ function applyWorkAccessMode() {
   $("#module-nav [data-module=\"comments\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("comments"));
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#reader-open-button").classList.toggle("permission-hidden", proseHidden);
+  $("#ai-assistant-entry").classList.toggle("permission-hidden", !state.work || aiHidden);
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
@@ -519,10 +540,30 @@ function setAiAssistantStatus(status) {
   dot.title = label;
 }
 
+function activeAiChatTab() {
+  return aiChatTabManager.active();
+}
+
+function aiChatTabForRequest(request) {
+  return request?.tabId ? aiChatTabManager.get(request.tabId) : null;
+}
+
+function isActiveAiChatTab(tab) {
+  return Boolean(tab && activeAiChatTab()?.id === tab.id);
+}
+
+function setAiChatTabStatus(tab, status) {
+  if (!tab) return;
+  tab.status = status;
+  if (isActiveAiChatTab(tab)) setAiAssistantStatus(status);
+  renderAiChatTabs();
+}
+
 function aiRequestTargetsCurrentState(request) {
-  return aiRequestManager.isCurrent(request) && aiRequestTargetsState(request, {
+  const tab = aiChatTabForRequest(request);
+  return aiRequestManager.isCurrent(request) && Boolean(tab) && aiRequestTargetsState(request, {
     workId: state.work?.id,
-    conversationId: state.aiConversationId
+    conversationId: tab.conversationId
   });
 }
 
@@ -532,41 +573,56 @@ function assertAiRequestCurrent(request) {
 }
 
 function aiInteractionBusy() {
-  return aiRequestManager.hasActive() || aiConversationNavigationPending !== null;
+  return aiRequestManager.hasActive(activeAiChatTab()?.id) || aiConversationNavigationPending !== null;
+}
+
+function aiSendButtonIconMarkup(stateName) {
+  return stateName === "stop"
+    ? '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="6" y="6" width="12" height="12" rx="1.5"></rect></svg>'
+    : '<svg class="ai-send-button-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 3 9.5 14.5M21 3l-7 18-4.5-6.5L3 10l18-7Z"></path></svg>';
 }
 
 function syncAiRequestControls() {
-  const sending = aiRequestManager.hasActive();
+  const sending = aiRequestManager.hasActive(activeAiChatTab()?.id);
   const switching = aiConversationNavigationPending !== null;
   const button = $("#ai-send");
-  button.disabled = sending || switching;
-  button.textContent = sending ? "发送中" : switching ? "切换中" : "发送";
+  const stateName = sending ? "stop" : switching ? "switching" : "send";
+  const label = sending ? "终止当前回复" : switching ? "正在切换对话" : "发送消息";
+  button.disabled = switching;
+  button.dataset.state = stateName;
+  button.classList.toggle("is-stop", sending);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.innerHTML = aiSendButtonIconMarkup(stateName);
   syncAiTaskOptions();
   renderAiRoleplayCharacterSelect();
 }
 
 function cancelActiveAiRequest(reason) {
-  const cancelled = aiRequestManager.cancel(reason);
+  const cancelled = aiRequestManager.cancel(reason, activeAiChatTab()?.id);
   syncAiRequestControls();
   return cancelled;
 }
 
-function beginAiConversationNavigation(reason, action = "切换会话") {
-  if (aiRequestManager.hasActive()) {
-    const isNewConversation = action === "新建会话";
-    toast(
-      `当前 turn 尚未结束，${action}会中断生成；${isNewConversation ? "\n" : ""}已收到的内容会保留在历史记录中`,
-      "warning",
-      isNewConversation ? "ai-new-conversation-toast" : ""
-    );
+function activateAiSendControl() {
+  const tab = activeAiChatTab();
+  if (aiRequestManager.hasActive(tab?.id)) {
+    if (cancelActiveAiRequest("用户已终止当前回复")) {
+      toast("已终止当前回复，可以重新发送");
+      $("#ai-prompt").focus();
+    }
+    return;
   }
+  void sendAi();
+}
+
+function beginAiConversationNavigation(reason, action = "切换会话") {
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = aiConversationNavigationGeneration;
   const navigation = Object.freeze({
     generation: aiConversationNavigationGeneration,
     workId: String(state.work?.id ?? "")
   });
-  cancelActiveAiRequest(reason);
   return navigation;
 }
 
@@ -584,11 +640,12 @@ function finishAiConversationNavigation(navigation) {
 
 function invalidateAiConversationNavigation(reason, action = "切换作品") {
   if (aiRequestManager.hasActive()) {
-    toast(`当前 turn 尚未结束，${action}会中断生成；已收到的内容会保留在历史记录中`, "warning");
+    toast(`仍有 Agent turn 尚未结束，${action}会中断全部生成；已收到的内容会保留在历史记录中`, "warning");
   }
   aiConversationNavigationGeneration += 1;
   aiConversationNavigationPending = null;
-  cancelActiveAiRequest(reason);
+  aiRequestManager.cancelAll(reason);
+  syncAiRequestControls();
 }
 
 function aiAssistantRequestId(request) {
@@ -665,6 +722,8 @@ let workSelectionRequestGeneration = 0;
 let chapterSelectionRequestGeneration = 0;
 let aiConversationNavigationGeneration = 0;
 let aiConversationNavigationPending = null;
+let aiChatTabLimit = 5;
+let aiConversationWorkspaceOpen = false;
 const loadedVolumeChapterIds = new Set();
 const volumeChapterLoadingIds = new Set();
 const volumeChapterRequests = new Map();
@@ -873,6 +932,7 @@ function replacePageRoute(route) {
   const hash = serializePageRoute(route);
   if (window.location.hash !== hash) window.history.replaceState(null, "", hash);
   schedulePresenceHeartbeat();
+  syncTopSearchButton();
 }
 
 function presencePageForRoute(route = currentPageRoute()) {
@@ -1084,6 +1144,149 @@ function currentPageRoute() {
   return { view: "welcome", workId };
 }
 
+function isChapterSearchContext() {
+  return Boolean(state.work && state.chapter && !$("#editor-view").classList.contains("hidden"));
+}
+
+function syncTopSearchButton() {
+  const button = $("#top-search-button");
+  const chapterContext = isChapterSearchContext();
+  button.classList.toggle("hidden", chapterContext);
+  button.disabled = !state.work || chapterContext || !canReadAggregateContent();
+  if (!chapterContext) closeChapterSearchPanel({ restoreFocus: false });
+}
+
+function chapterSearchMatches() {
+  return findTextMatches($("#chapter-content").value, $("#chapter-search-query").value);
+}
+
+function renderChapterSearchStatus() {
+  const query = $("#chapter-search-query").value;
+  const matches = chapterSearchMatches();
+  const status = $("#chapter-search-status");
+  const readOnly = !canEditProse() || chapterEditorReadOnly;
+  const replaceButtons = [$("#chapter-search-replace"), $("#chapter-search-replace-all")];
+  replaceButtons.forEach((button) => { button.disabled = readOnly || matches.length === 0; });
+  $("#chapter-search-previous").disabled = matches.length === 0;
+  $("#chapter-search-next").disabled = matches.length === 0;
+  if (!query) {
+    status.textContent = "输入关键词后开始搜索";
+    return;
+  }
+  if (!matches.length) {
+    status.textContent = "本章未找到匹配内容";
+    return;
+  }
+  const current = chapterSearchMatchIndex >= 0 ? chapterSearchMatchIndex + 1 : 0;
+  status.textContent = current ? `第 ${current} / ${matches.length} 处` : `找到 ${matches.length} 处`;
+}
+
+function syncChapterSearchControls() {
+  if (!$("#chapter-search-panel")) return;
+  const matches = chapterSearchMatches();
+  if (chapterSearchMatchIndex >= matches.length) chapterSearchMatchIndex = matches.length - 1;
+  renderChapterSearchStatus();
+}
+
+function selectChapterSearchMatch(index) {
+  const matches = chapterSearchMatches();
+  if (!matches.length) {
+    chapterSearchMatchIndex = -1;
+    renderChapterSearchStatus();
+    return;
+  }
+  chapterSearchMatchIndex = (index + matches.length) % matches.length;
+  const input = $("#chapter-content");
+  const start = matches[chapterSearchMatchIndex];
+  input.focus({ preventScroll: true });
+  input.setSelectionRange(start, start + $("#chapter-search-query").value.length);
+  renderChapterSearchStatus();
+}
+
+function moveChapterSearchMatch(direction) {
+  const matches = chapterSearchMatches();
+  if (!matches.length) {
+    renderChapterSearchStatus();
+    return;
+  }
+  const nextIndex = chapterSearchMatchIndex < 0
+    ? direction > 0 ? 0 : matches.length - 1
+    : chapterSearchMatchIndex + direction;
+  selectChapterSearchMatch(nextIndex);
+}
+
+function openChapterSearchPanel() {
+  if (!isChapterSearchContext()) return false;
+  const panel = $("#chapter-search-panel");
+  panel.classList.remove("hidden");
+  panel.setAttribute("aria-hidden", "false");
+  syncChapterSearchControls();
+  queueMicrotask(() => {
+    const input = $("#chapter-search-query");
+    input.focus();
+    if (input.value) input.select();
+  });
+  return true;
+}
+
+function closeChapterSearchPanel({ restoreFocus = true } = {}) {
+  const panel = $("#chapter-search-panel");
+  if (!panel || panel.classList.contains("hidden")) return;
+  panel.classList.add("hidden");
+  panel.setAttribute("aria-hidden", "true");
+  chapterSearchMatchIndex = -1;
+  if (restoreFocus && isChapterSearchContext()) $("#chapter-content").focus({ preventScroll: true });
+}
+
+function resetChapterSearchPanel() {
+  closeChapterSearchPanel({ restoreFocus: false });
+  $("#chapter-search-query").value = "";
+  $("#chapter-replace-query").value = "";
+  chapterSearchMatchIndex = -1;
+  renderChapterSearchStatus();
+}
+
+function replaceCurrentChapterSearchMatch() {
+  if (!isChapterSearchContext() || !canEditProse() || chapterEditorReadOnly) {
+    toast("请先进入编辑模式", "error");
+    return;
+  }
+  const query = $("#chapter-search-query").value;
+  const matches = chapterSearchMatches();
+  if (!query || !matches.length) return renderChapterSearchStatus();
+  const index = chapterSearchMatchIndex < 0 ? 0 : chapterSearchMatchIndex;
+  const start = matches[index];
+  const input = $("#chapter-content");
+  const replacement = $("#chapter-replace-query").value;
+  input.value = `${input.value.slice(0, start)}${replacement}${input.value.slice(start + query.length)}`;
+  chapterSearchMatchIndex = Math.min(index, Math.max(0, findTextMatches(input.value, query).length - 1));
+  updateChapterStats();
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+  scheduleChapterAutoSave(120);
+  syncChapterSearchControls();
+  toast("已替换本章 1 处，等待自动保存");
+}
+
+function replaceAllChapterSearchMatches() {
+  if (!isChapterSearchContext() || !canEditProse() || chapterEditorReadOnly) {
+    toast("请先进入编辑模式", "error");
+    return;
+  }
+  const query = $("#chapter-search-query").value;
+  const input = $("#chapter-content");
+  const result = replaceTextMatches(input.value, query, $("#chapter-replace-query").value);
+  if (!result.matches) return renderChapterSearchStatus();
+  input.value = result.content;
+  chapterSearchMatchIndex = -1;
+  updateChapterStats();
+  clearChapterLineSelection();
+  scheduleChapterLineNumbers();
+  scheduleChapterAutoSave(120);
+  syncChapterSearchControls();
+  toast(`已替换本章 ${result.matches} 处，等待自动保存`);
+}
+
 function loadPanelLayout() {
   try {
     const stored = JSON.parse(localStorage.getItem(panelLayoutStorageKey) ?? "{}");
@@ -1142,9 +1345,8 @@ function applyPanelLayout(persist = false) {
 }
 
 function ensureAiPanelExpanded() {
-  if (!panelLayout.aiCollapsed) return;
-  panelLayout.aiCollapsed = false;
-  applyPanelLayout(true);
+  if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) return;
+  setAiConversationWorkspaceVisible(true);
 }
 
 function setupPanelResize(handle, side) {
@@ -1193,6 +1395,7 @@ let chapterAutoSaveTimer = null;
 let chapterSaveInFlight = null;
 let chapterSaveGuardInFlight = null;
 let lastSavedChapterSnapshot = null;
+let chapterSearchMatchIndex = -1;
 let chapterSelectionRequestId = 0;
 let chapterForeshadowReminderRequestId = 0;
 let chapterForeshadowReminders = [];
@@ -1234,7 +1437,9 @@ const moduleListPages = {
   comments: 1,
   reviews: 1
 };
-const characterFilters = { raceIds: [], organizationIds: [] };
+const characterFilters = { raceIds: [], organizationIds: [], genderValues: [], deathState: "all" };
+const CHARACTER_GENDER_OPTIONS = [["unknown", "未知"], ["male", "男 / 雄"], ["female", "女 / 雌"], ["none", "无性别"]];
+const CHARACTER_DEATH_STATE_OPTIONS = [["all", "全部状态"], ["alive", "未死亡"], ["dead", "已死亡"]];
 let characterFiltersPanelOpen = false;
 const settingFilters = { keyword: "", category: "", lockState: "all" };
 let settingFiltersPanelOpen = false;
@@ -1293,6 +1498,7 @@ function applyChapterEditorMode() {
   $("#chapter-delete-button").classList.toggle("hidden", permissionBlocked || chapterEditorReadOnly || !state.chapter);
   $("#chapter-annotations-button").classList.toggle("hidden", !state.chapter);
   $("#chapter-reader-button").classList.toggle("hidden", !state.chapter || !canReadModule("editor"));
+  syncChapterSearchControls();
   if (viewOnly) cancelChapterAutoSave();
 }
 
@@ -1781,9 +1987,345 @@ function renderAiQuickActions() {
   quickActions.setAttribute("aria-hidden", String(!visible));
 }
 
-function attachMessageHeading(message, label, createdAt = new Date().toISOString()) {
+function createAiChatFeed() {
+  const feed = document.createElement("div");
+  feed.className = "ai-feed hidden";
+  feed.setAttribute("role", "tabpanel");
+  $("#ai-chat-panels").append(feed);
+  return feed;
+}
+
+function createAiChatTabState(input = {}) {
+  const existing = input.conversationId ? aiChatTabManager.findByConversation(input.conversationId) : null;
+  if (existing) {
+    aiChatTabManager.activate(existing.id);
+    return existing;
+  }
+  const feed = input.feed ?? createAiChatFeed();
+  const tab = aiChatTabManager.open({
+    workId: String(state.work?.id ?? ""),
+    conversationId: input.conversationId ?? null,
+    title: input.title ?? "新对话",
+    modelId: input.modelId ?? null,
+    selectedModelId: input.selectedModelId ?? null,
+    promptSent: input.promptSent === true,
+    taskType: input.taskType ?? "chat",
+    contextScope: input.contextScope ?? { type: "none" },
+    roleplayCharacter: input.roleplayCharacter ?? null,
+    citations: input.citations ?? [],
+    references: input.references ?? [],
+    composer: input.composer ?? { text: "", citations: [], references: [] },
+    contextUsage: input.contextUsage ?? null,
+    contextWarning: input.contextWarning === true,
+    lastMessageAt: input.lastMessageAt ?? null,
+    status: input.status ?? "ready",
+    unread: input.unread === true,
+    feed
+  });
+  feed.dataset.aiTabId = tab.id;
+  feed.setAttribute("aria-labelledby", `ai-chat-tab-${tab.id}`);
+  return tab;
+}
+
+function persistActiveAiChatTab() {
+  const tab = activeAiChatTab();
+  if (!tab) return null;
+  tab.workId = String(state.work?.id ?? "");
+  tab.conversationId = state.aiConversationId;
+  tab.title = $("#ai-conversation-title").textContent || tab.title || "新对话";
+  tab.modelId = state.aiConversationModelId;
+  tab.selectedModelId = $("#ai-model").value || tab.selectedModelId || null;
+  tab.promptSent = state.aiPromptSent;
+  tab.taskType = state.aiTaskType;
+  tab.contextScope = { ...state.aiContextScope };
+  tab.roleplayCharacter = state.aiRoleplayCharacter ? { ...state.aiRoleplayCharacter } : null;
+  setAiChatTabComposerSnapshot(tab, captureAiPromptComposer());
+  tab.contextUsage = latestAiContextUsage;
+  tab.contextWarning = !$("#ai-context-warning").classList.contains("hidden");
+  tab.lastMessageAt = state.aiLastMessageAt;
+  return tab;
+}
+
+function setAiChatTabComposerSnapshot(tab, snapshot) {
+  if (!tab) return;
+  tab.citations = snapshot.citations.map((citation) => ({ ...citation }));
+  tab.references = snapshot.references.map((reference) => ({ ...reference }));
+  tab.composer = {
+    text: snapshot.text,
+    citations: tab.citations.map((citation) => ({ ...citation })),
+    references: tab.references.map((reference) => ({ ...reference }))
+  };
+}
+
+function clearAiChatTabComposer(tab) {
+  setAiChatTabComposerSnapshot(tab, { text: "", citations: [], references: [] });
+}
+
+function applyAiChatTabState(tab) {
+  state.aiConversationId = tab.conversationId;
+  state.aiConversationModelId = tab.modelId;
+  state.aiPromptSent = tab.promptSent;
+  state.aiCitations = tab.citations.map((citation) => ({ ...citation }));
+  state.aiReferences = tab.references.map((reference) => ({ ...reference }));
+  state.aiLastMessageAt = tab.lastMessageAt;
+  $("#ai-conversation-title").textContent = tab.title || "新对话";
+  applyAiConversationTaskType(tab.taskType);
+  applyAiConversationContextScope(tab.contextScope);
+  applyAiRoleplayCharacter(tab.roleplayCharacter);
+  const selectedModelId = tab.modelId ?? tab.selectedModelId;
+  if (selectedModelId && state.models.some((model) => model.id === selectedModelId)) $("#ai-model").value = selectedModelId;
+  setAiPromptText(tab.composer.text);
+  renderAiCitations();
+  renderAiReferences();
+  latestAiContextUsage = null;
+  setAiContextMeter(tab.contextUsage);
+  if (tab.contextWarning) showAiContextWarning();
+  else hideAiContextWarning();
+  setAiAssistantStatus(tab.status);
+  renderAiQuickActions();
+  renderAiConversationHistory();
+  syncAiRequestControls();
+}
+
+function aiChatTabIsReplaceable(tab = activeAiChatTab()) {
+  return Boolean(tab
+    && !tab.conversationId
+    && !tab.promptSent
+    && !aiRequestManager.hasActive(tab.id)
+    && !(tab.composer?.text || "").trim()
+    && !(tab.composer?.citations?.length)
+    && !(tab.composer?.references?.length));
+}
+
+function aiChatTabOpeningSlot() {
+  const active = activeAiChatTab();
+  if (aiChatTabLimit === 1) return { allowed: true, tab: active, replacing: true };
+  if (aiChatTabIsReplaceable(active)) return { allowed: true, tab: active, replacing: true };
+  if (aiChatTabManager.list().length < aiChatTabLimit) return { allowed: true, tab: null, replacing: false };
+  return { allowed: false, tab: null, replacing: false };
+}
+
+function interruptAiChatTabForReplacement(slot) {
+  if (!slot?.replacing || !slot.tab) return;
+  if (aiRequestManager.cancel("已切换到其他对话", slot.tab.id)) {
+    toast("当前对话仍在生成，切换后已中断该 turn；已收到的内容仍保留在历史记录中", "warning");
+  }
+}
+
+function reportAiChatTabLimit() {
+  toast(`最多同时打开 ${aiChatTabLimit} 个对话，请先关闭一个再继续`, "warning");
+}
+
+function aiChatTabStatusLabel(tab, selected) {
+  if (tab.status === "streaming") return "正在生成";
+  if (tab.status === "error") return "执行失败";
+  if (tab.unread) return "已完成 · 未读";
+  return selected ? "当前对话" : "空闲";
+}
+
+function renderAiConversationSwitcher() {
+  const button = $("#ai-conversation-switcher");
+  const list = $("#ai-open-conversation-list");
+  if (!button || !list) return;
+  const tabs = aiChatTabManager.list();
+  const active = activeAiChatTab();
+  const multipleEnabled = aiChatTabLimit > 1;
+  $("#ai-conversation-title").textContent = active?.title || "新对话";
+  $("#ai-open-conversation-count").textContent = String(tabs.length);
+  $("#ai-conversation-switcher-limit").textContent = `${tabs.length} / ${aiChatTabLimit}`;
+  button.disabled = !multipleEnabled;
+  button.setAttribute("aria-disabled", String(!multipleEnabled));
+  button.title = multipleEnabled ? "切换打开的对话" : "多会话已通过环境变量关闭";
+  button.classList.toggle("has-background-activity", tabs.some((tab) => tab.id !== active?.id && (tab.status === "streaming" || tab.unread)));
+  $("#ai-workspace-open").classList.toggle("hidden", !multipleEnabled);
+  list.replaceChildren();
+  for (const tab of tabs) {
+    const selected = tab.id === active?.id;
+    const row = document.createElement("div");
+    row.className = `ai-open-conversation-row${selected ? " is-active" : ""}`;
+    row.setAttribute("role", "listitem");
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = "ai-open-conversation-select";
+    select.dataset.aiSwitcherTabId = tab.id;
+    select.setAttribute("aria-current", selected ? "true" : "false");
+    const status = document.createElement("span");
+    status.className = `ai-chat-tab-status${tab.status === "streaming" ? " is-streaming" : tab.status === "error" ? " is-error" : tab.unread ? " is-unread" : ""}`;
+    status.setAttribute("aria-hidden", "true");
+    const copy = document.createElement("span");
+    copy.className = "ai-open-conversation-copy";
+    const title = document.createElement("strong");
+    title.textContent = tab.title || "新对话";
+    const meta = document.createElement("small");
+    meta.textContent = aiChatTabStatusLabel(tab, selected);
+    copy.append(title, meta);
+    select.append(status, copy);
+    select.addEventListener("click", () => {
+      activateAiChatTab(tab.id);
+      setAiConversationSwitcherVisible(false);
+    });
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "ai-open-conversation-close";
+    close.setAttribute("aria-label", `关闭对话“${tab.title || "新对话"}”`);
+    close.textContent = "×";
+    close.classList.toggle("hidden", tabs.length === 1);
+    close.addEventListener("click", () => closeAiChatTab(tab.id));
+    row.append(select, close);
+    list.append(row);
+  }
+}
+
+function setAiConversationSwitcherVisible(visible) {
+  const menu = $("#ai-conversation-switcher-menu");
+  const button = $("#ai-conversation-switcher");
+  if (!menu || !button) return;
+  const nextVisible = Boolean(visible && aiChatTabLimit > 1);
+  menu.classList.toggle("hidden", !nextVisible);
+  button.setAttribute("aria-expanded", String(nextVisible));
+  if (nextVisible) renderAiConversationSwitcher();
+}
+
+function setAiConversationWorkspaceVisible(visible) {
+  aiConversationWorkspaceOpen = Boolean(visible);
+  if (aiConversationWorkspaceOpen) {
+    panelLayout.aiCollapsed = false;
+    $("#app").classList.remove("ai-panel-collapsed");
+  }
+  $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
+  $(".ai-panel").classList.toggle("is-conversation-workspace", aiConversationWorkspaceOpen);
+  $("#ai-assistant-entry").classList.toggle("active", aiConversationWorkspaceOpen);
+  $("#ai-assistant-entry").setAttribute("aria-expanded", String(aiConversationWorkspaceOpen));
+  $("#ai-chat-tabs").classList.add("hidden");
+  $("#ai-workspace-close").classList.toggle("hidden", !aiConversationWorkspaceOpen);
+  $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
+  setAiConversationSwitcherVisible(false);
+  renderAiChatTabs();
+  if (aiConversationWorkspaceOpen) {
+    window.requestAnimationFrame(() => $("#ai-prompt").focus({ preventScroll: true }));
+  }
+}
+
+function applyAiChatTabLimit(value) {
+  aiChatTabLimit = normalizeAiChatTabLimit(value);
+  const singleSession = aiChatTabLimit === 1;
+  $(".ai-panel").classList.toggle("is-single-conversation", singleSession);
+  if (singleSession) {
+    setAiConversationSwitcherVisible(false);
+  }
+  renderAiChatTabs();
+}
+
+function renderAiChatTabs() {
+  const host = $("#ai-chat-tabs");
+  if (!host) return;
+  const tabs = aiChatTabManager.list();
+  const active = activeAiChatTab();
+  host.replaceChildren();
+  for (const tab of tabs) {
+    const item = document.createElement("div");
+    item.className = "ai-chat-tab";
+    item.setAttribute("role", "presentation");
+    const button = document.createElement("button");
+    const selected = tab.id === active?.id;
+    button.type = "button";
+    button.id = `ai-chat-tab-${tab.id}`;
+    button.className = "ai-chat-tab-select";
+    button.dataset.aiTabId = tab.id;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(selected));
+    button.setAttribute("aria-controls", tab.feed.id || `ai-chat-panel-${tab.id}`);
+    button.tabIndex = selected ? 0 : -1;
+    button.title = tab.title || "新对话";
+    const status = document.createElement("span");
+    status.className = `ai-chat-tab-status${tab.status === "streaming" ? " is-streaming" : tab.status === "error" ? " is-error" : tab.unread ? " is-unread" : ""}`;
+    status.setAttribute("aria-hidden", "true");
+    const title = document.createElement("span");
+    title.textContent = tab.title || "新对话";
+    button.append(status, title);
+    button.addEventListener("click", () => activateAiChatTab(tab.id));
+    button.addEventListener("keydown", (event) => {
+      const index = tabs.findIndex((candidate) => candidate.id === tab.id);
+      const offset = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
+      if (!offset) return;
+      event.preventDefault();
+      const target = tabs[(index + offset + tabs.length) % tabs.length];
+      activateAiChatTab(target.id);
+      $("#ai-conversation-switcher").focus();
+    });
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "ai-chat-tab-close";
+    close.dataset.aiTabClose = tab.id;
+    close.setAttribute("aria-label", `关闭对话页签“${tab.title || "新对话"}”`);
+    close.title = "关闭页签";
+    close.textContent = "×";
+    close.classList.toggle("hidden", tabs.length === 1);
+    close.addEventListener("click", () => closeAiChatTab(tab.id));
+    item.append(button, close);
+    host.append(item);
+  }
+  renderAiConversationSwitcher();
+}
+
+function activateAiChatTab(tabId, { persistCurrent = true, force = false } = {}) {
+  const current = activeAiChatTab();
+  if (!force && current?.id === tabId) return current;
+  if (persistCurrent) persistActiveAiChatTab();
+  const tab = aiChatTabManager.activate(tabId);
+  if (!tab) return null;
+  tab.unread = false;
+  for (const feed of $("#ai-chat-panels").querySelectorAll(".ai-feed")) {
+    feed.classList.toggle("hidden", feed !== tab.feed);
+    feed.id = feed === tab.feed ? "ai-feed" : `ai-chat-panel-${feed.dataset.aiTabId}`;
+  }
+  tab.feed.classList.remove("hidden");
+  applyAiChatTabState(tab);
+  renderAiChatTabs();
+  return tab;
+}
+
+function closeAiChatTab(tabId) {
+  const tab = aiChatTabManager.get(tabId);
+  if (!tab) return;
+  const wasActive = isActiveAiChatTab(tab);
+  if (wasActive) persistActiveAiChatTab();
+  if (aiRequestManager.cancel("对话页签已关闭", tab.id)) {
+    toast(`“${tab.title || "新对话"}”仍在生成，关闭页签已中断该 turn；其他页签不受影响`, "warning");
+  }
+  const { active } = aiChatTabManager.close(tab.id);
+  tab.feed.remove();
+  if (!wasActive) {
+    renderAiChatTabs();
+    return;
+  }
+  const next = active ?? createAiChatTabState();
+  activateAiChatTab(next.id, { persistCurrent: false, force: true });
+}
+
+function resetAiChatTabs() {
+  aiRequestManager.cancelAll("已重置 Agent 对话页签");
+  setAiConversationSwitcherVisible(false);
+  setAiConversationWorkspaceVisible(false);
+  const panels = $("#ai-chat-panels");
+  panels.replaceChildren();
+  aiChatTabManager.reset();
+  const tab = createAiChatTabState();
+  resetAiFeed(tab.feed, tab.roleplayCharacter);
+  activateAiChatTab(tab.id, { persistCurrent: false, force: true });
+}
+
+function initializeAiChatTabs() {
+  const feed = $("#ai-feed");
+  aiChatTabManager.reset();
+  const tab = createAiChatTabState({ feed });
+  feed.dataset.aiTabId = tab.id;
+  activateAiChatTab(tab.id, { persistCurrent: false, force: true });
+}
+
+function attachMessageHeading(message, label, createdAt = new Date().toISOString(), tab = activeAiChatTab()) {
   const timestamp = createdAt || new Date().toISOString();
-  const previousCreatedAt = state.aiLastMessageAt;
+  const previousCreatedAt = tab?.lastMessageAt ?? state.aiLastMessageAt;
   const heading = document.createElement("span");
   heading.className = "message-heading";
   const role = document.createElement("span");
@@ -1795,7 +2337,8 @@ function attachMessageHeading(message, label, createdAt = new Date().toISOString
   message.prepend(heading);
   message.dataset.createdAt = timestamp;
   message.dataset.previousCreatedAt = previousCreatedAt ?? "";
-  state.aiLastMessageAt = timestamp;
+  if (tab) tab.lastMessageAt = timestamp;
+  if (isActiveAiChatTab(tab)) state.aiLastMessageAt = timestamp;
   return heading;
 }
 
@@ -1806,19 +2349,25 @@ function updateMessageCreatedAt(message, createdAt) {
   time.dateTime = createdAt;
   time.textContent = formatAiMessageTime(createdAt);
   message.dataset.createdAt = createdAt;
-  if (message === $("#ai-feed").lastElementChild) state.aiLastMessageAt = createdAt;
+  const tab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
+  if (message === tab?.feed.lastElementChild) {
+    tab.lastMessageAt = createdAt;
+    if (isActiveAiChatTab(tab)) state.aiLastMessageAt = createdAt;
+  }
 }
 
-function resetAiFeed() {
-  state.aiLastMessageAt = null;
-  const roleplayName = state.aiRoleplayCharacter?.name;
-  $("#ai-feed").innerHTML = roleplayName
+function resetAiFeed(feed = $("#ai-feed"), roleplayCharacter = state.aiRoleplayCharacter) {
+  const tab = aiChatTabManager.get(feed?.dataset.aiTabId);
+  if (tab) tab.lastMessageAt = null;
+  if (isActiveAiChatTab(tab)) state.aiLastMessageAt = null;
+  const roleplayName = roleplayCharacter?.name;
+  feed.innerHTML = roleplayName
     ? `<div class="assistant-message"><span class="message-heading"><span>${esc(roleplayName)}</span></span><div class="message-body"><p>正在扮演 ${esc(roleplayName)}。我只能通过角色卡和与自己有关的记忆回答。</p></div></div>`
     : '<div class="assistant-message"><span class="message-heading"><span>助手</span></span><div class="message-body"><p>选择章节和模型后，可以问答、续写或校对。所有引用都基于已保存正文。</p></div></div>';
 }
 
-function aiAssistantLabel(suffix = "") {
-  const name = state.aiRoleplayCharacter?.name || "助手";
+function aiAssistantLabel(suffix = "", roleplayCharacter = state.aiRoleplayCharacter) {
+  const name = roleplayCharacter?.name || "助手";
   return suffix ? `${name} · ${suffix}` : name;
 }
 
@@ -1834,26 +2383,24 @@ function createAiContextCompactionDivider({ kind = "conversation", ariaLabel = "
   return divider;
 }
 
-function appendAiContextCompactionDivider(kind, before = null) {
+function appendAiContextCompactionDivider(kind, before = null, feed = $("#ai-feed")) {
   const divider = createAiContextCompactionDivider({ kind });
-  const feed = $("#ai-feed");
   if (before?.parentElement === feed) feed.insertBefore(divider, before);
   else feed.append(divider);
-  scrollAiFeedToBottom();
+  scrollAiFeedToBottom(feed);
   return divider;
 }
 
-function renderConversationCompactionDivider(compactedMessageCount, totalMessageCount = null) {
-  const feed = $("#ai-feed");
+function renderConversationCompactionDivider(compactedMessageCount, totalMessageCount = null, feed = $("#ai-feed"), conversation = null) {
   feed.querySelector('[data-context-compaction="conversation"]')?.remove();
   const compactedCount = Math.max(0, Number(compactedMessageCount) || 0);
   if (compactedCount === 0) return null;
   const messages = [...feed.querySelectorAll("[data-message-id]")];
-  const current = state.aiConversations.find((conversation) => conversation.id === state.aiConversationId);
+  const current = conversation ?? state.aiConversations.find((item) => item.id === state.aiConversationId);
   const totalCount = Math.max(messages.length, Number(totalMessageCount ?? current?.messageCount) || messages.length);
   const loadedOffset = Math.max(0, totalCount - messages.length);
   const boundaryIndex = Math.max(0, Math.min(messages.length, compactedCount - loadedOffset));
-  return appendAiContextCompactionDivider("conversation", messages[boundaryIndex] ?? null);
+  return appendAiContextCompactionDivider("conversation", messages[boundaryIndex] ?? null, feed);
 }
 
 function renderMessageCardActions(message) {
@@ -1890,9 +2437,16 @@ function renderMessageCardActions(message) {
     fork.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4V7M12 13v4"/></svg><span>从此续写</span>';
     const forkRequestId = createAiIdempotencyKey();
     fork.addEventListener("click", async () => {
+      const openingSlot = aiChatTabOpeningSlot();
+      if (!openingSlot.allowed) {
+        reportAiChatTabLimit();
+        return;
+      }
       fork.disabled = true;
       try {
-        const conversation = await api(`/api/ai-conversations/${state.aiConversationId}/fork`, {
+        const sourceTab = aiChatTabManager.get(message.closest(".ai-feed")?.dataset.aiTabId);
+        if (!sourceTab?.conversationId) throw new Error("无法确定消息所属对话");
+        const conversation = await api(`/api/ai-conversations/${sourceTab.conversationId}/fork`, {
           method: "POST",
           body: { messageId: message.dataset.messageId, requestId: forkRequestId }
         });
@@ -1931,7 +2485,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_drafts: "搜索想法",
   recall_self: "回忆自身",
   image: "读取设定图片",
-  recall_relationship: "回忆人物关系"
+  recall_relationship: "回忆人物关系",
+  calculate_time: "计算日期"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -1943,10 +2498,11 @@ const AI_TOOL_DESCRIPTIONS = {
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  calculate_time: "计算日期差值，或从起始日期推算目标日期。"
 };
 
-let aiFeedScrollFrame = null;
+const aiFeedScrollFrames = new WeakMap();
 let markdownTableMenuTarget = null;
 let markdownTableMenuTrigger = null;
 
@@ -1987,14 +2543,15 @@ function openMarkdownTableMenu(header, clientX, clientY) {
   toggle.focus();
 }
 
-function scrollAiFeedToBottom() {
-  const feed = $("#ai-feed");
+function scrollAiFeedToBottom(feed = $("#ai-feed")) {
   feed.scrollTop = feed.scrollHeight;
-  if (aiFeedScrollFrame !== null) window.cancelAnimationFrame(aiFeedScrollFrame);
-  aiFeedScrollFrame = window.requestAnimationFrame(() => {
+  const currentFrame = aiFeedScrollFrames.get(feed);
+  if (currentFrame !== undefined) window.cancelAnimationFrame(currentFrame);
+  const nextFrame = window.requestAnimationFrame(() => {
     feed.scrollTop = feed.scrollHeight;
-    aiFeedScrollFrame = null;
+    aiFeedScrollFrames.delete(feed);
   });
+  aiFeedScrollFrames.set(feed, nextFrame);
 }
 
 function formatAiToolCallTime(value) {
@@ -2012,9 +2569,14 @@ function formatAiToolCallTime(value) {
   }).format(date);
 }
 
+const AI_TOOL_CALL_COPY_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path></svg>';
+const AI_TOOL_CALL_COPIED_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12 4 4L19 6"></path></svg>';
+
 function setAiToolCallCopyButtonState(button, copied) {
   const label = button.dataset.copyLabel ?? "代码块";
-  button.dataset.copyState = copied ? "copied" : "idle";
+  const nextState = copied ? "copied" : "idle";
+  if (button.dataset.copyState !== nextState) button.innerHTML = copied ? AI_TOOL_CALL_COPIED_ICON : AI_TOOL_CALL_COPY_ICON;
+  button.dataset.copyState = nextState;
   button.classList.toggle("is-copied", copied);
   button.setAttribute("aria-label", copied ? `${label}已复制` : `复制${label}`);
   button.title = copied ? "已复制" : `复制${label}`;
@@ -2233,23 +2795,15 @@ async function downloadAiConversation(conversation) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
+async function copyAiConversationSessionId(conversation) {
+  const sessionId = typeof conversation?.id === "string" ? conversation.id.trim() : "";
+  if (!sessionId) throw new Error("无法确定对话 Session ID");
+  await copyAiRawMarkdown(sessionId);
+}
+
 function resetAiConversationAfterDelete() {
-  state.aiConversationId = null;
-  state.aiConversationModelId = null;
-  state.aiPromptSent = false;
-  state.aiCitations = [];
-  state.aiReferences = [];
-  applyAiConversationTaskType("chat");
-  applyAiConversationContextScope({ type: "none" });
-  applyAiRoleplayCharacter(null);
-  $("#ai-conversation-title").textContent = "新对话";
-  resetAiFeed();
-  hideAiContextWarning();
-  resetAiContextMeter();
-  setAiPromptText("");
-  renderAiCitations();
-  renderAiReferences();
-  renderAiQuickActions();
+  const tab = activeAiChatTab();
+  if (tab) closeAiChatTab(tab.id);
 }
 
 async function favoriteAiConversation(conversation) {
@@ -2272,7 +2826,11 @@ async function deleteAiConversation(conversation) {
   })) return;
   await api(`/api/ai-conversations/${encodeURIComponent(conversation.id)}`, { method: "DELETE" });
   state.aiConversations = state.aiConversations.filter((item) => item.id !== conversation.id);
-  if (state.aiConversationId === conversation.id) resetAiConversationAfterDelete();
+  const tab = aiChatTabManager.findByConversation(conversation.id);
+  if (tab) {
+    if (isActiveAiChatTab(tab)) resetAiConversationAfterDelete();
+    else closeAiChatTab(tab.id);
+  }
   renderAiConversationHistory();
   toast("对话已清理");
 }
@@ -2408,8 +2966,11 @@ function applyAiConversationTitle(title, conversationId = state.aiConversationId
   if (!title || !conversationId) return;
   const current = state.aiConversations.find((conversation) => conversation.id === conversationId);
   if (current) current.title = title;
+  const tab = aiChatTabManager.findByConversation(conversationId);
+  if (tab) tab.title = title;
   if (state.aiConversationId === conversationId) $("#ai-conversation-title").textContent = title;
   renderAiConversationHistory();
+  renderAiChatTabs();
 }
 
 function applyAiConversations(pageResult) {
@@ -2453,6 +3014,21 @@ async function ensureAiConversationsLoaded() {
 
 async function openAiConversation(conversationId, hideHistory = true, focusMessageId = null) {
   if (!state.work) return null;
+  const existingTab = aiChatTabManager.findByConversation(conversationId);
+  const existingMessage = focusMessageId
+    ? existingTab?.feed.querySelector(`[data-message-id="${CSS.escape(String(focusMessageId))}"]`)
+    : null;
+  if (existingTab && (!focusMessageId || existingMessage || aiRequestManager.hasActive(existingTab.id))) {
+    activateAiChatTab(existingTab.id);
+    if (focusMessageId && existingMessage) focusAiConversationMessage(focusMessageId);
+    if (hideHistory) setAiHistoryVisible(false);
+    return state.aiConversations.find((conversation) => conversation.id === conversationId) ?? existingTab;
+  }
+  let openingSlot = existingTab ? { allowed: true, tab: existingTab, replacing: false } : aiChatTabOpeningSlot();
+  if (!openingSlot.allowed) {
+    reportAiChatTabLimit();
+    return null;
+  }
   const navigation = beginAiConversationNavigation("已切换 AI 对话", "切换会话");
   try {
     const parameters = new URLSearchParams({ page: "1", limit: "100" });
@@ -2464,28 +3040,18 @@ async function openAiConversation(conversationId, hideHistory = true, focusMessa
     if (!isAiConversationNavigationCurrent(navigation)) return null;
     if (String(conversation.workId ?? "") !== navigation.workId) throw new Error("AI 对话不属于当前作品");
     upsertAiConversationSummary(conversation);
-    state.aiConversationId = conversation.id;
-    state.aiConversationModelId = typeof conversation.modelId === "string" ? conversation.modelId : null;
-    state.aiPromptSent = conversation.messages.some((message) => message.role === "user");
-    applyAiConversationTaskType(conversation.taskType);
-    applyAiConversationContextScope(conversation.contextScope);
-    applyAiRoleplayCharacter(conversation.roleplayCharacter);
-    resetAiContextMeter();
-    $("#ai-conversation-title").textContent = conversation.title;
-    resetAiFeed();
-    for (const message of conversation.messages) appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id);
-    if (conversation.hasCompactedSummary) {
-      renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount);
+    persistActiveAiChatTab();
+    if (!existingTab) openingSlot = aiChatTabOpeningSlot();
+    if (!openingSlot.allowed) {
+      reportAiChatTabLimit();
+      return null;
     }
-    state.aiCitations = [];
-    state.aiReferences = [];
-    setAiPromptText("");
-    renderAiCitations();
-    renderAiReferences();
-    renderAiQuickActions();
-    renderAiConversationHistory();
-    if (conversation.contextWarningPending) showAiContextWarning();
-    else hideAiContextWarning();
+    interruptAiChatTabForReplacement(openingSlot);
+    let tab = existingTab ?? openingSlot.tab;
+    if (!tab) tab = createAiChatTabState();
+    applyConversationToAiChatTab(tab, conversation);
+    activateAiChatTab(tab.id, { persistCurrent: false, force: true });
+    if (focusMessageId) window.requestAnimationFrame(() => focusAiConversationMessage(focusMessageId));
     if (hideHistory) setAiHistoryVisible(false);
     return conversation;
   } catch (error) {
@@ -2505,30 +3071,60 @@ function focusAiConversationMessage(messageId) {
   window.setTimeout(() => message.classList.remove("is-search-target"), 1800);
 }
 
-function applyNewAiConversation(conversation) {
+function applyConversationToAiChatTab(tab, conversation) {
+  tab.workId = String(conversation.workId ?? state.work?.id ?? "");
+  tab.conversationId = conversation.id;
+  tab.title = conversation.title || "新对话";
+  tab.modelId = typeof conversation.modelId === "string" ? conversation.modelId : null;
+  tab.selectedModelId = tab.modelId ?? tab.selectedModelId;
+  tab.promptSent = Array.isArray(conversation.messages) && conversation.messages.some((message) => message.role === "user");
+  tab.taskType = conversation.taskType ?? "chat";
+  tab.contextScope = conversation.contextScope ?? { type: "none" };
+  tab.roleplayCharacter = conversation.roleplayCharacter ?? null;
+  tab.citations = [];
+  tab.references = [];
+  tab.composer = { text: "", citations: [], references: [] };
+  tab.contextUsage = null;
+  tab.contextWarning = conversation.contextWarningPending === true;
+  resetAiFeed(tab.feed, tab.roleplayCharacter);
+  for (const message of conversation.messages ?? []) {
+    appendMessage(message.role, message.content, message.citations, message.createdAt, message.metadata, message.id, { tab });
+  }
+  if (conversation.hasCompactedSummary) {
+    renderConversationCompactionDivider(conversation.compactedMessageCount, conversation.messageCount, tab.feed, conversation);
+  }
+  renderAiChatTabs();
+}
+
+function applyNewAiConversation(conversation, tab = activeAiChatTab()) {
   upsertAiConversationSummary(conversation);
-  state.aiConversationId = conversation.id;
-  state.aiConversationModelId = null;
-  state.aiPromptSent = false;
-  applyAiConversationTaskType(conversation.taskType);
-  applyAiConversationContextScope(conversation.contextScope);
-  applyAiRoleplayCharacter(conversation.roleplayCharacter);
-  $("#ai-conversation-title").textContent = conversation.title;
-  resetAiFeed();
-  hideAiContextWarning();
-  resetAiContextMeter();
-  renderAiQuickActions();
+  applyConversationToAiChatTab(tab, { ...conversation, messages: [] });
+  if (isActiveAiChatTab(tab)) applyAiChatTabState(tab);
   setAiHistoryVisible(false);
 }
 
 async function createNewAiConversation(taskType = "chat") {
   if (!state.work) return null;
+  let openingSlot = aiChatTabOpeningSlot();
+  if (!openingSlot.allowed) {
+    reportAiChatTabLimit();
+    return null;
+  }
   const navigation = beginAiConversationNavigation("已新建 AI 对话", "新建会话");
   try {
     const conversation = await api(`/api/works/${navigation.workId}/ai-conversations`, { method: "POST", body: { taskType } });
     if (!isAiConversationNavigationCurrent(navigation)) return null;
     if (String(conversation.workId ?? "") !== navigation.workId) throw new Error("新对话不属于当前作品");
-    applyNewAiConversation(conversation);
+    persistActiveAiChatTab();
+    openingSlot = aiChatTabOpeningSlot();
+    if (!openingSlot.allowed) {
+      reportAiChatTabLimit();
+      return null;
+    }
+    interruptAiChatTabForReplacement(openingSlot);
+    const tab = openingSlot.tab ?? createAiChatTabState();
+    applyNewAiConversation(conversation, tab);
+    activateAiChatTab(tab.id, { persistCurrent: false, force: true });
     return conversation;
   } catch (error) {
     if (!isAiConversationNavigationCurrent(navigation)) return null;
@@ -2610,6 +3206,8 @@ function syncAiTaskOptions() {
 function applyAiConversationTaskType(taskType) {
   const normalizedTaskType = ["chat", "roleplay", "continue", "polish"].includes(taskType) ? taskType : "chat";
   state.aiTaskType = normalizedTaskType;
+  const tab = activeAiChatTab();
+  if (tab) tab.taskType = normalizedTaskType;
   $("#ai-task").value = normalizedTaskType;
   $("#ai-task").dataset.previousValue = normalizedTaskType;
   syncAiTaskOptions();
@@ -2618,6 +3216,8 @@ function applyAiConversationTaskType(taskType) {
 function applyAiConversationContextScope(scope) {
   const normalizedScope = scope && typeof scope === "object" ? JSON.parse(JSON.stringify(scope)) : { type: "none" };
   state.aiContextScope = normalizedScope;
+  const tab = activeAiChatTab();
+  if (tab) tab.contextScope = { ...normalizedScope };
   $("#ai-scope").value = normalizedScope.type === "book" ? "book"
     : normalizedScope.type === "volume" ? "volume"
     : normalizedScope.type === "chapter" && normalizedScope.includeBookSummary ? "chapter-summary"
@@ -2628,6 +3228,8 @@ function applyAiConversationContextScope(scope) {
 
 function applyAiRoleplayCharacter(character) {
   state.aiRoleplayCharacter = character?.id ? character : null;
+  const tab = activeAiChatTab();
+  if (tab) tab.roleplayCharacter = state.aiRoleplayCharacter ? { ...state.aiRoleplayCharacter } : null;
   const active = Boolean(state.aiRoleplayCharacter);
   if (active) $("#ai-scope").value = "none";
   $(".ai-panel").classList.toggle("is-roleplaying", active);
@@ -2693,6 +3295,8 @@ async function persistAiConversationContextScope(scope) {
 
 async function prepareAiRequestConversation(requestHolder, taskType, scope) {
   let request = assertAiRequestCurrent(requestHolder.snapshot);
+  const tab = aiChatTabForRequest(request);
+  if (!tab) throw createAiRequestAbortError("Agent 对话页签已关闭");
   if (!request.conversationId) {
     const conversation = await api(`/api/works/${encodeURIComponent(request.workId)}/ai-conversations`, {
       method: "POST",
@@ -2701,7 +3305,7 @@ async function prepareAiRequestConversation(requestHolder, taskType, scope) {
     });
     assertAiRequestCurrent(request);
     if (String(conversation.workId ?? "") !== request.workId) throw new Error("新对话不属于请求作品");
-    applyNewAiConversation(conversation);
+    applyNewAiConversation(conversation, tab);
     requestHolder.snapshot = aiRequestManager.bind(request, { conversationId: conversation.id });
     request = requestHolder.snapshot;
   }
@@ -2712,8 +3316,12 @@ async function prepareAiRequestConversation(requestHolder, taskType, scope) {
   });
   assertAiRequestCurrent(request);
   upsertAiConversationSummary(taskConversation);
-  applyAiConversationTaskType(taskConversation.taskType);
-  applyAiRoleplayCharacter(taskConversation.roleplayCharacter);
+  tab.taskType = taskConversation.taskType;
+  tab.roleplayCharacter = taskConversation.roleplayCharacter ?? null;
+  if (isActiveAiChatTab(tab)) {
+    applyAiConversationTaskType(tab.taskType);
+    applyAiRoleplayCharacter(tab.roleplayCharacter);
+  }
 
   const scopedConversation = await api(`/api/ai-conversations/${encodeURIComponent(request.conversationId)}/context-scope`, {
     method: "PATCH",
@@ -2722,7 +3330,8 @@ async function prepareAiRequestConversation(requestHolder, taskType, scope) {
   });
   assertAiRequestCurrent(request);
   upsertAiConversationSummary(scopedConversation);
-  applyAiConversationContextScope(scopedConversation.contextScope);
+  tab.contextScope = scopedConversation.contextScope;
+  if (isActiveAiChatTab(tab)) applyAiConversationContextScope(tab.contextScope);
   return request;
 }
 
@@ -2746,13 +3355,29 @@ async function persistAiRequestInterruption(request, interruption = null) {
   const partialContent = typeof interruption?.content === "string" && interruption.content.trim()
     ? interruption.content
     : null;
+  const cancellationMessage = request.signal.reason instanceof Error
+    ? request.signal.reason.message
+    : "AI 请求已取消";
+  const cancelledByClient = request.signal.reason?.code === "AI_REQUEST_CANCELLED";
+  const metadata = cancelledByClient
+    ? {
+        ...(partialContent ? interruption.metadata : {}),
+        interrupted: true,
+        interruptionCode: "AI_REQUEST_CANCELLED",
+        interruptionMessage: cancellationMessage.slice(0, 500)
+      }
+    : interruption?.metadata ?? {
+        interrupted: true,
+        interruptionCode: "AI_REQUEST_CANCELLED",
+        interruptionMessage: cancellationMessage.slice(0, 500)
+      };
   try {
     const message = await persistAiConversationMessage(
       request.conversationId,
       "assistant",
-      partialContent ?? "调用失败：生成已取消，尚未收到可保留的回复内容。",
+      partialContent ?? "生成已终止，尚未收到可保留的回复内容。",
       [],
-      partialContent ? interruption.metadata : {},
+      metadata,
       { requestId: aiAssistantRequestId(request) }
     );
     updateAiConversationSummaryFromMessage(message);
@@ -3361,6 +3986,7 @@ async function api(path, options = {}) {
   const payload = await response.json();
   if (path === "/api/health") {
     applyImageUploadLimits(payload.data?.uploadLimits);
+    applyAiChatTabLimit(payload.data?.aiChatTabLimit);
     updateSystemHealth({
       status: payload.data?.status === "ok" ? "ready" : "degraded",
       version: payload.data?.version
@@ -3447,6 +4073,7 @@ function aiStreamInterruptionLabel(code) {
   if (code === "AI_STREAM_NETWORK_ERROR") return "网络中断";
   if (code === "AI_STREAM_UPSTREAM_CLOSED") return "流被关闭";
   if (code === "AI_STREAM_REQUEST_CANCELLED") return "请求已取消";
+  if (code === "AI_REQUEST_CANCELLED") return "已终止";
   return "生成中断";
 }
 
@@ -3578,8 +4205,9 @@ function invalidateModuleRequestsAfterMutation(path, method) {
 
 function applyProductHealthMetadata(health) {
   const version = String(health?.version ?? "").trim();
+  const versionLabel = String(health?.versionLabel ?? "").trim();
   document.querySelectorAll("[data-product-footer-version]").forEach((element) => {
-    element.textContent = version ? `v${version}` : "v—";
+    element.textContent = versionLabel || (version ? `v${version}` : "v—");
   });
   document.querySelectorAll("[data-product-footer-development]").forEach((element) => {
     element.classList.toggle("hidden", health?.development !== true);
@@ -4286,7 +4914,6 @@ async function persistChapter({ automatic = false } = {}) {
     const currentDraft = chapterDraftSnapshot();
     if (sameChapterSnapshot(currentDraft, draft)) {
       setSaveState(automatic ? "已自动保存" : collaborationAutoSaveDisabled ? "已保存 · 自动保存已关闭" : "已保存");
-      if (!automatic) toast(`正文已保存为 v${state.chapter.versionNo}`);
     } else {
       scheduleChapterAutoSave(250);
     }
@@ -5359,10 +5986,27 @@ function syncGlobalReplaceScopeOptions() {
   const selected = options.find((option) => option.checked && !option.disabled) ?? options.find((option) => !option.disabled);
   options.forEach((option) => { option.checked = option === selected; });
   const scope = selected?.value ?? "";
+  const volumeSelect = $("#replace-volume");
+  const volumeEnabled = scope === "prose" || scope === "prose-and-settings";
+  volumeSelect.disabled = !volumeEnabled || !canEditProse();
+  $("#replace-volume-description").textContent = scope === "settings"
+    ? "当前选择了设定库，分卷筛选不会生效。"
+    : "选择分卷后，只替换该分卷的章节正文；设定库不按分卷筛选。";
   $("#replace-submit").disabled = !scope || !canGlobalReplaceScope(scope);
   $("#replace-permission-note").textContent = scope
     ? "替换完成后，命中的章节和设定会分别生成新的版本历史。"
     : "当前账户没有可写入的正文或设定库权限。";
+}
+
+function renderGlobalReplaceVolumeOptions() {
+  const select = $("#replace-volume");
+  const currentValue = select.value;
+  const volumes = Array.isArray(state.work?.volumes) ? state.work.volumes : [];
+  select.innerHTML = [
+    '<option value="">全部分卷（整部作品正文）</option>',
+    ...volumes.map((volume) => `<option value="${esc(volume.id)}">${esc(volume.title)}</option>`)
+  ].join("");
+  select.value = volumes.some((volume) => String(volume.id) === currentValue) ? currentValue : "";
 }
 
 function openGlobalReplaceDialog() {
@@ -5376,6 +6020,7 @@ function openGlobalReplaceDialog() {
   }
   if ($("#search-dialog").open) $("#search-dialog").close();
   $("#replace-form").reset();
+  renderGlobalReplaceVolumeOptions();
   syncGlobalReplaceScopeOptions();
   $("#replace-dialog").showModal();
   queueMicrotask(() => $("#replace-find").focus());
@@ -5463,6 +6108,7 @@ async function submitGlobalReplace(event) {
   const find = $("#replace-find").value;
   const replacement = $("#replace-with").value;
   const scope = $("#replace-form").querySelector('input[name="replaceScope"]:checked')?.value ?? "prose";
+  const volumeId = scope === "settings" ? null : ($("#replace-volume").value || null);
   if (!find.trim()) {
     toast("请输入要查找的内容", "error");
     $("#replace-find").focus();
@@ -5485,8 +6131,14 @@ async function submitGlobalReplace(event) {
     return;
   }
   const scopeLabel = globalReplaceScopeLabels[scope] ?? "正文";
+  const selectedVolume = volumeId
+    ? state.work.volumes.find((volume) => String(volume.id) === volumeId)
+    : null;
+  const targetLabel = selectedVolume
+    ? `${scopeLabel}（正文仅限“${selectedVolume.title}”分卷${scope === "prose-and-settings" ? "，设定库仍为全部设定库" : ""}）`
+    : scopeLabel;
   const replacementLabel = replacement ? `“${replacement}”` : "空内容";
-  const confirmed = await confirmToast(`将把《${state.work.title}》的${scopeLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
+  const confirmed = await confirmToast(`将把《${state.work.title}》的${targetLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
     title: "确认全局替换",
     confirmLabel: "确认替换"
   });
@@ -5511,7 +6163,7 @@ async function submitGlobalReplace(event) {
   try {
     const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
       method: "POST",
-      body: { find, replacement, scope },
+      body: { find, replacement, scope, volumeId },
       skipOptimisticVersion: true
     });
     $("#replace-dialog").close();
@@ -5833,23 +6485,9 @@ function resetWorkScopedUiCaches() {
   volumeChapterRequests.clear();
   state.collapsedRaceIds.clear();
   lastSavedChapterSnapshot = null;
-  state.aiCitations = [];
-  state.aiReferences = [];
-  state.aiPromptSent = false;
-  state.aiConversationId = null;
-  state.aiConversationModelId = null;
   state.aiConversations = [];
-  state.aiRoleplayCharacter = null;
-  renderAiCitations();
-  renderAiReferences();
-  renderAiQuickActions();
-  resetAiFeed();
-  applyAiConversationTaskType("chat");
-  applyAiConversationContextScope({ type: "none" });
-  applyAiRoleplayCharacter(null);
-  $("#ai-conversation-title").textContent = "新对话";
+  resetAiChatTabs();
   $("#ai-model").innerHTML = '<option value="">使用创作助手时加载模型</option>';
-  resetAiContextMeter();
   renderAiConversationHistory();
 }
 
@@ -5994,7 +6632,7 @@ function renderTree() {
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
         <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
-        ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情">详情</button>` : ""}
+        ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情" title="打开“${esc(volume.title)}”分卷详情"><svg class="volume-detail-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 10.5v5.5M12 7.5h.01"></path></svg></button>` : ""}
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
@@ -6506,6 +7144,7 @@ async function selectChapter(chapterId, { editMode = false } = {}) {
     if (selectionRequestId === chapterSelectionRequestId) void loadChapterForeshadowReminders();
     return false;
   }
+  resetChapterSearchPanel();
   dismissDeleteToasts();
   if (selectionGeneration !== chapterSelectionRequestGeneration || selectionRequestId !== chapterSelectionRequestId || state.work?.id !== workId) return false;
   cancelChapterAutoSave();
@@ -7021,22 +7660,15 @@ function handleReadingKeyboard(event) {
   }
 }
 
-function handleReadingWheel(event) {
-  if (readingPreferences.mode !== "scroll" || readingLoading || Math.abs(event.deltaY) < 2) return;
-  const viewport = $("#reader-viewport");
-  const atEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2;
-  const atStart = viewport.scrollTop <= 2;
-  if (event.deltaY > 0 && atEnd) {
-    event.preventDefault();
-    void navigateReadingChapter(1, { continueFromBoundary: true });
-  } else if (event.deltaY < 0 && atStart) {
-    event.preventDefault();
-    void navigateReadingChapter(-1, { continueFromBoundary: true });
-  }
-}
-
 async function saveChapter() {
-  return persistChapter({ automatic: false });
+  const dismissSavingToast = persistentToast("正在保存中");
+  try {
+    const saved = await persistChapter({ automatic: false });
+    if (saved) toast(`保存成功（正文 v${saved.versionNo}）`);
+    return saved;
+  } finally {
+    dismissSavingToast();
+  }
 }
 
 function tidyChapterBlankLines() {
@@ -7067,7 +7699,7 @@ function showWelcome(hasWork = false) {
 }
 
 function markActiveModule(module) {
-  $("#module-nav").querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.module === module));
+  $("#module-nav").querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.module === module || (button.id === "ai-assistant-entry" && aiConversationWorkspaceOpen)));
 }
 
 const moduleMeta = {
@@ -7865,7 +8497,10 @@ async function renderSettings(page = moduleListPages.settings) {
 }
 
 async function renderCharacters(page = characterListPage) {
-  const hasCharacterFilters = characterFilters.raceIds.length > 0 || characterFilters.organizationIds.length > 0;
+  const hasCharacterFilters = characterFilters.raceIds.length > 0
+    || characterFilters.organizationIds.length > 0
+    || characterFilters.genderValues.length > 0
+    || characterFilters.deathState !== "all";
   const pageSize = pageSizeFor("characters");
   const [characterSource, races, organizations] = await Promise.all([
     hasCharacterFilters
@@ -7893,6 +8528,7 @@ async function renderCharacters(page = characterListPage) {
     <article class="record-card character-card preview-record-card has-card-edit" data-open-character="${esc(item.id)}" role="button" tabindex="0" aria-label="查看角色 ${esc(item.name)}">${recordCardEditButton("edit-character", item.id, `角色“${item.name}”`)}
     <div class="character-card-heading"><h3>${esc(item.name)}</h3>${entityLifecycleBadge(item.isDead, "已死亡")}${characterLockBadge(item)}</div>
     ${item.attributes?.identity ? `<p class="character-identity">${esc(item.attributes.identity)}</p>` : ""}
+    <div class="character-gender"><b>性别</b><span class="pill">${esc(characterGenderLabel(item.gender))}</span></div>
     ${item.aliases.length ? `<div class="character-aliases"><b>别名</b>${item.aliases.map((alias) => `<span class="pill">${esc(alias)}</span>`).join("")}</div>` : ""}
     ${item.code ? `<div class="character-code"><b>编号</b><span class="pill">${esc(item.code)}</span></div>` : ""}
     ${item.species ? `<div class="character-species"><b>种族</b><span class="pill">${esc(racePathLabel(item.race) || item.species)}</span></div>` : ""}
@@ -7906,6 +8542,7 @@ async function renderCharacters(page = characterListPage) {
     const preview = moduleRowPreview(item.profile?.summary || item.attributes?.identity || Object.entries(item.currentState).map(([key, value]) => `${characterStateFieldLabel(key)}：${value}`).join(" ") || "尚未记录当前状态");
     const meta = [
       item.code ? `编号 ${item.code}` : "",
+      `性别 ${characterGenderLabel(item.gender)}`,
       item.species ? (racePathLabel(item.race) || item.species) : "",
       ...(item.aliases ?? []).slice(0, 3),
       (item.organizations ?? []).length ? (item.organizations ?? []).map((organization) => organization.name).join("、") : ""
@@ -7927,16 +8564,25 @@ async function renderCharacters(page = characterListPage) {
     : "";
   const selectedRaceIds = new Set(characterFilters.raceIds);
   const selectedOrganizationIds = new Set(characterFilters.organizationIds);
+  const selectedGenderValues = new Set(characterFilters.genderValues);
   const selectedRaceNames = races.filter((race) => selectedRaceIds.has(String(race.id))).map((race) => racePathLabel(race) || race.name);
   const selectedOrganizationNames = organizations.filter((organization) => selectedOrganizationIds.has(String(organization.id))).map((organization) => organization.name);
+  const selectedGenderNames = CHARACTER_GENDER_OPTIONS
+    .filter(([value]) => selectedGenderValues.has(value))
+    .map(([, label]) => label);
+  const selectedDeathStateLabel = CHARACTER_DEATH_STATE_OPTIONS.find(([value]) => value === characterFilters.deathState)?.[1] ?? "全部状态";
   const filterOptionList = (items, selectedIds, valueKey = "id") => items.map((item) => {
     const value = String(item[valueKey]);
     const label = valueKey === "id" ? (racePathLabel(item) || item.name) : item.name;
     return `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedIds.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`;
   }).join("");
-  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
+  const genderFilterOptions = CHARACTER_GENDER_OPTIONS.map(([value, label]) => `<label class="character-filter-option"><input type="checkbox" value="${esc(value)}" ${selectedGenderValues.has(value) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("");
+  const deathStateFilterOptions = CHARACTER_DEATH_STATE_OPTIONS.map(([value, label]) => `<label class="character-filter-option"><input type="radio" name="character-death-state" value="${esc(value)}" ${characterFilters.deathState === value ? "checked" : ""}><span>${esc(label)}</span></label>`).join("");
+  const filterToolbar = `<section id="character-filter-panel" class="character-filter-toolbar character-filter-toolbar-with-extra-filters${characterFiltersPanelOpen ? "" : " hidden"}" aria-label="角色筛选">
     <details class="character-filter-dropdown"><summary><span>按种族筛选</span><strong>${selectedRaceNames.length ? `已选 ${selectedRaceNames.length} 项` : "全部种族"}</strong></summary><div id="character-race-filter" class="character-filter-options">${filterOptionList(orderRaceFilterOptions(races), selectedRaceIds)}</div></details>
     <details class="character-filter-dropdown"><summary><span>按组织筛选</span><strong>${selectedOrganizationNames.length ? `已选 ${selectedOrganizationNames.length} 项` : "全部组织"}</strong></summary><div id="character-organization-filter" class="character-filter-options">${filterOptionList(organizations, selectedOrganizationIds, "id")}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按性别筛选</span><strong>${selectedGenderNames.length ? `已选 ${selectedGenderNames.length} 项` : "全部性别"}</strong></summary><div id="character-gender-filter" class="character-filter-options">${genderFilterOptions}</div></details>
+    <details class="character-filter-dropdown"><summary><span>按死亡状态筛选</span><strong>${esc(selectedDeathStateLabel)}</strong></summary><div id="character-death-filter" class="character-filter-options">${deathStateFilterOptions}</div></details>
     <div class="character-filter-toolbar-actions">${hasCharacterFilters ? `<span class="character-filter-result-count" aria-live="polite">筛选后剩余 ${characterPage.total} 个角色</span>` : ""}<button id="clear-character-filters" class="ghost-button" type="button" ${hasCharacterFilters ? "" : "disabled"}>重置筛选</button></div>
   </section>`;
   mountCharacterFilterToggle();
@@ -7958,10 +8604,24 @@ async function renderCharacters(page = characterListPage) {
     characterListPage = 1;
     await renderCharacters(1);
   });
+  $("#character-gender-filter").addEventListener("change", async () => {
+    characterFiltersPanelOpen = true;
+    characterFilters.genderValues = readSelectedValues("#character-gender-filter");
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
+  $("#character-death-filter").addEventListener("change", async (event) => {
+    characterFiltersPanelOpen = true;
+    characterFilters.deathState = CHARACTER_DEATH_STATE_OPTIONS.some(([value]) => value === event.target.value) ? event.target.value : "all";
+    characterListPage = 1;
+    await renderCharacters(1);
+  });
   $("#clear-character-filters")?.addEventListener("click", async () => {
     characterFiltersPanelOpen = true;
     characterFilters.raceIds = [];
     characterFilters.organizationIds = [];
+    characterFilters.genderValues = [];
+    characterFilters.deathState = "all";
     characterListPage = 1;
     await renderCharacters(1);
   });
@@ -8556,9 +9216,9 @@ async function renderRelationships(page = moduleListPages.relationships) {
   if ($("#relationship-map-dialog").open) $("#relationship-map-dialog").close();
   const graph = buildRelationshipGraph(state.characters, relationships);
   state.relationshipGraph = graph;
-  const relationshipList = filteredRelationships.length ? `<table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${pageResult.items.map((item) => `
+  const relationshipList = filteredRelationships.length ? `<div class="relationship-table-wrapper"><table class="table-list relationship-table"><thead><tr><th>人物</th><th>关系</th><th>关键词</th><th>证据</th><th>置信度</th><th>状态</th><th>操作</th></tr></thead><tbody>${pageResult.items.map((item) => `
     <tr><td>${esc(nameOf(item.fromCharacterId))} ${item.directed ? "→" : "—"} ${esc(nameOf(item.toCharacterId))}</td>
-    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions">${canEditRelationships ? `<button data-edit-relationship="${esc(item.id)}">编辑</button>` : ""}<button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table>` : relationships.length ? '<div class="relationship-empty-note">没有符合当前筛选条件的关系。</div>' : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>';
+    <td>${esc(relationshipCategoryLabel(item.category))} / ${esc(item.subtype || "未细分")}</td><td>${(item.keywords ?? []).map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || "—"}</td><td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td><td>${esc(relationshipConfirmationLabel(item.confirmationStatus))}</td><td class="relationship-actions">${canEditRelationships ? `<button data-edit-relationship="${esc(item.id)}">编辑</button>` : ""}<button data-entity-history="relationship" data-entity-id="${esc(item.id)}" data-entity-title="${esc(`${nameOf(item.fromCharacterId)} / ${nameOf(item.toCharacterId)}`)}">历史</button></td></tr>`).join("")}</tbody></table></div>` : relationships.length ? '<div class="relationship-empty-note">没有符合当前筛选条件的关系。</div>' : '<div class="relationship-empty-note">尚无关系边；孤立角色仍显示在力导向图谱中。可人工新建关系，或运行全书人物关系分析。</div>';
   $("#module-content").innerHTML = `${filterToolbar}<div id="relationship-map-host"></div>${relationshipList}${renderModulePagination(pageResult, "relationships", "人物关系列表")}`;
   bindModulePagination("relationships", renderRelationships);
   const openGalaxy = () => {
@@ -8566,6 +9226,8 @@ async function renderRelationships(page = moduleListPages.relationships) {
     const galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, {
       workId: state.work.id,
       frameRate: state.uiSettings.galaxyFrameRate,
+      motionMode: storedGalaxyMotionMode(),
+      onMotionModeChange: persistGalaxyMotionMode,
       onClose: () => {
         if (state.galaxy === galaxy) state.galaxy = null;
       }
@@ -8742,7 +9404,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
     moduleApiPage("tasks", `/api/works/${state.work.id}/tasks`, page, pageSize, { refresh }),
     canReadModule("ai-settings")
       ? moduleApi("tasks", `/api/works/${state.work.id}/ai-settings`, { refresh })
-      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunPaused: false })
+      : Promise.resolve({ autoRunEnabled: false, autoRunConcurrency: 2, autoRunDailyTaskLimit: 0, autoRunFailureThreshold: 3, autoRunStabilityDelayMinutes: 2, autoRunPaused: false })
   ]);
   if (!taskPage.items.length && page > 1) return renderTasks(page - 1, { refresh });
   taskListPage = taskPage.page;
@@ -8779,6 +9441,7 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
         <div class="task-auto-run-copy">
           <strong id="task-auto-run-title">自动执行待分析任务</strong>
           <small>只执行已经进入“待执行”队列的任务，不会自动创建人物关系、世界观或其他分析。</small>
+          <small>正文停止编辑后，等待稳定窗口结束才会创建章节理解任务。</small>
           <small>开启后会持续执行直到队列清空；临时错误自动退避重试，连续失败达到阈值后暂停。</small>
         </div>
         <div class="task-auto-run-actions">
@@ -8790,11 +9453,13 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
         <label>同时运行上限<input id="task-auto-run-concurrency" type="number" min="1" max="8" value="${esc(String(settings.autoRunConcurrency ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
         <label>每日任务上限<input id="task-auto-run-daily-limit" type="number" min="0" max="10000" value="${esc(String(settings.autoRunDailyTaskLimit ?? 0))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-daily-help"></label>
         <label>连续失败暂停阈值<input id="task-auto-run-failure-threshold" type="number" min="1" max="10" value="${esc(String(settings.autoRunFailureThreshold ?? 3))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}"></label>
+        <label>停止编辑后创建任务<input id="task-auto-run-stability-delay" type="number" min="1" max="120" value="${esc(String(settings.autoRunStabilityDelayMinutes ?? 2))}" ${autoRunEditing ? "" : "disabled"} aria-readonly="${String(!autoRunEditing)}" aria-describedby="task-auto-run-stability-help"></label>
         ${autoRunEditing
           ? `<button id="task-auto-run-save" class="primary-button" type="button">保存并生效</button><button id="task-auto-run-pause" class="ghost-button" type="button">${autoRunPauseLabel}</button>`
           : ""}
       </div>
       <p id="task-auto-run-daily-help" class="task-auto-run-help">每日任务上限填 0 表示不限制；达到上限后会在下一个 UTC 自然日自动恢复。</p>
+      <p id="task-auto-run-stability-help" class="task-auto-run-help">正文连续 ${esc(String(settings.autoRunStabilityDelayMinutes ?? 2))} 分钟没有编辑，才会创建章节理解任务；最低 1 分钟。</p>
       <p class="task-auto-run-meta">待执行队列 ${pendingCount} 个 · 正在运行 ${runningCount} 个 · ${autoRunPaused ? "已暂停" : autoRunActive ? "持续执行中" : "未开启"}</p>
       ${autoRunPaused ? `<p class="task-auto-run-alert" role="status"><strong>自动执行已暂停</strong><span>${esc(settings.autoRunPauseReason || "需要人工确认后恢复")}</span>${settings.autoRunResumeAt ? `<small>预计 ${esc(formatDateTime(settings.autoRunResumeAt))} 自动恢复</small>` : ""}</p>` : ""}
       <div class="task-auto-run-progress ${activeTaskCount ? "" : "hidden"}" aria-live="polite">
@@ -8848,7 +9513,8 @@ async function renderTasks(page = taskListPage, { refresh = false } = {}) {
           autoRunEnabled: $("#task-auto-run-enabled").checked,
           autoRunConcurrency: Number($("#task-auto-run-concurrency").value),
           autoRunDailyTaskLimit: Number($("#task-auto-run-daily-limit").value),
-          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value)
+          autoRunFailureThreshold: Number($("#task-auto-run-failure-threshold").value),
+          autoRunStabilityDelayMinutes: Number($("#task-auto-run-stability-delay").value)
         }
       });
       toast(updated.autoRunEnabled
@@ -9771,7 +10437,7 @@ function renderProviderCards(providers, models) {
       : "";
     return `
     <article class="record-card provider-card ${provider.status === "disabled" ? "is-disabled" : ""}"><div class="provider-card-meta"><small>平台级 · ${esc(providerProtocolLabel(provider.protocol))} · ${esc(providerConnectionLabel(provider.connectionStatus))}</small><span class="provider-status-badge ${providerStatusClass}">${esc(providerStatusLabel(provider.status))}</span></div><h3>${esc(provider.name)}</h3>
-    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
+    ${disabledNotice}<p>${esc(provider.baseUrl)}\n密钥：${esc(provider.apiKey)}\n最大输出参数：${esc(provider.maxTokensParameter ?? "max_tokens")}\n并发：${provider.concurrencyLimit} · 每分钟请求：${provider.rpmLimit}${provider.lastError ? `\n错误：${esc(provider.lastError)}` : ""}</p>
     <div class="provider-models">${providerModels.map((model) => {
       const modelUnavailable = !isSelectableModel({ ...model, providerStatus: provider.status, providerConnectionStatus: provider.connectionStatus });
       const modelStatus = !model.enabled
@@ -9781,7 +10447,8 @@ function renderProviderCards(providers, models) {
           : "";
       const capability = model.multimodalEnabled ? " · 多模态" : "";
       const defaultBadge = model.imageToolDefault ? " · 默认读图模型" : "";
-      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
+      const thinkingEffortLabel = MODEL_THINKING_EFFORT_OPTIONS.find(([value]) => value === model.thinkingEffort)?.[1] ?? "模型默认";
+      return `<div class="provider-model-row${modelUnavailable ? " is-unavailable" : ""}"><button class="pill model-pill" type="button" data-edit-model="${esc(model.id)}" aria-label="编辑模型 ${esc(model.displayName)}">${esc(model.displayName)} · ${model.enabled ? "启用" : "停用"}${capability}${defaultBadge} · 思考模式 ${model.thinkingEnabled ? "开启" : "关闭"} · 思考强度 ${esc(thinkingEffortLabel)} · 上下文 ${Number(model.contextWindow ?? 128000).toLocaleString("zh-CN")} 令牌 · 最大输出 ${Number(model.preset?.max_tokens ?? 32000).toLocaleString("zh-CN")}</button>${modelStatus}</div>`;
     }).join("")}</div>
     <div class="card-actions"><button data-edit-provider="${esc(provider.id)}">编辑配置</button>${provider.status === "enabled" ? `<button data-test-provider="${esc(provider.id)}" ${providerModels.length ? "" : "disabled aria-disabled=\"true\" title=\"请先添加模型\""}>测试连接</button>` : ""}<button data-add-model="${esc(provider.id)}">添加模型</button></div></article>`;
   }).join("")}</div>`
@@ -10106,7 +10773,12 @@ async function refreshBackgroundTaskCenter({ announce = true } = {}) {
     backgroundTaskCenterTaskSnapshots = transitionResult.snapshots;
     backgroundTaskCenterSnapshot.taskPage = taskResult.value;
     if (backgroundTaskCenterTasksInitialized && announce && state.module !== "tasks") {
-      for (const transition of transitionResult.transitions) {
+      const announcementResult = filterBackgroundTaskTransitionsForAnnouncement(
+        transitionResult.transitions,
+        backgroundTaskCenterExpiredNoticeTimes
+      );
+      backgroundTaskCenterExpiredNoticeTimes = announcementResult.noticeTimes;
+      for (const transition of announcementResult.transitions) {
         const notification = backgroundTaskTransitionMessage(transition);
         toast(notification.message, notification.type);
       }
@@ -10134,6 +10806,7 @@ function stopBackgroundTaskCenter() {
   backgroundTaskCenterWorkId = null;
   backgroundTaskCenterTasksInitialized = false;
   backgroundTaskCenterTaskSnapshots = new Map();
+  backgroundTaskCenterExpiredNoticeTimes = new Map();
   backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
   const dialog = $("#background-task-dialog");
   if (dialog?.open) dialog.close();
@@ -10347,7 +11020,7 @@ async function renderBookAiSettings() {
   const host = $("#module-content");
   const workId = String(state.work.id);
   const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
@@ -10380,7 +11053,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算日期差值，或从起始日期推算目标日期，不读取作品内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
@@ -10772,6 +11445,18 @@ function resetAiContextMeter() {
   setAiContextMeter(null);
 }
 
+function setAiChatTabContextUsage(tab, usage, allowShrink = true) {
+  if (!tab) return;
+  if (isActiveAiChatTab(tab)) {
+    setAiContextMeter(usage, allowShrink);
+    tab.contextUsage = latestAiContextUsage;
+    return;
+  }
+  tab.contextUsage = allowShrink
+    ? resolveAiContextUsage(tab.contextUsage, usage)
+    : mergeAiContextUsage(tab.contextUsage, usage, false);
+}
+
 function setAiContextDistributionVisible(visible) {
   const meter = $("#ai-context-meter");
   const popover = $("#ai-context-popover");
@@ -10788,6 +11473,14 @@ function showAiContextWarning(usage = null) {
 
 function hideAiContextWarning() {
   $("#ai-context-warning").classList.add("hidden");
+}
+
+function setAiChatTabContextWarning(tab, visible) {
+  if (!tab) return;
+  tab.contextWarning = visible;
+  if (!isActiveAiChatTab(tab)) return;
+  if (visible) showAiContextWarning();
+  else hideAiContextWarning();
 }
 
 function setAiContextWarningActionsDisabled(disabled) {
@@ -11640,8 +12333,11 @@ function renderCharacterEditorRelationships() {
     const category = relationshipCategoryLabel(relationship.category);
     const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
     const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
+    const actions = !entityEditorReadOnly && canEditModule("relationships")
+      ? `<div class="character-relationship-actions"><button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button><button class="danger-button" type="button" data-character-relationship-delete="${esc(relationship.id)}">删除关系</button></div>`
+      : "";
     return `<article class="character-relationship-row">
-      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${!entityEditorReadOnly && canEditModule("relationships") ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${actions}</div>
       <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
     </article>`;
   }).join("");
@@ -11649,6 +12345,14 @@ function renderCharacterEditorRelationships() {
   host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
     const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
     if (relationship) void openRelationshipDialog(relationship, { characterId });
+  }));
+  host.querySelectorAll("[data-character-relationship-delete]").forEach((button) => button.addEventListener("click", () => {
+    const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipDelete);
+    if (!relationship) return;
+    button.disabled = true;
+    void deleteRelationshipRecord(relationship, characterId).finally(() => {
+      if (button.isConnected) button.disabled = false;
+    });
   }));
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
@@ -11668,7 +12372,7 @@ async function loadCharacterEditorRelationships(characterId, { refresh = false }
     ]);
     if (state.work?.id !== workId || characterEditorItem?.id !== characterId) return;
     state.characters = characters;
-    characterEditorRelationships = relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId);
+    characterEditorRelationships = sortCharacterRelationships(relationships.filter((relationship) => relationship.fromCharacterId === characterId || relationship.toCharacterId === characterId), characterId);
     characterEditorRelationshipsLoaded = true;
     loaded = true;
   } catch (error) {
@@ -11690,6 +12394,21 @@ async function refreshRelationshipSurfaces(characterId = null) {
     tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
+}
+
+async function deleteRelationshipRecord(item, characterId = null) {
+  const relationshipName = `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}`;
+  if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return false;
+  if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return false;
+  try {
+    await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await Promise.all([refreshRelationshipSurfaces(characterId), loadAiReferences()]);
+    deleteToast(`已删除人物关系“${relationshipName}”`);
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
 }
 
 const characterSectionTypeLabels = {
@@ -12426,6 +13145,7 @@ function renderCharacterEditorFields(item) {
   $("#character-editor-fields").innerHTML = [
     characterEditorSection("basic", "基础资料", "用于检索、去重和建立人物在作品中的基本归属。",
       field("name", "标准名", "text", item?.name) +
+      field("gender", "性别", "select", item?.gender ?? "unknown", CHARACTER_GENDER_OPTIONS) +
       field("isDead", "标记为已死亡", "checkbox", item?.isDead ?? false) +
       field("aliases", "别名", "item-list", item?.aliases ?? []) +
       (!canReadModule("races")
@@ -12479,6 +13199,7 @@ function collectCharacterBody(form) {
   delete profile.sections;
   const body = {
     name: String(form.get("name") ?? "").trim(),
+    gender: String(form.get("gender") ?? "unknown"),
     isDead: form.has("isDead"),
     code: String(form.get("code") ?? "").trim(),
     aliases: form.getAll("aliases").map((value) => String(value).trim()).filter(Boolean),
@@ -13083,7 +13804,6 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  const relationshipName = item ? `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}` : "";
   const management = item && canEditModule("relationships") ? `<section class="entity-dialog-management" aria-label="人物关系操作">
     <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
@@ -13101,16 +13821,7 @@ async function openRelationshipDialog(item, options = {}) {
       dialog.showModal();
     };
     dialog.close();
-    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return reopenDialog();
-    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return reopenDialog();
-    try {
-      await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
-      await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
-      deleteToast(`已删除人物关系“${relationshipName}”`);
-    } catch (error) {
-      reopenDialog();
-      toast(error.message, "error");
-    }
+    if (!await deleteRelationshipRecord(item, options.characterId ?? null)) return reopenDialog();
   });
 }
 
@@ -13161,17 +13872,23 @@ async function openTaskDialog() {
         group.push(item);
         groups.set(groupKey, { id: groupId, title: groupTitle, options: group });
         return groups;
-      }, new Map())].map(([, group]) => `<section class="task-scope-volume-group" data-task-scope-group data-task-scope-volume-id="${esc(group.id)}">
+      }, new Map())].map(([, group]) => {
+      const groupOptionsId = group.id ? `task-scope-volume-options-${group.id}` : "task-scope-volume-options-unassigned";
+      return `<section class="task-scope-volume-group" data-task-scope-group data-task-scope-volume-id="${esc(group.id)}">
         <header>
           ${group.id ? `<label class="task-scope-volume-option">
             <input type="checkbox" data-task-scope-volume-input="${esc(group.id)}" data-task-scope-volume-title="${esc(group.title)}" aria-label="全选${esc(group.title)}章节">
             <span class="task-scope-checkbox" aria-hidden="true"></span>
             <span class="task-scope-volume-copy"><strong>${esc(group.title)}</strong><small>勾选以全选本卷章节</small></span>
           </label>` : `<strong>${esc(group.title)}</strong>`}
-          <span>${group.options.length} 章</span>
+          <span class="task-scope-volume-count">${group.options.length} 章</span>
+          ${group.id ? `<button type="button" class="task-scope-volume-collapse" data-task-scope-volume-toggle="${esc(group.id)}" data-task-scope-volume-title="${esc(group.title)}" aria-expanded="true" aria-controls="${esc(groupOptionsId)}" aria-label="折叠${esc(group.title)}章节"><span aria-hidden="true">⌃</span></button>` : ""}
         </header>
-        ${group.options.map(renderOption).join("")}
-      </section>`).join("");
+        <div id="${esc(groupOptionsId)}" class="task-scope-volume-options">
+          ${group.options.map(renderOption).join("")}
+        </div>
+      </section>`;
+    }).join("");
     return `<div class="form-field task-scope-field task-scope-${kind}-field is-disabled" data-task-scope-field="${kind}" aria-disabled="true">
       <div class="task-scope-field-heading"><span id="task-${kind}-label">${esc(label)}（可多选）</span><small>从左侧选择，右侧确认已选内容</small></div>
       <div class="task-scope-picker">
@@ -13262,7 +13979,8 @@ async function openTaskDialog() {
   const buildRelationshipScope = (form) => {
     const taskType = String(form.get("taskType"));
     const scopeType = String(form.get("scopeType"));
-    const includeAllSettings = taskType === "relationship-analysis" && scopeType === "book-with-settings";
+    const includeAllSettings = taskType === "relationship-analysis"
+      && ["chapter-with-settings", "book-with-settings"].includes(scopeType);
     const settingsOnly = taskType === "relationship-analysis" && scopeType === "settings";
     const additionalPrompt = taskType === "relationship-analysis" ? String(form.get("additionalPrompt") ?? "").trim() : "";
     const characterIds = taskType === "relationship-analysis" ? form.getAll("characterIds").map(String).filter(Boolean) : [];
@@ -13273,11 +13991,12 @@ async function openTaskDialog() {
     const chapterScope = {
       type: "chapter",
       ...(chapterIds[0] ? { chapterId: chapterIds[0] } : {}),
-      ...(chapterIds.length ? { chapterIds } : {})
+      ...(chapterIds.length ? { chapterIds } : {}),
+      ...(scopeType === "chapter-with-settings" ? { includeAllSettings: true } : {})
     };
     const scope = settingsOnly
       ? { type: "settings", ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
-      : scopeType === "book" || includeAllSettings
+      : scopeType === "book" || scopeType === "book-with-settings"
       ? { type: "book", ...(includeAllSettings ? { includeAllSettings: true } : {}), ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) }
       : { ...chapterScope, ...(additionalPrompt ? { additionalPrompt } : {}), ...(characterIds.length ? { characterIds, preFilterRelationshipSources } : {}), ...(previewRelationshipChanges ? { previewRelationshipChanges: true } : {}), ...(replaceExistingRelationships ? { replaceExistingRelationships: true } : {}) };
     return scope;
@@ -13318,7 +14037,7 @@ async function openTaskDialog() {
     }
     taskListPage = 1;
     toast("分析任务已创建，已进入任务队列");
-    void refreshAnalysisTaskViewsAfterCreate(workId);
+    await refreshAnalysisTaskViewsAfterCreate(workId);
   }, "AI 分析", {
     large: true,
     submitLabel: "创建任务",
@@ -13346,6 +14065,9 @@ async function openTaskDialog() {
   };
   const scopeVolumeInputs = [
     ...$("#dialog-fields").querySelectorAll("[data-task-scope-volume-input]")
+  ];
+  const scopeVolumeCollapseButtons = [
+    ...$("#dialog-fields").querySelectorAll("[data-task-scope-volume-toggle]")
   ];
   const scopeSummaries = {
     chapter: $("#dialog-fields").querySelector("#task-chapter-summary")
@@ -13393,6 +14115,9 @@ async function openTaskDialog() {
   const allSettingsOption = document.createElement("option");
   allSettingsOption.value = "book-with-settings";
   allSettingsOption.textContent = "全书 + 设定集";
+  const chapterSettingsOption = document.createElement("option");
+  chapterSettingsOption.value = "chapter-with-settings";
+  chapterSettingsOption.textContent = "指定章节 + 设定集";
   const settingsOnlyOption = document.createElement("option");
   settingsOnlyOption.value = "settings";
   settingsOnlyOption.textContent = "仅设定集";
@@ -13404,6 +14129,13 @@ async function openTaskDialog() {
       scopeBubbles[kind].scrollIntoView({ block: "start" });
       scopeSearches[kind].focus({ preventScroll: true });
     }
+  };
+  const setTaskScopeVolumeCollapsed = (button, collapsed) => {
+    const group = button.closest("[data-task-scope-group]");
+    if (!group) return;
+    group.classList.toggle("is-collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", `${collapsed ? "展开" : "折叠"}${button.dataset.taskScopeVolumeTitle ?? ""}章节`);
   };
   const syncTaskScopeVolumeInputs = () => {
     for (const volumeInput of scopeVolumeInputs) {
@@ -13442,7 +14174,12 @@ async function openTaskDialog() {
       if (visible) visibleCount += 1;
     }
     scopeFields[kind].querySelectorAll("[data-task-scope-group]").forEach((group) => {
-      group.classList.toggle("hidden", !group.querySelector(".task-scope-option:not(.hidden)"));
+      const hasVisibleOptions = Boolean(group.querySelector(".task-scope-option:not(.hidden)"));
+      group.classList.toggle("hidden", !hasVisibleOptions);
+      if (query && hasVisibleOptions) {
+        const collapseButton = group.querySelector("[data-task-scope-volume-toggle]");
+        if (collapseButton) setTaskScopeVolumeCollapsed(collapseButton, false);
+      }
     });
     scopeAvailableCounts[kind].textContent = query
       ? `${visibleCount} / ${scopeInputs[kind].length} 章`
@@ -13451,7 +14188,7 @@ async function openTaskDialog() {
   };
   const syncChapterField = () => {
     const kind = "chapter";
-    const enabled = scopeTypeSelect.value === "chapter";
+    const enabled = ["chapter", "chapter-with-settings"].includes(scopeTypeSelect.value);
     scopeFields[kind].classList.toggle("is-disabled", !enabled);
     scopeFields[kind].classList.toggle("hidden", !enabled);
     scopeFields[kind].setAttribute("aria-disabled", String(!enabled));
@@ -13525,8 +14262,14 @@ async function openTaskDialog() {
   };
   const syncRelationshipOptions = () => {
     const enabled = taskTypeSelect.value === "relationship-analysis";
+    const bookScopeOption = scopeTypeSelect.querySelector('option[value="book"]');
+    if (enabled && !chapterSettingsOption.isConnected) bookScopeOption.before(chapterSettingsOption);
     if (enabled && !allSettingsOption.isConnected) scopeTypeSelect.append(allSettingsOption);
     if (enabled && !settingsOnlyOption.isConnected) scopeTypeSelect.append(settingsOnlyOption);
+    if (!enabled && chapterSettingsOption.isConnected) {
+      if (scopeTypeSelect.value === chapterSettingsOption.value) scopeTypeSelect.value = "chapter";
+      chapterSettingsOption.remove();
+    }
     if (!enabled && allSettingsOption.isConnected) {
       if (scopeTypeSelect.value === allSettingsOption.value) scopeTypeSelect.value = "book";
       allSettingsOption.remove();
@@ -13644,6 +14387,11 @@ async function openTaskDialog() {
     clearContextWarning();
     invalidateRelationshipSourcePreview();
   });
+  for (const collapseButton of scopeVolumeCollapseButtons) collapseButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setTaskScopeVolumeCollapsed(collapseButton, collapseButton.getAttribute("aria-expanded") === "true");
+  });
   $("#dynamic-form").onclick = (event) => {
     if (!relationshipCharacterPickerElement.contains(event.target)) setRelationshipCharacterBubbleOpen(false);
     for (const kind of ["chapter"]) {
@@ -13711,12 +14459,15 @@ function openProviderDialog(item) {
     return field("apiKey", item ? "替换 API 密钥（留空则不变）" : "API 密钥", "password");
   };
   const defaultBaseUrl = item?.baseUrl ?? defaultBaseUrlForProtocol(protocol);
+  const useMaxCompletionTokens = item?.maxTokensParameter === "max_completion_tokens" && protocol !== "anthropic-messages";
+  const maxTokensParameterField = `<div class="form-field provider-max-tokens-parameter-field" data-provider-max-tokens-parameter-field><span>最大输出令牌参数</span><label class="checkbox-field"><input name="useMaxCompletionTokens" type="checkbox" ${useMaxCompletionTokens ? "checked" : ""} aria-describedby="provider-max-tokens-parameter-hint"><span>使用 max_completion_tokens</span></label><small id="provider-max-tokens-parameter-hint" data-provider-max-tokens-parameter-hint>默认使用 max_tokens；OpenAI 新版模型可按需切换。</small></div>`;
   openDialog(
     item ? "编辑 AI 供应商" : "新建 AI 供应商",
     field("name", "显示名称", "text", item?.name)
       + field("protocol", "接口协议", "select", protocol, providerProtocolOptions)
       + field("baseUrl", "API 基础地址", "url", defaultBaseUrl)
       + `<div data-provider-credential-field>${credentialFieldForProtocol(protocol)}</div>`
+      + maxTokensParameterField
       + field("concurrencyLimit", "最大并发请求数", "number", item?.concurrencyLimit ?? 10)
       + field("rpmLimit", "每分钟请求上限", "number", item?.rpmLimit ?? 10)
       + field("note", "用途备注", "textarea", item?.note)
@@ -13726,6 +14477,7 @@ function openProviderDialog(item) {
         name: form.get("name"),
         protocol: form.get("protocol"),
         baseUrl: form.get("baseUrl"),
+        maxTokensParameter: form.get("useMaxCompletionTokens") === "on" ? "max_completion_tokens" : "max_tokens",
         concurrencyLimit: Number(form.get("concurrencyLimit")),
         rpmLimit: Number(form.get("rpmLimit")),
         note: form.get("note"),
@@ -13742,12 +14494,23 @@ function openProviderDialog(item) {
   const protocolSelect = $("#dialog-fields select[name='protocol']");
   const baseUrlInput = $("#dialog-fields input[name='baseUrl']");
   const credentialHost = $("#dialog-fields [data-provider-credential-field]");
+  const maxTokensParameterFieldElement = $("#dialog-fields [data-provider-max-tokens-parameter-field]");
+  const maxTokensParameterInput = $("#dialog-fields input[name='useMaxCompletionTokens']");
+  const syncMaxTokensParameter = () => {
+    const anthropic = protocolSelect.value === "anthropic-messages";
+    maxTokensParameterFieldElement.hidden = anthropic;
+    maxTokensParameterFieldElement.classList.toggle("hidden", anthropic);
+    maxTokensParameterInput.disabled = anthropic;
+    if (anthropic) maxTokensParameterInput.checked = false;
+  };
   const syncProviderCredentialField = () => {
     const nextProtocol = protocolSelect.value;
     credentialHost.innerHTML = credentialFieldForProtocol(nextProtocol);
     if (!item) baseUrlInput.value = defaultBaseUrlForProtocol(nextProtocol);
+    syncMaxTokensParameter();
   };
   protocolSelect.addEventListener("change", syncProviderCredentialField);
+  syncMaxTokensParameter();
 }
 
 function openModelDialog(providerId, item = null, provider = null) {
@@ -13757,16 +14520,16 @@ function openModelDialog(providerId, item = null, provider = null) {
   const contextWindowField = `<div class="form-field model-context-window-field"><label for="model-context-window">模型上下文令牌总量<input id="model-context-window" name="contextWindow" type="number" value="${esc(values.contextWindow)}" min="${MIN_MODEL_CONTEXT_WINDOW}" max="2000000" step="1" required aria-describedby="model-context-window-hint"></label><small id="model-context-window-hint" class="model-context-window-hint" hidden>低于 128K 的模型在小说创作场景不太适用，建议使用支持更长上下文的模型。</small></div>`;
   const temperatureField = `<div class="form-field model-temperature-field"><label for="model-temperature">默认温度<input id="model-temperature" name="temperature" type="number" value="${esc(values.temperature)}" step="any" aria-describedby="model-temperature-hint"></label><small id="model-temperature-hint" class="model-temperature-hint" hidden>Kimi 模型必须设置温度为 1。</small></div>`;
   const connectionTestDescription = values.multimodalEnabled && imageDefaultSupported
-    ? "使用当前已保存的模型标识符和供应商凭据，并发送一张测试图片验证图片请求。"
-    : "使用当前已保存的模型标识符和供应商凭据发起最小请求。";
+    ? "使用当前已保存的模型标识符、思考设置和供应商凭据，并发送一张测试图片验证图片请求。"
+    : "使用当前已保存的模型标识符、思考设置和供应商凭据发起最小请求。";
   const connectionTest = item && item.providerStatus === "enabled"
     ? `<section class="model-connection-test">
         <div><strong>模型连接测试</strong><p>${connectionTestDescription}</p></div>
         <button class="ghost-button" type="button" data-test-model="${esc(item.id)}">测试连接</button>
       </section>`
     : "";
-  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
-    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
+  openDialog(item ? "编辑模型" : "添加模型", field("displayName", "显示名称", "text", values.displayName) + field("modelId", "模型标识符", "text", values.modelId) + field("purposes", "支持用途（可多选）", "chips", values.purposes, MODEL_PURPOSE_OPTIONS) + contextWindowField + temperatureField + field("maxTokens", "默认最大输出令牌数", "number", values.maxTokens) + field("thinkingEnabled", "开启思考模式（供应商需支持相应参数）", "checkbox", values.thinkingEnabled) + field("thinkingEffort", "思考强度（模型默认时不发送强度参数）", "select", values.thinkingEffort, MODEL_THINKING_EFFORT_OPTIONS) + multimodalFields + field("enabled", "启用模型", "checkbox", values.enabled) + connectionTest, async (form) => {
+    const body = modelPayload({ displayName: form.get("displayName"), modelId: form.get("modelId"), purposes: form.getAll("purposes"), contextWindow: form.get("contextWindow"), temperature: form.get("temperature"), maxTokens: form.get("maxTokens"), thinkingEnabled: form.get("thinkingEnabled") === "on", thinkingEffort: form.get("thinkingEffort") ?? thinkingEffortSelect.value, multimodalEnabled: form.get("multimodalEnabled") === "on", imageToolDefault: form.get("imageToolDefault") === "on", enabled: form.get("enabled") === "on" }, item?.preset);
     await api(item ? `/api/models/${item.id}` : `/api/providers/${providerId}/models`, { method: item ? "PATCH" : "POST", body });
     await renderPlatformAiConfig();
     await loadModels();
@@ -13777,6 +14540,8 @@ function openModelDialog(providerId, item = null, provider = null) {
   const contextWindowHint = $("#model-context-window-hint");
   const temperatureInput = $("#dialog-fields input[name='temperature']");
   const temperatureHint = $("#model-temperature-hint");
+  const thinkingEnabledInput = $("#dialog-fields input[name='thinkingEnabled']");
+  const thinkingEffortSelect = $("#dialog-fields select[name='thinkingEffort']");
   const multimodalInput = $("#model-multimodal-enabled");
   const imageDefaultField = $("#model-image-tool-default-field");
   const imageDefaultInput = $("#model-image-tool-default");
@@ -13796,11 +14561,15 @@ function openModelDialog(providerId, item = null, provider = null) {
     const isKimi = isKimiModelId(modelIdInput.value);
     temperatureHint.hidden = !isKimi;
   };
+  const syncThinkingEffort = () => {
+    thinkingEffortSelect.disabled = !thinkingEnabledInput.checked;
+  };
   modelIdInput.addEventListener("input", () => {
     if (isKimiModelId(modelIdInput.value)) temperatureInput.value = "1";
     syncKimiTemperature();
   });
   contextWindowInput.addEventListener("input", syncModelContextWindowGuidance);
+  thinkingEnabledInput.addEventListener("change", syncThinkingEffort);
   multimodalInput?.addEventListener("change", syncMultimodalFields);
   $("#dialog-fields [data-test-model]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
@@ -13823,6 +14592,7 @@ function openModelDialog(providerId, item = null, provider = null) {
   });
   syncModelContextWindowGuidance();
   syncKimiTemperature();
+  syncThinkingEffort();
   syncMultimodalFields();
 }
 
@@ -13832,6 +14602,9 @@ async function sendAi() {
 
 async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   if (!state.work) return toast("请先选择作品", "error");
+  const tab = activeAiChatTab();
+  if (!tab) return toast("Agent 对话页签尚未就绪", "error");
+  if (aiRequestManager.hasActive(tab.id)) return;
   const composerSnapshot = captureAiPromptComposer();
   const instruction = composerSnapshot.text.trim();
   if (!instruction) return toast("请输入指令", "error");
@@ -13841,31 +14614,37 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   const { taskType, scope, selection } = requestScope;
   if (taskType === "polish" && !selection) return toast("请先在正文中选中一段文本", "error");
   const citations = composerSnapshot.citations.map(({ chapterId, chapterTitle, startLine, endLine, text }) => ({ chapterId, chapterTitle, startLine, endLine, text }));
+  const selectedTaskType = $("#ai-task").value;
+  persistActiveAiChatTab();
+  tab.selectedModelId = $("#ai-model").value || tab.selectedModelId || null;
   const requestHolder = {
     snapshot: aiRequestManager.begin({
+      tabId: tab.id,
       workId: state.work.id,
       conversationId: state.aiConversationId
     })
   };
+  setAiChatTabStatus(tab, "streaming");
   syncAiRequestControls();
   try {
     try {
       await ensureAiModelsLoaded();
     } catch (error) {
       if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
-      setAiAssistantStatus("error");
+      setAiChatTabStatus(tab, "error");
       return toast(`创作助手加载失败：${error.message}`, "error");
     }
     assertAiRequestCurrent(requestHolder.snapshot);
-    const modelId = $("#ai-model").value;
+    const modelId = tab.selectedModelId || state.models[0]?.id || (isActiveAiChatTab(tab) ? $("#ai-model").value : "");
     if (!modelId) return toast("请先在 AI 管理中配置并选择模型", "error");
+    tab.selectedModelId = modelId;
     try {
-      await prepareAiRequestConversation(requestHolder, $("#ai-task").value, requestScope.conversationScope);
+      await prepareAiRequestConversation(requestHolder, selectedTaskType, requestScope.conversationScope);
     } catch (error) {
       if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
       return toast(`对话配置锁定失败：${error.message}`, "error");
     }
-    setAiAssistantStatus("ready");
+    setAiChatTabStatus(tab, "streaming");
     if (taskType !== "chat") {
       try {
         const request = assertAiRequestCurrent(requestHolder.snapshot);
@@ -13880,16 +14659,22 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
         assertAiRequestCurrent(request);
         updateAiConversationSummaryFromMessage(persistedUserMessage);
         requestHolder.snapshot = aiRequestManager.bind(request, { userMessageId: persistedUserMessage.id });
-        state.aiConversationModelId = modelId;
-        state.aiPromptSent = true;
-        syncAiTaskOptions();
-        renderAiRoleplayCharacterSelect();
-        renderAiQuickActions();
-        appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id);
-        clearAiPromptComposer();
+        tab.modelId = modelId;
+        tab.selectedModelId = modelId;
+        tab.promptSent = true;
+        clearAiChatTabComposer(tab);
+        appendMessage("user", instruction, citations, persistedUserMessage.createdAt, {}, persistedUserMessage.id, { tab });
+        if (isActiveAiChatTab(tab)) {
+          state.aiConversationModelId = modelId;
+          state.aiPromptSent = true;
+          syncAiTaskOptions();
+          renderAiRoleplayCharacterSelect();
+          renderAiQuickActions();
+          clearAiPromptComposer();
+        }
       } catch (error) {
         if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
-        setAiAssistantStatus("error");
+        setAiChatTabStatus(tab, "error");
         return toast(`对话记录创建失败：${error.message}`, "error");
       }
     }
@@ -13925,8 +14710,9 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       const suggestionFailed = suggestion.guard?.status === "failed"
         || suggestion.toolCalls?.some((toolCall) => toolCall.status === "failed")
         || suggestion.processSteps?.some((step) => step?.toolCall?.status === "failed");
-      if (suggestionFailed) setAiAssistantStatus("error");
-      setAiContextMeter(suggestion.contextUsage, false);
+      if (suggestionFailed) setAiChatTabStatus(tab, "error");
+      tab.contextUsage = mergeAiContextUsage(tab.contextUsage, suggestion.contextUsage, false);
+      if (isActiveAiChatTab(tab)) setAiContextMeter(suggestion.contextUsage, false);
       assistantContent = suggestion.content;
       assistantMetadata = { modelId, modelDisplayName: suggestion.model?.displayName, outputTokens: suggestion.outputTokens, cacheHitPercent: suggestion.cacheHitPercent, processDurationMs: suggestion.processDurationMs };
     }
@@ -13955,36 +14741,50 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
         if (assistantMessage) {
           updateMessageCreatedAt(assistantMessage, persistedAssistantMessage.createdAt);
           attachMessageIdentity(assistantMessage, persistedAssistantMessage.id);
-        } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id);
+        } else if (suggestion) appendSuggestion(suggestion, persistedAssistantMessage.createdAt, persistedAssistantMessage.id, { tab });
       }
     } catch (error) {
       if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
-      setAiAssistantStatus("error");
-      if (suggestion) appendSuggestion(suggestion);
+      setAiChatTabStatus(tab, "error");
+      if (suggestion) appendSuggestion(suggestion, null, null, { tab });
       toast(`AI 回复已生成，但历史记录保存失败：${error.message}`, "error");
     }
   } catch (error) {
     const request = requestHolder.snapshot;
     if (isAiRequestCancellation(error, request) || !aiRequestTargetsCurrentState(request)) {
-      await persistAiRequestInterruption(request, error?.streamInterruption);
+      const persistedInterruption = await persistAiRequestInterruption(request, error?.streamInterruption);
+      const userStoppedCurrentReply = request.signal.reason instanceof Error
+        && request.signal.reason.message === "用户已终止当前回复";
+      if (userStoppedCurrentReply && persistedInterruption && isActiveAiChatTab(tab)) {
+        appendMessage(
+          "assistant",
+          persistedInterruption.content,
+          [],
+          persistedInterruption.createdAt,
+          persistedInterruption.metadata,
+          persistedInterruption.id,
+          { tab }
+        );
+      }
       return;
     }
     if (error?.code === "AI_CONVERSATION_RESPONSE_IN_PROGRESS") {
-      restoreAiPromptComposer(composerSnapshot);
+      setAiChatTabComposerSnapshot(tab, composerSnapshot);
+      if (isActiveAiChatTab(tab)) restoreAiPromptComposer(composerSnapshot);
       toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
-      $("#ai-prompt").focus();
+      if (isActiveAiChatTab(tab)) $("#ai-prompt").focus();
       return;
     }
     if (error?.code === "AI_IDEMPOTENT_REQUEST_IN_PROGRESS") {
       toast("当前对话仍在生成回复，请等待完成或取消后再发送", "error");
-      $("#ai-prompt").focus();
+      if (isActiveAiChatTab(tab)) $("#ai-prompt").focus();
       return;
     }
     if (["IDEMPOTENCY_KEY_REUSED", "AI_IDEMPOTENT_REQUEST_TERMINAL"].includes(error?.code)) {
       toast(error.message, "error");
       return;
     }
-    setAiAssistantStatus("error");
+    setAiChatTabStatus(tab, "error");
     const interruption = error?.streamInterruption;
     if (interruption?.content) {
       try {
@@ -14031,15 +14831,21 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
       updateAiConversationSummaryFromMessage(persistedFailureMessage);
     } catch { /* 主请求错误已显示，历史记录保存失败不覆盖原始错误 */ }
     if (aiRequestTargetsCurrentState(request)) {
-      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id);
+      appendMessage("assistant", failureMessage, [], persistedFailureMessage?.createdAt, {}, persistedFailureMessage?.id, { tab });
     }
   } finally {
     aiRequestManager.finish(requestHolder.snapshot);
-    syncAiRequestControls();
+    if (!isActiveAiChatTab(tab) && aiChatTabManager.get(tab.id)) tab.unread = true;
+    if (tab.status === "streaming") setAiChatTabStatus(tab, "ready");
+    else renderAiChatTabs();
+    if (isActiveAiChatTab(tab)) syncAiRequestControls();
   }
 }
 
 async function streamChat(requestHolder, body, idempotencyKey) {
+  const tab = aiChatTabForRequest(requestHolder.snapshot);
+  if (!tab) throw createAiRequestAbortError("Agent 对话页签已关闭");
+  const feed = tab.feed;
   const message = document.createElement("div");
   message.className = "assistant-message is-streaming";
   message.dataset.testid = "ai-stream-message";
@@ -14051,10 +14857,10 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   const mountAssistantMessage = () => {
     if (messageMounted) return true;
     if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return false;
-    attachMessageHeading(message, aiAssistantLabel("正在生成"));
-    $("#ai-feed").append(message);
+    attachMessageHeading(message, aiAssistantLabel("正在生成", tab.roleplayCharacter), undefined, tab);
+    feed.append(message);
     messageMounted = true;
-    scrollAiFeedToBottom();
+    scrollAiFeedToBottom(feed);
     return true;
   };
   const typewriter = createStreamTypewriter({
@@ -14066,7 +14872,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
       meta.textContent = progress.pendingCharacters > 0
         ? `正在生成 · ${progress.visibleCharacters} / ${receivedCharacters} 字`
         : `正在生成 · ${progress.visibleCharacters} 字`;
-      scrollAiFeedToBottom();
+      scrollAiFeedToBottom(feed);
     }
   });
   let streamedText = "";
@@ -14099,7 +14905,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
         renderStreamingProcessSteps(finalAnswerStarted);
-        scrollAiFeedToBottom();
+        scrollAiFeedToBottom(feed);
       }
     });
     processStepTypewriters.set(step, typewriter);
@@ -14127,7 +14933,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
       assertAiRequestCurrent(requestHolder.snapshot);
       if (eventName === "context") {
         contextAction = typeof payload.action === "string" ? payload.action : "ready";
-        if (!state.aiPromptSent) setAiContextMeter(payload.usage);
+        if (!tab.promptSent) setAiChatTabContextUsage(tab, payload.usage);
         if (payload.conversation?.id) {
           if (String(payload.conversation.id) !== requestHolder.snapshot.conversationId) {
             throw new Error("流式上下文返回了其他对话");
@@ -14135,11 +14941,11 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           upsertAiConversationSummary(payload.conversation);
           applyAiConversationTitle(payload.conversation.title, requestHolder.snapshot.conversationId);
         }
-        if (contextAction === "warn") showAiContextWarning(payload.usage);
+        if (contextAction === "warn") setAiChatTabContextWarning(tab, true);
         else {
-          hideAiContextWarning();
+          setAiChatTabContextWarning(tab, false);
           if (contextAction === "compacted") {
-            renderConversationCompactionDivider(payload.compaction?.compactedMessageCount, payload.conversation?.messageCount);
+            renderConversationCompactionDivider(payload.compaction?.compactedMessageCount, payload.conversation?.messageCount, feed, payload.conversation);
             toast("已自动整理较早对话为长期记忆并继续发送");
           }
         }
@@ -14154,13 +14960,19 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           const lockedModelId = typeof persistedUserMessage.metadata?.modelId === "string"
             ? persistedUserMessage.metadata.modelId
             : typeof body.modelId === "string" ? body.modelId : null;
-          state.aiConversationModelId = lockedModelId;
-          state.aiPromptSent = true;
-          syncAiTaskOptions();
-          renderAiRoleplayCharacterSelect();
-          renderAiQuickActions();
-          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id);
-          clearAiPromptComposer();
+          tab.modelId = lockedModelId;
+          tab.selectedModelId = lockedModelId;
+          tab.promptSent = true;
+          clearAiChatTabComposer(tab);
+          appendMessage("user", persistedUserMessage.content, persistedUserMessage.citations, persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id, { tab });
+          if (isActiveAiChatTab(tab)) {
+            state.aiConversationModelId = lockedModelId;
+            state.aiPromptSent = true;
+            syncAiTaskOptions();
+            renderAiRoleplayCharacterSelect();
+            renderAiQuickActions();
+            clearAiPromptComposer();
+          }
           mountAssistantMessage();
         }
       } else if (eventName === "delta") {
@@ -14190,26 +15002,26 @@ async function streamChat(requestHolder, body, idempotencyKey) {
           : step.type === "context_compaction"
             ? `已压缩第 ${Number(step.round) || 1} 轮工具上下文`
             : `正在处理第 ${Number(step.round) || 1} 轮中间结果`;
-        scrollAiFeedToBottom();
+        scrollAiFeedToBottom(feed);
       } else if (eventName === "tool_call") {
         mountAssistantMessage();
         const toolCall = { ...payload };
         const round = toolCall.round;
         delete toolCall.round;
-        if (toolCall.status === "failed") setAiAssistantStatus("error");
+        if (toolCall.status === "failed") setAiChatTabStatus(tab, "error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
         renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
-        scrollAiFeedToBottom();
+        scrollAiFeedToBottom(feed);
       } else if (eventName === "context_compacted") {
         streamContextCompacted = true;
-        setAiContextMeter(payload.contextUsage);
+        setAiChatTabContextUsage(tab, payload.contextUsage);
         if (messageMounted) meta.textContent = "已压缩工具上下文，正在继续生成";
       } else if (eventName === "complete") {
         if (payload.warningOnly === true) {
           warningOnly = true;
-          setAiContextMeter(payload.contextUsage);
+          setAiChatTabContextUsage(tab, payload.contextUsage);
           return;
         }
         mountAssistantMessage();
@@ -14217,7 +15029,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         persistedMessageCreatedAt = typeof payload.messageCreatedAt === "string" ? payload.messageCreatedAt : null;
         conversationTitle = typeof payload.conversationTitle === "string" ? payload.conversationTitle : null;
         const announcedCompaction = contextAction === "compacted" || streamContextCompacted;
-        setAiContextMeter(payload.contextUsage, announcedCompaction);
+        setAiChatTabContextUsage(tab, payload.contextUsage, announcedCompaction);
         await Promise.all([typewriter.finish(), finishProcessStepTypewriters()]);
         assertAiRequestCurrent(requestHolder.snapshot);
         message.classList.remove("is-streaming");
@@ -14232,11 +15044,11 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         renderAiProcessSteps(message, processSteps, true, processDurationMs);
         meta.textContent = formatAiMessageMeta(payload.model?.displayName, payload.outputTokens, payload.cacheHitPercent, "", processDurationMs);
         attachAssistantCopyAction(message, streamedText);
-        scrollAiFeedToBottom();
+        scrollAiFeedToBottom(feed);
       } else if (eventName === "request_status") {
         streamError = createClientError(payload, "AI 请求状态不可重放", response.status);
       } else if (eventName === "error") {
-        setAiAssistantStatus("error");
+        setAiChatTabStatus(tab, "error");
         streamError = createClientError(payload, "AI 流式调用失败", response.status);
       }
     };
@@ -14279,7 +15091,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     message.dataset.status = "interrupted";
     content.setAttribute("aria-busy", "false");
     const headingRole = message.querySelector(".message-heading > span");
-    headingRole.textContent = aiAssistantLabel(interruptionLabel);
+    headingRole.textContent = aiAssistantLabel(interruptionLabel, tab.roleplayCharacter);
     const interruptionBadge = document.createElement("strong");
     interruptionBadge.className = "ai-message-status is-error";
     interruptionBadge.textContent = "中断";
@@ -14288,12 +15100,14 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     renderStreamingProcessSteps(true, elapsedProcessTime());
     meta.textContent = formatAiStreamInterruptionMeta(interruptionCode, streamedText.length);
     if (streamedText) attachAssistantCopyAction(message, streamedText);
-    scrollAiFeedToBottom();
+    scrollAiFeedToBottom(feed);
     throw streamFailure;
   }
 }
 
-function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null) {
+function appendMessage(role, text, citations = [], createdAt = null, metadata = {}, messageId = null, options = {}) {
+  const tab = options.tab ?? activeAiChatTab();
+  const feed = options.feed ?? tab?.feed ?? $("#ai-feed");
   const message = document.createElement("div");
   const isFailure = role === "assistant" && text.startsWith("调用失败：");
   const isInterrupted = role === "assistant" && metadata?.interrupted === true;
@@ -14309,8 +15123,9 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   });
   const heading = attachMessageHeading(
     message,
-    role === "user" ? "作者" : aiAssistantLabel(isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : ""),
-    createdAt ?? undefined
+    role === "user" ? "作者" : aiAssistantLabel(isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "", tab?.roleplayCharacter),
+    createdAt ?? undefined,
+    tab
   );
   if (isFailure || isInterrupted) {
     message.dataset.status = isInterrupted ? "interrupted" : "failed";
@@ -14360,7 +15175,8 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
   if (role === "assistant" && !text.startsWith("调用失败：")) {
-    const selectedModel = state.models.find((model) => model.id === $("#ai-model").value) ?? state.models[0];
+    const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
+    const selectedModel = state.models.find((model) => model.id === selectedModelId) ?? state.models[0];
     const modelDisplayName = metadata?.modelDisplayName || selectedModel?.displayName || "模型";
     const outputTokens = Number.isFinite(metadata?.outputTokens) ? metadata.outputTokens : estimateAiMessageTokens(text);
     const meta = document.createElement("div");
@@ -14372,18 +15188,20 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     attachAssistantCopyAction(message, text);
   }
   attachMessageIdentity(message, messageId);
-  $("#ai-feed").append(message);
-  scrollAiFeedToBottom();
+  feed.append(message);
+  scrollAiFeedToBottom(feed);
 }
 
-function appendSuggestion(suggestion, createdAt = null, messageId = null) {
+function appendSuggestion(suggestion, createdAt = null, messageId = null, options = {}) {
+  const tab = options.tab ?? activeAiChatTab();
+  const feed = options.feed ?? tab?.feed ?? $("#ai-feed");
   const message = document.createElement("div");
   message.className = "assistant-message";
   const applicable = suggestion.action !== "note";
   const guard = suggestion.guard;
   const guardHtml = guard ? `<section class="guard-card ${esc(guard.status)}" data-testid="continuation-guard"><strong>${guard.status === "clear" ? "一致性守卫：未发现冲突" : guard.status === "warning" ? `一致性守卫：发现 ${guard.issues.length} 项风险` : "一致性守卫：检查失败"}</strong>${guard.status === "failed" ? `<p>${esc(guard.failure || "无法完成检查，请谨慎采纳")}</p>` : guard.issues.map((issue) => `<p><b>${esc(levelLabel(issue.severity))} · ${esc(reviewItemTypeLabel(issue.type))}</b> ${esc(issue.title)}${issue.description ? `：${esc(issue.description)}` : ""}</p>`).join("")}</section>` : "";
   message.innerHTML = `<div class="message-body">${renderMarkdown(suggestion.content)}</div><div class="message-meta">${esc(formatAiMessageMeta(suggestion.model?.displayName, suggestion.outputTokens, suggestion.cacheHitPercent, `基于 v${suggestion.chapterVersion ?? "-"}`, suggestion.processDurationMs))}</div>${guardHtml}${applicable ? '<div class="message-actions"><button data-action="accept">采纳到正文</button><button data-action="reject">拒绝</button></div>' : ""}`;
-  attachMessageHeading(message, "助手建议", createdAt ?? undefined);
+  attachMessageHeading(message, "助手建议", createdAt ?? undefined, tab);
   attachAssistantCopyAction(message, suggestion.content);
   attachMessageIdentity(message, messageId);
   if (applicable) {
@@ -14406,8 +15224,8 @@ function appendSuggestion(suggestion, createdAt = null, messageId = null) {
       message.querySelector(".message-actions").innerHTML = "<span>已拒绝</span>";
     });
   }
-  $("#ai-feed").append(message);
-  scrollAiFeedToBottom();
+  feed.append(message);
+  scrollAiFeedToBottom(feed);
   return message;
 }
 
@@ -15696,6 +16514,20 @@ $("#shelf-new-work").addEventListener("click", openWorkDialog);
 $("#shelf-recycle-bin").addEventListener("click", () => { void openWorkRecycleBin(); });
 $("#welcome-new-work").addEventListener("click", () => state.work ? openChapterDialog() : openWorkDialog());
 $("#save-button").addEventListener("click", saveChapter);
+$("#chapter-search-close").addEventListener("click", () => closeChapterSearchPanel());
+$("#chapter-search-query").addEventListener("input", () => {
+  chapterSearchMatchIndex = -1;
+  renderChapterSearchStatus();
+});
+$("#chapter-search-query").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  moveChapterSearchMatch(event.shiftKey ? -1 : 1);
+});
+$("#chapter-search-previous").addEventListener("click", () => moveChapterSearchMatch(-1));
+$("#chapter-search-next").addEventListener("click", () => moveChapterSearchMatch(1));
+$("#chapter-search-replace").addEventListener("click", replaceCurrentChapterSearchMatch);
+$("#chapter-search-replace-all").addEventListener("click", replaceAllChapterSearchMatches);
 $("#chapter-foreshadow-reminder-previous").addEventListener("click", () => {
   showChapterForeshadowReminderAt(chapterForeshadowReminderIndex - 1);
 });
@@ -15862,6 +16694,10 @@ $("#mobile-panel-backdrop").addEventListener("click", () => {
   applyPanelLayout(true);
 });
 $("#ai-panel-toggle").addEventListener("click", () => {
+  if (aiConversationWorkspaceOpen) {
+    setAiConversationWorkspaceVisible(false);
+    return;
+  }
   panelLayout.aiCollapsed = !panelLayout.aiCollapsed;
   applyPanelLayout(true);
 });
@@ -15873,6 +16709,17 @@ window.addEventListener("resize", () => {
   if (isMobileViewport() && $("#onboarding-dialog").open) completeOnboarding();
   applyPanelLayout();
   scheduleChapterLineNumbers();
+});
+$("#ai-assistant-entry").addEventListener("click", () => {
+  if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) {
+    return toast("当前账户没有创作助手读取权限", "error");
+  }
+  setModuleNavExpanded(false);
+  if (isMobileViewport()) {
+    panelLayout.leftCollapsed = true;
+    applyPanelLayout(true);
+  }
+  setAiConversationWorkspaceVisible(true);
 });
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
@@ -16139,6 +16986,7 @@ document.addEventListener("pointerdown", (event) => {
     closeManuscriptExportMenu(true);
   }
   if (!event.target.closest("#ai-history-action-menu") && !event.target.closest(".ai-history-more")) closeAiHistoryActionMenu();
+  if (!event.target.closest("#ai-conversation-switcher-menu") && !event.target.closest("#ai-conversation-switcher")) setAiConversationSwitcherVisible(false);
   if (!event.target.closest(".prompt-composer")) hideAiMentionMenu();
   if (!event.target.closest("#ai-context-meter") && !event.target.closest("#ai-context-popover")) setAiContextDistributionVisible(false);
   if (!event.target.closest("#account-button") && !event.target.closest("#account-menu")) {
@@ -16158,7 +17006,20 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.key === "Escape") {
+    if (!$("#chapter-search-panel").classList.contains("hidden")) {
+      closeChapterSearchPanel();
+      return;
+    }
     if (!$("#ai-history-action-menu").classList.contains("hidden")) return;
+    if (!$("#ai-conversation-switcher-menu").classList.contains("hidden")) {
+      setAiConversationSwitcherVisible(false);
+      $("#ai-conversation-switcher").focus();
+      return;
+    }
+    if (aiConversationWorkspaceOpen) {
+      setAiConversationWorkspaceVisible(false);
+      return;
+    }
     closeChapterTypeMenu();
     closeLineCitationMenu();
     closeMarkdownTableMenu(true);
@@ -16173,14 +17034,37 @@ document.addEventListener("keydown", (event) => {
   event.preventDefault();
   event.stopPropagation();
   if (event.repeat) return;
+  if (isChapterSearchContext()) {
+    openChapterSearchPanel();
+    return;
+  }
   openSearchDialog().catch((error) => toast(error.message, "error"));
 }, { capture: true });
 $("#ai-context-meter").addEventListener("click", () => {
   setAiContextDistributionVisible($("#ai-context-popover").classList.contains("hidden"));
 });
 $("#ai-context-popover-close").addEventListener("click", () => setAiContextDistributionVisible(false));
-$("#ai-send").addEventListener("click", sendAi);
+$("#ai-send").addEventListener("click", activateAiSendControl);
+$("#ai-conversation-switcher").addEventListener("click", () => {
+  setAiConversationSwitcherVisible($("#ai-conversation-switcher-menu").classList.contains("hidden"));
+});
+$("#ai-conversation-switcher-close").addEventListener("click", () => {
+  setAiConversationSwitcherVisible(false);
+  $("#ai-conversation-switcher").focus();
+});
+$("#ai-workspace-open").addEventListener("click", () => setAiConversationWorkspaceVisible(true));
+$("#ai-workspace-close").addEventListener("click", () => setAiConversationWorkspaceVisible(false));
+$("#ai-switcher-history").addEventListener("click", async () => {
+  setAiConversationSwitcherVisible(false);
+  try {
+    await ensureAiConversationsLoaded();
+    setAiHistoryVisible(true);
+  } catch (error) {
+    toast(`对话历史加载失败：${error.message}`, "error");
+  }
+});
 $("#ai-new-conversation").addEventListener("click", async () => {
+  setAiConversationSwitcherVisible(false);
   const button = $("#ai-new-conversation");
   button.disabled = true;
   try {
@@ -16244,6 +17128,7 @@ $("#ai-context-dismiss").addEventListener("click", async () => {
   }
 });
 $("#ai-history-toggle").addEventListener("click", async () => {
+  setAiConversationSwitcherVisible(false);
   if ($("#ai-history-dialog").open) return setAiHistoryVisible(false);
   try {
     await ensureAiConversationsLoaded();
@@ -16304,6 +17189,20 @@ $("#ai-history-action-menu").addEventListener("click", async (event) => {
     }
     return;
   }
+  if (action === "copy-session-id") {
+    option.disabled = true;
+    try {
+      await copyAiConversationSessionId(conversation);
+      closeAiHistoryActionMenu(true);
+      toast("对话 Session ID 已复制");
+    } catch (error) {
+      toast(`Session ID 复制失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
   if (action === "delete") {
     option.disabled = true;
     try {
@@ -16356,7 +17255,7 @@ $("#ai-prompt").addEventListener("keydown", (event) => {
   }
   if (shouldSendAiPrompt(event)) {
     event.preventDefault();
-    if (!$("#ai-send").disabled) void sendAi();
+    if (!$("#ai-send").disabled && !aiRequestManager.hasActive(activeAiChatTab()?.id)) void sendAi();
   }
 });
 $(".quick-actions").addEventListener("click", (event) => {
@@ -16452,7 +17351,6 @@ $("#reader-font-size").addEventListener("change", (event) => updateReadingPrefer
 $("#reader-line-height").addEventListener("change", (event) => updateReadingPreference({ lineHeight: Number(event.currentTarget.value) }));
 $("#reader-theme").addEventListener("change", (event) => updateReadingPreference({ theme: event.currentTarget.value }));
 $("#reader-view").addEventListener("keydown", handleReadingKeyboard);
-$("#reader-viewport").addEventListener("wheel", handleReadingWheel, { passive: false });
 $("#reader-viewport").addEventListener("scroll", () => {
   if (readingPreferences.mode === "scroll") scheduleReadingPositionSave();
 }, { passive: true });
@@ -16469,7 +17367,7 @@ window.addEventListener("pagehide", dismissDeleteToasts);
 window.addEventListener("beforeunload", (event) => {
   if (hasUnsavedEditorChanges()) event.preventDefault();
   if (aiRequestManager.hasActive()) {
-    toast("当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中", "warning");
+    toast("仍有 Agent turn 尚未结束，刷新会中断全部生成；已收到的内容会保留在历史记录中", "warning");
   }
 });
 window.addEventListener("online", () => {
@@ -16486,6 +17384,7 @@ window.addEventListener("resize", () => {
   });
 });
 
+initializeAiChatTabs();
 initializePage().catch((error) => {
   restoringPageRoute = false;
   if (state.user) {

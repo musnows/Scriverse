@@ -10,15 +10,15 @@ describe("AI 流式请求快照", () => {
       readFile(join(publicPath, "index.html"), "utf8")
     ]);
 
-    expect(application).toContain('/ai-request-manager.js?v=20260812-ai-request-snapshot-v1');
+    expect(application).toContain('/ai-request-manager.js?v=20260816-ai-chat-tabs-v1');
     expect(application).toContain('fetch(`/api/works/${encodeURIComponent(request.workId)}/chat/stream`');
     expect(application).toContain("signal: request.signal");
     expect(application).toContain("request.conversationId,\n          \"assistant\"");
     expect(application).toContain("requestHolder.snapshot = aiRequestManager.bind(requestHolder.snapshot, { userMessageId: persistedUserMessage.id })");
-    expect(page).toContain('/app.js?v=20260815-ai-stream-persistence-v4');
+    expect(page).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
   });
 
-  it("对话和作品切换会取消旧流并拒绝过期回调", async () => {
+  it("页签切换保留旧流，作品切换会取消全部流并拒绝过期回调", async () => {
     const application = await readFile(join(process.cwd(), "src", "public", "app.js"), "utf8");
 
     expect(application).toContain('beginAiConversationNavigation("已切换 AI 对话", "切换会话")');
@@ -27,11 +27,11 @@ describe("AI 流式请求快照", () => {
     expect(application).toContain("selectionGeneration !== workSelectionRequestGeneration");
     expect(application).toContain("assertAiRequestCurrent(requestHolder.snapshot)");
     expect(application).toContain("persistAiRequestInterruption(request, error?.streamInterruption)");
-    expect(application).toContain('const isNewConversation = action === "新建会话";');
-    expect(application).toContain('isNewConversation ? "\\n" : ""');
-    expect(application).toContain('isNewConversation ? "ai-new-conversation-toast" : ""');
-    expect(application).toContain('`当前 turn 尚未结束，${action}会中断生成；${isNewConversation ? "\\n" : ""}已收到的内容会保留在历史记录中`');
-    expect(application).toContain('当前 turn 尚未结束，刷新会中断生成；已收到的内容会保留在历史记录中');
+    expect(application).toContain('tabId: tab.id');
+    expect(application).toContain('aiRequestManager.cancelAll(reason)');
+    expect(application).toContain('仍有 Agent turn 尚未结束，${action}会中断全部生成');
+    expect(application).toContain('仍有 Agent turn 尚未结束，刷新会中断全部生成；已收到的内容会保留在历史记录中');
+    expect(application).not.toContain('切换会话会中断生成');
     expect(application).not.toContain('event.returnValue = "";');
   });
 });
