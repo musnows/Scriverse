@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   backgroundTaskActivityCount,
   backgroundTaskPollDelay,
-  collectBackgroundTaskTransitions
+  collectBackgroundTaskTransitions,
+  filterBackgroundTaskTransitionsForAnnouncement
 } from "../../src/public/background-task-center.js";
 
 describe("全局后台任务中心", () => {
@@ -45,6 +46,28 @@ describe("全局后台任务中心", () => {
     expect(initial.transitions).toEqual([
       expect.objectContaining({ previousStatus: "running", status: "failed" })
     ]);
+  });
+
+  it("按分析类型降低连续过期提醒频率，但不影响其他终态提醒", () => {
+    const transitions = [
+      { task: { id: "chapter-1", taskType: "chapter-analysis" }, previousStatus: "running", status: "expired" },
+      { task: { id: "chapter-2", taskType: "chapter-analysis" }, previousStatus: "running", status: "expired" },
+      { task: { id: "book-1", taskType: "book-analysis" }, previousStatus: "running", status: "expired" },
+      { task: { id: "failed-1", taskType: "chapter-analysis" }, previousStatus: "running", status: "failed" }
+    ];
+    const first = filterBackgroundTaskTransitionsForAnnouncement(transitions, new Map(), 1_000);
+    expect(first.transitions).toHaveLength(3);
+    expect(first.transitions.map((transition) => transition.task.id)).toEqual(["chapter-1", "book-1", "failed-1"]);
+
+    const second = filterBackgroundTaskTransitionsForAnnouncement([
+      { task: { id: "chapter-3", taskType: "chapter-analysis" }, previousStatus: "running", status: "expired" }
+    ], first.noticeTimes, 30_000);
+    expect(second.transitions).toEqual([]);
+
+    const afterCooldown = filterBackgroundTaskTransitionsForAnnouncement([
+      { task: { id: "chapter-4", taskType: "chapter-analysis" }, previousStatus: "running", status: "expired" }
+    ], second.noticeTimes, 61_000);
+    expect(afterCooldown.transitions).toHaveLength(1);
   });
 
   it("活动任务或打开弹窗时采用更短轮询间隔", () => {

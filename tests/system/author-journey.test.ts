@@ -462,7 +462,7 @@ describe("作者完整创作流程", () => {
     expect(page.text).toContain('id="setting-editor-confirm"');
     expect(application.text).toContain('review: "已完成"');
     expect(application.text).toContain('failed: "失败"');
-    expect(application.text).toContain('/background-task-center.js?v=20260810-analysis-task-failed-v1');
+    expect(application.text).toContain('/background-task-center.js?v=20260817-analysis-task-expired-toast-v1');
     expect(application.text).toContain('if (transition.status === "failed") return { message: `${label}失败，请打开任务详情查看`, type: "error" };');
     expect(application.text).not.toContain('review: "待审核"');
     expect(application.text).toContain('"分析已完成"');

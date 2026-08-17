@@ -91,7 +91,7 @@ import {
   outlineBoardRequestPath,
   outlineBoardUnresolvedCount
 } from "/outline-board.js?v=20260813-outline-board-page-v1";
-import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions, filterBackgroundTaskTransitionsForAnnouncement } from "/background-task-center.js?v=20260817-analysis-task-expired-toast-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
@@ -259,6 +259,7 @@ let backgroundTaskCenterRequest = 0;
 let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
+let backgroundTaskCenterExpiredNoticeTimes = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 let s3BackupTargets = [];
 let s3BackupRuns = [];
@@ -2475,7 +2476,8 @@ const AI_TOOL_DISPLAY_NAMES = {
   search_drafts: "搜索想法",
   recall_self: "回忆自身",
   image: "读取设定图片",
-  recall_relationship: "回忆人物关系"
+  recall_relationship: "回忆人物关系",
+  calculate_time: "计算日期"
 };
 
 const AI_TOOL_DESCRIPTIONS = {
@@ -2487,7 +2489,8 @@ const AI_TOOL_DESCRIPTIONS = {
   search_drafts: "搜索可能采用、也可能永远不会进入正文或正式设定的未确认临时想法。",
   recall_self: "读取当前扮演角色自己的角色卡、档案，以及自己参与的关系、时间线和正文记忆。",
   image: "读取设定正文引用的图片附件，并返回多模态模型的理解内容。",
-  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。"
+  recall_relationship: "不传角色列表时读取有关系的角色列表；传入一个或多个角色后读取当前角色与这些角色之间的关系详情。",
+  calculate_time: "计算日期差值，或从起始日期推算目标日期。"
 };
 
 const aiFeedScrollFrames = new WeakMap();
@@ -10771,7 +10774,12 @@ async function refreshBackgroundTaskCenter({ announce = true } = {}) {
     backgroundTaskCenterTaskSnapshots = transitionResult.snapshots;
     backgroundTaskCenterSnapshot.taskPage = taskResult.value;
     if (backgroundTaskCenterTasksInitialized && announce && state.module !== "tasks") {
-      for (const transition of transitionResult.transitions) {
+      const announcementResult = filterBackgroundTaskTransitionsForAnnouncement(
+        transitionResult.transitions,
+        backgroundTaskCenterExpiredNoticeTimes
+      );
+      backgroundTaskCenterExpiredNoticeTimes = announcementResult.noticeTimes;
+      for (const transition of announcementResult.transitions) {
         const notification = backgroundTaskTransitionMessage(transition);
         toast(notification.message, notification.type);
       }
@@ -10799,6 +10807,7 @@ function stopBackgroundTaskCenter() {
   backgroundTaskCenterWorkId = null;
   backgroundTaskCenterTasksInitialized = false;
   backgroundTaskCenterTaskSnapshots = new Map();
+  backgroundTaskCenterExpiredNoticeTimes = new Map();
   backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
   const dialog = $("#background-task-dialog");
   if (dialog?.open) dialog.close();
@@ -11012,7 +11021,7 @@ async function renderBookAiSettings() {
   const host = $("#module-content");
   const workId = String(state.work.id);
   const maximumAgentToolCallLimit = Math.max(5, Number(settings.agentToolCallLimitMaximum) || 80);
-  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
+  const agentTools = new Set(settings.agentTools ?? ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
   const dailyTokenQuota = settings.dailyTokenQuota === null ? null : Number(settings.dailyTokenQuota);
   const quotaUsedTokens = Number(usage?.quota?.usedTokens) || 0;
   const quotaRemainingTokens = usage?.quota?.remainingTokens === null
@@ -11045,7 +11054,7 @@ async function renderBookAiSettings() {
   );
   host.querySelector(".ai-agent-tools").insertAdjacentHTML(
     "beforeend",
-    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label>`
+    `<label><input name="agent-tool" type="checkbox" value="search_drafts" ${agentTools.has("search_drafts") ? "checked" : ""}><span><strong>搜索想法</strong><small>查询正文想法和设定想法。这些内容只是可能采用、也可能永远不会进入正文或正式设定的临时方向，Agent 不会把它当作已确认事实。</small></span></label><label><input name="agent-tool" type="checkbox" value="image" ${agentTools.has("image") ? "checked" : ""}><span><strong>读取设定图片</strong><small>读取设定正文引用的单张图片附件，并由多模态模型返回图片理解内容。</small></span></label><label><input name="agent-tool" type="checkbox" value="calculate_time" ${agentTools.has("calculate_time") ? "checked" : ""}><span><strong>计算日期</strong><small>计算日期差值，或从起始日期推算目标日期，不读取作品内容。</small></span></label>`
   );
   if (!canEditModule("ai-settings")) {
     host.querySelectorAll("textarea, input, select").forEach((control) => { control.disabled = true; });
