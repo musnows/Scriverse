@@ -2907,6 +2907,60 @@ describe("用户、作品权限与操作者追踪 API", () => {
     expect(runtime.database.all("PRAGMA foreign_key_check")).toEqual([]);
   });
 
+  it("仅向有权限的已登录用户暴露对话 Session ID，不暴露认证会话 ID", async () => {
+    const owner = await register(runtime, "ai_session_id_owner");
+    const reader = await register(runtime, "ai_session_id_reader");
+    const outsider = await register(runtime, "ai_session_id_outsider");
+    const work = await owner.agent.post("/api/works")
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "Session ID 权限边界作品" })
+      .expect(201);
+    const workId = String(work.body.data.id);
+    await owner.agent.post(`/api/works/${workId}/members`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({
+        userId: reader.user.userId,
+        permissions: {
+          prose: "none",
+          drafts: "none",
+          settings: "none",
+          characters: "none",
+          races: "none",
+          organizations: "none",
+          timeline: "none",
+          relationships: "none",
+          outlines: "none",
+          reviews: "none",
+          "ai-chat": "read",
+          "ai-analysis": "none",
+          "ai-settings": "none"
+        }
+      })
+      .expect(201);
+    const created = await owner.agent.post(`/api/works/${workId}/ai-conversations`)
+      .set("X-CSRF-Token", owner.csrfToken)
+      .send({ title: "诊断对话" })
+      .expect(201);
+    const conversationId = String(created.body.data.id);
+
+    const unauthenticated = await request(runtime.app).get(`/api/ai-conversations/${conversationId}`).expect(401);
+    expect(unauthenticated.body.error.code).toBe("AUTH_REQUIRED");
+    const forbidden = await outsider.agent.get(`/api/ai-conversations/${conversationId}`).expect(403);
+    expect(forbidden.body.error.code).toBe("WORK_ACCESS_DENIED");
+
+    const readable = await reader.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
+    expect(readable.body.data.id).toBe(conversationId);
+    expect(readable.body.data).not.toHaveProperty("sessionId");
+    expect(readable.body.data).not.toHaveProperty("csrfToken");
+    expect(readable.body.data).not.toHaveProperty("token");
+
+    const authSession = await reader.agent.get("/api/auth/session").expect(200);
+    expect(authSession.body.data).not.toHaveProperty("id");
+    expect(authSession.body.data).not.toHaveProperty("sessionId");
+    expect(authSession.body.data).not.toHaveProperty("token");
+    expect(authSession.body.data.csrfToken).toBe(reader.csrfToken);
+  });
+
   it("首位管理员注册时自动接管迁移前的现有作品", async () => {
     const legacyWork = runtime.store.createWork({ title: "既有作品" });
     const admin = await register(runtime, "first_admin");

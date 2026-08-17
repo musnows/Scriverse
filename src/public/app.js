@@ -2620,6 +2620,12 @@ async function downloadAiConversation(conversation) {
   window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
 }
 
+async function copyAiConversationSessionId(conversation) {
+  const sessionId = typeof conversation?.id === "string" ? conversation.id.trim() : "";
+  if (!sessionId) throw new Error("无法确定对话 Session ID");
+  await copyAiRawMarkdown(sessionId);
+}
+
 function resetAiConversationAfterDelete() {
   const tab = activeAiChatTab();
   if (tab) closeAiChatTab(tab.id);
@@ -16897,6 +16903,20 @@ $("#ai-history-action-menu").addEventListener("click", async (event) => {
       closeAiHistoryActionMenu(true);
     } catch (error) {
       toast(`对话收藏状态更新失败：${error.message}`, "error");
+      option.focus();
+    } finally {
+      option.disabled = false;
+    }
+    return;
+  }
+  if (action === "copy-session-id") {
+    option.disabled = true;
+    try {
+      await copyAiConversationSessionId(conversation);
+      closeAiHistoryActionMenu(true);
+      toast("对话 Session ID 已复制");
+    } catch (error) {
+      toast(`Session ID 复制失败：${error.message}`, "error");
       option.focus();
     } finally {
       option.disabled = false;
