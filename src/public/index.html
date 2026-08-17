@@ -10,7 +10,7 @@
     <link rel="icon" href="/icon.svg?v=20260712" type="image/svg+xml">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="stylesheet" href="/vendor/vditor/dist/index.css?v=3.11.2">
-    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1">
+    <link rel="stylesheet" href="/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=task-auto-run-ring-center-v3&feature=character-relationship-delete-v1&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1">
   </head>
   <body class="auth-pending">
     <section id="auth-view" class="auth-view hidden" aria-labelledby="auth-title">
@@ -133,6 +133,7 @@
             <button type="button" data-module="relationships"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98"/><path d="m15.41 6.51-6.82 3.98"/></svg>关系</button>
             <button type="button" data-module="races"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="4" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="20" cy="16" r="2"/><path d="M9 10a5 5 0 0 1 5 5v3.5a3.5 3.5 0 0 1-6.84 1.045Q6.52 17.48 4.46 16.84A3.5 3.5 0 0 1 5.5 10Z"/></svg>种族</button>
             <button class="ai-analysis-entry" type="button" data-module="tasks"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>AI 分析</button>
+            <button id="ai-assistant-entry" class="ai-assistant-entry" type="button" aria-controls="ai-panel" aria-expanded="false"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H11l-4.5 4v-4h0A2.5 2.5 0 0 1 4 13.5z"/><path d="M8 8h8M8 11h5"/></svg>创作助手</button>
             <button id="module-more-button" type="button" aria-expanded="false"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg><span class="nav-label">更多</span></button>
             <button id="reader-open-button" class="module-nav-secondary hidden" type="button" aria-label="打开沉浸式阅读预览" title="阅读预览"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3H11v16H5.5A2.5 2.5 0 0 0 3 21.5Z"/><path d="M21 5.5A2.5 2.5 0 0 0 18.5 3H13v16h5.5a2.5 2.5 0 0 1 2.5 2.5Z"/></svg>阅读预览</button>
             <button class="module-nav-secondary hidden" type="button" data-module="comments"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4Z"/><path d="M8 9h8M8 13h5"/></svg><span class="nav-label">正文评论</span></button>
@@ -322,7 +323,7 @@
         </section>
       </main>
 
-      <aside class="ai-panel">
+      <aside id="ai-panel" class="ai-panel">
         <div id="ai-panel-resize" class="panel-resize-handle" role="separator" aria-label="调整创作助手宽度" aria-orientation="vertical" tabindex="0"></div>
         <div class="ai-heading">
           <button id="ai-panel-toggle" class="panel-collapse-button" type="button" aria-label="收起创作助手" aria-expanded="true">›</button>
@@ -406,24 +407,30 @@
           <h1 id="reader-title">阅读预览</h1>
         </div>
         <details id="reader-settings" class="reader-settings">
-          <summary>显示设置</summary>
+          <summary>阅读设置</summary>
           <div class="reader-settings-panel">
-            <label>字号<select id="reader-font-size" aria-label="阅读字号">
-              <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
-            </select></label>
-            <label>行距<select id="reader-line-height" aria-label="阅读行距">
-              <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
-            </select></label>
-            <label>主题<select id="reader-theme" aria-label="阅读主题">
-              <option value="auto">跟随工作台</option><option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
-            </select></label>
+            <section class="reader-settings-group" aria-labelledby="reader-display-settings-title">
+              <span id="reader-display-settings-title" class="reader-settings-section-title">显示设置</span>
+              <label>字号<select id="reader-font-size" aria-label="阅读字号">
+                <option value="16">16 像素</option><option value="18">18 像素</option><option value="20">20 像素</option><option value="22">22 像素</option><option value="24">24 像素</option>
+              </select></label>
+              <label>行距<select id="reader-line-height" aria-label="阅读行距">
+                <option value="1.6">紧凑 1.6</option><option value="1.8">适中 1.8</option><option value="1.9">舒展 1.9</option><option value="2">宽松 2.0</option><option value="2.2">宽松 2.2</option>
+              </select></label>
+              <label>主题<select id="reader-theme" aria-label="阅读主题">
+                <option value="auto">跟随工作台</option><option value="paper">纸张</option><option value="light">明亮</option><option value="dark">夜间</option>
+              </select></label>
+            </section>
+            <section class="reader-settings-group reader-navigation-group" aria-labelledby="reader-navigation-title">
+              <span id="reader-navigation-title" class="reader-settings-section-title">阅读导航</span>
+              <div class="reader-jump-controls" aria-label="阅读导航与模式">
+                <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
+                <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
+                <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
+              </div>
+            </section>
           </div>
         </details>
-        <div class="reader-jump-controls" aria-label="阅读导航与模式">
-          <label>分卷<select id="reader-volume" aria-label="从分卷开始阅读"></select></label>
-          <label>章节<select id="reader-chapter" aria-label="快速跳章"></select></label>
-          <label>方式<select id="reader-mode" aria-label="阅读方式"><option value="scroll">连续滚动</option><option value="paged">翻页阅读</option></select></label>
-        </div>
       </header>
       <main id="reader-viewport" class="reader-viewport" tabindex="0" aria-describedby="reader-keyboard-hint">
         <article id="reader-document" class="reader-document" aria-live="polite">
@@ -1198,6 +1205,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=calculate-time-tool-v1&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=galaxy-motion-mode-v3&feature=calculate-time-tool-v1&feature=analysis-task-expired-toast-v1&feature=global-replace-volume-v1&feature=chapter-search-replace-v1&feature=chapter-save-toast-v1&feature=character-relationship-delete-v1&feature=character-relationship-group-v1&feature=analysis-task-stability-delay-v1&feature=ai-assistant-workspace-v1&feature=volume-detail-icon-v1&feature=reader-manual-chapter-navigation-v1"></script>
   </body>
 </html>

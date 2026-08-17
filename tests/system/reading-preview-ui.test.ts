@@ -22,7 +22,7 @@ describe("沉浸式阅读预览界面", () => {
     const readingState = await request(runtime.app).get("/reading-preview.js").expect(200);
     const pageRoute = await request(runtime.app).get("/page-route.js").expect(200);
 
-    expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
+    expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v3&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=galaxy-compact-controls-v2&feature=galaxy-motion-mode-v2&feature=chapter-search-replace-v3&feature=ai-assistant-workspace-v2&feature=mobile-module-tab-position-v1&feature=volume-detail-icon-v1&feature=editor-actions-flow-v1&feature=reader-controls-subpanel-v1&feature=reader-focus-ring-v1');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(page.text).toContain('id="reader-open-button" class="module-nav-secondary hidden"');
     expect(page.text).toMatch(/id="module-more-button"[\s\S]*id="reader-open-button"[\s\S]*data-module="comments"/u);
@@ -33,6 +33,8 @@ describe("沉浸式阅读预览界面", () => {
     expect(page.text).toContain('id="reader-volume" aria-label="从分卷开始阅读"');
     expect(page.text).toContain('id="reader-chapter" aria-label="快速跳章"');
     expect(page.text).toContain('id="reader-mode" aria-label="阅读方式"');
+    expect(page.text).toMatch(/id="reader-settings"[\s\S]*class="reader-jump-controls"/u);
+    expect(page.text).not.toMatch(/<\/details>\s*<div class="reader-jump-controls"/u);
     expect(page.text).toContain('id="reader-font-size" aria-label="阅读字号"');
     expect(page.text).toContain('id="reader-line-height" aria-label="阅读行距"');
     expect(page.text).toContain('id="reader-theme" aria-label="阅读主题"');
@@ -51,10 +53,15 @@ describe("沉浸式阅读预览界面", () => {
     expect(application.text).toContain('$("#reader-open-button").disabled = !canReadModule("editor") || count === 0');
     expect(application.text).toContain('const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")]');
     expect(application.text).toContain("function handleReadingKeyboard(event)");
+    expect(application.text).not.toContain("function handleReadingWheel(event)");
+    expect(application.text).not.toContain('addEventListener("wheel", handleReadingWheel');
+    expect(application.text).toContain('$("#reader-previous").addEventListener("click", () => void navigateReadingChapter(-1))');
+    expect(application.text).toContain('$("#reader-next").addEventListener("click", () => void navigateReadingChapter(1))');
     expect(application.text).toContain("function layoutReadingPages");
     expect(styles.text).toContain(".reader-view {");
     expect(styles.text).toContain('.reader-view[data-reader-theme="dark"]');
     expect(styles.text).toContain(".reader-viewport.is-paged .reader-content");
+    expect(styles.text).toContain(".reader-viewport:focus-visible { box-shadow: none; }");
     expect(styles.text).toContain("@media (max-width: 700px)");
     expect(styles.text).toContain(".reader-settings-panel { position: static;");
     expect(styles.text).toContain(".app-shell.ai-hidden-mode:not(.shelf-mode) { grid-template-columns: minmax(0, 1fr); }");

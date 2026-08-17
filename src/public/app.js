@@ -429,6 +429,7 @@ function applyWorkAccessMode() {
   $("#module-nav [data-module=\"comments\"]").classList.toggle("permission-hidden", Boolean(state.work) && !canReadModule("comments"));
   $("#module-nav [data-work-settings]").classList.toggle("permission-hidden", Boolean(state.work) && !canManageWork());
   $("#reader-open-button").classList.toggle("permission-hidden", proseHidden);
+  $("#ai-assistant-entry").classList.toggle("permission-hidden", !state.work || aiHidden);
   $("#new-volume-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#chapter-batch-button").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
   $("#welcome-new-work").classList.toggle("permission-hidden", Boolean(state.work) && proseReadOnly);
@@ -1344,9 +1345,8 @@ function applyPanelLayout(persist = false) {
 }
 
 function ensureAiPanelExpanded() {
-  if (!panelLayout.aiCollapsed) return;
-  panelLayout.aiCollapsed = false;
-  applyPanelLayout(true);
+  if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) return;
+  setAiConversationWorkspaceVisible(true);
 }
 
 function setupPanelResize(handle, side) {
@@ -2187,13 +2187,23 @@ function setAiConversationSwitcherVisible(visible) {
 }
 
 function setAiConversationWorkspaceVisible(visible) {
-  aiConversationWorkspaceOpen = Boolean(visible && aiChatTabLimit > 1);
+  aiConversationWorkspaceOpen = Boolean(visible);
+  if (aiConversationWorkspaceOpen) {
+    panelLayout.aiCollapsed = false;
+    $("#app").classList.remove("ai-panel-collapsed");
+  }
+  $("#app").classList.toggle("ai-workspace-mode", aiConversationWorkspaceOpen);
   $(".ai-panel").classList.toggle("is-conversation-workspace", aiConversationWorkspaceOpen);
+  $("#ai-assistant-entry").classList.toggle("active", aiConversationWorkspaceOpen);
+  $("#ai-assistant-entry").setAttribute("aria-expanded", String(aiConversationWorkspaceOpen));
   $("#ai-chat-tabs").classList.add("hidden");
   $("#ai-workspace-close").classList.toggle("hidden", !aiConversationWorkspaceOpen);
   $("#ai-panel-resize").setAttribute("aria-hidden", String(aiConversationWorkspaceOpen));
   setAiConversationSwitcherVisible(false);
   renderAiChatTabs();
+  if (aiConversationWorkspaceOpen) {
+    window.requestAnimationFrame(() => $("#ai-prompt").focus({ preventScroll: true }));
+  }
 }
 
 function applyAiChatTabLimit(value) {
@@ -2202,7 +2212,6 @@ function applyAiChatTabLimit(value) {
   $(".ai-panel").classList.toggle("is-single-conversation", singleSession);
   if (singleSession) {
     setAiConversationSwitcherVisible(false);
-    setAiConversationWorkspaceVisible(false);
   }
   renderAiChatTabs();
 }
@@ -6623,7 +6632,7 @@ function renderTree() {
     <div class="volume-node ${collapsed ? "is-collapsed" : ""}" data-volume-id="${esc(volume.id)}">
       <div class="volume-title">
         <button class="volume-toggle" type="button" data-volume-toggle="${esc(volume.id)}" aria-expanded="${collapsed ? "false" : "true"}" title="左键展开或折叠；右键打开分卷详情；可将章节拖到这里追加"><span>${esc(volume.title)}</span><span>${Number(volume.chapterCount ?? chapters.length)} 章</span></button>
-        ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情">详情</button>` : ""}
+        ${proseEditable ? `<button class="ghost-button volume-detail-button" type="button" data-volume-detail="${esc(volume.id)}" aria-label="打开“${esc(volume.title)}”分卷详情" title="打开“${esc(volume.title)}”分卷详情"><svg class="volume-detail-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 10.5v5.5M12 7.5h.01"></path></svg></button>` : ""}
         ${proseEditable ? `<button class="add-button chapter-add-button" type="button" data-new-chapter-volume="${esc(volume.id)}" aria-label="在“${esc(volume.title)}”中新建章节" title="在“${esc(volume.title)}”中新建章节">+</button>` : ""}
       </div>
       <div class="volume-chapters">
@@ -7651,20 +7660,6 @@ function handleReadingKeyboard(event) {
   }
 }
 
-function handleReadingWheel(event) {
-  if (readingPreferences.mode !== "scroll" || readingLoading || Math.abs(event.deltaY) < 2) return;
-  const viewport = $("#reader-viewport");
-  const atEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2;
-  const atStart = viewport.scrollTop <= 2;
-  if (event.deltaY > 0 && atEnd) {
-    event.preventDefault();
-    void navigateReadingChapter(1, { continueFromBoundary: true });
-  } else if (event.deltaY < 0 && atStart) {
-    event.preventDefault();
-    void navigateReadingChapter(-1, { continueFromBoundary: true });
-  }
-}
-
 async function saveChapter() {
   const dismissSavingToast = persistentToast("正在保存中");
   try {
@@ -7704,7 +7699,7 @@ function showWelcome(hasWork = false) {
 }
 
 function markActiveModule(module) {
-  $("#module-nav").querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.module === module));
+  $("#module-nav").querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.module === module || (button.id === "ai-assistant-entry" && aiConversationWorkspaceOpen)));
 }
 
 const moduleMeta = {
@@ -16715,6 +16710,17 @@ window.addEventListener("resize", () => {
   applyPanelLayout();
   scheduleChapterLineNumbers();
 });
+$("#ai-assistant-entry").addEventListener("click", () => {
+  if (!state.work || !canReadPermissionModule(state.work, "ai-chat")) {
+    return toast("当前账户没有创作助手读取权限", "error");
+  }
+  setModuleNavExpanded(false);
+  if (isMobileViewport()) {
+    panelLayout.leftCollapsed = true;
+    applyPanelLayout(true);
+  }
+  setAiConversationWorkspaceVisible(true);
+});
 $("#module-nav").addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.id === "module-more-button") return;
@@ -17345,7 +17351,6 @@ $("#reader-font-size").addEventListener("change", (event) => updateReadingPrefer
 $("#reader-line-height").addEventListener("change", (event) => updateReadingPreference({ lineHeight: Number(event.currentTarget.value) }));
 $("#reader-theme").addEventListener("change", (event) => updateReadingPreference({ theme: event.currentTarget.value }));
 $("#reader-view").addEventListener("keydown", handleReadingKeyboard);
-$("#reader-viewport").addEventListener("wheel", handleReadingWheel, { passive: false });
 $("#reader-viewport").addEventListener("scroll", () => {
   if (readingPreferences.mode === "scroll") scheduleReadingPositionSave();
 }, { passive: true });
