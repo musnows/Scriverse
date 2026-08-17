@@ -6360,29 +6360,33 @@ export class AiManager {
 
   /** 计算两个日期之间的年/月/日差值（考虑日历规则）。 */
   private calculateYMDDiff(startDate: Date, endDate: Date): { years: number; months: number; days: number } {
-    const startYear = startDate.getUTCFullYear();
-    const startMonth = startDate.getUTCMonth() + 1;
-    const startDay = startDate.getUTCDate();
+    const isBackward = endDate.getTime() < startDate.getTime();
+    const earlierDate = isBackward ? endDate : startDate;
+    const laterDate = isBackward ? startDate : endDate;
+    const earlierYear = earlierDate.getUTCFullYear();
+    const earlierMonth = earlierDate.getUTCMonth() + 1;
+    const earlierDay = earlierDate.getUTCDate();
+    const laterYear = laterDate.getUTCFullYear();
+    const laterMonth = laterDate.getUTCMonth() + 1;
+    const laterDay = laterDate.getUTCDate();
 
-    let endYear = endDate.getUTCFullYear();
-    let endMonth = endDate.getUTCMonth() + 1;
-    const endDay = endDate.getUTCDate();
-
-    let totalMonths = (endYear - startYear) * 12 + (endMonth - startMonth);
-    let remainingDays = endDay - startDay;
+    let totalMonths = (laterYear - earlierYear) * 12 + (laterMonth - earlierMonth);
+    let remainingDays = laterDay - earlierDay;
 
     if (remainingDays < 0) {
       totalMonths -= 1;
       // 上个月的最后一天
-      const prevMonth = endMonth === 1 ? 12 : endMonth - 1;
-      const prevYear = endMonth === 1 ? endYear - 1 : endYear;
+      const prevMonth = laterMonth === 1 ? 12 : laterMonth - 1;
+      const prevYear = laterMonth === 1 ? laterYear - 1 : laterYear;
       remainingDays += this.getDaysInMonth(prevYear, prevMonth);
     }
 
     const years = Math.floor(totalMonths / 12);
     const months = totalMonths % 12;
+    const direction = isBackward ? -1 : 1;
+    const signedValue = (value: number): number => value === 0 ? 0 : value * direction;
 
-    return { years, months, days: remainingDays };
+    return { years: signedValue(years), months: signedValue(months), days: signedValue(remainingDays) };
   }
 
   private constrainParametersForContext(

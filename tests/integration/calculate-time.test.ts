@@ -90,6 +90,38 @@ describe("AI 时间计算工具", () => {
     expect(data.absoluteDays).toBeGreaterThan(0);
   });
 
+  it("diff 模式：反向日期的年月日分解保持方向一致", async () => {
+    runtime = createTestRuntime();
+    const seeded = await seedChapter(runtime, "测试章节。");
+    const workId = String(seeded.work.id);
+
+    const internalAi = runtime.ai as unknown as {
+      executeAgentTool: (
+        candidateWorkId: string,
+        toolCall: Record<string, unknown>,
+        maximumResultChars?: number,
+        roleplayCharacterId?: string | null,
+        allowedToolIds?: ReadonlySet<string>
+      ) => Promise<Record<string, unknown>>;
+    };
+
+    const execution = await internalAi.executeAgentTool(workId, buildToolCall("calculate_time", {
+      operation: "diff",
+      startYear: 2025,
+      startMonth: 6,
+      startDay: 15,
+      endYear: 2025,
+      endMonth: 6,
+      endDay: 10
+    }));
+
+    const result = execution.result as Record<string, unknown>;
+    const data = result.data as Record<string, unknown>;
+    expect(execution.status).toBe("completed");
+    expect(data.totalDays).toBe(-5);
+    expect(data.ymdBreakdown).toEqual({ years: 0, months: 0, days: -5 });
+  });
+
   it("diff 模式：处理闰年（2月有29天）", async () => {
     runtime = createTestRuntime();
     const seeded = await seedChapter(runtime, "测试章节。");
