@@ -976,8 +976,9 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .replace-dialog > form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: 100%; min-height: 0; }
 .replace-dialog-body { display: grid; min-height: 0; gap: 16px; padding: 20px 24px 6px; overflow-y: auto; }
 .replace-field { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
-.replace-field input, .replace-field textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 13px; line-height: 1.6; }
+.replace-field input, .replace-field textarea, .replace-field select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); color: var(--ink); font-size: 13px; line-height: 1.6; }
 .replace-field textarea { min-height: 96px; resize: vertical; }
+.replace-field select:disabled { cursor: not-allowed; opacity: .55; }
 .replace-scope-fieldset { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); }
 .replace-scope-fieldset legend { padding: 0 6px; color: var(--ink); font-size: 12px; font-weight: 650; }
 .replace-scope-fieldset legend, .replace-scope-fieldset > p { grid-column: 1 / -1; }
@@ -991,6 +992,7 @@ body.work-viewer-mode .character-editor-actions { display: none !important; }
 .replace-scope-option input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .replace-permission-note { margin: 0; color: var(--accent-dark); font-size: 10px; line-height: 1.5; }
 .replace-permission-note:empty { display: none; }
+.replace-range-note { margin: -8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .replace-dialog .primary-button:disabled { cursor: not-allowed; opacity: .42; }
 .search-results { display: grid; gap: 8px; max-height: min(52vh, 480px); overflow: auto; }
 .search-results-summary { margin: 0; padding: 2px 2px 5px; color: var(--muted); font-size: 10px; }

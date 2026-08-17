@@ -222,7 +222,8 @@ const settingSchema = z.object({
 const globalReplaceSchema = z.object({
   find: z.string().min(1).max(500),
   replacement: z.string().max(200_000),
-  scope: z.enum(["prose", "settings", "prose-and-settings"])
+  scope: z.enum(["prose", "settings", "prose-and-settings"]),
+  volumeId: identifier.nullable().optional()
 }).strict();
 
 const draftSchema = z.object({

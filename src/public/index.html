@@ -708,7 +708,7 @@
           <label>关键词<input id="search-query" name="query" type="search" maxlength="100" placeholder="搜索正文、设定、人物、时间线、关系、大纲、伏笔或 Agent 历史" required></label>
           <label>资料类型<select id="search-type" name="type">
             <option value="">全部资料</option>
-            <option value="chapter">章节</option>
+            <option value="chapter">正文章节</option>
             <option value="setting">设定</option>
             <option value="character">角色</option>
             <option value="race">种族</option>
@@ -738,6 +738,8 @@
         <div class="replace-dialog-body">
           <label class="replace-field">查找内容<input id="replace-find" name="find" type="text" maxlength="500" autocomplete="off" required placeholder="输入要查找的文字"></label>
           <label class="replace-field">替换为<textarea id="replace-with" name="replacement" maxlength="200000" rows="4" placeholder="输入替换后的文字；留空表示删除"></textarea></label>
+          <label class="replace-field">正文分卷<select id="replace-volume" name="volumeId" aria-describedby="replace-volume-description"><option value="">全部分卷（整部作品正文）</option></select></label>
+          <p id="replace-volume-description" class="replace-range-note">选择分卷后，只替换该分卷的章节正文；设定库不按分卷筛选。</p>
           <fieldset class="replace-scope-fieldset" aria-describedby="replace-scope-description">
             <legend>替换范围</legend>
             <p id="replace-scope-description">默认只替换章节正文内容。</p>
@@ -1177,6 +1179,6 @@
     <div id="auth-loading" class="auth-loading" role="status" aria-label="正在载入工作台"></div>
     <script id="vditorIconScript" src="/vendor/vditor/dist/js/icons/ant.js?v=3.11.2"></script>
     <script src="/vendor/vditor/dist/index.min.js?v=3.11.2"></script>
-    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2"></script>
+    <script type="module" src="/app.js?v=20260816-extended-thinking-effort-v1&feature=ai-tool-call-copy-feedback-v2&feature=ai-send-control-v2&feature=analysis-task-queue-refresh-v1&feature=character-gender-v1&feature=character-filter-state-v1&feature=relationship-canvas-scale-v1&feature=relationship-table-scroll-v1&feature=ai-session-id-copy-v2&feature=global-replace-volume-v1"></script>
   </body>
 </html>

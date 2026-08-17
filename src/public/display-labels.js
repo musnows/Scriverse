@@ -83,7 +83,7 @@ export function occurrenceRoleLabel(value) {
 
 export function searchResultTypeLabel(value) {
   return enumLabel({
-    chapter: "章节",
+    chapter: "正文章节",
     setting: "设定",
     character: "角色",
     race: "种族",

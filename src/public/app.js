@@ -52,7 +52,7 @@ import {
   timelineStatusLabel,
   characterGenderLabel,
   characterStateFieldLabel
-} from "/display-labels.js?v=20260816-character-gender-v1";
+} from "/display-labels.js?v=20260816-character-gender-v1&feature=global-replace-volume-v1";
 import { parsePageRoute, serializePageRoute } from "/page-route.js?v=20260812-reader-preview-v1";
 import {
   READING_PREFERENCES_STORAGE_KEY,
@@ -5813,10 +5813,27 @@ function syncGlobalReplaceScopeOptions() {
   const selected = options.find((option) => option.checked && !option.disabled) ?? options.find((option) => !option.disabled);
   options.forEach((option) => { option.checked = option === selected; });
   const scope = selected?.value ?? "";
+  const volumeSelect = $("#replace-volume");
+  const volumeEnabled = scope === "prose" || scope === "prose-and-settings";
+  volumeSelect.disabled = !volumeEnabled || !canEditProse();
+  $("#replace-volume-description").textContent = scope === "settings"
+    ? "当前选择了设定库，分卷筛选不会生效。"
+    : "选择分卷后，只替换该分卷的章节正文；设定库不按分卷筛选。";
   $("#replace-submit").disabled = !scope || !canGlobalReplaceScope(scope);
   $("#replace-permission-note").textContent = scope
     ? "替换完成后，命中的章节和设定会分别生成新的版本历史。"
     : "当前账户没有可写入的正文或设定库权限。";
+}
+
+function renderGlobalReplaceVolumeOptions() {
+  const select = $("#replace-volume");
+  const currentValue = select.value;
+  const volumes = Array.isArray(state.work?.volumes) ? state.work.volumes : [];
+  select.innerHTML = [
+    '<option value="">全部分卷（整部作品正文）</option>',
+    ...volumes.map((volume) => `<option value="${esc(volume.id)}">${esc(volume.title)}</option>`)
+  ].join("");
+  select.value = volumes.some((volume) => String(volume.id) === currentValue) ? currentValue : "";
 }
 
 function openGlobalReplaceDialog() {
@@ -5830,6 +5847,7 @@ function openGlobalReplaceDialog() {
   }
   if ($("#search-dialog").open) $("#search-dialog").close();
   $("#replace-form").reset();
+  renderGlobalReplaceVolumeOptions();
   syncGlobalReplaceScopeOptions();
   $("#replace-dialog").showModal();
   queueMicrotask(() => $("#replace-find").focus());
@@ -5917,6 +5935,7 @@ async function submitGlobalReplace(event) {
   const find = $("#replace-find").value;
   const replacement = $("#replace-with").value;
   const scope = $("#replace-form").querySelector('input[name="replaceScope"]:checked')?.value ?? "prose";
+  const volumeId = scope === "settings" ? null : ($("#replace-volume").value || null);
   if (!find.trim()) {
     toast("请输入要查找的内容", "error");
     $("#replace-find").focus();
@@ -5939,8 +5958,14 @@ async function submitGlobalReplace(event) {
     return;
   }
   const scopeLabel = globalReplaceScopeLabels[scope] ?? "正文";
+  const selectedVolume = volumeId
+    ? state.work.volumes.find((volume) => String(volume.id) === volumeId)
+    : null;
+  const targetLabel = selectedVolume
+    ? `${scopeLabel}（正文仅限“${selectedVolume.title}”分卷${scope === "prose-and-settings" ? "，设定库仍为全部设定库" : ""}）`
+    : scopeLabel;
   const replacementLabel = replacement ? `“${replacement}”` : "空内容";
-  const confirmed = await confirmToast(`将把《${state.work.title}》的${scopeLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
+  const confirmed = await confirmToast(`将把《${state.work.title}》的${targetLabel}中所有“${find}”替换为${replacementLabel}。每个命中对象都会生成新版本，确认继续吗？`, {
     title: "确认全局替换",
     confirmLabel: "确认替换"
   });
@@ -5965,7 +5990,7 @@ async function submitGlobalReplace(event) {
   try {
     const result = await api(`/api/works/${encodeURIComponent(workId)}/replace`, {
       method: "POST",
-      body: { find, replacement, scope },
+      body: { find, replacement, scope, volumeId },
       skipOptimisticVersion: true
     });
     $("#replace-dialog").close();
