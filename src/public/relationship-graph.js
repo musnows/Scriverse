@@ -303,6 +303,9 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_TARGET_FRAME_RATE = 30;
 export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60, 90, 120, 144, 165, 240]);
+export const GALAXY_MOTION_MODES = Object.freeze(["auto", "reduced", "off"]);
+export const GALAXY_REDUCED_MOTION_NODE_THRESHOLD = 80;
+export const GALAXY_REDUCED_MOTION_EDGE_THRESHOLD = 120;
 export const GALAXY_BASE_STAR_COUNT = 7200;
 export const GALAXY_EDGE_STAR_BOOST_RATIO = 1.1 * 1.1 - 1;
 export const GALAXY_MAX_CANVAS_PIXELS = 4_000_000;
@@ -318,6 +321,32 @@ export const GALAXY_LAYOUT_CONFIG = Object.freeze({
 export function normalizeGalaxyFrameRate(value) {
   const candidate = Number(value);
   return GALAXY_FRAME_RATE_OPTIONS.includes(candidate) ? candidate : GALAXY_TARGET_FRAME_RATE;
+}
+
+export function normalizeGalaxyMotionMode(value) {
+  return GALAXY_MOTION_MODES.includes(value) ? value : "auto";
+}
+
+export function getGalaxyMotionProfile(mode, nodeCount, edgeCount, prefersReducedMotion = false) {
+  const requestedMode = normalizeGalaxyMotionMode(mode);
+  const thresholdExceeded = Math.max(0, Number(nodeCount) || 0) > GALAXY_REDUCED_MOTION_NODE_THRESHOLD
+    || Math.max(0, Number(edgeCount) || 0) > GALAXY_REDUCED_MOTION_EDGE_THRESHOLD;
+  const reducedBySystem = requestedMode === "auto" && Boolean(prefersReducedMotion);
+  const reducedByThreshold = requestedMode === "auto" && thresholdExceeded;
+  const effectiveMode = requestedMode === "off"
+    ? "off"
+    : requestedMode === "reduced" || reducedBySystem || reducedByThreshold ? "reduced" : "full";
+  return {
+    requestedMode,
+    effectiveMode,
+    reducedBySystem,
+    reducedByThreshold,
+    autoRotation: effectiveMode === "full",
+    starfieldPhysics: effectiveMode === "full",
+    focusAnimation: effectiveMode !== "off",
+    cssMotion: effectiveMode !== "off",
+    maximumFrameRate: effectiveMode === "reduced" ? 24 : effectiveMode === "off" ? 0 : null
+  };
 }
 
 export function formatRelationshipLabel(edge, separator = " · ") {
@@ -2260,7 +2289,13 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   const stats = dialog.querySelector("#galaxy-stats");
   const detail = dialog.querySelector("#galaxy-detail");
   const shell = dialog.querySelector(".galaxy-shell");
-  const targetFrameRate = normalizeGalaxyFrameRate(options.frameRate);
+  const motionModeControl = dialog.querySelector("#galaxy-motion-mode");
+  const motionStatus = dialog.querySelector("#galaxy-motion-status");
+  const configuredFrameRate = normalizeGalaxyFrameRate(options.frameRate);
+  const reducedMotionMedia = window.matchMedia("(prefers-reduced-motion: reduce)");
+  let requestedMotionMode = normalizeGalaxyMotionMode(options.motionMode);
+  let motionProfile = getGalaxyMotionProfile(requestedMotionMode, graph.stats.nodeCount, graph.stats.edgeCount, reducedMotionMedia.matches);
+  let targetFrameRate = motionProfile.maximumFrameRate ?? configuredFrameRate;
   const seed = `${options.workId ?? "work"}|${graph.nodes.map((node) => node.id).join("|")}|${graph.edges.length}`;
   const layout = layoutGalaxy(graph, seed);
   const stars = createGalaxyStarfield(`${seed}|stars`);
@@ -2300,7 +2335,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   let cameraFocus = null;
   let draggedNode = null;
   let starPhysicsEnergy = 0;
-  let paused = false;
+  let rotationPaused = false;
   let starsVisible = true;
   let gridVisible = false;
   let destroyed = false;
@@ -2322,6 +2357,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   shell.dataset.starPhysicsEnergy = "0";
   shell.dataset.rotationSpeed = String(GALAXY_ROTATION_RADIANS_PER_MS);
   shell.dataset.targetFrameRate = String(targetFrameRate);
+  shell.dataset.motionNodeThreshold = String(GALAXY_REDUCED_MOTION_NODE_THRESHOLD);
+  shell.dataset.motionEdgeThreshold = String(GALAXY_REDUCED_MOTION_EDGE_THRESHOLD);
   shell.dataset.layoutMinimumRadius = String(GALAXY_LAYOUT_CONFIG.minimumRadius);
   shell.dataset.layoutRadialSpan = String(GALAXY_LAYOUT_CONFIG.radialSpan);
   shell.dataset.layoutDesiredEdgeLength = String(GALAXY_LAYOUT_CONFIG.desiredEdgeLength);
@@ -2559,7 +2596,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.dataset.renderedFrameCount = String(renderedFrameCount);
   };
 
-  const shouldAnimate = () => !paused || Boolean(cameraFocus) || Boolean(draggedNode) || starPhysicsEnergy > 0.01;
+  const shouldRotate = () => motionProfile.autoRotation && !rotationPaused;
+  const shouldAnimate = () => shouldRotate()
+    || Boolean(cameraFocus)
+    || (motionProfile.starfieldPhysics && (Boolean(draggedNode) || starPhysicsEnergy > 0.01));
 
   const renderFrame = (time) => {
     animationFrame = 0;
@@ -2585,8 +2625,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
         shell.classList.remove("is-focusing-node");
       }
     }
-    if (!paused && !cameraDrag) camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS;
-    if (draggedNode || starPhysicsEnergy > 0.01) {
+    if (shouldRotate() && !cameraDrag) camera.yaw += elapsed * GALAXY_ROTATION_RADIANS_PER_MS;
+    if (motionProfile.starfieldPhysics && (draggedNode || starPhysicsEnergy > 0.01)) {
       starPhysicsEnergy = stepGalaxyStarfieldPhysics(stars, draggedNode, { deltaMs: elapsed || 16.667 });
       shell.dataset.starPhysicsEnergy = starPhysicsEnergy.toFixed(3);
     }
@@ -2615,9 +2655,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
 
   const focusCameraOnNode = (node) => {
     const target = getGalaxyNodeFocusCamera(node, camera);
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     shell.dataset.focusedNodeId = node.id;
-    if (reducedMotion) {
+    if (!motionProfile.focusAnimation) {
       Object.assign(camera, target);
       drawScene();
       return;
@@ -2748,7 +2787,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
           dragged: false
         };
         draggedNode = node;
-        startAnimation();
+        if (motionProfile.starfieldPhysics) startAnimation();
         button.setPointerCapture(event.pointerId);
         button.classList.add("is-dragging");
         button.setAttribute("aria-grabbed", "true");
@@ -2829,17 +2868,77 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     drawScene();
   };
 
+  const resetStarfieldPhysics = () => {
+    for (const star of stars) {
+      star.x = star.originX;
+      star.z = star.originZ;
+      star.vx = 0;
+      star.vz = 0;
+    }
+    starPhysicsEnergy = 0;
+    shell.dataset.starPhysicsEnergy = "0";
+  };
+
   const updateRotationControl = () => {
-    shell.classList.toggle("is-paused", paused);
+    const rotationEnabled = motionProfile.autoRotation;
+    shell.classList.toggle("is-paused", !rotationEnabled || rotationPaused);
     const control = dialog.querySelector("#galaxy-rotation");
-    control.setAttribute("aria-pressed", String(paused));
-    control.textContent = paused ? "继续旋转" : "暂停旋转";
+    control.disabled = !rotationEnabled;
+    control.setAttribute("aria-pressed", String(!rotationEnabled || rotationPaused));
+    control.textContent = !rotationEnabled
+      ? motionProfile.effectiveMode === "off" ? "动效已关闭" : "旋转已关闭"
+      : rotationPaused ? "继续旋转" : "暂停旋转";
+  };
+
+  const updateMotionControls = () => {
+    const automaticallyReduced = motionProfile.reducedBySystem || motionProfile.reducedByThreshold;
+    motionModeControl.value = requestedMotionMode;
+    motionModeControl.dataset.effectiveMode = motionProfile.effectiveMode;
+    shell.dataset.motionRequestedMode = requestedMotionMode;
+    shell.dataset.motionMode = motionProfile.effectiveMode;
+    shell.dataset.motionAutoReduced = String(automaticallyReduced);
+    shell.classList.toggle("is-motion-reduced", motionProfile.effectiveMode !== "full");
+    shell.classList.toggle("is-motion-off", motionProfile.effectiveMode === "off");
+    motionStatus.value = motionProfile.effectiveMode === "off"
+      ? "全部动效已关闭"
+      : requestedMotionMode === "reduced"
+        ? "持续动效已减少"
+        : motionProfile.reducedByThreshold
+          ? "图谱较大，已自动减少"
+          : motionProfile.reducedBySystem
+            ? "跟随系统，已减少"
+            : "当前为完整动效";
+    motionStatus.title = `超过 ${GALAXY_REDUCED_MOTION_NODE_THRESHOLD} 个节点或 ${GALAXY_REDUCED_MOTION_EDGE_THRESHOLD} 条关系时自动减少动效`;
+    updateRotationControl();
+  };
+
+  const applyMotionMode = (mode, { persist = true, redraw = true } = {}) => {
+    requestedMotionMode = normalizeGalaxyMotionMode(mode);
+    motionProfile = getGalaxyMotionProfile(
+      requestedMotionMode,
+      graph.stats.nodeCount,
+      graph.stats.edgeCount,
+      reducedMotionMedia.matches
+    );
+    targetFrameRate = motionProfile.maximumFrameRate ?? configuredFrameRate;
+    shell.dataset.targetFrameRate = String(targetFrameRate);
+    if (!motionProfile.starfieldPhysics) resetStarfieldPhysics();
+    if (!motionProfile.focusAnimation && cameraFocus) {
+      Object.assign(camera, cameraFocus.to);
+      cancelCameraFocus();
+    }
+    if (motionProfile.autoRotation) rotationPaused = false;
+    updateMotionControls();
+    if (redraw) drawScene();
+    if (shouldAnimate()) startAnimation();
+    else stopAnimation();
+    if (persist) options.onMotionModeChange?.(requestedMotionMode);
   };
 
   const open = () => {
     if (destroyed) return;
     if (!dialog.open) dialog.showModal();
-    paused = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    rotationPaused = false;
     starsVisible = true;
     gridVisible = false;
     background.classList.remove("hidden-stars");
@@ -2852,6 +2951,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.dataset.resourceState = "active";
     stats.value = `${graph.stats.nodeCount} 个节点 / ${graph.stats.edgeCount} 条关系`;
     renderNodes();
+    applyMotionMode(requestedMotionMode, { persist: false, redraw: false });
     drawScene();
     if (shouldAnimate()) startAnimation();
     dialog.querySelector("#galaxy-close").focus();
@@ -2866,6 +2966,10 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   listen(dialog.querySelector("#galaxy-reset"), "click", reset);
   listen(dialog.querySelector("#galaxy-zoom-in"), "click", () => zoom(1.18));
   listen(dialog.querySelector("#galaxy-zoom-out"), "click", () => zoom(1 / 1.18));
+  listen(motionModeControl, "change", (event) => applyMotionMode(event.currentTarget.value));
+  listen(reducedMotionMedia, "change", () => {
+    if (requestedMotionMode === "auto") applyMotionMode(requestedMotionMode, { persist: false });
+  });
   listen(dialog.querySelector("#galaxy-stars"), "click", (event) => {
     starsVisible = !starsVisible;
     background.classList.toggle("hidden-stars", !starsVisible);
@@ -2881,7 +2985,8 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     drawScene();
   });
   listen(dialog.querySelector("#galaxy-rotation"), "click", () => {
-    paused = !paused;
+    if (!motionProfile.autoRotation) return;
+    rotationPaused = !rotationPaused;
     updateRotationControl();
     drawScene();
     if (shouldAnimate()) startAnimation();
@@ -2973,7 +3078,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     backdrop = null;
     shell.dataset.resourceState = "released";
     shell.dataset.starCount = "0";
-    shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused", "is-focusing-node");
+    shell.classList.remove("is-three-dimensional", "is-rotating-camera", "is-paused", "is-focusing-node", "is-motion-reduced", "is-motion-off");
   };
 
   listen(dialog, "close", () => {

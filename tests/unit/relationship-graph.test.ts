@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 // @ts-expect-error 浏览器端模块没有单独的类型声明，测试仅调用纯函数导出。
-import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipCanvasPixelRatio, getRelationshipEdgeGeometry, getRelationshipGraphRenderProfile, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
+import { applyRelationshipDragInfluence, assignBalancedObsidianNodeAppearances, assignRelationshipEdgeCurves, buildRelationshipGraph, createGalaxyStarfield, formatRelationshipDetailLabel, formatRelationshipLabel, formatRelationshipStatusNote, GALAXY_BASE_STAR_COUNT, GALAXY_EDGE_STAR_BOOST_RATIO, GALAXY_FRAME_RATE_OPTIONS, GALAXY_LAYOUT_CONFIG, GALAXY_MOTION_MODES, GALAXY_NODE_SIZE_FULL_SCALE_DEGREE, GALAXY_NODE_SIZE_GROWTH_THRESHOLD, GALAXY_REDUCED_MOTION_EDGE_THRESHOLD, GALAXY_REDUCED_MOTION_NODE_THRESHOLD, GALAXY_TARGET_FRAME_RATE, getGalaxyCanvasPixelRatio, getGalaxyMotionProfile, getGalaxyNodeAppearance, getGalaxyNodeDegreeScale, getGalaxyNodeDepthOpacity, getGalaxyNodeFocusCamera, getGalaxyNodeLabelOffset, getGalaxyNodeSize, getObsidianNodeAppearance, getRelationshipCanvasPixelRatio, getRelationshipEdgeGeometry, getRelationshipGraphRenderProfile, getRelationshipNetworkInitialScale, getRelationshipNodeFocusView, getRelationshipNodeLabelFontSize, getRelationshipSearchActiveIndex, groupRelationshipDetailsByCharacterName, layoutGalaxy, layoutRelationshipNetwork, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, OBSIDIAN_NODE_PALETTE, projectGalaxyPoint, projectGalaxyPointInto, resolveRelationshipNodeGroup, searchRelationshipNodes, shouldShowRelationshipNodeLabel, stepGalaxyStarfieldPhysics, stepRelationshipDragPhysics, stepRelationshipInertiaCoast } from "../../src/public/relationship-graph.js";
 
 describe("人物关系图数据与布局", () => {
   it("关系网达到当前规模后切换为 Canvas 连线并限制像素密度", () => {
@@ -9,6 +9,36 @@ describe("人物关系图数据与布局", () => {
     expect(getRelationshipGraphRenderProfile(223, 289)).toEqual({ dense: true, edgeMode: "canvas" });
     expect(getRelationshipCanvasPixelRatio(2, 1200, 640)).toBe(1.25);
     expect(getRelationshipCanvasPixelRatio(2, 1600, 900)).toBeCloseTo(Math.sqrt(2_000_000 / (1600 * 900)));
+  });
+
+  it("银河图超过性能阈值后自动减少动效，并允许彻底关闭", () => {
+    expect(GALAXY_MOTION_MODES).toEqual(["auto", "reduced", "off"]);
+    expect(GALAXY_REDUCED_MOTION_NODE_THRESHOLD).toBe(80);
+    expect(GALAXY_REDUCED_MOTION_EDGE_THRESHOLD).toBe(120);
+    expect(normalizeGalaxyMotionMode("invalid")).toBe("auto");
+    expect(getGalaxyMotionProfile("auto", 80, 120)).toMatchObject({
+      effectiveMode: "full",
+      autoRotation: true,
+      starfieldPhysics: true,
+      focusAnimation: true
+    });
+    expect(getGalaxyMotionProfile("auto", 98, 121)).toMatchObject({
+      effectiveMode: "reduced",
+      reducedByThreshold: true,
+      autoRotation: false,
+      starfieldPhysics: false,
+      focusAnimation: true,
+      maximumFrameRate: 24
+    });
+    expect(getGalaxyMotionProfile("auto", 20, 20, true)).toMatchObject({ effectiveMode: "reduced", reducedBySystem: true });
+    expect(getGalaxyMotionProfile("off", 20, 20)).toMatchObject({
+      effectiveMode: "off",
+      autoRotation: false,
+      starfieldPhysics: false,
+      focusAnimation: false,
+      cssMotion: false,
+      maximumFrameRate: 0
+    });
   });
 
   it("不渲染已拒绝关系，但保留待审和确认关系", () => {

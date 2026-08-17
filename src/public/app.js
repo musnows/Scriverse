@@ -1,4 +1,4 @@
-import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1";
+import { buildRelationshipGraph, createGalaxyRenderer, normalizeGalaxyFrameRate, normalizeGalaxyMotionMode, renderRelationshipMindMap } from "/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v1";
 import { collapseExcessBlankLines, formatDateTime, normalizeParagraphSpacing } from "/text-formatting.js?v=20260713-saved-at-seconds";
 import { renderMarkdown } from "/markdown.js?v=20260731-no-external-images-v1";
 import { findAiMention, listAiMentionOptions, mergeAiReferenceScope, userMessageMentionNames } from "/ai-mentions.js?v=20260811-user-message-mentions-v1";
@@ -122,6 +122,21 @@ const defaultPageSizes = Object.freeze({
   analysisTasks: 30,
   fileVersions: 30
 });
+const GALAXY_MOTION_MODE_STORAGE_KEY = "scriverse.galaxy-motion-mode.v1";
+
+function storedGalaxyMotionMode() {
+  try {
+    return normalizeGalaxyMotionMode(localStorage.getItem(GALAXY_MOTION_MODE_STORAGE_KEY));
+  } catch {
+    return "auto";
+  }
+}
+
+function persistGalaxyMotionMode(mode) {
+  const normalized = normalizeGalaxyMotionMode(mode);
+  try { localStorage.setItem(GALAXY_MOTION_MODE_STORAGE_KEY, normalized); } catch { /* 浏览器禁用存储时仅保留本次选择 */ }
+  return normalized;
+}
 
 function normalizePageSize(value, fallback = 30) {
   const candidate = Number(value);
@@ -9034,6 +9049,8 @@ async function renderRelationships(page = moduleListPages.relationships) {
     const galaxy = createGalaxyRenderer($("#relationship-galaxy-dialog"), graph, {
       workId: state.work.id,
       frameRate: state.uiSettings.galaxyFrameRate,
+      motionMode: storedGalaxyMotionMode(),
+      onMotionModeChange: persistGalaxyMotionMode,
       onClose: () => {
         if (state.galaxy === galaxy) state.galaxy = null;
       }
