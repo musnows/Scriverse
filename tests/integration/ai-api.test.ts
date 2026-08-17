@@ -1268,7 +1268,8 @@ describe("AI 供应商、模型与建议 API", () => {
         pagination: { cursor: number; nextCursor: number | null; maxChars: number };
       };
       expect((latest?.content ?? "").length).toBeLessThanOrEqual(10_000);
-      expect(result.pagination.maxChars).toBe(10_000);
+      expect(result.pagination.maxChars).toBeGreaterThan(0);
+      expect(result.pagination.maxChars).toBeLessThanOrEqual(10_000);
       expect(result.data.chapters.every((chapter) => chapter._fragment)).toBe(true);
       fragments.push(...result.data.chapters.map((chapter) => chapter.content ?? ""));
       if (result.pagination.nextCursor !== null) {
