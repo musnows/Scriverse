@@ -587,7 +587,7 @@ function thinkingParameters(provider: Row, model: Row): Record<string, unknown> 
   return { thinking: { type: thinkingEnabled ? "enabled" : "disabled" }, ...effortParameters };
 }
 
-const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"] as const;
+const CONFIGURED_AGENT_TOOL_IDS = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"] as const;
 const AGENT_TOOL_IDS = [...CONFIGURED_AGENT_TOOL_IDS, "recall_self", "recall_relationship"] as const;
 type AgentToolId = (typeof AGENT_TOOL_IDS)[number];
 type ConfiguredAgentToolId = (typeof CONFIGURED_AGENT_TOOL_IDS)[number];
@@ -597,7 +597,8 @@ const AGENT_TOOL_READ_MODULES: Record<Exclude<ConfiguredAgentToolId, "search_sto
   grep: ["prose"],
   read_character_sections: ["characters"],
   search_drafts: ["drafts"],
-  image: ["settings"]
+  image: ["settings"],
+  calculate_time: []
 };
 const IMAGE_TOOL_READ_MODULES: readonly WorkPermissionModule[] = [
   "settings",
@@ -958,6 +959,18 @@ const recallRelationshipArguments = z.object({
   characters: z.array(z.string().trim().min(1).max(200)).max(20).default([]),
   cursor: agentToolCursor
 }).strict();
+const calculateTimeArguments = z.object({
+  operation: z.enum(["diff", "add"]),
+  startYear: z.number().int().min(-9999).max(9999),
+  startMonth: z.number().int().min(1).max(12),
+  startDay: z.number().int().min(1).max(31),
+  endYear: z.number().int().min(-9999).max(9999).optional(),
+  endMonth: z.number().int().min(1).max(12).optional(),
+  endDay: z.number().int().min(1).max(31).optional(),
+  addYears: z.number().int().min(-9999).max(9999).optional(),
+  addMonths: z.number().int().min(-9999).max(9999).optional(),
+  addDays: z.number().int().min(-999999).max(999999).optional()
+}).strict();
 const agentToolCursorParameter = {
   type: "integer",
   minimum: 0,
@@ -1037,6 +1050,14 @@ const AGENT_TOOL_DEFINITIONS: Record<AgentToolId, Record<string, unknown>> = {
       name: "recall_relationship",
       description: "查询当前扮演角色的人物关系，并返回关系双方的权威 gender：male 表示男/雄性，female 表示女/雌性，none 表示无性别，unknown 表示未知；gender=unknown 时禁止根据关系或剧情自行推断。未传入 characters 或传入空数组时，只返回与当前角色有关系的其他角色列表；传入一个或多个角色姓名、别名或角色 ID 时，返回当前角色与这些角色之间的关系详情。只能返回当前角色参与的关系，不能查询两个其他角色之间的关系，也不会返回对方角色卡。已拒绝的关系候选不会作为记忆返回。",
       parameters: { type: "object", properties: { characters: { type: "array", items: { type: "string", minLength: 1, maxLength: 200 }, maxItems: 20, default: [], description: "可选的对方角色姓名、别名或角色 ID 列表；留空时只列出有关系的角色。" }, cursor: agentToolCursorParameter }, additionalProperties: false }
+    }
+  },
+  calculate_time: {
+    type: "function",
+    function: {
+      name: "calculate_time",
+      description: "纯计算工具，用于计算两个日期之间的天数差（diff 模式），或从一个日期推算另一个日期（add 模式）。所有计算仅使用 JavaScript Date 对象，不涉及任何外部资源、数据库或文件系统访问。diff 模式需要 startYear/startMonth/startDay 和 endYear/endMonth/endDay；add 模式需要 startYear/startMonth/startDay，以及可选的 addYears/addMonths/addDays。返回结果包含总天数差或推算后的日期，以及中间经过的闰年列表。",
+      parameters: { type: "object", properties: { operation: { type: "string", enum: ["diff", "add"] }, startYear: { type: "integer", minimum: -9999, maximum: 9999 }, startMonth: { type: "integer", minimum: 1, maximum: 12 }, startDay: { type: "integer", minimum: 1, maximum: 31 }, endYear: { type: "integer", minimum: -9999, maximum: 9999 }, endMonth: { type: "integer", minimum: 1, maximum: 12 }, endDay: { type: "integer", minimum: 1, maximum: 31 }, addYears: { type: "integer", minimum: -9999, maximum: 9999 }, addMonths: { type: "integer", minimum: -9999, maximum: 9999 }, addDays: { type: "integer", minimum: -999999, maximum: 999999 } }, required: ["operation", "startYear", "startMonth", "startDay"], additionalProperties: false }
     }
   }
 };
@@ -5514,6 +5535,7 @@ export class AiManager {
       return Object.values(AGENT_ENTITY_CATEGORY_MODULES).some((module) => canReadWorkModule(permissions, module));
     }
     if (toolId === "image") return IMAGE_TOOL_READ_MODULES.some((module) => canReadWorkModule(permissions, module));
+    if (toolId === "calculate_time") return true;
     return AGENT_TOOL_READ_MODULES[toolId].every((module) => canReadWorkModule(permissions, module));
   }
 
@@ -5674,6 +5696,7 @@ export class AiManager {
       : name === "image" ? imageArguments
       : name === "recall_self" ? recallSelfArguments
       : name === "recall_relationship" ? recallRelationshipArguments
+      : name === "calculate_time" ? calculateTimeArguments
       : null;
     const toolId = AGENT_TOOL_IDS.includes(name as AgentToolId) ? name as AgentToolId : null;
     const enabledTools = allowedToolIds ?? new Set((this.store.getWorkAiSettings(workId).agentTools as unknown[])
@@ -6146,7 +6169,218 @@ export class AiManager {
         result
       };
     }
+    if (name === "calculate_time") {
+      const parsed = calculateTimeArguments.safeParse(suppliedArguments);
+      if (!parsed.success) {
+        const details = parsed.error.issues.map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`).join("; ");
+        return {
+          id: toolCall.id,
+          name,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "failed",
+          result: { ok: false, error: { code: "TOOL_ARGUMENTS_INVALID", message: `Invalid arguments for calculate_time: ${details}` } }
+        };
+      }
+      const args = parsed.data;
+      try {
+        return this.executeCalculateTime(toolCall, calledAt, args);
+      } catch (error) {
+        const appError = error instanceof AppError ? error : null;
+        return {
+          id: toolCall.id,
+          name,
+          calledAt,
+          arguments: suppliedArguments,
+          status: "failed",
+          result: { ok: false, error: { code: appError?.code ?? "CALCULATE_TIME_FAILED", message: appError?.message ?? "Time calculation failed." } }
+        };
+      }
+    }
     throw new Error(`Unhandled agent tool: ${name}`);
+  }
+
+  private executeCalculateTime(
+    toolCall: CompletionToolCall,
+    calledAt: string,
+    args: z.infer<typeof calculateTimeArguments>
+  ): AgentToolCallResult {
+    const operation = args.operation;
+    const startYear = args.startYear;
+    const startMonth = args.startMonth;
+    const startDay = args.startDay;
+
+    // 验证起始日期有效性
+    this.validateDate(startYear, startMonth, startDay);
+
+    if (operation === "diff") {
+      const endYear = args.endYear ?? startYear;
+      const endMonth = args.endMonth ?? startMonth;
+      const endDay = args.endDay ?? startDay;
+
+      // 验证结束日期有效性
+      this.validateDate(endYear, endMonth, endDay);
+
+      const startDate = new Date(Date.UTC(startYear, startMonth - 1, startDay));
+      const endDate = new Date(Date.UTC(endYear, endMonth - 1, endDay));
+
+      const diffMs = endDate.getTime() - startDate.getTime();
+      const totalDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+      // 计算中间经过的闰年
+      const leapYears = this.getLeapYearsInRange(
+        Math.min(startYear, endYear),
+        Math.max(startYear, endYear)
+      );
+
+      // 计算精确的年/月/日差值
+      const { years, months, days } = this.calculateYMDDiff(startDate, endDate);
+
+      return {
+        id: toolCall.id,
+        name: toolCall.function.name,
+        calledAt,
+        arguments: { operation, startYear, startMonth, startDay, endYear, endMonth, endDay },
+        status: "completed",
+        result: {
+          ok: true,
+          data: {
+            operation: "diff",
+            startDate: `${startYear}年${startMonth}月${startDay}日`,
+            endDate: `${endYear}年${endMonth}月${endDay}日`,
+            totalDays,
+            direction: totalDays >= 0 ? "forward" : "backward",
+            absoluteDays: Math.abs(totalDays),
+            ymdBreakdown: {
+              years,
+              months,
+              days
+            },
+            leapYears: leapYears.length > 0 ? leapYears : undefined,
+            note: totalDays === 0 ? "两个日期相同" : `相差 ${Math.abs(totalDays)} 天`
+          }
+        }
+      };
+    }
+
+    // add 模式：从起始日期推算未来/过去日期
+    const addYears = args.addYears ?? 0;
+    const addMonths = args.addMonths ?? 0;
+    const addDaysVal = args.addDays ?? 0;
+
+    // 验证结果日期不会超出范围
+    const resultYear = startYear + addYears;
+    if (resultYear < -9999 || resultYear > 9999) {
+      throw new AppError(400, "DATE_RANGE_EXCEEDED", `推算结果年份 ${resultYear} 超出允许范围 [-9999, 9999]`);
+    }
+
+    // 使用 JavaScript Date 进行日期推算，手动处理月末边界（如 1月31日 + 1个月 = 2月28/29日）
+    // 先计算目标年月，再将日期截断到该月的最大天数
+    let rYear = startYear + addYears;
+    let rMonth = startMonth + addMonths;
+    // 处理月份进位/借位（支持负数）
+    if (rMonth > 0) {
+      rYear += Math.floor((rMonth - 1) / 12);
+      rMonth = ((rMonth - 1) % 12) + 1;
+    } else {
+      rYear -= Math.floor((-rMonth) / 12);
+      rMonth = 12 - ((-rMonth - 1) % 12);
+    }
+    // 目标月份的最大天数（用于月末边界截断）
+    const maxDayInTargetMonth = this.getDaysInMonth(rYear, rMonth);
+    // 将起始日期截断到目标月份的最大天数（处理月末边界）
+    let rDay = Math.min(startDay, maxDayInTargetMonth);
+    // 再加上 addDays（可能再次溢出，需要二次截断）
+    rDay += addDaysVal;
+    // 如果加完 days 后超出目标月份，截断到最大天数（不跨月）；同时保证至少为 1
+    rDay = Math.max(1, Math.min(rDay, maxDayInTargetMonth));
+
+    // 验证结果日期有效性
+    if (rYear < -9999 || rYear > 9999) {
+      throw new AppError(400, "DATE_RANGE_EXCEEDED", `推算结果年份 ${rYear} 超出允许范围 [-9999, 9999]`);
+    }
+
+    return {
+      id: toolCall.id,
+      name: toolCall.function.name,
+      calledAt,
+      arguments: { operation, startYear, startMonth, startDay, addYears, addMonths, addDays: addDaysVal },
+      status: "completed",
+      result: {
+        ok: true,
+        data: {
+          operation: "add",
+          startDate: `${startYear}年${startMonth}月${startDay}日`,
+          resultDate: `${rYear}年${rMonth}月${rDay}日`,
+          added: { years: addYears, months: addMonths, days: addDaysVal },
+          isLeapYear: this.isLeapYear(rYear),
+          note: `从 ${startYear}年${startMonth}月${startDay}日 推算 ${addYears > 0 ? `+${addYears}` : addYears < 0 ? `${addYears}` : "无"}年 ${addMonths > 0 ? `+${addMonths}` : addMonths < 0 ? `${addMonths}` : "无"}月 ${addDaysVal > 0 ? `+${addDaysVal}` : addDaysVal < 0 ? `${addDaysVal}` : "无"}天`
+        }
+      }
+    };
+  }
+
+  /** 验证日期是否有效。 */
+  private validateDate(year: number, month: number, day: number): void {
+    if (month < 1 || month > 12) {
+      throw new AppError(400, "INVALID_DATE", `月份 ${month} 不在 [1, 12] 范围内`);
+    }
+    const daysInMonth = this.getDaysInMonth(year, month);
+    if (day < 1 || day > daysInMonth) {
+      throw new AppError(400, "INVALID_DATE", `${year}年${month}月只有 ${daysInMonth} 天，日期 ${day} 无效`);
+    }
+  }
+
+  /** 获取指定年月有多少天。 */
+  private getDaysInMonth(year: number, month: number): number {
+    // Date.UTC(year, month, 0) 会返回上个月最后一天
+    return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  /** 判断是否为闰年。 */
+  private isLeapYear(year: number): boolean {
+    return (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
+  }
+
+  /** 获取指定范围内的所有闰年。 */
+  private getLeapYearsInRange(startYear: number, endYear: number): number[] {
+    const leaps: number[] = [];
+    // 从 startYear 开始找到第一个 >= startYear 的闰年
+    let year = startYear;
+    while (year <= endYear) {
+      if (this.isLeapYear(year)) {
+        leaps.push(year);
+      }
+      year += 1;
+    }
+    return leaps;
+  }
+
+  /** 计算两个日期之间的年/月/日差值（考虑日历规则）。 */
+  private calculateYMDDiff(startDate: Date, endDate: Date): { years: number; months: number; days: number } {
+    const startYear = startDate.getUTCFullYear();
+    const startMonth = startDate.getUTCMonth() + 1;
+    const startDay = startDate.getUTCDate();
+
+    let endYear = endDate.getUTCFullYear();
+    let endMonth = endDate.getUTCMonth() + 1;
+    const endDay = endDate.getUTCDate();
+
+    let totalMonths = (endYear - startYear) * 12 + (endMonth - startMonth);
+    let remainingDays = endDay - startDay;
+
+    if (remainingDays < 0) {
+      totalMonths -= 1;
+      // 上个月的最后一天
+      const prevMonth = endMonth === 1 ? 12 : endMonth - 1;
+      const prevYear = endMonth === 1 ? endYear - 1 : endYear;
+      remainingDays += this.getDaysInMonth(prevYear, prevMonth);
+    }
+
+    const years = Math.floor(totalMonths / 12);
+    const months = totalMonths % 12;
+
+    return { years, months, days: remainingDays };
   }
 
   private constrainParametersForContext(

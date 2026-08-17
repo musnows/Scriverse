@@ -990,7 +990,7 @@ describe("AI 供应商、模型与建议 API", () => {
       if (String(input).endsWith("/models")) return new Response(JSON.stringify({ data: [{ id: "mock-novel-model" }] }), { status: 200 });
       completionCount += 1;
       const body = JSON.parse(String(init?.body)) as { tools?: Array<{ function?: { name?: string } }>; messages: Array<{ role: string; content?: string }> };
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image", "calculate_time"]);
       if (completionCount === 1) {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: "tool-call-1", type: "function", function: { name: "story_index", arguments: "{\"limit\":1}" } }] } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }

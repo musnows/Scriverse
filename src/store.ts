@@ -83,7 +83,8 @@ export const WORK_AGENT_TOOL_IDS = [
   "search_story_entities",
   "read_character_sections",
   "search_drafts",
-  "image"
+  "image",
+  "calculate_time"
 ] as const;
 export type WorkAgentToolId = (typeof WORK_AGENT_TOOL_IDS)[number];
 const DEFAULT_WORK_AGENT_TOOLS: WorkAgentToolId[] = [...WORK_AGENT_TOOL_IDS];
