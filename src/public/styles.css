@@ -4176,7 +4176,7 @@ body { font-size: var(--ui-font-size); }
   scrollbar-gutter: stable;
 }
 .reader-viewport:focus { outline: none; }
-.reader-viewport:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--reader-accent) 55%, transparent); }
+.reader-viewport:focus-visible { box-shadow: none; }
 .reader-document {
   box-sizing: border-box;
   width: min(820px, calc(100% - 32px));
