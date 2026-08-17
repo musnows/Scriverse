@@ -2411,16 +2411,18 @@ function renderMessageCardActions(message) {
     message.append(actions);
   }
   actions.replaceChildren();
-  if (Object.hasOwn(message.dataset, "rawMarkdown")) {
+  const hasCopyValue = Object.hasOwn(message.dataset, "rawMarkdown") || Object.hasOwn(message.dataset, "copyText");
+  if (hasCopyValue) {
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "message-copy-button";
-    copy.setAttribute("aria-label", "复制 AI 原始 Markdown");
+    const isUserMessage = message.classList.contains("user-message");
+    copy.setAttribute("aria-label", isUserMessage ? "复制用户指令" : "复制 AI 回复");
     copy.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>复制</span>';
     const copyLabel = copy.querySelector("span");
     copy.addEventListener("click", async () => {
       try {
-        await copyAiRawMarkdown(message.dataset.rawMarkdown);
+        await copyAiRawMarkdown(message.dataset.rawMarkdown ?? message.dataset.copyText ?? "");
         copyLabel.textContent = "已复制";
         window.setTimeout(() => { copyLabel.textContent = "复制"; }, 1200);
       } catch (error) {
@@ -2467,6 +2469,11 @@ function renderMessageCardActions(message) {
 
 function attachAssistantCopyAction(message, rawMarkdown) {
   message.dataset.rawMarkdown = String(rawMarkdown ?? "");
+  renderMessageCardActions(message);
+}
+
+function attachUserCopyAction(message, text) {
+  message.dataset.copyText = String(text ?? "");
   renderMessageCardActions(message);
 }
 
@@ -15187,6 +15194,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   if (role === "assistant") {
     renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
+  if (role === "user") attachUserCopyAction(message, text);
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
     const selectedModel = state.models.find((model) => model.id === selectedModelId) ?? state.models[0];
