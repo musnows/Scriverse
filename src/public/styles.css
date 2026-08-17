@@ -3672,7 +3672,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .brand-block .brand-mark { width: 30px; height: 30px; }
   .brand-block strong { font-size: 14px; }
   .brand-block small { display: none; }
-  .mobile-module-tab { position: fixed; z-index: 38; top: 132px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
+  .mobile-module-tab { position: fixed; z-index: 38; top: 124px; right: 0; display: grid; width: 34px; height: 42px; padding: 0; place-items: center; border: 1px solid var(--line); border-right: 0; border-radius: 5px 0 0 5px; background: var(--surface-soft); color: var(--accent-dark); font-size: 10px; writing-mode: vertical-rl; }
   .app-shell.shelf-mode .mobile-module-tab { display: none; }
   .mobile-panel-backdrop { position: fixed; z-index: 36; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: rgba(20, 17, 14, .28); }
   .app-shell:not(.shelf-mode):not(.left-panel-collapsed) .mobile-panel-backdrop { display: block; }
