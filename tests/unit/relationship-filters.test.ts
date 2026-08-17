@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterRelationships } from "../../src/public/relationship-filters.js";
+import { filterRelationships, sortCharacterRelationships } from "../../src/public/relationship-filters.js";
 
 describe("relationship filters", () => {
   const relationships = [
@@ -17,5 +17,17 @@ describe("relationship filters", () => {
 
   it("returns all relationships when no filter is selected", () => {
     expect(filterRelationships(relationships)).toEqual(relationships);
+  });
+
+  it("groups the same other character before applying the stable detail order", () => {
+    const characterRelationships = [
+      { id: "r1", fromCharacterId: "self", toCharacterId: "b", confidence: 1, createdAt: "2026-01-01T00:00:00Z" },
+      { id: "r2", fromCharacterId: "self", toCharacterId: "a", confidence: 0.1, createdAt: "2026-01-03T00:00:00Z" },
+      { id: "r3", fromCharacterId: "c", toCharacterId: "self", confidence: 0.9, createdAt: "2026-01-02T00:00:00Z" },
+      { id: "r4", fromCharacterId: "self", toCharacterId: "b", confidence: 0.9, createdAt: "2026-01-02T00:00:00Z" }
+    ];
+
+    expect(sortCharacterRelationships(characterRelationships, "self").map((item) => item.id)).toEqual(["r2", "r1", "r4", "r3"]);
+    expect(characterRelationships.map((item) => item.id)).toEqual(["r1", "r2", "r3", "r4"]);
   });
 });
