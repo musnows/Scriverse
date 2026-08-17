@@ -5209,14 +5209,16 @@ export class AiManager {
     );
     const toolGuidance = enabledToolIds.includes("recall_self") || enabledToolIds.includes("recall_relationship")
       ? [
-          `当前可用的内部记忆能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
+          `当前可用的内部能力是：${enabledToolIds.join("、")}。不要向用户提及工具、调用过程、资料库或检索结果。`,
+          ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当回应涉及角色自身的身份、经历、所见所闻或记忆，而角色卡与对话历史不足以确定时，使用 recall_self 回忆；它不能指定或查询其他角色。",
           ...(enabledToolIds.includes("recall_relationship") ? ["当回应涉及当前角色与其他角色的关系、关系类型、状态或相处经历，而角色卡与对话历史不足以确定时，使用 recall_relationship；先不传 characters 获取有关系的角色列表，再传入 characters 数组获取一个或多个指定角色的关系详情。它只能查询当前角色参与的关系，不能查询两个其他角色之间的关系。"] : []),
           "把返回内容自然地当作角色自己的记忆、认知或感受来表达。没有返回的信息就以符合角色的方式表现为不知道、没见过、记不清或不确定，不得补用全知信息。"
         ].join("\n")
       : enabledToolIds.length > 0
       ? [
-          `当前可用作品查询工具：${enabledToolIds.join("、")}。`,
+          `当前可用作品查询和计算工具：${enabledToolIds.join("、")}。`,
+          ...(enabledToolIds.includes("calculate_time") ? ["涉及日期差值或从日期推算目标日期时，使用 calculate_time；不要凭记忆估算日期。"] : []),
           "当作者询问当前作品、项目、章节、情节、人物、关系、世界观或设定，而预加载上下文为空或不足时，必须先调用工具主动查询；不得直接声称没有上下文，也不得先要求作者补充本系统已经能够查询的信息。",
           "整体介绍、作品基本信息、目录或章节定位优先调用 story_index；按关键字定位正文段落时调用 grep；已知章节 ID 且需要原文事实或精确措辞时调用 read_chapters；查找设定、人物、组织、时间线、关系、大纲或伏笔时调用 search_story_entities（可传入短实体名、拼音或关键词，勿用自然语言整句）；人物匹配结果包含 sectionId 且需要背景故事、能力或经历原文时调用 read_character_sections；作者询问尚未定稿的想法、备选方向或明确提到想法时调用 search_drafts。想法可能永远不会进入正文或设定，必须明确标注为未确认想法，不得把它当作故事事实。工具结果上限 10000 字符；pagination.nextCursor 非空时，以其作为 cursor 并保持其他参数不变续读，不得假定后续不存在。",
           "根据问题选择最少且必要的工具。工具结果仍不足时才说明未知，并明确已经查询过什么；不要重复无效调用。"
@@ -5506,6 +5508,7 @@ export class AiManager {
       if (canReadWorkModule(permissions, "relationships") && (!requested || requested.has("recall_relationship"))) {
         roleplayTools.push("recall_relationship");
       }
+      roleplayTools.push("calculate_time");
       return roleplayTools;
     }
     const sourceTools = conversationId && taskType === "chat"
@@ -5706,7 +5709,8 @@ export class AiManager {
       ? toolId as ConfiguredAgentToolId
       : null;
     const toolAvailable = roleplayCharacterId
-      ? (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
+      ? (toolId === "calculate_time" && enabledTools.has(toolId))
+        || (toolId === "recall_self" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters"))
         || (toolId === "recall_relationship" && enabledTools.has(toolId) && canReadWorkModule(permissions, "characters") && canReadWorkModule(permissions, "relationships"))
       : Boolean(configuredToolId && enabledTools.has(configuredToolId) && this.canReadWithAgentTool(permissions, configuredToolId));
     if (!schema || !toolId || !toolAvailable) {

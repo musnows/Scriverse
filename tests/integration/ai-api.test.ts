@@ -1744,16 +1744,18 @@ describe("AI 供应商、模型与建议 API", () => {
       expect(systemPrompt).not.toContain("<work_system_prompt>");
       expect(systemPrompt).not.toContain("<extra_system_prompt>");
       expect(systemPrompt).not.toContain("<current_time>");
+      expect(systemPrompt).toContain("使用 calculate_time");
       expect(JSON.stringify(body.messages)).toContain("<scene_context>");
       expect(JSON.stringify(body.messages)).toContain("<user_message>");
       expect(JSON.stringify(body.messages)).not.toContain("<author_instruction>");
-      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship"]);
+      expect(body.tools?.map((tool) => tool.function?.name)).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
       expect(body.tools?.[0]?.function?.description).toContain("只有值为 true 才能判定已死亡");
       expect(body.tools?.[0]?.function?.description).toContain("gender=unknown 时禁止");
       expect(body.tools?.[0]?.function?.description).toContain("字段为 false 时必须视为仍存活");
       expect(body.tools?.[1]?.function?.description).toContain("只能返回当前角色参与的关系");
       expect(body.tools?.[1]?.function?.description).toContain("未传入 characters");
       expect(body.tools?.[1]?.function?.description).toContain("关系双方的权威 gender");
+      expect(body.tools?.[2]?.function?.description).toContain("纯计算工具");
       expect(JSON.stringify(body.tools)).not.toContain("characterId");
       expect(JSON.stringify(body.tools)).not.toContain("otherCharacter");
       if (completionCount === 1) {
@@ -1761,6 +1763,7 @@ describe("AI 供应商、模型与建议 API", () => {
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "self-memory", type: "function", function: { name: "recall_self", arguments: JSON.stringify({ categories: ["profile", "sections", "chapters"] }) } },
           { id: "relationship-list", type: "function", function: { name: "recall_relationship", arguments: "{}" } },
+          { id: "date-calculation", type: "function", function: { name: "calculate_time", arguments: JSON.stringify({ operation: "diff", startYear: 2025, startMonth: 1, startDay: 1, endYear: 2025, endMonth: 1, endDay: 8 }) } },
           { id: "forbidden-index", type: "function", function: { name: "story_index", arguments: "{}" } }
         ] } }] }), { status: 200 });
       }
@@ -1779,7 +1782,8 @@ describe("AI 供应商、模型与建议 API", () => {
         expect(toolMessages[1]).toContain("relationshipCount");
         expect(toolMessages[1]).not.toContain("旧友");
         expect(toolMessages[1]).not.toContain("共同远航");
-        expect(toolMessages[2]).toContain("TOOL_NOT_AVAILABLE");
+        expect(toolMessages[2]).toContain('"totalDays":7');
+        expect(toolMessages[3]).toContain("TOOL_NOT_AVAILABLE");
         return new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: [
           { id: "relationship-details", type: "function", function: { name: "recall_relationship", arguments: JSON.stringify({ characters: ["潮哥", "沈星"] }) } }
         ] } }] }), { status: 200 });
@@ -1808,6 +1812,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200);
     expect(streamed.text).toContain('"name":"recall_self"');
     expect(streamed.text).toContain('"name":"story_index"');
+    expect(streamed.text).toContain('"name":"calculate_time"');
     expect(streamed.text).toContain('"status":"failed"');
     expect(streamed.text).toContain("我记得第一次看见星舰");
     const secondTurn = await request(runtime.app).post(`/api/works/${workId}/chat/stream`).send({
