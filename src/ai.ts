@@ -40,6 +40,12 @@ import {
   withAgentToolCallQuotaNotice
 } from "./ai-tool-results.js";
 import { AiConnectivityTestGate, hashAiConnectivityConfiguration, type AiConnectivityTestClaim } from "./ai-connectivity-test.js";
+import {
+  aiHttpRetryCount,
+  aiHttpRetryDelayMs,
+  normalizeAiRetryPolicy,
+  type AiRetryPolicy
+} from "./ai-retry.js";
 import { DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS } from "./ai-stream-timeout.js";
 import { CredentialVault } from "./credential-vault.js";
 import { AttachmentStorage } from "./attachment-storage.js";
@@ -168,7 +174,24 @@ type InteractiveStreamWaitPhase = "first_event" | "between_events";
 
 type AiManagerOptions = {
   interactiveStreamIdleTimeoutMs?: number;
+  retryPolicy?: Partial<AiRetryPolicy>;
+  retrySleep?: (delayMs: number, signal?: AbortSignal) => Promise<void>;
 };
+
+function waitForAiRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function isInteractiveStreamError(error: unknown): error is AppError {
   return error instanceof AppError && interactiveStreamErrorCodes.has(error.code);
@@ -2132,6 +2155,8 @@ export class ContextBuilder {
 export class AiManager {
   readonly contextBuilder: ContextBuilder;
   private readonly interactiveStreamIdleTimeoutMs: number;
+  private readonly retryPolicy: AiRetryPolicy;
+  private readonly retrySleep: (delayMs: number, signal?: AbortSignal) => Promise<void>;
   private readonly taskControllers = new Map<string, AbortController>();
   private readonly autoRunStarting = new Map<string, Set<string>>();
   private readonly autoRunTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2174,6 +2199,8 @@ export class AiManager {
       && Number(options.interactiveStreamIdleTimeoutMs) > 0
       ? Number(options.interactiveStreamIdleTimeoutMs)
       : DEFAULT_AI_STREAM_IDLE_TIMEOUT_MS;
+    this.retryPolicy = normalizeAiRetryPolicy(options.retryPolicy);
+    this.retrySleep = options.retrySleep ?? waitForAiRetry;
     this.contextBuilder = new ContextBuilder(store);
     this.store.setAnalysisTaskQueuedHandler((workId) => this.scheduleAutoRun(workId));
     this.autoRunStartupTimer = setTimeout(() => {
@@ -2185,7 +2212,11 @@ export class AiManager {
       this.relationshipIndexTimer = null;
       void this.schedulePendingRelationshipIndexes();
     }, 0);
-    logger.info("ai.manager.ready", { interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs });
+    logger.info("ai.manager.ready", {
+      interactiveStreamIdleTimeoutMs: this.interactiveStreamIdleTimeoutMs,
+      retryCount: this.retryPolicy.retryCount,
+      backoffRetryCount: this.retryPolicy.backoffRetryCount
+    });
   }
 
   getPlatformTokenUsage(timezoneOffset: number): Record<string, unknown> {
@@ -2878,6 +2909,25 @@ export class AiManager {
     return fetchSafeAiEndpoint(this.fetchImpl, url, init, this.validateOutboundUrl);
   }
 
+  private async outboundFetchWithRetry(url: string, init: RequestInit): Promise<Awaited<ReturnType<typeof fetch>>> {
+    for (let retryNumber = 0; ; retryNumber += 1) {
+      const response = await this.outboundFetch(url, init);
+      if (response.ok) return response;
+      const retryCount = aiHttpRetryCount(response.status, this.retryPolicy);
+      if (retryNumber >= retryCount) return response;
+      const nextRetryNumber = retryNumber + 1;
+      const delayMs = aiHttpRetryDelayMs(response.status, nextRetryNumber, response.headers.get("retry-after"));
+      await response.body?.cancel().catch(() => undefined);
+      logger.warn("ai.http.retry_scheduled", {
+        status: response.status,
+        retryNumber: nextRetryNumber,
+        retryCount,
+        delayMs
+      });
+      await this.retrySleep(delayMs, init.signal ?? undefined);
+    }
+  }
+
   private async resolveProviderAccessToken(row: ProviderRow): Promise<{ accessToken: string; credentialSecret: string }> {
     const protocol = providerProtocol(row);
     if (protocol === "google-vertex") assertOfficialGoogleVertexBaseUrl(stringValue(row, "base_url"));
@@ -2889,7 +2939,7 @@ export class AiManager {
     const accessToken = await this.vertexTokenCache.getAccessToken(
       stringValue(row, "id"),
       account,
-      (jwt) => fetchGoogleOAuthAccessToken(jwt, (url, init) => this.outboundFetch(url, init))
+      (jwt) => fetchGoogleOAuthAccessToken(jwt, (url, init) => this.outboundFetchWithRetry(url, init))
     );
     return { accessToken, credentialSecret };
   }
@@ -2904,7 +2954,7 @@ export class AiManager {
         { type: "image_url", image_url: { url: MULTIMODAL_TEST_IMAGE_DATA_URL, detail: "low" } }
       ]
       : "请回复“连接成功”。";
-    const response = await this.outboundFetch(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
+    const response = await this.outboundFetchWithRetry(providerCompletionEndpoint(stringValue(row, "base_url"), protocol), {
       method: "POST",
       headers: providerRequestHeaders(protocol, accessToken, "application/json"),
       body: JSON.stringify(buildCompletionRequestBody({
@@ -3076,7 +3126,7 @@ export class AiManager {
       for (let index = 0; index < endpoints.length; index += 1) {
         const endpoint = endpoints[index];
         if (!endpoint) continue;
-        const response = await this.outboundFetch(endpoint, {
+        const response = await this.outboundFetchWithRetry(endpoint, {
           headers: providerRequestHeaders(protocol, accessToken, "application/json"),
           signal: controller.signal
         });
@@ -5534,7 +5584,7 @@ export class AiManager {
     const timeout = setTimeout(() => controller.abort(), AI_INTERACTIVE_TIMEOUT_MS);
     try {
       const response = await this.scheduleProviderRequest(provider, signal, async () => {
-        const upstream = await this.outboundFetch(endpoint, {
+        const upstream = await this.outboundFetchWithRetry(endpoint, {
           method: "POST",
           headers: providerRequestHeaders("openai-chat-completions", accessToken, "application/json"),
           body: JSON.stringify(buildCompletionRequestBody({
@@ -6301,7 +6351,12 @@ export class AiManager {
       const timeoutMs = input.taskType === "book-analysis" || input.taskType === "relationship-analysis"
         ? AI_LONG_RUNNING_TIMEOUT_MS
         : AI_INTERACTIVE_TIMEOUT_MS;
-      const maximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
+      const legacyMaximumAttempts = Math.round(clamp(input.maxAttempts ?? 3, 1, 5));
+      const maximumAttempts = Math.max(
+        legacyMaximumAttempts,
+        this.retryPolicy.retryCount + 1,
+        this.retryPolicy.backoffRetryCount + 1
+      );
       let completionRequestCount = 0;
       let cacheUsageComplete = true;
       let totalInputTokens = 0;
@@ -6358,6 +6413,8 @@ export class AiManager {
         let lastFailure: unknown = null;
         for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
           let retryable = true;
+          let retryLimit = legacyMaximumAttempts - 1;
+          let retryDelayMs = attempt * 1_200;
           let attemptEmitted = false;
           const attemptStartedAt = process.hrtime.bigint();
           const traceAttempt: AiCallTraceAttempt = {
@@ -6400,7 +6457,12 @@ export class AiManager {
                 });
                 responseReceived = true;
                 if (!response.ok) {
-                  return { ok: false as const, status: response.status, body: await readResponseTextLimited(response) };
+                  return {
+                    ok: false as const,
+                    status: response.status,
+                    body: await readResponseTextLimited(response),
+                    retryAfter: response.headers.get("retry-after")
+                  };
                 }
                 const isEventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") ?? false;
                 if (!streamResponse || !isEventStream) {
@@ -6495,7 +6557,9 @@ export class AiManager {
             traceAttempt.httpStatus = candidate.status;
             traceAttempt.failure = redactProviderSecretsText(`HTTP ${candidate.status}: ${candidate.body.slice(0, 2_000)}`, ...activeSecrets);
             saveTrace();
-            if (candidate.status !== 429 && candidate.status < 500) {
+            retryLimit = aiHttpRetryCount(candidate.status, this.retryPolicy);
+            retryDelayMs = aiHttpRetryDelayMs(candidate.status, attempt, candidate.retryAfter);
+            if (attempt > retryLimit) {
               retryable = false;
               throw lastFailure;
             }
@@ -6513,15 +6577,15 @@ export class AiManager {
             logger.warn("ai.call.attempt_failed", {
               callId,
               attempt,
-              retryable: retryable && !attemptEmitted && attempt < maximumAttempts && !input.signal?.aborted,
+              retryable: retryable && !attemptEmitted && attempt <= retryLimit && attempt < maximumAttempts && !input.signal?.aborted,
               durationMs: Number(process.hrtime.bigint() - attemptStartedAt) / 1_000_000,
               streaming: streamResponse,
               error: aiErrorForLog(error)
             });
             if (input.signal?.aborted || attemptEmitted) throw error;
-            if (!retryable || attempt >= maximumAttempts) throw error;
+            if (!retryable || attempt > retryLimit || attempt >= maximumAttempts) throw error;
           }
-          if (attempt < maximumAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1200));
+          if (attempt < maximumAttempts) await this.retrySleep(retryDelayMs, input.signal);
         }
         throw lastFailure instanceof Error ? lastFailure : new Error("AI request failed after all retries.");
       };

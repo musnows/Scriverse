@@ -24,8 +24,10 @@ describe("人物关系图搜索界面", () => {
     const styles = await request(runtime.app).get("/styles.css").expect(200);
 
     expect(page.text).toContain('/styles.css?v=20260816-task-scope-volume-collapse-v2');
+    expect(page.text).toContain('feature=galaxy-compact-controls-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
-    expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-size-threshold-v1');
+    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1');
+    expect(application.text).toContain('class="relationship-table-wrapper"');
     expect(graph.text).toContain('export function searchRelationshipNodes(nodes, query, limit = 8)');
     expect(graph.text).toContain('testId: "relationship-node-search"');
     expect(graph.text).toContain('testId: "galaxy-node-search"');
@@ -34,6 +36,8 @@ describe("人物关系图搜索界面", () => {
     expect(graph.text).toContain('focusCameraOnNode(node)');
     expect(styles.text).toContain('.relationship-node-search-results');
     expect(styles.text).toContain('.relationship-node-search.is-galaxy');
+    expect(styles.text).toContain('.relationship-node-search.is-galaxy input { min-height: 36px; padding-block: 5px;');
+    expect(styles.text).toContain('.galaxy-close { position: fixed; z-index: 8; top: 22px; right: 25px; width: 36px; height: 36px; min-height: 0;');
     expect(styles.text).toContain('.relationship-node-search:not(.is-galaxy)');
     expect(styles.text).toContain('.relationship-map-dialog { position: fixed; inset: 0; width: 100vw; max-width: none; height: 100dvh;');
     expect(styles.text).not.toContain('width: min(1400px, 96vw);');

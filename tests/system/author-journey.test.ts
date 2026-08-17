@@ -402,7 +402,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain('.setting-editor-content { height: 100%; min-height: 0; padding: 16px clamp(16px, 2vw, 32px) 24px; overflow: hidden; }');
     expect(application.text).toContain("if (readOnly) editor?.disabled();");
     expect(application.text).not.toContain("if (readOnly) editor.disabled();");
-    expect(application.text).toContain('/relationship-graph.js?v=20260809-galaxy-size-threshold-v1');
+    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1');
     expect(application.text).toContain('<td>${item.evidence.length}</td><td>${Math.round(item.confidence * 100)}%</td>');
     expect(application.text).not.toContain('${item.evidence.length} 条');
     expect(graph.text).toContain('path.setAttribute("marker-end", `url(#${arrowMarkerId})`)');

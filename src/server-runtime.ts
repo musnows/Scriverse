@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { basename, join } from "node:path";
 import { createRuntime, type Runtime } from "./app.js";
 import { resolveAiChatTabLimit } from "./ai-chat-tab-limit.js";
+import { resolveAiRetryPolicy } from "./ai-retry.js";
 import { resolveAiStreamIdleTimeoutMs } from "./ai-stream-timeout.js";
 import { DATABASE_SCHEMA_VERSION, readDatabaseSchemaVersion } from "./database.js";
 import { loadMasterSecret } from "./credential-vault.js";
@@ -233,6 +234,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Run
       releaseCheckTimeoutMs: resolveReleaseCheckTimeoutMs(options.env.APP_UPDATE_CHECK_TIMEOUT_SECONDS),
       releaseCheckRetries: resolveReleaseCheckRetries(options.env.APP_UPDATE_CHECK_RETRIES),
       aiChatTabLimit: resolveAiChatTabLimit(options.env),
+      aiRetryPolicy: resolveAiRetryPolicy(options.env),
       aiStreamIdleTimeoutMs: resolveAiStreamIdleTimeoutMs(options.env),
       uploadLimits: resolveImageUploadLimits(options.env)
     });
