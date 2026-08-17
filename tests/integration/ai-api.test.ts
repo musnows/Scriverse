@@ -640,6 +640,20 @@ describe("AI 供应商、模型与建议 API", () => {
     expect(temperatures.sort((left, right) => left - right)).toEqual([0.2, 1]);
   });
 
+  it("AI 工具设置支持 calculate_time 并兼容旧默认工具配置", async () => {
+    const legacyDefaultTools = ["story_index", "read_chapters", "grep", "search_story_entities", "read_character_sections", "search_drafts", "image"];
+    runtime.database.run("UPDATE work_ai_settings SET agent_tools_json = ? WHERE work_id = ?", JSON.stringify(legacyDefaultTools), workId);
+
+    const migrated = await request(runtime.app).get(`/api/works/${workId}/ai-settings`).expect(200);
+    expect(migrated.body.data.agentTools).toEqual([...legacyDefaultTools, "calculate_time"]);
+
+    const selected = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: ["calculate_time"] }).expect(200);
+    expect(selected.body.data.agentTools).toEqual(["calculate_time"]);
+
+    const disabled = await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
+    expect(disabled.body.data.agentTools).toEqual([]);
+  });
+
   it("Gemini endpoint 或模型名命中时不发送 thinking 字段", async () => {
     await request(runtime.app).patch(`/api/works/${workId}/ai-settings`).send({ agentTools: [] }).expect(200);
     fetchMock.mockImplementation(async (input, init) => {
