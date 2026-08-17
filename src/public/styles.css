@@ -3736,7 +3736,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
   .module-nav .module-nav-secondary.hidden { display: none !important; }
   .panel-heading { display: flex; margin-top: 8px; }
   #novel-tree { display: block; padding-bottom: 18px; }
-  .volume-detail-button { display: inline-flex; flex: none; align-items: center; min-height: 40px; padding: 7px 9px; font-size: 11px; }
+  .volume-detail-button { display: inline-flex; flex: 0 0 40px; align-items: center; justify-content: center; width: 40px; min-width: 40px; min-height: 40px; padding: 0; }
+  .volume-detail-icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
   .app-shell.left-panel-collapsed .left-panel-body { padding: 8px var(--mobile-gutter) 0; }
   .app-shell.left-panel-collapsed .left-actions { display: block; padding: 0; }
 

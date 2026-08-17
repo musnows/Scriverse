@@ -856,6 +856,8 @@ describe("作者完整创作流程", () => {
     expect(application.text).toContain('downloadVolumeEpub(item, event.currentTarget)');
     expect(application.text).toContain('class="ghost-button volume-detail-button"');
     expect(application.text).toContain('data-volume-detail="${esc(volume.id)}"');
+    expect(application.text).toContain('class="volume-detail-icon"');
+    expect(application.text).toContain('title="打开“${esc(volume.title)}”分卷详情"');
     expect(application.text).toContain('button.dataset.volumeDetail));');
     expect(application.text).toContain('event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")');
     expect(application.text).toContain('field("keywords", "分卷关键词", "keyword-chips"');
@@ -874,7 +876,7 @@ describe("作者完整创作流程", () => {
     expect(styles.text).toContain(".volume-detail-button { display: none; }");
     expect(styles.text).toContain(".panel-heading { display: flex; margin-top: 8px; }");
     expect(styles.text).toContain("#novel-tree { display: block; padding-bottom: 18px; }");
-    expect(styles.text).toContain(".volume-detail-button { display: inline-flex; flex: none;");
+    expect(styles.text).toContain(".volume-detail-button { display: inline-flex; flex: 0 0 40px;");
     expect(styles.text).not.toContain(".panel-heading, #novel-tree { display: none; }");
     expect(application.text).toContain('aria-label="在“${esc(volume.title)}”中新建章节"');
     expect(application.text).toContain('button.dataset.volumeToggle));');
