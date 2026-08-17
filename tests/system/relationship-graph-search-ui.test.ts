@@ -27,13 +27,13 @@ describe("人物关系图搜索界面", () => {
     expect(page.text).toContain('feature=galaxy-compact-controls-v2');
     expect(page.text).toContain('feature=galaxy-motion-mode-v2');
     expect(page.text).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
-    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v2');
+    expect(application.text).toContain('/relationship-graph.js?v=20260817-relationship-canvas-scale-v1&feature=galaxy-motion-mode-v3');
     expect(application.text).toContain('class="relationship-table-wrapper"');
     expect(application.text).toContain('GALAXY_MOTION_MODE_STORAGE_KEY');
     expect(application.text).toContain('motionMode: storedGalaxyMotionMode()');
     expect(application.text).toContain('onMotionModeChange: persistGalaxyMotionMode');
     expect(page.text).toContain('id="galaxy-motion-mode"');
-    expect(page.text).toContain('<option value="auto">自动</option><option value="reduced">减少</option><option value="off">关闭</option>');
+    expect(page.text).toContain('<option value="auto">自动</option><option value="on">开启</option><option value="reduced">减少</option><option value="off">关闭</option>');
     expect(page.text).toContain('id="galaxy-motion-status"');
     expect(graph.text).toContain('export function searchRelationshipNodes(nodes, query, limit = 8)');
     expect(graph.text).toContain('export function getGalaxyMotionProfile');

@@ -11,8 +11,8 @@ describe("人物关系图数据与布局", () => {
     expect(getRelationshipCanvasPixelRatio(2, 1600, 900)).toBeCloseTo(Math.sqrt(2_000_000 / (1600 * 900)));
   });
 
-  it("银河图超过性能阈值后自动减少动效，并允许彻底关闭", () => {
-    expect(GALAXY_MOTION_MODES).toEqual(["auto", "reduced", "off"]);
+  it("银河图超过性能阈值后自动减少动效，并允许始终开启或彻底关闭", () => {
+    expect(GALAXY_MOTION_MODES).toEqual(["auto", "on", "reduced", "off"]);
     expect(GALAXY_REDUCED_MOTION_NODE_THRESHOLD).toBe(80);
     expect(GALAXY_REDUCED_MOTION_EDGE_THRESHOLD).toBe(120);
     expect(normalizeGalaxyMotionMode("invalid")).toBe("auto");
@@ -27,6 +27,15 @@ describe("人物关系图数据与布局", () => {
       starfieldPhysics: false,
       focusAnimation: true,
       maximumFrameRate: 24
+    });
+    expect(getGalaxyMotionProfile("on", 980, 1_210, true)).toMatchObject({
+      requestedMode: "on",
+      effectiveMode: "full",
+      reducedBySystem: false,
+      reducedByThreshold: false,
+      starfieldPhysics: true,
+      focusAnimation: true,
+      maximumFrameRate: null
     });
     expect(getGalaxyMotionProfile("auto", 20, 20, true)).toMatchObject({ effectiveMode: "reduced", reducedBySystem: true });
     expect(getGalaxyMotionProfile("off", 20, 20)).toMatchObject({

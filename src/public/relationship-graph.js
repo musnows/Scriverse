@@ -303,7 +303,7 @@ const GALAXY_CELESTIAL_TYPES = Object.freeze({
 export const GALAXY_ROTATION_RADIANS_PER_MS = 0.000012;
 export const GALAXY_TARGET_FRAME_RATE = 30;
 export const GALAXY_FRAME_RATE_OPTIONS = Object.freeze([24, 30, 60, 90, 120, 144, 165, 240]);
-export const GALAXY_MOTION_MODES = Object.freeze(["auto", "reduced", "off"]);
+export const GALAXY_MOTION_MODES = Object.freeze(["auto", "on", "reduced", "off"]);
 export const GALAXY_REDUCED_MOTION_NODE_THRESHOLD = 80;
 export const GALAXY_REDUCED_MOTION_EDGE_THRESHOLD = 120;
 export const GALAXY_BASE_STAR_COUNT = 7200;
@@ -2897,13 +2897,15 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.classList.toggle("is-motion-off", motionProfile.effectiveMode === "off");
     motionStatus.value = motionProfile.effectiveMode === "off"
       ? "全部动效已关闭"
-      : requestedMotionMode === "reduced"
-        ? "持续动效已减少"
-        : motionProfile.reducedByThreshold
-          ? "图谱较大，已自动减少"
-          : motionProfile.reducedBySystem
-            ? "跟随系统，已减少"
-            : "当前为完整动效";
+      : requestedMotionMode === "on"
+        ? "动效始终开启"
+        : requestedMotionMode === "reduced"
+          ? "持续动效已减少"
+          : motionProfile.reducedByThreshold
+            ? "图谱较大，已自动减少"
+            : motionProfile.reducedBySystem
+              ? "跟随系统，已减少"
+              : "当前为完整动效";
     motionStatus.title = `超过 ${GALAXY_REDUCED_MOTION_NODE_THRESHOLD} 个节点或 ${GALAXY_REDUCED_MOTION_EDGE_THRESHOLD} 条关系时自动减少动效`;
     updateRotationControl();
   };
