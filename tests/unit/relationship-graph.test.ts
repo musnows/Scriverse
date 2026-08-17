@@ -18,14 +18,12 @@ describe("人物关系图数据与布局", () => {
     expect(normalizeGalaxyMotionMode("invalid")).toBe("auto");
     expect(getGalaxyMotionProfile("auto", 80, 120)).toMatchObject({
       effectiveMode: "full",
-      autoRotation: true,
       starfieldPhysics: true,
       focusAnimation: true
     });
     expect(getGalaxyMotionProfile("auto", 98, 121)).toMatchObject({
       effectiveMode: "reduced",
       reducedByThreshold: true,
-      autoRotation: false,
       starfieldPhysics: false,
       focusAnimation: true,
       maximumFrameRate: 24
@@ -33,11 +31,10 @@ describe("人物关系图数据与布局", () => {
     expect(getGalaxyMotionProfile("auto", 20, 20, true)).toMatchObject({ effectiveMode: "reduced", reducedBySystem: true });
     expect(getGalaxyMotionProfile("off", 20, 20)).toMatchObject({
       effectiveMode: "off",
-      autoRotation: false,
       starfieldPhysics: false,
       focusAnimation: false,
       cssMotion: false,
-      maximumFrameRate: 0
+      maximumFrameRate: null
     });
   });
 

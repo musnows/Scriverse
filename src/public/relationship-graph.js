@@ -341,11 +341,10 @@ export function getGalaxyMotionProfile(mode, nodeCount, edgeCount, prefersReduce
     effectiveMode,
     reducedBySystem,
     reducedByThreshold,
-    autoRotation: effectiveMode === "full",
     starfieldPhysics: effectiveMode === "full",
     focusAnimation: effectiveMode !== "off",
     cssMotion: effectiveMode !== "off",
-    maximumFrameRate: effectiveMode === "reduced" ? 24 : effectiveMode === "off" ? 0 : null
+    maximumFrameRate: effectiveMode === "reduced" ? 24 : null
   };
 }
 
@@ -2596,7 +2595,7 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     shell.dataset.renderedFrameCount = String(renderedFrameCount);
   };
 
-  const shouldRotate = () => motionProfile.autoRotation && !rotationPaused;
+  const shouldRotate = () => !rotationPaused;
   const shouldAnimate = () => shouldRotate()
     || Boolean(cameraFocus)
     || (motionProfile.starfieldPhysics && (Boolean(draggedNode) || starPhysicsEnergy > 0.01));
@@ -2880,14 +2879,11 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
   };
 
   const updateRotationControl = () => {
-    const rotationEnabled = motionProfile.autoRotation;
-    shell.classList.toggle("is-paused", !rotationEnabled || rotationPaused);
+    shell.classList.toggle("is-paused", rotationPaused);
     const control = dialog.querySelector("#galaxy-rotation");
-    control.disabled = !rotationEnabled;
-    control.setAttribute("aria-pressed", String(!rotationEnabled || rotationPaused));
-    control.textContent = !rotationEnabled
-      ? motionProfile.effectiveMode === "off" ? "动效已关闭" : "旋转已关闭"
-      : rotationPaused ? "继续旋转" : "暂停旋转";
+    control.disabled = false;
+    control.setAttribute("aria-pressed", String(rotationPaused));
+    control.textContent = rotationPaused ? "继续旋转" : "暂停旋转";
   };
 
   const updateMotionControls = () => {
@@ -2927,7 +2923,6 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
       Object.assign(camera, cameraFocus.to);
       cancelCameraFocus();
     }
-    if (motionProfile.autoRotation) rotationPaused = false;
     updateMotionControls();
     if (redraw) drawScene();
     if (shouldAnimate()) startAnimation();
@@ -2985,7 +2980,6 @@ export function createGalaxyRenderer(dialog, graph, options = {}) {
     drawScene();
   });
   listen(dialog.querySelector("#galaxy-rotation"), "click", () => {
-    if (!motionProfile.autoRotation) return;
     rotationPaused = !rotationPaused;
     updateRotationControl();
     drawScene();
