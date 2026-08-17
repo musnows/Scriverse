@@ -30,4 +30,22 @@ describe("角色性别界面", () => {
     expect(styles.text).toContain(".character-species, .character-gender {");
     expect(page.text).toContain("feature=character-gender-v1");
   });
+
+  it("在角色筛选器中支持性别多选和死亡状态筛选", async () => {
+    const [application, styles, page] = await Promise.all([
+      request(runtime.app).get("/app.js").expect(200),
+      request(runtime.app).get("/styles.css").expect(200),
+      request(runtime.app).get("/").expect(200)
+    ]);
+
+    expect(application.text).toContain('/character-filters.js?v=20260817-character-filter-state-v1');
+    expect(application.text).toContain('const characterFilters = { raceIds: [], organizationIds: [], genderValues: [], deathState: "all" };');
+    expect(application.text).toContain('id="character-gender-filter"');
+    expect(application.text).toContain('按性别筛选');
+    expect(application.text).toContain('id="character-death-filter"');
+    expect(application.text).toContain('name="character-death-state"');
+    expect(application.text).toContain('characterFilters.deathState = CHARACTER_DEATH_STATE_OPTIONS.some');
+    expect(styles.text).toContain('.character-filter-toolbar-with-extra-filters { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }');
+    expect(page.text).toContain("feature=character-filter-state-v1");
+  });
 });
