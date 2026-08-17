@@ -53,6 +53,10 @@ describe("沉浸式阅读预览界面", () => {
     expect(application.text).toContain('$("#reader-open-button").disabled = !canReadModule("editor") || count === 0');
     expect(application.text).toContain('const focusCandidates = [focus, $("#chapter-reader-button"), $("#reader-open-button"), $("#home-button")]');
     expect(application.text).toContain("function handleReadingKeyboard(event)");
+    expect(application.text).not.toContain("function handleReadingWheel(event)");
+    expect(application.text).not.toContain('addEventListener("wheel", handleReadingWheel');
+    expect(application.text).toContain('$("#reader-previous").addEventListener("click", () => void navigateReadingChapter(-1))');
+    expect(application.text).toContain('$("#reader-next").addEventListener("click", () => void navigateReadingChapter(1))');
     expect(application.text).toContain("function layoutReadingPages");
     expect(styles.text).toContain(".reader-view {");
     expect(styles.text).toContain('.reader-view[data-reader-theme="dark"]');

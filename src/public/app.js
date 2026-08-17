@@ -7660,20 +7660,6 @@ function handleReadingKeyboard(event) {
   }
 }
 
-function handleReadingWheel(event) {
-  if (readingPreferences.mode !== "scroll" || readingLoading || Math.abs(event.deltaY) < 2) return;
-  const viewport = $("#reader-viewport");
-  const atEnd = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2;
-  const atStart = viewport.scrollTop <= 2;
-  if (event.deltaY > 0 && atEnd) {
-    event.preventDefault();
-    void navigateReadingChapter(1, { continueFromBoundary: true });
-  } else if (event.deltaY < 0 && atStart) {
-    event.preventDefault();
-    void navigateReadingChapter(-1, { continueFromBoundary: true });
-  }
-}
-
 async function saveChapter() {
   const dismissSavingToast = persistentToast("正在保存中");
   try {
@@ -17345,7 +17331,6 @@ $("#reader-font-size").addEventListener("change", (event) => updateReadingPrefer
 $("#reader-line-height").addEventListener("change", (event) => updateReadingPreference({ lineHeight: Number(event.currentTarget.value) }));
 $("#reader-theme").addEventListener("change", (event) => updateReadingPreference({ theme: event.currentTarget.value }));
 $("#reader-view").addEventListener("keydown", handleReadingKeyboard);
-$("#reader-viewport").addEventListener("wheel", handleReadingWheel, { passive: false });
 $("#reader-viewport").addEventListener("scroll", () => {
   if (readingPreferences.mode === "scroll") scheduleReadingPositionSave();
 }, { passive: true });
