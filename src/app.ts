@@ -1092,6 +1092,13 @@ function redactAiConversation(record: Record<string, unknown>, permissions: Work
   const result: Record<string, unknown> = {
     ...scopedRecord
   };
+  if (result.roleplayCharacter) {
+    result.agentTools = [
+      ...(permissions.characters !== "none" ? ["recall_self"] : []),
+      ...(permissions.characters !== "none" && permissions.relationships !== "none" ? ["recall_relationship"] : []),
+      "calculate_time"
+    ];
+  }
   if ((permissions.prose === "none" || permissions.characters === "none") && Array.isArray(result.messages)) {
     result.messages = result.messages.map((item) => redactAiConversationMessage(item, permissions));
   }

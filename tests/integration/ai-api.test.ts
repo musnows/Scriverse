@@ -1707,6 +1707,7 @@ describe("AI 供应商、模型与建议 API", () => {
     }).expect(200);
     expect(roleplay.body.data.taskType).toBe("roleplay");
     expect(roleplay.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(roleplay.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const otherWork = await request(runtime.app).post("/api/works").send({ title: "其他作品" }).expect(201);
     const foreignCharacter = await request(runtime.app).post(`/api/works/${otherWork.body.data.id}/characters`).send({ name: "越界角色" }).expect(201);
     const mismatch = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
@@ -1828,11 +1829,13 @@ describe("AI 供应商、模型与建议 API", () => {
     const reloaded = await request(runtime.app).get(`/api/ai-conversations/${conversation.body.data.id}`).expect(200);
     expect(reloaded.body.data.taskType).toBe("roleplay");
     expect(reloaded.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(reloaded.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const forked = await request(runtime.app).post(`/api/ai-conversations/${conversation.body.data.id}/fork`).send({
       messageId: reloaded.body.data.messages.at(-1).id
     }).expect(201);
     expect(forked.body.data.taskType).toBe("roleplay");
     expect(forked.body.data.roleplayCharacter).toMatchObject({ id: role.body.data.id, name: "林舟" });
+    expect(forked.body.data.agentTools).toEqual(["recall_self", "recall_relationship", "calculate_time"]);
     const lockedRole = await request(runtime.app).patch(`/api/ai-conversations/${conversation.body.data.id}/roleplay`).send({
       characterId: otherRole.body.data.id
     }).expect(409);
