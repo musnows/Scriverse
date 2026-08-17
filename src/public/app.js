@@ -91,7 +91,7 @@ import {
   outlineBoardRequestPath,
   outlineBoardUnresolvedCount
 } from "/outline-board.js?v=20260813-outline-board-page-v1";
-import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions } from "/background-task-center.js?v=20260810-analysis-task-failed-v1";
+import { backgroundTaskActivityCount, backgroundTaskPollDelay, collectBackgroundTaskTransitions, filterBackgroundTaskTransitionsForAnnouncement } from "/background-task-center.js?v=20260817-analysis-task-expired-toast-v1";
 import { createModuleRequestCache } from "/module-request-cache.js?v=20260730-module-request-cache-v1";
 import { systemStatusPresentation } from "/system-status.js?v=20260801-system-health-v1";
 import { collectS3BackupRunTransitions, s3BackupEncryptionKeyFile, s3BackupEncryptionPresentation, s3BackupFailureToast, s3BackupRootPrefix, s3BackupStatusLabel } from "/s3-backup-ui.js?v=20260810-backup-encryption-v1";
@@ -259,6 +259,7 @@ let backgroundTaskCenterRequest = 0;
 let backgroundTaskCenterWorkId = null;
 let backgroundTaskCenterTasksInitialized = false;
 let backgroundTaskCenterTaskSnapshots = new Map();
+let backgroundTaskCenterExpiredNoticeTimes = new Map();
 let backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
 let s3BackupTargets = [];
 let s3BackupRuns = [];
@@ -10767,7 +10768,12 @@ async function refreshBackgroundTaskCenter({ announce = true } = {}) {
     backgroundTaskCenterTaskSnapshots = transitionResult.snapshots;
     backgroundTaskCenterSnapshot.taskPage = taskResult.value;
     if (backgroundTaskCenterTasksInitialized && announce && state.module !== "tasks") {
-      for (const transition of transitionResult.transitions) {
+      const announcementResult = filterBackgroundTaskTransitionsForAnnouncement(
+        transitionResult.transitions,
+        backgroundTaskCenterExpiredNoticeTimes
+      );
+      backgroundTaskCenterExpiredNoticeTimes = announcementResult.noticeTimes;
+      for (const transition of announcementResult.transitions) {
         const notification = backgroundTaskTransitionMessage(transition);
         toast(notification.message, notification.type);
       }
@@ -10795,6 +10801,7 @@ function stopBackgroundTaskCenter() {
   backgroundTaskCenterWorkId = null;
   backgroundTaskCenterTasksInitialized = false;
   backgroundTaskCenterTaskSnapshots = new Map();
+  backgroundTaskCenterExpiredNoticeTimes = new Map();
   backgroundTaskCenterSnapshot = { taskPage: null, relationshipIndex: null, errors: {} };
   const dialog = $("#background-task-dialog");
   if (dialog?.open) dialog.close();
