@@ -6282,11 +6282,12 @@ export class AiManager {
     // 目标月份的最大天数（用于月末边界截断）
     const maxDayInTargetMonth = this.getDaysInMonth(rYear, rMonth);
     // 将起始日期截断到目标月份的最大天数（处理月末边界）
-    let rDay = Math.min(startDay, maxDayInTargetMonth);
-    // 再加上 addDays（可能再次溢出，需要二次截断）
-    rDay += addDaysVal;
-    // 如果加完 days 后超出目标月份，截断到最大天数（不跨月）；同时保证至少为 1
-    rDay = Math.max(1, Math.min(rDay, maxDayInTargetMonth));
+    const resultDate = this.createUtcDate(rYear, rMonth, Math.min(startDay, maxDayInTargetMonth));
+    // 让 Date 正确处理 addDays 的跨月和跨年进位/借位
+    resultDate.setUTCDate(resultDate.getUTCDate() + addDaysVal);
+    rYear = resultDate.getUTCFullYear();
+    rMonth = resultDate.getUTCMonth() + 1;
+    const rDay = resultDate.getUTCDate();
 
     // 验证结果日期有效性
     if (rYear < -9999 || rYear > 9999) {
@@ -6328,6 +6329,14 @@ export class AiManager {
   private getDaysInMonth(year: number, month: number): number {
     // Date.UTC(year, month, 0) 会返回上个月最后一天
     return new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }
+
+  /** 创建指定公历日期的 UTC Date，避免 Date.UTC 将 0 到 99 年解释为 1900 到 1999 年。 */
+  private createUtcDate(year: number, month: number, day: number): Date {
+    const date = new Date(0);
+    date.setUTCFullYear(year, month - 1, day);
+    date.setUTCHours(0, 0, 0, 0);
+    return date;
   }
 
   /** 判断是否为闰年。 */
