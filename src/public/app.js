@@ -12328,8 +12328,11 @@ function renderCharacterEditorRelationships() {
     const category = relationshipCategoryLabel(relationship.category);
     const relationLabel = [category, relationship.subtype].filter(Boolean).join(" · ") || "未细分";
     const keywords = Array.isArray(relationship.keywords) ? relationship.keywords : [];
+    const actions = !entityEditorReadOnly && canEditModule("relationships")
+      ? `<div class="character-relationship-actions"><button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button><button class="danger-button" type="button" data-character-relationship-delete="${esc(relationship.id)}">删除关系</button></div>`
+      : "";
     return `<article class="character-relationship-row">
-      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${!entityEditorReadOnly && canEditModule("relationships") ? `<button type="button" data-character-relationship-edit="${esc(relationship.id)}">编辑关系</button>` : ""}</div>
+      <div class="character-relationship-heading"><div><strong>${esc(nameOf(otherCharacterId))}</strong><span>${direction} ${esc(relationLabel)}</span></div>${actions}</div>
       <div class="character-relationship-keywords"><small>关系关键词</small><div>${keywords.map((keyword) => `<span class="pill relationship-keyword">${esc(keyword)}</span>`).join("") || '<span class="character-relationship-empty-keywords">未填写关键词</span>'}</div></div>
     </article>`;
   }).join("");
@@ -12337,6 +12340,14 @@ function renderCharacterEditorRelationships() {
   host.querySelectorAll("[data-character-relationship-edit]").forEach((button) => button.addEventListener("click", () => {
     const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipEdit);
     if (relationship) void openRelationshipDialog(relationship, { characterId });
+  }));
+  host.querySelectorAll("[data-character-relationship-delete]").forEach((button) => button.addEventListener("click", () => {
+    const relationship = characterEditorRelationships.find((item) => item.id === button.dataset.characterRelationshipDelete);
+    if (!relationship) return;
+    button.disabled = true;
+    void deleteRelationshipRecord(relationship, characterId).finally(() => {
+      if (button.isConnected) button.disabled = false;
+    });
   }));
   host.querySelector("[data-character-relationship-create]")?.addEventListener("click", () => void openRelationshipDialog(null, { characterId }));
 }
@@ -12378,6 +12389,21 @@ async function refreshRelationshipSurfaces(characterId = null) {
     tasks.push(loadCharacterEditorRelationships(characterId, { refresh: true }));
   }
   await Promise.all(tasks);
+}
+
+async function deleteRelationshipRecord(item, characterId = null) {
+  const relationshipName = `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}`;
+  if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return false;
+  if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return false;
+  try {
+    await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
+    await Promise.all([refreshRelationshipSurfaces(characterId), loadAiReferences()]);
+    deleteToast(`已删除人物关系“${relationshipName}”`);
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
 }
 
 const characterSectionTypeLabels = {
@@ -13773,7 +13799,6 @@ async function openRelationshipDialog(item, options = {}) {
   const characterOptions = state.characters.map((item) => [item.id, item.name]);
   const defaultFrom = options.characterId && state.characters.some((character) => character.id === options.characterId) ? options.characterId : characterOptions[0][0];
   const defaultTo = characterOptions.find(([id]) => id !== defaultFrom)?.[0] ?? characterOptions[1][0];
-  const relationshipName = item ? `${state.characters.find((character) => character.id === item.fromCharacterId)?.name ?? "未知角色"} / ${state.characters.find((character) => character.id === item.toCharacterId)?.name ?? "未知角色"}` : "";
   const management = item && canEditModule("relationships") ? `<section class="entity-dialog-management" aria-label="人物关系操作">
     <div><strong>关系操作</strong><small>删除操作会记录到版本历史和审计日志。</small></div>
     <div class="entity-dialog-management-actions"><button class="danger-button" type="button" data-dialog-relationship-delete>删除关系</button></div>
@@ -13791,16 +13816,7 @@ async function openRelationshipDialog(item, options = {}) {
       dialog.showModal();
     };
     dialog.close();
-    if (!await confirmToast(`确认删除人物关系“${relationshipName}”吗？`, { title: "删除人物关系", confirmLabel: "继续删除" })) return reopenDialog();
-    if (!await confirmToast(`删除人物关系“${relationshipName}”后无法恢复。`, { title: "删除操作需要再次确认", confirmLabel: "确认删除" })) return reopenDialog();
-    try {
-      await api(`/api/relationships/${item.id}`, { method: "DELETE", body: { expectedVersionNo: item.versionNo } });
-      await Promise.all([refreshRelationshipSurfaces(options.characterId ?? null), loadAiReferences()]);
-      deleteToast(`已删除人物关系“${relationshipName}”`);
-    } catch (error) {
-      reopenDialog();
-      toast(error.message, "error");
-    }
+    if (!await deleteRelationshipRecord(item, options.characterId ?? null)) return reopenDialog();
   });
 }
 

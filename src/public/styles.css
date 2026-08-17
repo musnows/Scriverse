@@ -3374,6 +3374,7 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .character-relationship-row { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-soft); }
 .character-relationship-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .character-relationship-heading > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.character-relationship-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 6px; }
 .character-relationship-heading strong { font-size: 14px; }
 .character-relationship-heading span { color: var(--muted); font-size: 10px; }
 .character-relationship-heading button { flex: 0 0 auto; padding: 6px 9px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--muted); font-size: 10px; }
