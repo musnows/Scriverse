@@ -1072,10 +1072,13 @@ function redactAiConversationMessage(item: unknown, permissions: WorkModulePermi
   const message = recordValue(item);
   if (!message) return item;
   if (permissions.prose !== "none") {
-    if (permissions.characters !== "none") return item;
     const metadata = recordValue(message.metadata);
-    if (!metadata || !("mentionCharacterIds" in metadata)) return item;
-    const { mentionCharacterIds: _mentionCharacterIds, ...readableMetadata } = metadata;
+    if (!metadata) return item;
+    const readableMetadata = { ...metadata };
+    if (permissions.characters === "none") delete readableMetadata.mentionCharacterIds;
+    if (permissions.races === "none") delete readableMetadata.mentionRaceIds;
+    if (permissions.organizations === "none") delete readableMetadata.mentionOrganizationIds;
+    if (Object.keys(readableMetadata).length === Object.keys(metadata).length) return item;
     return { ...message, metadata: readableMetadata };
   }
   return {
@@ -2934,6 +2937,8 @@ export function createRuntime(options: RuntimeOptions): Runtime {
         ...(resolvedScope.characterIds ?? []),
         ...(resolvedScope.mentionCharacterIds ?? [])
       ])];
+      const mentionRaceIds = [...new Set(resolvedScope.raceIds ?? [])];
+      const mentionOrganizationIds = [...new Set(resolvedScope.organizationIds ?? [])];
       const begun = store.beginAiConversationStreamRequest({
         workId: request.params.workId,
         conversationId,
@@ -2944,9 +2949,11 @@ export function createRuntime(options: RuntimeOptions): Runtime {
           content: input.instruction,
           citations,
           ...(input.currentMessageId ? { existingMessageId: input.currentMessageId } : {}),
-          ...((modelId || mentionCharacterIds.length) ? { metadata: {
+          ...((modelId || mentionCharacterIds.length || mentionRaceIds.length || mentionOrganizationIds.length) ? { metadata: {
             ...(modelId ? { modelId } : {}),
-            ...(mentionCharacterIds.length ? { mentionCharacterIds } : {})
+            ...(mentionCharacterIds.length ? { mentionCharacterIds } : {}),
+            ...(mentionRaceIds.length ? { mentionRaceIds } : {}),
+            ...(mentionOrganizationIds.length ? { mentionOrganizationIds } : {})
           } } : {})
         }
       });

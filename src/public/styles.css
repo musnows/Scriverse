@@ -2616,6 +2616,8 @@ select:focus, input:focus, textarea:focus { border-color: #a77768; box-shadow: 0
 .ai-error-settings-link:hover, .ai-error-settings-link:focus-visible { color: var(--accent-dark); }
 .config-section.is-targeted { border-radius: 5px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent); }
 .message-card-actions { position: absolute; right: 0; bottom: -31px; display: flex; align-items: center; gap: 12px; height: 24px; }
+.assistant-message .message-card-actions { right: auto; left: 0; }
+.user-message .message-card-actions { right: 0; left: auto; }
 .message-card-actions button { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 3px 2px; border: 0; background: transparent; color: var(--muted); font-size: 9px; }
 .message-card-actions button:hover, .message-card-actions button:focus-visible { color: var(--accent-dark); }
 .message-action-icon { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }

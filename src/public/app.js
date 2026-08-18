@@ -20,7 +20,7 @@ import { MIN_MODEL_CONTEXT_WINDOW, MODEL_PURPOSE_OPTIONS, MODEL_THINKING_EFFORT_
 import { connectivityConfigurationSavedToast, connectivityTestErrorToast, connectivityTestResultToast } from "/ai-connectivity-test.js?v=20260812-connectivity-cooldown-v1";
 import { shouldSendAiPrompt } from "/ai-prompt-keyboard.js?v=20260713-enter-to-send";
 import { estimateAiMessageTokens, formatAiMessageMeta } from "/ai-message-meta.js?v=20260814-ai-model-lock-v1";
-import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260815-ai-stream-typewriter-v4";
+import { createStreamTypewriter, createStreamTypewriterSpeedController } from "/stream-typewriter.js?v=20260818-ai-agent-turn-process-v1";
 import { assertAiStreamCompleted, readAiEventStream } from "/ai-stream-protocol.js?v=20260812-ai-stream-complete-v1";
 import { buildUsageCalendar, formatCacheHitRate, formatTokenCount } from "/ai-usage.js?v=20260727-ai-usage-v1";
 import { formatAiMessageTime } from "/ai-message-time.js?v=20260801-month-day-time";
@@ -2417,16 +2417,18 @@ function renderMessageCardActions(message) {
     message.append(actions);
   }
   actions.replaceChildren();
-  if (Object.hasOwn(message.dataset, "rawMarkdown")) {
+  const hasCopyValue = Object.hasOwn(message.dataset, "rawMarkdown") || Object.hasOwn(message.dataset, "copyText");
+  if (hasCopyValue) {
     const copy = document.createElement("button");
     copy.type = "button";
     copy.className = "message-copy-button";
-    copy.setAttribute("aria-label", "复制 AI 原始 Markdown");
+    const isUserMessage = message.classList.contains("user-message");
+    copy.setAttribute("aria-label", isUserMessage ? "复制用户指令" : "复制 AI 回复");
     copy.innerHTML = '<svg class="message-action-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>复制</span>';
     const copyLabel = copy.querySelector("span");
     copy.addEventListener("click", async () => {
       try {
-        await copyAiRawMarkdown(message.dataset.rawMarkdown);
+        await copyAiRawMarkdown(message.dataset.rawMarkdown ?? message.dataset.copyText ?? "");
         copyLabel.textContent = "已复制";
         window.setTimeout(() => { copyLabel.textContent = "复制"; }, 1200);
       } catch (error) {
@@ -2473,6 +2475,11 @@ function renderMessageCardActions(message) {
 
 function attachAssistantCopyAction(message, rawMarkdown) {
   message.dataset.rawMarkdown = String(rawMarkdown ?? "");
+  renderMessageCardActions(message);
+}
+
+function attachUserCopyAction(message, text) {
+  message.dataset.copyText = String(text ?? "");
   renderMessageCardActions(message);
 }
 
@@ -6464,6 +6471,7 @@ function resetWorkScopedUiCaches() {
   state.characters = [];
   state.settings = [];
   state.races = [];
+  state.organizations = [];
   characterListPage = 1;
   draftTypeFilter = "all";
   draftBindingFilters = [];
@@ -11497,13 +11505,17 @@ async function loadAiReferences() {
   const workId = state.work?.id;
   if (!workId) return;
   const generation = workScopedUiGeneration;
-  const [characters, settings] = await Promise.all([
+  const [characters, settings, races, organizations] = await Promise.all([
     canReadModule("characters") ? apiAllPages(`/api/works/${workId}/characters`) : Promise.resolve([]),
-    canReadModule("settings") ? api(`/api/works/${workId}/settings/context`) : Promise.resolve([])
+    canReadModule("settings") ? api(`/api/works/${workId}/settings/context`) : Promise.resolve([]),
+    canReadModule("races") ? api(`/api/works/${workId}/races`) : Promise.resolve([]),
+    canReadModule("organizations") ? apiAllPages(`/api/works/${workId}/organizations`) : Promise.resolve([])
   ]);
   if (state.work?.id !== workId || generation !== workScopedUiGeneration) return;
   state.characters = characters;
   state.settings = settings;
+  state.races = races;
+  state.organizations = organizations;
   renderAiRoleplayCharacterSelect();
   loadedAiReferencesWorkId = workId;
 }
@@ -14635,6 +14647,7 @@ async function sendAiWithOptions({ ignoreContextWarning = false } = {}) {
   try {
     try {
       await ensureAiModelsLoaded();
+      await ensureAiReferencesLoaded();
     } catch (error) {
       if (isAiRequestCancellation(error, requestHolder.snapshot) || !aiRequestTargetsCurrentState(requestHolder.snapshot)) throw error;
       setAiChatTabStatus(tab, "error");
@@ -14882,6 +14895,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
     }
   });
   let streamedText = "";
+  let streamedPendingText = "";
   let generatedMetadata = {};
   let toolCalls = [];
   let processSteps = [];
@@ -14892,7 +14906,6 @@ async function streamChat(requestHolder, body, idempotencyKey) {
   let contextAction = "ready";
   let warningOnly = false;
   let streamContextCompacted = false;
-  let finalAnswerStarted = false;
   const processStartedAt = Date.now();
   const elapsedProcessTime = () => Math.max(0, Date.now() - processStartedAt);
   const processStepTypewriters = new Map();
@@ -14910,7 +14923,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
       onRender: (text) => {
         if (!aiRequestTargetsCurrentState(requestHolder.snapshot)) return;
         processStepVisibleContents.set(step, text);
-        renderStreamingProcessSteps(finalAnswerStarted);
+        renderStreamingProcessSteps(false);
         scrollAiFeedToBottom(feed);
       }
     });
@@ -14983,18 +14996,21 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         }
       } else if (eventName === "delta") {
         mountAssistantMessage();
-        const firstFinalDelta = streamedText.length === 0;
         const delta = typeof payload.delta === "string" ? payload.delta : "";
         streamedText += delta;
-        if (streamedText.length > 0) finalAnswerStarted = true;
+        streamedPendingText += delta;
         typewriter.append(delta);
-        if (firstFinalDelta && processSteps.length) renderStreamingProcessSteps(true, elapsedProcessTime());
         meta.textContent = "正在生成回复……";
       } else if (eventName === "process_step") {
         mountAssistantMessage();
         const step = { ...payload };
         const append = step.append === true;
         delete step.append;
+        if (step.type === "intermediate" && typeof step.content === "string" && streamedPendingText.endsWith(step.content)) {
+          streamedPendingText = streamedPendingText.slice(0, -step.content.length);
+          streamedText = streamedText.slice(0, -step.content.length);
+          typewriter.replace(streamedText);
+        }
         const existing = append ? processSteps.find((item) => item.id === step.id && item.type === step.type) : null;
         if (existing && typeof step.content === "string") existing.content += step.content;
         else processSteps.push(step);
@@ -15002,7 +15018,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         if (typeof step.content === "string" && step.content.length > 0 && step.type === "thinking") {
           processStepTypewriter(targetStep).append(step.content);
         }
-        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(false, elapsedProcessTime());
         meta.textContent = step.type === "thinking"
           ? `正在思考 · 第 ${Number(step.round) || 1} 轮`
           : step.type === "context_compaction"
@@ -15017,7 +15033,7 @@ async function streamChat(requestHolder, body, idempotencyKey) {
         if (toolCall.status === "failed") setAiChatTabStatus(tab, "error");
         toolCalls.push(toolCall);
         processSteps.push(aiToolProcessStep(toolCall, round));
-        renderStreamingProcessSteps(finalAnswerStarted, elapsedProcessTime());
+        renderStreamingProcessSteps(false, elapsedProcessTime());
         meta.textContent = `已调用 ${toolCalls.length} 个工具，正在等待模型处理结果`;
         scrollAiFeedToBottom(feed);
       } else if (eventName === "context_compacted") {
@@ -15141,20 +15157,27 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
     failureBadge.setAttribute("aria-label", `消息状态：${isInterrupted ? aiStreamInterruptionLabel(interruptionCode) : "失败"}`);
     heading.firstElementChild?.append(failureBadge);
   }
-  const mentionNames = role === "user"
-    ? userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)
+  const mentionGroups = role === "user"
+    ? [
+      ["角色", metadata?.mentionCharacterIds, state.characters],
+      ["种族", metadata?.mentionRaceIds, state.races],
+      ["组织", metadata?.mentionOrganizationIds, state.organizations]
+    ]
+      .flatMap(([kind, ids, items]) => userMessageMentionNames(ids, items).map((name) => ({ kind, name })))
     : [];
-  if (mentionNames.length) {
+  if (mentionGroups.length) {
     const references = document.createElement("div");
     references.className = "user-message-mentions";
     const label = document.createElement("span");
     label.className = "user-message-mentions-label";
-    label.textContent = "引用角色";
+    label.textContent = "引用";
     references.append(label);
-    for (const name of mentionNames) {
+    for (const { kind, name } of mentionGroups) {
       const reference = document.createElement("span");
       reference.className = "user-message-mention";
       reference.textContent = name;
+      reference.title = `${kind}：${name}`;
+      reference.setAttribute("aria-label", `${kind}：${name}`);
       references.append(reference);
     }
     message.append(references);
@@ -15180,6 +15203,7 @@ function appendMessage(role, text, citations = [], createdAt = null, metadata = 
   if (role === "assistant") {
     renderAiProcessSteps(message, processSteps, true, processDurationMs);
   }
+  if (role === "user") attachUserCopyAction(message, text);
   if (role === "assistant" && !text.startsWith("调用失败：")) {
     const selectedModelId = tab?.modelId ?? tab?.selectedModelId ?? $("#ai-model").value;
     const selectedModel = state.models.find((model) => model.id === selectedModelId) ?? state.models[0];

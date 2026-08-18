@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-describe("AI 用户消息角色引用横幅", () => {
-  it("透传流式消息 metadata 并渲染可换行的角色标签", async () => {
+describe("AI 用户消息引用横幅", () => {
+  it("透传流式消息 metadata 并渲染可换行的三类引用标签", async () => {
     const [page, application, styles] = await Promise.all([
       readFile(join(process.cwd(), "src", "public", "index.html"), "utf8"),
       readFile(join(process.cwd(), "src", "public", "app.js"), "utf8"),
@@ -14,10 +14,15 @@ describe("AI 用户消息角色引用横幅", () => {
     expect(page).toContain('/app.js?v=20260816-extended-thinking-effort-v1');
     expect(application).toContain('/ai-mentions.js?v=20260811-user-message-mentions-v1');
     expect(application).toContain("persistedUserMessage.createdAt, persistedUserMessage.metadata, persistedUserMessage.id");
-    expect(application).toContain("userMessageMentionNames(metadata?.mentionCharacterIds, state.characters)");
+    expect(application).toContain('["角色", metadata?.mentionCharacterIds, state.characters]');
+    expect(application).toContain('["种族", metadata?.mentionRaceIds, state.races]');
+    expect(application).toContain('["组织", metadata?.mentionOrganizationIds, state.organizations]');
+    expect(application).toContain('label.textContent = "引用";');
+    expect(application).toContain('reference.setAttribute("aria-label", `${kind}：${name}`);');
+    expect(application).toContain('canReadModule("races") ? api(`/api/works/${workId}/races`)');
+    expect(application).toContain('canReadModule("organizations") ? apiAllPages(`/api/works/${workId}/organizations`)');
     expect(application).toContain("ensureAiReferencesLoaded()\n    ]);");
     expect(application).toContain('references.className = "user-message-mentions";');
-    expect(application).toContain('label.textContent = "引用角色";');
     expect(styles).toContain(".user-message-mentions { display: flex; align-items: center; flex-wrap: wrap;");
     expect(styles).toContain(".user-message-mention { min-width: 0; max-width: 100%;");
   });

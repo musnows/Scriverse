@@ -537,6 +537,8 @@ type AiConversationMessageInput = {
   requestId?: string;
   metadata?: {
     mentionCharacterIds?: string[];
+    mentionRaceIds?: string[];
+    mentionOrganizationIds?: string[];
     modelId?: string;
     modelDisplayName?: string;
     outputTokens?: number;
@@ -571,7 +573,7 @@ type BeginAiConversationStreamRequestInput = {
   userMessage: {
     content: string;
     citations?: unknown[];
-    metadata?: { mentionCharacterIds?: string[]; modelId?: string };
+    metadata?: { mentionCharacterIds?: string[]; mentionRaceIds?: string[]; mentionOrganizationIds?: string[]; modelId?: string };
     existingMessageId?: string;
   };
 };

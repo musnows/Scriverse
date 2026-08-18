@@ -2668,12 +2668,16 @@ describe("用户、作品权限与操作者追踪 API", () => {
       content: "可读取的对话正文",
       metadata: {
         mentionCharacterIds: [String(character.body.data.id)],
+        mentionRaceIds: ["secret-race-id"],
+        mentionOrganizationIds: ["secret-organization-id"],
         modelDisplayName: "保留的模型信息"
       }
     });
 
     const ownerView = await owner.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(ownerView.body.data.messages[0].metadata.mentionCharacterIds).toEqual([character.body.data.id]);
+    expect(ownerView.body.data.messages[0].metadata.mentionRaceIds).toEqual(["secret-race-id"]);
+    expect(ownerView.body.data.messages[0].metadata.mentionOrganizationIds).toEqual(["secret-organization-id"]);
 
     const collaboratorView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}`).expect(200);
     expect(collaboratorView.body.data.messages[0]).toMatchObject({
@@ -2681,6 +2685,8 @@ describe("用户、作品权限与操作者追踪 API", () => {
       metadata: { modelDisplayName: "保留的模型信息" }
     });
     expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionCharacterIds");
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionRaceIds");
+    expect(collaboratorView.body.data.messages[0].metadata).not.toHaveProperty("mentionOrganizationIds");
 
     const pagedView = await collaborator.agent.get(`/api/ai-conversations/${conversationId}?page=1&limit=20`).expect(200);
     expect(pagedView.body.data.messagesPage.items[0].metadata).toEqual({ modelDisplayName: "保留的模型信息" });

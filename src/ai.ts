@@ -6631,6 +6631,7 @@ export class AiManager {
     });
     let activeSecrets: string[] = [];
     let streamedContent = "";
+    let streamedPartialContent = "";
     let trackedInputTokens = 0;
     let trackedOutputTokens = 0;
     let trackedCachedInputTokens = 0;
@@ -6729,6 +6730,7 @@ export class AiManager {
           traceRound.attempts.push(traceAttempt);
           saveTrace();
           logger.info("ai.call.attempt_started", { callId, attempt, maximumAttempts, toolChoice, purpose });
+          let streamedRoundContent = "";
           try {
             const candidate = await this.scheduleProviderRequest(provider, input.signal, async () => {
               const controller = new AbortController();
@@ -6784,7 +6786,8 @@ export class AiManager {
                   activeSecrets,
                   (delta) => {
                     attemptEmitted = true;
-                    streamedContent += delta;
+                    streamedRoundContent += delta;
+                    streamedPartialContent += delta;
                     onDelta?.(delta);
                   },
                   (delta) => {
@@ -6835,6 +6838,22 @@ export class AiManager {
             if (candidate.ok) {
               const parsed = candidate.payload;
               completionDelivery.set(parsed, candidate.delivery);
+              if (candidate.delivery === "sse" && purpose === "generation" && streamedRoundContent.length > 0) {
+                const currentChoice = parsed.choices?.[0];
+                if (currentChoice?.message?.tool_calls?.length) {
+                  const step: AiProcessStep = {
+                    id: id("process"),
+                    type: "intermediate",
+                    round: processRound,
+                    content: streamedRoundContent,
+                    createdAt: now()
+                  };
+                  processSteps.push(step);
+                  input.onProcessStep?.(step);
+                } else {
+                  streamedContent += streamedRoundContent;
+                }
+              }
               traceAttempt.completedAt = now();
               traceAttempt.status = "completed";
               traceAttempt.httpStatus = candidate.status;
@@ -7207,7 +7226,7 @@ export class AiManager {
              token_usage_source = ?, completed_at = ?
          WHERE id = ?`,
         message,
-        streamedContent.length,
+        (streamedPartialContent || streamedContent).length,
         trackedInputTokens,
         trackedOutputTokens,
         trackedCachedInputTokens,
